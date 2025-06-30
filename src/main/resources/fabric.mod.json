@@ -1,8 +1,8 @@
 {
 	"schemaVersion": 1,
-	"id": "gibber",
+	"id": "paulsbrawls",
 	"version": "${version}",
-	"name": "Gibber",
+	"name": "Paul's Brawls",
 	"description": "The best path to a communist utopia is giving everyone a lot of money.",
 	"authors": [
 		"Paul Boursin"
@@ -12,7 +12,7 @@
 		"sources": "https://github.com/FabricMC/fabric-example-mod"
 	},
 	"license": "CC0-1.0",
-	"icon": "assets/gibber/icon.png",
+	"icon": "assets/paulsbrawls/icon.png",
 	"environment": "*",
 	"entrypoints": {
 		"server": [
@@ -23,9 +23,9 @@
 		]
 	},
 	"mixins": [
-		"gibber.mixins.json",
+		"paulsbrawls.mixins.json",
 		{
-			"config": "gibber.client.mixins.json",
+			"config": "paulsbrawls.client.mixins.json",
 			"environment": "client"
 		}
 	],
