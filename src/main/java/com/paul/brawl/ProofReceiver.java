@@ -2,6 +2,7 @@ package com.paul.brawl;
 
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.server.network.ServerPlayerEntity;
 
 public class ProofReceiver {
     
@@ -12,13 +13,14 @@ public class ProofReceiver {
     public static void register() {
         ServerPlayNetworking.registerGlobalReceiver(ImagePayload.ID, (data, context) -> {
             byte[] bytes = data.image();
-            checkProof(bytes);
+            var player = context.player();
+            checkProof(bytes, player);
         });
     }
 
-    private static void checkProof(byte[] bytes) {
-        ChatBot.sendImageChatRequest("Here's the evidence : ", bytes, r -> {
-            ChatPrinter.broadcast("God : " + ChatBot.getResponseText(r));
+    private static void checkProof(byte[] bytes, ServerPlayerEntity player) {
+        ChatBot.sendImageChatRequest("Here's the evidence : ", bytes, player, (r,text) -> {
+            ChatPrinter.broadcast("God : " + text);
         });
     }
 

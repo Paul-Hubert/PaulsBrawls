@@ -18,11 +18,14 @@ import net.minecraft.text.Text;
 
 public class Screenshotter {
 
-	private static boolean flag = false;
+	private static volatile boolean flag = false;
+	private static ExecutorService executor;
 
 	public static void register() {
 		registerCommand();
 		registerTickEvent();
+
+		executor = Executors.newSingleThreadExecutor();
 	}
 
 	// send screen shot on start of next tick to avoid chat locking the view
@@ -48,12 +51,23 @@ public class Screenshotter {
 	}
 
 	public static void sendProofScreenshot() {
-		flag = true;
+
+		MinecraftClient.getInstance().inGameHud.getChatHud().addMessage(Text.literal("Screenshotting in 1 second"));
+
+		executor.submit(() -> {
+			try {
+				Thread.sleep(1000);
+			} catch (InterruptedException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			flag = true;
+		});
 	}
 
 	private static void sendProofScreenshotAfterDelay() {
 
-		MinecraftClient.getInstance().inGameHud.getChatHud().addMessage(Text.literal("Screenshotting"));
+		MinecraftClient.getInstance().inGameHud.getChatHud().addMessage(Text.literal("Screenshotted, sending to God"));
 
 		NativeImage nativeImage = ScreenshotRecorder.takeScreenshot(MinecraftClient.getInstance().getFramebuffer());
 		try {

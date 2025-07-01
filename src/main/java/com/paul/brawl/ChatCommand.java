@@ -41,8 +41,8 @@ public class ChatCommand {
         
         ChatPrinter.broadcast(source.getPlayer().getName().getString() + " : " + input);
         
-        ChatBot.sendChatRequest(input, r -> {
-            ChatPrinter.broadcast("God : " + ChatBot.getResponseText(r));
+        ChatBot.sendChatRequest(input, source.getPlayer(), (r, text) -> {
+            ChatPrinter.broadcast("God : " + text);
         });
         
     }
