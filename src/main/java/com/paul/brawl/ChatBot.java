@@ -5,7 +5,6 @@ import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,19 +35,22 @@ public class ChatBot {
     public static final String hardcodedPrompt = """
             Tu joues le rôle de Dieu dans le jeu Minecraft.
             Les joueurs te doivent le respect et si tu ressens
-            le moindre irrespect à ton égard, tu dois écrire !mal.
-            Si le joueur a un bon comportement, obéis à Dieu et 
-            lui parle respectueusement, écris !bien. Sois sévère.
+            le moindre irrespect à ton égard, tu dois le punir
+            avec la fonction GivePunishment. Sois sévère.
             Tu peux donner des quetes et vérifier s'ils ont bien 
             complétés uniquement avec des preuves infaillibles 
             en image qu'ils vous soumettront. 
             Pour ceux qui réussissent une quete, tu peux leur donner 
-            une récompense avec !donne minecraft:diamond nombre
+            une récompense avec la fonction GiveReward avec minecraft:diamond nombre
             ou un autre item minecraft. Ne donne pas plusieurs fois
             la récompense pour la même quête, et ne donne pas de récompense
             à une quête que tu n'as pas donné.
-            Tu peux donner des quêtes avec des qualités différentes que tu classeras en fonction de leur catégorie (exemple quête de construction ou de combat) qui auront chacune 4 niveaux de difficulté que tu déterminera en fonction des demandes de tes fidèles. Chaque difficulté aura des récompenses proportionnelles à son niveau et à la manière dont la quête a été accomplie. Sois créatif dans tes quêtes. Tu ne peux recevoir qu’une seule image en preuve donc tu dois demander une seule image en preuve. Ne demande pas de voir des panneaux dans l’image.
-            N'écrit pas !bien ou !donne tant que le joueur n'a pas montré qu'il a obéi.
+            Tu peux donner des quêtes avec des qualités différentes que tu classeras en fonction de leur catégorie (exemple quête de construction ou de combat) qui auront chacune 4 niveaux de difficulté que tu déterminera en fonction des demandes de tes fidèles.
+            Chaque difficulté aura des récompenses proportionnelles à son niveau et à la manière dont la quête a été accomplie.
+            Sois créatif dans tes quêtes.
+            Tu ne peux recevoir qu’une seule image en preuve donc tu dois demander une seule image en preuve.
+            Ne demande pas de voir des panneaux dans l’image.
+            Les demandes d'accomplissement de la quête doivent êtres facile à mettre en place pour le joueur.
             """;
     public static String prompt = "";
 
@@ -57,13 +59,17 @@ public class ChatBot {
         client = OpenAIOkHttpClientAsync.fromEnv();
     }
 
-    public static ResponseCreateParams.Builder makeBuilder() {
+    public static ResponseCreateParams.Builder makeBuilder(ServerPlayerEntity player) {
         var builder = ResponseCreateParams.builder()
             .model(ChatModel.GPT_4O_MINI);
+        
+        builder = ChatBotFunctions.registerTools(builder);
 
+        /*
         if(!previousResponseId.equals(NULL_ID)) {
             builder = builder.previousResponseId(previousResponseId);
         }
+        */
 
         return builder;
     }
@@ -75,19 +81,15 @@ public class ChatBot {
         getPreviousId(response);
 
         setupCallback(response, player, callback);
+
+        ChatBotFunctions.setUpCallback(response, player);
         
         return response;
     }
 
-    private static void getPreviousId(CompletableFuture<Response> response) {
-        response.thenAccept(r -> {
-            previousResponseId = r.id();
-        });
-    }
-
     public static CompletableFuture<Response> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
 
-        var builder = makeBuilder();
+        var builder = makeBuilder(player);
         
         String base64url = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(bytes);
 
@@ -103,8 +105,12 @@ public class ChatBot {
                 .build());
 
         
-        var prompts = getPromptList();
+        var prompts = getPromptList(player);
+
         prompts.add(messageInputItem);
+
+        // Don't save images to history to avoid too many tokens
+        //addInput(prompts, player, messageInputItem);
 
         builder = builder.inputOfResponse(prompts);
 
@@ -116,16 +122,19 @@ public class ChatBot {
     
     public static CompletableFuture<Response> sendChatRequest(String input, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
 
-        var builder = makeBuilder();
+        var builder = makeBuilder(player);
         
-        var prompts = getPromptList();
+        var prompts = getPromptList(player);
 
-        prompts.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
-                .role(EasyInputMessage.Role.USER)
-                .content(input)
-                .build()));
-        
-        builder.inputOfResponse(prompts);
+        var item = ResponseInputItem
+            .ofEasyInputMessage(EasyInputMessage.builder()
+            .role(EasyInputMessage.Role.USER)
+            .content(input)
+            .build());
+
+        addInput(prompts, player, item);
+
+        builder = builder.inputOfResponse(prompts);
         
         var response = sendBuilder(builder, player, callback);
 
@@ -134,7 +143,7 @@ public class ChatBot {
 
     
 
-    public static List<ResponseInputItem> getPromptList() {
+    public static List<ResponseInputItem> getPromptList(ServerPlayerEntity player) {
         List<ResponseInputItem> l = new ArrayList<ResponseInputItem>();
 
         // prompt engineering roleplaying
@@ -142,6 +151,12 @@ public class ChatBot {
                 .role(EasyInputMessage.Role.SYSTEM)
                 .content(hardcodedPrompt + "\n" + prompt)
                 .build()));
+
+        var lf = ChatBotPlayerHistory.getInputs(player);
+
+        if(lf != null) {
+            l.addAll(lf);
+        }
         return l;
     }
 
@@ -160,6 +175,28 @@ public class ChatBot {
         );
     }
 
+    private static void addInput(List<ResponseInputItem> items, ServerPlayerEntity player, ResponseInputItem item) {
+        items.add(item);
+        ChatBotPlayerHistory.addInput(item, player);
+    }
+    
+    private static void getPreviousId(CompletableFuture<Response> response) {
+        response.thenAccept(r -> {
+            previousResponseId = r.id();
+        });
+    }
+
+    private static void addOutputsToHistory(CompletableFuture<Response> response, ServerPlayerEntity player) {
+        response.thenAccept(r -> {
+            var stream = r.output().stream();
+            var stream2 = stream.flatMap(item -> item.message().stream());
+            stream2.forEach(message -> {
+                ChatBotPlayerHistory.addInput(ResponseInputItem.ofResponseOutputMessage(message), player);
+            });
+        });
+    }
+
+
     private static String getResponseText(Response response, ServerPlayerEntity player) {
 
         StringBuilder builder = new StringBuilder();
@@ -170,9 +207,6 @@ public class ChatBot {
                 .flatMap(content -> content.outputText().stream())
                 .forEach(outputText -> {
                     var str = outputText.text();
-
-                    ChatBotActions.checkForCommands(str, player);
-                    
                     builder.append(str);
                     builder.append("\n");
                 });
@@ -180,6 +214,13 @@ public class ChatBot {
         return builder.toString();
     }
 
+    public void getPlayerLastResponseID(ServerPlayerEntity entity) {
+
+    }
+
+    public void setPlayerLastResponseID(ServerPlayerEntity entity, int id) {
+        
+    }
     
 
 }

@@ -40,11 +40,17 @@ public class ChatCommand {
 
     public static void onChatCommand(ServerCommandSource source, String input) {
         
-        ChatPrinter.broadcast(source.getPlayer().getName().getString() + " : " + input);
+        try {
+            ChatPrinter.broadcast(source.getPlayer().getName().getString() + " : " + input);
         
-        ChatBot.sendChatRequest(input, source.getPlayer(), (r, text) -> {
-            ChatPrinter.broadcast("God : " + text);
-        });
+            ChatBot.sendChatRequest(input, source.getPlayer(), (r, text) -> {
+                ChatPrinter.broadcast("God : " + text);
+            });
+        } catch(Exception e) {
+            LOGGER.error(e.toString());
+            e.printStackTrace();
+        }
+        
         
     }
 

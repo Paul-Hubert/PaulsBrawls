@@ -59,6 +59,10 @@ dependencies {
 	include 'org.jetbrains.kotlin:kotlin-stdlib-common:1.8.10'
 	include 'org.jetbrains.kotlin:kotlin-stdlib:1.8.10'
 	include 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.0'
+
+	include 'com.github.victools:jsonschema-generator:4.38.0'
+	include 'com.github.victools:jsonschema-module-jackson:4.38.0'
+	include 'com.fasterxml:classmate:1.7.0'
 }
 
 processResources {

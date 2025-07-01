@@ -1,5 +1,8 @@
 package com.paul.brawl;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LightningEntity;
 import net.minecraft.item.Item;
@@ -11,33 +14,8 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
 public class ChatBotActions {
-    
-    public static boolean checkForCommands(String str, ServerPlayerEntity player) {
-        if(str.contains("!bien")) {
-            giveGoodReward(player);
-            return true;
-        } if(str.contains("!mal")) {
-            giveBadReward(player);
-            return true;
-        } if(str.contains("!donne")) {
 
-            var args = stripArguments(str, "!donne");
-            Item item = getItemFromString(args[0]);
-            if(item == null) {
-                return false;
-            }
-
-            int amount = 1;
-            try {
-                amount = Integer.parseInt(args[1]);
-            } catch(Exception e) {}
-            
-            giveItem(player, item, amount);
-
-            return true;
-        }
-        return false;
-    }
+    private static final Logger LOGGER = LoggerFactory.getLogger("ChatBotActions");
 
     public static void giveGoodReward(ServerPlayerEntity player) {
         giveItem(player, Money.MONEY, 10);
@@ -45,6 +23,10 @@ public class ChatBotActions {
 
     public static void giveBadReward(ServerPlayerEntity player) {
         smite(player);
+    }
+
+    public static void giveItem(ServerPlayerEntity player, String item, int amount) {
+        giveItem(player, getItemFromString(item), amount);
     }
 
     public static void giveItem(ServerPlayerEntity player, Item item, int amount) {
@@ -61,10 +43,14 @@ public class ChatBotActions {
     }
 
     public static Item getItemFromString(String str) {
-        if (str == null) return null;
+        if (str == null) {
+            LOGGER.error("Invalid item string: " + str);
+            return null;
+        }
 
         var strs = str.split(":");
         if(strs.length < 2) {
+            LOGGER.error("Invalid item string: " + str);
             return null;
         }
         var nameSpace = strs[0];
@@ -76,10 +62,16 @@ public class ChatBotActions {
             id = Identifier.of(nameSpace, name);
             return Registries.ITEM.getOrEmpty(id).orElse(null);
         } catch (Exception e) {
+            LOGGER.error("Invalid item string: " + str + " Exception " + e);
             return null;
         }
     }
 
+    public static void smite(ServerPlayerEntity player, int amount) {
+        for(int i = 0; i<amount; i++) {
+            smite(player);
+        }
+    }
 
     public static void smite(ServerPlayerEntity player) {
         if (player != null && player.getWorld() != null) {
