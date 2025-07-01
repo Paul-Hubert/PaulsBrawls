@@ -4,6 +4,7 @@ import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.minecraft.command.argument.MessageArgumentType;
 import net.minecraft.command.argument.TextArgumentType;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
@@ -26,9 +27,9 @@ public class ChatCommand {
             dispatcher.register(
                 LiteralArgumentBuilder.<ServerCommandSource>literal("chat")
                     .requires(source -> source.hasPermissionLevel(0)) // Admin only
-                    .then(CommandManager.argument("text", TextArgumentType.text(registryAccess))
+                    .then(CommandManager.argument("text", MessageArgumentType.message())
                     .executes(context -> {
-                        Text input = TextArgumentType.getTextArgument(context, "text");
+                        Text input = MessageArgumentType.getMessage(context, "text");
                         onChatCommand(context.getSource(), input.getString());
                         return Command.SINGLE_SUCCESS;
                     })
@@ -50,16 +51,14 @@ public class ChatCommand {
 
     public static void registerPromptCommand() {
 
-        // /gib_salary amount
-        // Gives everyone money every period
+        // /prompt text
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
                 LiteralArgumentBuilder.<ServerCommandSource>literal("prompt")
                     .requires(source -> source.hasPermissionLevel(2)) // Admin only
-                    .then(CommandManager.argument("text", TextArgumentType.text(registryAccess))
+                    .then(CommandManager.argument("text", MessageArgumentType.message())
                         .executes(context -> {
-
-                            Text text = TextArgumentType.getTextArgument(context, "text");
+                            Text text = MessageArgumentType.getMessage(context, "text");
 
                             ChatBot.prompt = text.getString();
 

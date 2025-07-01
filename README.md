@@ -25,8 +25,6 @@ In order to get your quest rewards, you need to send proof with a screenshot
 
 # TODO
 
-* Resize screenshot size to avoid giant packets
 * Get actions with !command and apply effects such as !give !good and !bad
 * Make chat per person instead of global
-* Remove "" from commands
 

@@ -5,7 +5,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import com.mojang.brigadier.Command;
-import com.mojang.brigadier.context.CommandContext;
 
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -70,8 +69,13 @@ public class Screenshotter {
 		MinecraftClient.getInstance().inGameHud.getChatHud().addMessage(Text.literal("Screenshotted, sending to God"));
 
 		NativeImage nativeImage = ScreenshotRecorder.takeScreenshot(MinecraftClient.getInstance().getFramebuffer());
+		
+		var img2 = new NativeImage(854, 480, true);
+		
+		nativeImage.resizeSubRectTo(0, 0, nativeImage.getWidth(), nativeImage.getHeight(), img2);
+
 		try {
-			ImagePayload payload =  new ImagePayload (nativeImage.getBytes());
+			ImagePayload payload =  new ImagePayload (img2.getBytes());
 			ClientPlayNetworking.send(payload);
 		} catch (IOException e) {
 			e.printStackTrace();
