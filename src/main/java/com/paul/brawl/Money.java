@@ -12,8 +12,8 @@ public class Money {
     public static void register() {
         MONEY = Registry.register(
 			Registries.ITEM,
-			Identifier.of("gibber", "super_ingot"),
-			new Item(new Item.Settings().maxCount(999))
+			Identifier.of("paulsbrawls", "coin"),
+			new Item(new Item.Settings().maxCount(99))
 		);
     }
 

@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import net.fabricmc.fabric.api.entity.event.v1.EntityElytraEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.UnbreakableComponent;
 import net.minecraft.item.ItemStack;
@@ -19,6 +20,8 @@ public class FlagManager {
         banElytra();
 
         dropOnHit();
+
+        glowFlagholders();
 
     }
 
@@ -45,6 +48,17 @@ public class FlagManager {
         });
     }
 
+    // ban elytra
+    public static void glowFlagholders() {
+        ServerTickEvents.START_WORLD_TICK.register((server) -> {
+            for(var player : server.getPlayers()) {
+
+                var hasFlag = checkInventory(player) != null;
+                updateGlow(player, hasFlag);
+            }
+        });
+    }
+
     public static ItemStack checkInventory(ServerPlayerEntity player) {
         
         for (var stack : player.getInventory().main) {
@@ -66,6 +80,10 @@ public class FlagManager {
         item.set(DataComponentTypes.UNBREAKABLE, new UnbreakableComponent(true));
         player.dropItem(item.copyAndEmpty(), true, false);
         
+    }
+
+    public static void updateGlow(ServerPlayerEntity player, boolean b) {
+        player.setGlowing(b);
     }
 
 }

@@ -40,7 +40,7 @@ public class Screenshotter {
 	public static void registerCommand() {
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
 			dispatcher.register(
-				ClientCommandManager.literal("proof")
+				ClientCommandManager.literal("prouver")
 						.executes(context -> {
 							sendProofScreenshot();
 							return Command.SINGLE_SUCCESS;

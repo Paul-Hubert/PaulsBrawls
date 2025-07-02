@@ -5,7 +5,6 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.argument.MessageArgumentType;
-import net.minecraft.command.argument.TextArgumentType;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
@@ -25,7 +24,7 @@ public class ChatCommand {
     public static void chatCommand() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("chat")
+                LiteralArgumentBuilder.<ServerCommandSource>literal("prier")
                     .requires(source -> source.hasPermissionLevel(0)) // Admin only
                     .then(CommandManager.argument("text", MessageArgumentType.message())
                     .executes(context -> {
@@ -68,7 +67,9 @@ public class ChatCommand {
 
                             ChatBot.prompt = text.getString();
 
-                            LOGGER.info("Changed prompt " + text);
+                            var message = "Changed prompt " + text;
+                            ChatPrinter.sendMessage(context.getSource().getPlayer(), message);
+                            LOGGER.info(message);
                             return Command.SINGLE_SUCCESS;
                         })
                     )
@@ -80,6 +81,7 @@ public class ChatCommand {
                 LiteralArgumentBuilder.<ServerCommandSource>literal("prompt")
                     .requires(source -> source.hasPermissionLevel(2)) // Admin only
                         .executes(context -> {
+                            ChatBot.readPrompt();
                             Text text = Text.literal("Hardcoded prompt : ").append(ChatBot.hardcodedPrompt).append("\nCustom Prompt : ").append(ChatBot.prompt);
                             context.getSource().getPlayer().sendMessage(text);
                             return Command.SINGLE_SUCCESS;

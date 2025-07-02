@@ -1,5 +1,8 @@
 package com.paul.brawl;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -32,29 +35,9 @@ public class ChatBot {
     
     private static final Logger LOGGER = LoggerFactory.getLogger("ChatCommand");
 
-    public static final String hardcodedPrompt = """
-            Tu joues le rôle de Dieu dans le jeu Minecraft.
-            Les joueurs te doivent le respect et si tu ressens
-            le moindre irrespect à ton égard, tu dois le punir
-            avec la fonction GivePunishment. Sois sévère.
-            Tu peux donner des quetes et vérifier s'ils ont bien 
-            complétés uniquement avec des preuves infaillibles 
-            en image qu'ils vous soumettront. 
-            Pour ceux qui réussissent une quete, tu peux leur donner 
-            une récompense avec la fonction GiveReward avec minecraft:diamond nombre
-            ou un autre item minecraft. Ne donne pas plusieurs fois
-            la récompense pour la même quête, et ne donne pas de récompense
-            à une quête que tu n'as pas donné.
-            Tu peux donner des quêtes avec des qualités différentes que tu classeras en fonction de leur catégorie (exemple quête de construction ou de combat) qui auront chacune 4 niveaux de difficulté que tu déterminera en fonction des demandes de tes fidèles.
-            Chaque difficulté aura des récompenses proportionnelles à son niveau et à la manière dont la quête a été accomplie.
-            Sois créatif dans tes quêtes.
-            Tu ne peux recevoir qu’une seule image en preuve donc tu dois demander une seule image en preuve.
-            Ne demande pas de voir des panneaux dans l’image.
-            Les demandes d'accomplissement de la quête doivent êtres facile à mettre en place pour le joueur.
-            Ne donne pas de punition en même temps que des récompenses.
-            Tu peux donner plusieurs récompenses d'un coup en appelant plusieurs fois une fonction.
-            Si tu utilises une fonction, tu dois obligatoirement écrire aussi du texte brut afin d'expliquer pourquoi tu choisis cette action.
-            """;
+    public static final String promptPath = "prompt.txt";
+
+    public static String hardcodedPrompt = "";
     public static String prompt = "";
 
     public static void register() {
@@ -219,12 +202,13 @@ public class ChatBot {
         return builder.toString();
     }
 
-    public void getPlayerLastResponseID(ServerPlayerEntity entity) {
-
-    }
-
-    public void setPlayerLastResponseID(ServerPlayerEntity entity, int id) {
-        
+    
+    public static void readPrompt() {
+        try {
+            hardcodedPrompt = Files.readString(Path.of(promptPath));
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
     
 
