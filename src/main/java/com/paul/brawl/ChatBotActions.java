@@ -25,8 +25,13 @@ public class ChatBotActions {
         smite(player);
     }
 
-    public static void giveItem(ServerPlayerEntity player, String item, int amount) {
-        giveItem(player, getItemFromString(item), amount);
+    public static void giveItemFromString(ServerPlayerEntity player, String item, int amount) {
+        var command = "/give " + player.getName().getString() + " " + item + " " + amount;
+        
+        var manager = player.getServer().getCommandManager();
+        var source = player.getServer().getCommandSource();
+
+        manager.executeWithPrefix(source, command);
     }
 
     public static void giveItem(ServerPlayerEntity player, Item item, int amount) {

@@ -1,10 +1,5 @@
 package com.paul.brawl;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 import com.fasterxml.jackson.annotation.JsonClassDescription;
@@ -18,65 +13,42 @@ import net.minecraft.server.network.ServerPlayerEntity;
 
 public class ChatBotFunctions {
 
-    @JsonClassDescription("Gives a good reward to the player.")
-    static class GiveReward {
+    @JsonClassDescription("Donne une récompense au joueur sous forme d'item.")
+    static class Recompense {
         @JsonPropertyDescription("The name of the item to give. Example: minecraft:diamond")
         public String itemName;
         @JsonPropertyDescription("The amount of itemName to give to the player.")
         public int amount;
 
-        public GiveReward execute(ServerPlayerEntity player) {
-            ChatBotActions.giveItem(player, itemName, amount);
+        public Recompense execute(ServerPlayerEntity player) {
+            ChatBotActions.giveItemFromString(player, itemName, amount);
             return this;
         }
 
         public String toString() {
-            return "Gave " + amount + " times " + itemName + " to the player.";
+            return "Dieu a donné " + amount + " " + itemName + " au joueur.";
         }
     }
 
-    @JsonClassDescription("Punishes the player.")
-    static class GivePunishment {
-        @JsonPropertyDescription("The amount of punishments to give to the player.")
+    @JsonClassDescription("Punis le joueur")
+    static class Punition {
+        @JsonPropertyDescription("Le nombre de punitions.")
         public int amount;
 
-        public GivePunishment execute(ServerPlayerEntity player) {
+        public Punition execute(ServerPlayerEntity player) {
             ChatBotActions.smite(player, amount);
             return this;
         }
 
         public String toString() {
-            return "Punished the player.";
-        }
-    }
-
-    @JsonClassDescription("Gives a reward to the player.")
-    static class BadReward {
-        @JsonPropertyDescription("The name of the item to give. Example: minecraft:diamond")
-        public String itemName;
-        @JsonPropertyDescription("The amount of itemName to give to the player.")
-        public int amount;
-
-        public GiveReward execute() {
-            return copy();
-        }
-
-        public void apply(ServerPlayerEntity player) {
-            ChatBotActions.giveItem(player, itemName, amount);
-        }
-
-        public GiveReward copy() {
-            var c = new GiveReward();
-            c.itemName = itemName;
-            c.amount = amount;
-            return c;
+            return "Dieu a puni le joueur.";
         }
     }
 
     public static Builder registerTools(Builder builder) {
         return builder
-            .addTool(GivePunishment.class)
-            .addTool(GiveReward.class);
+            .addTool(Recompense.class)
+            .addTool(Punition.class);
     }
 
     public static void setUpCallback(CompletableFuture<Response> response, ServerPlayerEntity player) {
@@ -93,11 +65,11 @@ public class ChatBotFunctions {
     private static void callFunction(ResponseFunctionToolCall function, ServerPlayerEntity player) {
         Object ret = null;
         switch (function.name()) {
-            case "GiveReward":
-                ret = function.arguments(GiveReward.class).execute(player);
+            case "Recompense":
+                ret = function.arguments(Recompense.class).execute(player);
                 break;
-            case "GivePunishment":
-                ret = function.arguments(GivePunishment.class).execute(player);
+            case "Punition":
+                ret = function.arguments(Punition.class).execute(player);
                 break;
             default:
                 throw new IllegalArgumentException("Unknown function: " + function.name());
