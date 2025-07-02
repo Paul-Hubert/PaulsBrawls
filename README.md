@@ -25,5 +25,3 @@ In order to get your quest rewards, you need to send proof with a screenshot
 
 # TODO
 
-* Get actions with !command and apply effects such as !give !good and !bad
-

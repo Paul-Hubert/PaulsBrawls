@@ -51,6 +51,9 @@ public class ChatBot {
             Tu ne peux recevoir qu’une seule image en preuve donc tu dois demander une seule image en preuve.
             Ne demande pas de voir des panneaux dans l’image.
             Les demandes d'accomplissement de la quête doivent êtres facile à mettre en place pour le joueur.
+            Ne donne pas de punition en même temps que des récompenses.
+            Tu peux donner plusieurs récompenses d'un coup en appelant plusieurs fois une fonction.
+            Si tu utilises une fonction, tu dois obligatoirement écrire aussi du texte brut afin d'expliquer pourquoi tu choisis cette action.
             """;
     public static String prompt = "";
 
@@ -61,7 +64,7 @@ public class ChatBot {
 
     public static ResponseCreateParams.Builder makeBuilder(ServerPlayerEntity player) {
         var builder = ResponseCreateParams.builder()
-            .model(ChatModel.GPT_4O_MINI);
+            .model(ChatModel.GPT_4O);
         
         builder = ChatBotFunctions.registerTools(builder);
 
@@ -81,6 +84,8 @@ public class ChatBot {
         getPreviousId(response);
 
         setupCallback(response, player, callback);
+
+        addOutputsToHistory(response, player);
 
         ChatBotFunctions.setUpCallback(response, player);
         

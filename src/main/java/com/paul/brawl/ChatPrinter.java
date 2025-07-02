@@ -1,6 +1,9 @@
 package com.paul.brawl;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.text.Text;
+
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
@@ -23,4 +26,10 @@ public class ChatPrinter {
             registered = true;
         }
     }
+
+    public static void sendMessage(ServerPlayerEntity player, String text) {
+        player.sendMessage(Text.literal(text));
+
+    }
+
 }
