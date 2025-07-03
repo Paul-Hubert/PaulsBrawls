@@ -29,6 +29,8 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 
 		ProofReceiver.register();
 
+		TradeOffers.register();
+
 	}
 
 }

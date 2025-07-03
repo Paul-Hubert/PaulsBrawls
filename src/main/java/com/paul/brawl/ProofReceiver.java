@@ -25,9 +25,7 @@ public class ProofReceiver {
     }
 
     private static void checkProof(byte[] bytes, ServerPlayerEntity player) {
-        ChatBot.sendImageChatRequest("Voici la preuve de l'accomplissement de ma quête : ", bytes, player, (r,text) -> {
-            ChatPrinter.sendMessage(player, "Dieu : " + text);
-        });
+        ChatBot.sendImageChatRequest("Voici la preuve de l'accomplissement de ma quête : ", bytes, player);
     }
 
     private static void saveImage(byte[] bytes) {

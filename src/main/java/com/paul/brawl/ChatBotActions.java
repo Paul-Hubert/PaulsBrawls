@@ -3,6 +3,7 @@ package com.paul.brawl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LightningEntity;
 import net.minecraft.item.Item;
@@ -17,6 +18,12 @@ public class ChatBotActions {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("ChatBotActions");
 
+    private static String message;
+
+    public static void register() {
+        registerCommandMessageEvent();
+    }
+
     public static void giveGoodReward(ServerPlayerEntity player) {
         giveItem(player, Money.MONEY, 10);
     }
@@ -25,13 +32,25 @@ public class ChatBotActions {
         smite(player);
     }
 
-    public static void giveItemFromString(ServerPlayerEntity player, String item, int amount) {
+    public static void sendTradeOffer(ServerPlayerEntity player, String giveItemName, int giveAmount, String takeItemName, int takeAmount) {
+        var message = "Dieu t'a proposé un échange : \n Tu reçois " + giveAmount + " " + giveItemName + " contre " + takeAmount + " " + takeItemName;
+        ChatPrinter.sendMessage(player, message);
+        TradeOffers.updateOffer(player, giveItemName, giveAmount, takeItemName, takeAmount);
+    }
+
+    public static String giveItemFromString(ServerPlayerEntity player, String item, int amount) {
+
         var command = "/give " + player.getName().getString() + " " + item + " " + amount;
         
         var manager = player.getServer().getCommandManager();
         var source = player.getServer().getCommandSource();
 
+        message = null;
+        LOGGER.info("before " + message);
         manager.executeWithPrefix(source, command);
+        LOGGER.info("after " + message);
+        return message;
+
     }
 
     public static void giveItem(ServerPlayerEntity player, Item item, int amount) {
@@ -90,6 +109,13 @@ public class ChatBotActions {
                 }
             }
         }
+    }
+
+    public static void registerCommandMessageEvent() {
+        ServerMessageEvents.ALLOW_COMMAND_MESSAGE.register((m, s, p) -> {
+            if(message == null) message = m.getSignedContent();
+            return true;
+        });
     }
 
 

@@ -43,36 +43,14 @@ public class ChatBot {
     public static void register() {
         // Configures using the `OPENAI_API_KEY`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` environment variables
         client = OpenAIOkHttpClientAsync.fromEnv();
+        
+        ChatBot.readPrompt();
     }
 
-    public static ResponseCreateParams.Builder makeBuilder(ServerPlayerEntity player) {
-        var builder = ResponseCreateParams.builder()
-            .model(ChatModel.GPT_4O);
-        
-        builder = ChatBotFunctions.registerTools(builder);
+    
 
-        /*
-        if(!previousResponseId.equals(NULL_ID)) {
-            builder = builder.previousResponseId(previousResponseId);
-        }
-        */
-
-        return builder;
-    }
-
-    private static CompletableFuture<Response> sendBuilder(ResponseCreateParams.Builder builder, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
-
-        CompletableFuture<Response> response = client.responses().create(builder.build());
-
-        getPreviousId(response);
-
-        setupCallback(response, player, callback);
-
-        addOutputsToHistory(response, player);
-
-        ChatBotFunctions.setUpCallback(response, player);
-        
-        return response;
+    public static CompletableFuture<Response> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player) {
+        return sendImageChatRequest(input, bytes, player, null);
     }
 
     public static CompletableFuture<Response> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
@@ -108,6 +86,10 @@ public class ChatBot {
 
     }
     
+    public static CompletableFuture<Response> sendChatRequest(String input, ServerPlayerEntity player) {
+        return sendChatRequest(input, player, null);
+    }
+
     public static CompletableFuture<Response> sendChatRequest(String input, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
 
         var builder = makeBuilder(player);
@@ -129,6 +111,31 @@ public class ChatBot {
         return response;
     }
 
+    public static ResponseCreateParams.Builder makeBuilder(ServerPlayerEntity player) {
+        var builder = ResponseCreateParams.builder()
+            .model(ChatModel.GPT_4O);
+        
+        builder = ChatBotFunctions.registerTools(builder);
+
+        /*
+        if(!previousResponseId.equals(NULL_ID)) {
+            builder = builder.previousResponseId(previousResponseId);
+        }
+        */
+
+        return builder;
+    }
+
+    private static CompletableFuture<Response> sendBuilder(ResponseCreateParams.Builder builder, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
+
+        CompletableFuture<Response> response = client.responses().create(builder.build());
+
+        setupCustomCallback(response, callback);
+
+        setupGeneralCallback(response, player);
+
+        return response;
+    }
     
 
     public static List<ResponseInputItem> getPromptList(ServerPlayerEntity player) {
@@ -148,11 +155,33 @@ public class ChatBot {
         return l;
     }
 
-    public static void setupCallback(CompletableFuture<Response> response, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
+    public static void setupGeneralCallback(CompletableFuture<Response> response, ServerPlayerEntity player) {
+        response.thenAccept(r -> {
+            
+            try {
+                setPreviousId(r);
+                addOutputsToHistory(r, player);
+                printOutputs(r, player);
+                boolean hadFunctions = ChatBotFunctions.checkForFunctions(r, player);
+                /* 
+                if(hadFunctions) {
+                    LOGGER.info("before chat request");
+                    sendChatRequest("Vous avez appelé des fonctions.", player);
+                    LOGGER.info("after chat request");
+                }*/
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        });
+    }
+
+    public static void setupCustomCallback(CompletableFuture<Response> response, BiConsumer<? super Response, String> callback) {
+        if(callback == null) return;
+
         response.handleAsync(
             (r, ex) -> {
                 if (ex == null) {
-                    callback.accept(r, getResponseText(r, player));
+                    callback.accept(r, getResponseText(r));
                     return 1L;
                 } else {
                     LOGGER.error(ex.getMessage());
@@ -168,24 +197,25 @@ public class ChatBot {
         ChatBotPlayerHistory.addInput(item, player);
     }
     
-    private static void getPreviousId(CompletableFuture<Response> response) {
-        response.thenAccept(r -> {
-            previousResponseId = r.id();
+    private static void setPreviousId(Response response) {
+        previousResponseId = response.id();
+    }
+
+    private static void addOutputsToHistory(Response response, ServerPlayerEntity player) {
+        response.output().stream()
+            .flatMap(item -> item.message().stream())
+            .forEach(message -> {
+            ChatBotPlayerHistory.addInput(ResponseInputItem.ofResponseOutputMessage(message), player);
         });
     }
 
-    private static void addOutputsToHistory(CompletableFuture<Response> response, ServerPlayerEntity player) {
-        response.thenAccept(r -> {
-            var stream = r.output().stream();
-            var stream2 = stream.flatMap(item -> item.message().stream());
-            stream2.forEach(message -> {
-                ChatBotPlayerHistory.addInput(ResponseInputItem.ofResponseOutputMessage(message), player);
-            });
-        });
+    private static void printOutputs(Response response, ServerPlayerEntity player) {
+        var text = getResponseText(response);
+        ChatPrinter.sendMessage(player, "Dieu : " + text);
     }
 
 
-    private static String getResponseText(Response response, ServerPlayerEntity player) {
+    private static String getResponseText(Response response) {
 
         StringBuilder builder = new StringBuilder();
 

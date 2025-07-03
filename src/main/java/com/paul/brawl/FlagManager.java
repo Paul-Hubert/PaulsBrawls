@@ -52,7 +52,6 @@ public class FlagManager {
     public static void glowFlagholders() {
         ServerTickEvents.START_WORLD_TICK.register((server) -> {
             for(var player : server.getPlayers()) {
-
                 var hasFlag = checkInventory(player) != null;
                 updateGlow(player, hasFlag);
             }

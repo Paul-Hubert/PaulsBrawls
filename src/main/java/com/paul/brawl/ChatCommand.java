@@ -42,9 +42,7 @@ public class ChatCommand {
         try {
             ChatPrinter.sendMessage(source.getPlayer(), source.getPlayer().getName().getString() + " : " + input);
         
-            ChatBot.sendChatRequest(input, source.getPlayer(), (r, text) -> {
-                ChatPrinter.sendMessage(source.getPlayer(), "Dieu : " + text);
-            });
+            ChatBot.sendChatRequest(input, source.getPlayer());
         } catch(Exception e) {
             LOGGER.error(e.toString());
             e.printStackTrace();

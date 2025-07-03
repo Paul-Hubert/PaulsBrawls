@@ -25,3 +25,5 @@ In order to get your quest rewards, you need to send proof with a screenshot
 
 # TODO
 
+* trade function to chatbot
+
