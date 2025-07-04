@@ -10,6 +10,7 @@ import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.minecraft.item.Item;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 
@@ -20,6 +21,8 @@ public class TradeOffers {
         public String giveItemName, takeItemName;
         public int giveAmount, takeAmount;
 
+        private Item giveItem, takeItem;
+
         public TradeOffer(String giveItemName, int giveAmount, String takeItemName, int takeAmount) {
             this.giveItemName = giveItemName;
             this.giveAmount = giveAmount;
@@ -27,20 +30,22 @@ public class TradeOffers {
             this.takeAmount = takeAmount;
         }
 
-        public boolean execute(ServerPlayerEntity player) {
+        public String verifyItems() {
 
-            var giveItem = ChatBotActions.getItemFromString(giveItemName);
+            giveItem = ChatBotActions.getItemFromString(giveItemName);
             if(giveItem == null) {
-                ChatPrinter.sendMessage(player, "L'échange est annulé. " + giveItemName + " n'est pas un item correct.");
-                return false;
+                return "L'échange est annulé. " + giveItemName + " n'est pas un item correct. Veuillez rééssayer.";
             }
 
-            var takeItem = ChatBotActions.getItemFromString(takeItemName);
+            takeItem = ChatBotActions.getItemFromString(takeItemName);
             if(takeItem == null) {
-                ChatPrinter.sendMessage(player, "L'échange est annulé. " + takeItemName + " n'est pas un item correct.");
-                return false;
+                return "L'échange est annulé. " + takeItemName + " n'est pas un item correct. Veuillez rééssayer.";
             }
 
+            return null;
+        }
+
+        public boolean execute(ServerPlayerEntity player) {
 
             int amount = 0;
             for (var stack : player.getInventory().main) {
@@ -73,7 +78,6 @@ public class TradeOffers {
 
             if(toBeRemoved != 0) {
                 ChatPrinter.sendMessage(player, "Retiré trop d'items");
-                return false;
             }
 
             ChatBotActions.giveItem(player, giveItem, giveAmount);
@@ -109,18 +113,26 @@ public class TradeOffers {
             return;
         }
 
-        offer.execute(player);
+        var executed = offer.execute(player);
+
+        // if failed, don't remove offer (probably doesn't have inventory)
+        if(!executed) return;
 
         offers.remove(player.getUuid());
     }
 
-    public static void updateOffer(
+    public static String updateOffer(
         ServerPlayerEntity player,
         String giveItemName, int giveAmount,
         String takeItemName, int takeAmount) {
 
         var offer = new TradeOffer(giveItemName, giveAmount, takeItemName, takeAmount);
+        String error = offer.verifyItems();
+        if(error != null) {
+            return error;
+        }
         offers.put(player.getUuid(), offer);
+        return null;
     }
 
 }

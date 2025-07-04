@@ -32,13 +32,33 @@ public class ChatBotActions {
         smite(player);
     }
 
-    public static void sendTradeOffer(ServerPlayerEntity player, String giveItemName, int giveAmount, String takeItemName, int takeAmount) {
+    public static String sendTradeOffer(ServerPlayerEntity player, String giveItemName, int giveAmount, String takeItemName, int takeAmount) {
+        var error = TradeOffers.updateOffer(player, giveItemName, giveAmount, takeItemName, takeAmount);
+        if(error != null) {
+            return error;
+        }
+
         var message = "Dieu t'a proposé un échange : \n Tu reçois " + giveAmount + " " + giveItemName + " contre " + takeAmount + " " + takeItemName;
         ChatPrinter.sendMessage(player, message);
-        TradeOffers.updateOffer(player, giveItemName, giveAmount, takeItemName, takeAmount);
+
+        return "Dieu a proposé un échange au joueur : Dieu donne "
+             + giveAmount + " " + giveItemName + " contre " + takeAmount + " " + takeItemName
+             + "\nLe joueur peut accepter, ou non, cet échange.";
     }
 
-    public static String giveItemFromString(ServerPlayerEntity player, String item, int amount) {
+    public static String giveItemFromString(ServerPlayerEntity player, String itemName, int amount) {
+        
+        var item = getItemFromString(itemName);
+        if(item == null) {
+            return "Récompense annulée, l'item " + itemName + " n'existe pas, veuillez rééssayer.";
+        }
+
+        giveItem(player, item, amount);
+
+        return "Vous avez donné une récompense au joueur : " + amount + " " + itemName;
+    }
+
+    public static String giveItemWithCommand(ServerPlayerEntity player, String item, int amount) {
 
         var command = "/give " + player.getName().getString() + " " + item + " " + amount;
         
@@ -52,6 +72,7 @@ public class ChatBotActions {
         return message;
 
     }
+
 
     public static void giveItem(ServerPlayerEntity player, Item item, int amount) {
         player.giveItemStack(new ItemStack(item, amount));
@@ -91,10 +112,11 @@ public class ChatBotActions {
         }
     }
 
-    public static void smite(ServerPlayerEntity player, int amount) {
+    public static String smite(ServerPlayerEntity player, int amount) {
         for(int i = 0; i<amount; i++) {
             smite(player);
         }
+        return "Dieu a puni le joueur " + amount + " fois.";
     }
 
     public static void smite(ServerPlayerEntity player) {

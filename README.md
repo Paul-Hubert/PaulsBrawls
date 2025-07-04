@@ -16,12 +16,10 @@ Simple changes that make capture the flag more fun :
 
 Adds commands to interact with God in Minecraft, supported by an AI LLM.
 
-By chatting with God with /chat, you can convince it to give you gifts, or incur it's wrath and get punished.
+By chatting with God with /prier, you can convince it to give you gifts, or incur it's wrath and get punished.
 
-You can show what you see to God with /proof, sending a screenshot of your Minecraft view automatically.
-
-It can give you quests or propose trades.
-In order to get your quest rewards, you need to send proof with a screenshot
+It can give you quests or propose trades that you can accept with /accepter.
+In order to get your quest rewards, you need to send proof with /prouver.
+You can show what you see to God, sending a screenshot of your Minecraft view automatically.
 
 # TODO
-

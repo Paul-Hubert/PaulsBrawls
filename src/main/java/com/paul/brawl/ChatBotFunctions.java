@@ -18,15 +18,8 @@ public class ChatBotFunctions {
         @JsonPropertyDescription("Le nombre d'item à donner.")
         public int amount;
 
-        private String outputMessage;
-
-        public Recompense execute(ServerPlayerEntity player) {
-            outputMessage = ChatBotActions.giveItemFromString(player, itemName, amount);
-            return this;
-        }
-
-        public String toString() {
-            return outputMessage != null ? outputMessage : "Vous avez donné une récompense au joueur !";
+        public String execute(ServerPlayerEntity player) {
+            return ChatBotActions.giveItemFromString(player, itemName, amount);
         }
     }
 
@@ -42,14 +35,8 @@ public class ChatBotFunctions {
         @JsonPropertyDescription("Le nombre d'item à prendre au joueur en échange.")
         public int takeAmount;
 
-        public Echange execute(ServerPlayerEntity player) {
-            ChatBotActions.sendTradeOffer(player, giveItemName, giveAmount, takeItemName, takeAmount);
-            return this;
-        }
-
-        public String toString() {
-            return "Dieu a proposé un échange au joueur : Dieu donne "
-             + giveAmount + " " + giveItemName + " contre " + takeAmount + " " + takeItemName;
+        public String execute(ServerPlayerEntity player) {
+            return ChatBotActions.sendTradeOffer(player, giveItemName, giveAmount, takeItemName, takeAmount);
         }
     }
 
@@ -58,13 +45,8 @@ public class ChatBotFunctions {
         @JsonPropertyDescription("Le nombre de punitions à infliger au joueur.")
         public int amount;
 
-        public Punition execute(ServerPlayerEntity player) {
-            ChatBotActions.smite(player, amount);
-            return this;
-        }
-
-        public String toString() {
-            return "Dieu a puni le joueur.";
+        public String execute(ServerPlayerEntity player) {
+            return ChatBotActions.smite(player, amount);
         }
     }
 
@@ -89,7 +71,7 @@ public class ChatBotFunctions {
     }
 
     private static boolean callFunction(ResponseFunctionToolCall function, ServerPlayerEntity player) {
-        Object ret = null;
+        String ret = null;
         switch (function.name()) {
             case "Recompense":
                 ret = function.arguments(Recompense.class).execute(player);
@@ -103,7 +85,7 @@ public class ChatBotFunctions {
             default:
                 throw new IllegalArgumentException("Unknown function: " + function.name());
         }
-        addFunctionReturn(ret.toString(), function, player);
+        addFunctionReturn(ret, function, player);
         return true;
     }
 

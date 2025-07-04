@@ -163,12 +163,10 @@ public class ChatBot {
                 addOutputsToHistory(r, player);
                 printOutputs(r, player);
                 boolean hadFunctions = ChatBotFunctions.checkForFunctions(r, player);
-                /* 
+                
                 if(hadFunctions) {
-                    LOGGER.info("before chat request");
                     sendChatRequest("Vous avez appelé des fonctions.", player);
-                    LOGGER.info("after chat request");
-                }*/
+                }
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -211,6 +209,7 @@ public class ChatBot {
 
     private static void printOutputs(Response response, ServerPlayerEntity player) {
         var text = getResponseText(response);
+        if(text.isEmpty()) return;
         ChatPrinter.sendMessage(player, "Dieu : " + text);
     }
 
