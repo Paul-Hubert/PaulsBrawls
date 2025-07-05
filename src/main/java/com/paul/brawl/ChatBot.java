@@ -12,6 +12,7 @@ import java.util.function.BiConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.gson.JsonObject;
 import com.openai.client.OpenAIClientAsync;
 import com.openai.client.okhttp.OpenAIOkHttpClientAsync;
 import com.openai.models.ChatModel;
@@ -76,7 +77,7 @@ public class ChatBot {
         prompts.add(messageInputItem);
 
         // Don't save images to history to avoid too many tokens
-        //addInput(prompts, player, messageInputItem);
+        // addInput(prompts, player, messageInputItem);
 
         builder = builder.inputOfResponse(prompts);
 
@@ -92,17 +93,27 @@ public class ChatBot {
 
     public static CompletableFuture<Response> sendChatRequest(String input, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
 
-        var builder = makeBuilder(player);
-        
-        var prompts = getPromptList(player);
-
         var item = ResponseInputItem
             .ofEasyInputMessage(EasyInputMessage.builder()
             .role(EasyInputMessage.Role.USER)
             .content(input)
             .build());
 
-        addInput(prompts, player, item);
+        return sendRequest(item, player, callback);
+    }
+
+
+    public static CompletableFuture<Response> sendFunctionOutput(ServerPlayerEntity player) {
+        return sendRequest(null, player, null);
+    }
+
+    public static CompletableFuture<Response> sendRequest(ResponseInputItem item, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
+
+        var builder = makeBuilder(player);
+        
+        var prompts = getPromptList(player);
+
+        if(item != null) addInput(prompts, player, item);
 
         builder = builder.inputOfResponse(prompts);
         
@@ -116,7 +127,7 @@ public class ChatBot {
             .model(ChatModel.GPT_4O);
         
         builder = ChatBotFunctions.registerTools(builder);
-
+        
         /*
         if(!previousResponseId.equals(NULL_ID)) {
             builder = builder.previousResponseId(previousResponseId);
@@ -147,6 +158,15 @@ public class ChatBot {
                 .content(hardcodedPrompt + "\n" + prompt)
                 .build()));
 
+        JsonObject jsonObject = PlayerDataCollector.collect(player);
+
+        l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
+                .role(EasyInputMessage.Role.SYSTEM)
+                .content("Le joueur avec lequel tu intéragis as ses informations au format json ici : \n"
+                         + jsonObject.getAsString())
+                .build()));
+
+        
         var lf = ChatBotPlayerHistory.getInputs(player);
 
         if(lf != null) {
@@ -165,7 +185,7 @@ public class ChatBot {
                 boolean hadFunctions = ChatBotFunctions.checkForFunctions(r, player);
                 
                 if(hadFunctions) {
-                    sendChatRequest("Vous avez appelé des fonctions.", player);
+                    sendFunctionOutput(player);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
