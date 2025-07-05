@@ -80,7 +80,7 @@ public class PlayerDataCollector {
             worldData.addProperty("is_thundering", sw.isThundering());
             data.add("world", worldData);
         }
-
+        
         return data;
     }
 } 

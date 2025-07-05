@@ -10,6 +10,12 @@ public class Money {
     public static Item MONEY;
 
     public static void register() {
+        
+        registerCoinItem();
+
+    }
+
+    public static void registerCoinItem() {
         MONEY = Registry.register(
 			Registries.ITEM,
 			Identifier.of("paulsbrawls", "coin"),

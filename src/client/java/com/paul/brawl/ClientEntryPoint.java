@@ -6,8 +6,6 @@ public class ClientEntryPoint implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 
-		ProofReceiver.commonRegister();
-
 		Screenshotter.register();
 
 		Money.register();

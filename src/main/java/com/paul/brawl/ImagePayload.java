@@ -1,18 +1,21 @@
 package com.paul.brawl;
 
+import com.openai.models.images.ImageEditParams.Image;
+
 import net.minecraft.network.RegistryByteBuf;
 import net.minecraft.network.codec.PacketCodec;
 import net.minecraft.network.codec.PacketCodecs;
 import net.minecraft.network.packet.CustomPayload;
 import net.minecraft.util.Identifier;
 
-public record ImagePayload(byte[] image) implements CustomPayload {
+public record ImagePayload(byte[] image, String text) implements CustomPayload {
 
-    public static final Identifier identifier = Identifier.of("screenshot", "proof");
+    public static final Identifier identifier = Identifier.of("screenshot", "image");
 
     public static final CustomPayload.Id<ImagePayload> ID = new CustomPayload.Id<>(identifier);
     public static final PacketCodec<RegistryByteBuf, ImagePayload> CODEC = PacketCodec.tuple(
         PacketCodecs.BYTE_ARRAY, ImagePayload::image,
+        PacketCodecs.STRING, ImagePayload::text,
          ImagePayload::new);
     // should you need to send more data, add the appropriate record parameters and change your codec:
     // public static final PacketCodec<RegistryByteBuf, BlockHighlightPayload> CODEC = PacketCodec.tuple(

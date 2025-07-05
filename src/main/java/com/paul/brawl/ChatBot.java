@@ -46,6 +46,19 @@ public class ChatBot {
         client = OpenAIOkHttpClientAsync.fromEnv();
         
         ChatBot.readPrompt();
+
+        ChatMessageHistory.register();
+
+		ChatCommand.register();
+
+        ChatBotActions.register();
+        
+		ImageReceiver.commonRegister();
+
+		ImageReceiver.register();
+
+		TradeOffers.register();
+
     }
 
     
@@ -58,8 +71,10 @@ public class ChatBot {
 
         var builder = makeBuilder(player);
         
-        String base64url = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(bytes);
+        input = modifyImagePrompt(input);
 
+        String base64url = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(bytes);
+        
         ResponseInputImage image = ResponseInputImage.builder()
                 .detail(ResponseInputImage.Detail.AUTO)
                 .imageUrl(base64url)
@@ -74,10 +89,10 @@ public class ChatBot {
         
         var prompts = getPromptList(player);
 
-        prompts.add(messageInputItem);
+        //prompts.add(messageInputItem);
 
         // Don't save images to history to avoid too many tokens
-        // addInput(prompts, player, messageInputItem);
+        addInput(prompts, player, messageInputItem);
 
         builder = builder.inputOfResponse(prompts);
 
@@ -158,14 +173,19 @@ public class ChatBot {
                 .content(hardcodedPrompt + "\n" + prompt)
                 .build()));
 
-        JsonObject jsonObject = PlayerDataCollector.collect(player);
+        String jsonString = PlayerDataCollector.collect(player).toString();
 
         l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
                 .role(EasyInputMessage.Role.SYSTEM)
                 .content("Le joueur avec lequel tu intéragis as ses informations au format json ici : \n"
-                         + jsonObject.getAsString())
+                         + jsonString)
                 .build()));
 
+        l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
+                .role(EasyInputMessage.Role.SYSTEM)
+                .content("L'historique du chat, des commandes et des messages du jeu est montré ici : \n"
+                         + ChatMessageHistory.getHistory())
+                .build()));
         
         var lf = ChatBotPlayerHistory.getInputs(player);
 
@@ -177,7 +197,6 @@ public class ChatBot {
 
     public static void setupGeneralCallback(CompletableFuture<Response> response, ServerPlayerEntity player) {
         response.thenAccept(r -> {
-            
             try {
                 setPreviousId(r);
                 addOutputsToHistory(r, player);
@@ -258,6 +277,15 @@ public class ChatBot {
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    public static String modifyImagePrompt(String s) {
+        if(s.contains("prouver :")) {
+            return Prompts.proofPrompt + s;
+        } else if(s.contains("construire :")) {
+            return Prompts.buildPrompt + s;
+        }
+        return s;
     }
     
 

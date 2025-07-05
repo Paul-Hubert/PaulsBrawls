@@ -3,12 +3,19 @@ package com.paul.brawl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
+import com.mojang.brigadier.Command;
+import com.mojang.brigadier.arguments.FloatArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.minecraft.block.Block;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LightningEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
+import net.minecraft.server.command.CommandManager;
+import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
@@ -17,8 +24,6 @@ import net.minecraft.world.World;
 public class ChatBotActions {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("ChatBotActions");
-
-    private static String message;
 
     public static void register() {
         registerCommandMessageEvent();
@@ -65,11 +70,8 @@ public class ChatBotActions {
         var manager = player.getServer().getCommandManager();
         var source = player.getServer().getCommandSource();
 
-        message = null;
-        LOGGER.info("before " + message);
         manager.executeWithPrefix(source, command);
-        LOGGER.info("after " + message);
-        return message;
+        return "";
 
     }
 
@@ -134,11 +136,60 @@ public class ChatBotActions {
     }
 
     public static void registerCommandMessageEvent() {
-        ServerMessageEvents.ALLOW_COMMAND_MESSAGE.register((m, s, p) -> {
-            if(message == null) message = m.getSignedContent();
-            return true;
+
+        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+            dispatcher.register(
+                LiteralArgumentBuilder.<ServerCommandSource>literal("bloc")
+                    .requires(source -> source.hasPermissionLevel(2)) // Admin only
+                    .then(CommandManager.argument("x", FloatArgumentType.floatArg())
+                    .then(CommandManager.argument("y", FloatArgumentType.floatArg())
+                        .executes(context -> {
+                            float x = FloatArgumentType.getFloat(context, "x");
+                            float y = FloatArgumentType.getFloat(context, "y");
+                            placeBlockAtImageSpot(context.getSource().getPlayer(), x, y, "minecraft:stone");
+                            return Command.SINGLE_SUCCESS;
+                        })))
+            );
         });
+
     }
 
+    public static void placeBlockAtImageSpots(ServerPlayerEntity player, float[] x, float[] y, String blockType) {
+        for(int i = 0; i<Math.min(x.length, x.length); i++) {
+            var X = x[i];
+            var Y = y[i];
+            placeBlockAtImageSpot(player, X, Y, blockType);
+        }
+    }
+
+    public static void placeBlockAtImageSpot(ServerPlayerEntity player, float x, float y, String blockType) {
+
+        BlockPos pos = Raycaster.raycast(player, x, y);
+
+        if (pos != null) {
+            Item blockItem = getItemFromString(blockType);
+            if (blockItem != null) {
+                Block block = Block.getBlockFromItem(blockItem);
+                if (block != null) {
+                    player.getWorld().setBlockState(pos, block.getDefaultState());
+                }
+            }
+        }
+
+
+    }
+
+
+    public static String changeWeather(ServerPlayerEntity player, String weatherType, int durationSeconds) {
+        if (player == null || player.getServer() == null) {
+            return "Impossible de changer la météo : joueur ou serveur invalide.";
+        }
+        String command = "/weather " + weatherType.toLowerCase() + " " + durationSeconds;
+        player.getServer().getCommandManager().executeWithPrefix(
+            player.getServer().getCommandSource(),
+            command
+        );
+        return "La météo a été changée en " + weatherType + " pour " + (durationSeconds > 0 ? durationSeconds + " secondes." : "une durée indéterminée.");
+    }
 
 }

@@ -8,6 +8,10 @@ import com.openai.models.responses.ResponseFunctionToolCall;
 import com.openai.models.responses.ResponseInputItem;
 
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
+import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.BlockPos;
 
 public class ChatBotFunctions {
 
@@ -50,11 +54,40 @@ public class ChatBotFunctions {
         }
     }
 
+    @JsonClassDescription("Change la météo du monde du joueur.")
+    static class ChangerMeteo {
+        @JsonPropertyDescription("Type de météo à appliquer. Exemples: clear, rain, thunder")
+        public String weatherType;
+        @JsonPropertyDescription("Durée de la météo en secondes. 0 pour permanent.")
+        public int durationSeconds;
+
+        public String execute(ServerPlayerEntity player) {
+            return ChatBotActions.changeWeather(player, weatherType, durationSeconds);
+        }
+    }
+
+    @JsonClassDescription("Place un bloc à un emplacement choisi sur une image.")
+    static class Placer {
+        @JsonPropertyDescription("Coordonnée X de la position choisie sur l'image. Entre -1 (gauche) et +1 (droite)")
+        public float[] x;
+        @JsonPropertyDescription("Coordonnée Y de la position choisie sur l'image. Entre -1 (haut) et +1 (base)")
+        public float[] y;
+        @JsonPropertyDescription("Type de bloc à placer. Exemple: minecraft:stone")
+        public String blockType;
+
+        public String execute(ServerPlayerEntity player) {
+            ChatBotActions.placeBlockAtImageSpots(player, x, y, blockType);
+            return "Bloc placé.";
+        }
+    }
+
     public static Builder registerTools(Builder builder) {
         return builder
             .addTool(Recompense.class)
             .addTool(Echange.class)
-            .addTool(Punition.class);
+            .addTool(Punition.class)
+            .addTool(ChangerMeteo.class)
+            .addTool(Placer.class);
     }
 
     private static boolean hadFunctionCall = false;
@@ -81,6 +114,12 @@ public class ChatBotFunctions {
                 break;
             case "Punition":
                 ret = function.arguments(Punition.class).execute(player);
+                break;
+            case "ChangerMeteo":
+                ret = function.arguments(ChangerMeteo.class).execute(player);
+                break;
+            case "Placer":
+                ret = function.arguments(Placer.class).execute(player);
                 break;
             default:
                 throw new IllegalArgumentException("Unknown function: " + function.name());

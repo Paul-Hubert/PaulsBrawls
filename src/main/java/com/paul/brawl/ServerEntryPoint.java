@@ -11,25 +11,21 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 	@Override
 	public void onInitializeServer() {
 		
-		Money.register();
 
+		// Money
 		GibCommand.register();
 
 		RevenueManager.register();
 
 		SalaryScheduler.register();
 
+		Money.register();
+
+
+
 		FlagManager.register();
 
 		ChatBot.register();
-
-		ChatCommand.register();
-
-		ProofReceiver.commonRegister();
-
-		ProofReceiver.register();
-
-		TradeOffers.register();
 
 	}
 
