@@ -98,7 +98,7 @@ public class Screenshotter {
 
 		NativeImage nativeImage = ScreenshotRecorder.takeScreenshot(MinecraftClient.getInstance().getFramebuffer());
 		
-		var img2 = new NativeImage(854*2, 480*2, true);
+		var img2 = new NativeImage(854, 480, true);
 		
 		nativeImage.resizeSubRectTo(0, 0, nativeImage.getWidth(), nativeImage.getHeight(), img2);
 

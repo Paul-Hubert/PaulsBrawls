@@ -71,7 +71,7 @@ public class ChatBot {
 
         var builder = makeBuilder(player);
         
-        input = modifyImagePrompt(input);
+        input = modifyImagePrompt(player, input);
 
         String base64url = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(bytes);
         
@@ -80,18 +80,21 @@ public class ChatBot {
                 .imageUrl(base64url)
                 .build();
 
-        ResponseInputItem messageInputItem = ResponseInputItem.ofMessage(ResponseInputItem.Message.builder()
+        ResponseInputItem imageInputItem = ResponseInputItem.ofMessage(ResponseInputItem.Message.builder()
                 .role(ResponseInputItem.Message.Role.USER)
-                .addInputTextContent(input)
                 .addContent(image)
                 .build());
 
+        ResponseInputItem messageInputItem = ResponseInputItem.ofMessage(ResponseInputItem.Message.builder()
+                .role(ResponseInputItem.Message.Role.USER)
+                .addInputTextContent(input)
+                .build());
         
         var prompts = getPromptList(player);
 
-        //prompts.add(messageInputItem);
-
         // Don't save images to history to avoid too many tokens
+        prompts.add(imageInputItem);
+
         addInput(prompts, player, messageInputItem);
 
         builder = builder.inputOfResponse(prompts);
@@ -139,7 +142,7 @@ public class ChatBot {
 
     public static ResponseCreateParams.Builder makeBuilder(ServerPlayerEntity player) {
         var builder = ResponseCreateParams.builder()
-            .model(ChatModel.GPT_4O);
+            .model(ChatModel.O4_MINI);
         
         builder = ChatBotFunctions.registerTools(builder);
         
@@ -186,6 +189,12 @@ public class ChatBot {
                 .content("L'historique du chat, des commandes et des messages du jeu est montré ici : \n"
                          + ChatMessageHistory.getHistory())
                 .build()));
+
+        l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
+                .role(EasyInputMessage.Role.SYSTEM)
+                .content("Voici les informations sur les blocs à proximité du curseur du joueur : \n"
+                    + ChatBotActions.getBlockInfo(player))
+                .build()));
         
         var lf = ChatBotPlayerHistory.getInputs(player);
 
@@ -213,11 +222,10 @@ public class ChatBot {
     }
 
     public static void setupCustomCallback(CompletableFuture<Response> response, BiConsumer<? super Response, String> callback) {
-        if(callback == null) return;
-
+        
         response.handleAsync(
             (r, ex) -> {
-                if (ex == null) {
+                if (ex == null && callback != null) {
                     callback.accept(r, getResponseText(r));
                     return 1L;
                 } else {
@@ -243,6 +251,11 @@ public class ChatBot {
             .flatMap(item -> item.message().stream())
             .forEach(message -> {
             ChatBotPlayerHistory.addInput(ResponseInputItem.ofResponseOutputMessage(message), player);
+        });
+        response.output().stream()
+            .flatMap(item -> item.reasoning().stream())
+            .forEach(reasoning -> {
+            ChatBotPlayerHistory.addInput(ResponseInputItem.ofReasoning(reasoning), player);
         });
     }
 
@@ -279,7 +292,7 @@ public class ChatBot {
         }
     }
 
-    public static String modifyImagePrompt(String s) {
+    public static String modifyImagePrompt(ServerPlayerEntity player, String s) {
         if(s.contains("prouver :")) {
             return Prompts.proofPrompt + s;
         } else if(s.contains("construire :")) {

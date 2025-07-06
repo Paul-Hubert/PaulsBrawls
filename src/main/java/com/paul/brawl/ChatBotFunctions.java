@@ -68,15 +68,17 @@ public class ChatBotFunctions {
 
     @JsonClassDescription("Place un bloc à un emplacement choisi sur une image.")
     static class Placer {
-        @JsonPropertyDescription("Coordonnée X de la position choisie sur l'image. Entre -1 (gauche) et +1 (droite)")
-        public float[] x;
-        @JsonPropertyDescription("Coordonnée Y de la position choisie sur l'image. Entre -1 (haut) et +1 (base)")
-        public float[] y;
+        @JsonPropertyDescription("Coordonnée X de la position choisie à partir du milieu de l'image.")
+        public int[] x;
+        @JsonPropertyDescription("Coordonnée Y de la position choisie à partir du milieu de l'image.")
+        public int[] y;
+        @JsonPropertyDescription("Coordonnée Z de la position choisie à partir du milieu de l'image.")
+        public int[] z;
         @JsonPropertyDescription("Type de bloc à placer. Exemple: minecraft:stone")
         public String blockType;
 
         public String execute(ServerPlayerEntity player) {
-            ChatBotActions.placeBlockAtImageSpots(player, x, y, blockType);
+            ChatBotActions.placeBlockAtImageSpots(player, x, y, z, blockType);
             return "Bloc placé.";
         }
     }

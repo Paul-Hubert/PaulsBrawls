@@ -1,6 +1,8 @@
 package com.paul.brawl;
 
-import org.joml.Quaternionf;
+import java.util.HashMap;
+import java.util.UUID;
+
 import org.joml.Vector3f;
 
 import net.minecraft.entity.Entity;
@@ -16,6 +18,7 @@ import net.minecraft.world.RaycastContext;
 
 public class Raycaster {
     
+    private static HashMap<UUID, BlockPos> lastPos = new HashMap<>();
 
     public static BlockPos raycast(ServerPlayerEntity player, float x, float y) {
         var c = player.getRotationVec(0.1f);
@@ -59,7 +62,9 @@ public class Raycaster {
 
         if (nextHit.getType() == HitResult.Type.BLOCK) {
             var result = (BlockHitResult) nextHit;
-            BlockPos ret = result.getBlockPos().add(result.getSide().getVector());
+            BlockPos ret = result.getBlockPos();
+            // for getting the block facing the side that is selected
+            //.add(result.getSide().getVector());
             return ret;
         } else if(nextHit.getType() == HitResult.Type.ENTITY) {
             System.out.println("Entity");
@@ -132,4 +137,13 @@ public class Raycaster {
                 entity
         ));
     }
+
+    public static BlockPos getLastPos(UUID uuid) {
+        return lastPos.get(uuid);
+    }
+
+    public static void setLastPos(ServerPlayerEntity player) {
+        lastPos.put(player.getUuid(), raycast(player, 0, 0));
+    }
+
 }

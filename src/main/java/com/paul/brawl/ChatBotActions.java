@@ -4,11 +4,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.mojang.brigadier.Command;
-import com.mojang.brigadier.arguments.FloatArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LightningEntity;
 import net.minecraft.item.Item;
@@ -19,6 +20,7 @@ import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3i;
 import net.minecraft.world.World;
 
 public class ChatBotActions {
@@ -141,31 +143,84 @@ public class ChatBotActions {
             dispatcher.register(
                 LiteralArgumentBuilder.<ServerCommandSource>literal("bloc")
                     .requires(source -> source.hasPermissionLevel(2)) // Admin only
-                    .then(CommandManager.argument("x", FloatArgumentType.floatArg())
-                    .then(CommandManager.argument("y", FloatArgumentType.floatArg())
+                    .then(CommandManager.argument("x", IntegerArgumentType.integer())
+                    .then(CommandManager.argument("y", IntegerArgumentType.integer())
+                    .then(CommandManager.argument("z", IntegerArgumentType.integer())
                         .executes(context -> {
-                            float x = FloatArgumentType.getFloat(context, "x");
-                            float y = FloatArgumentType.getFloat(context, "y");
-                            placeBlockAtImageSpot(context.getSource().getPlayer(), x, y, "minecraft:stone");
+                            int x = IntegerArgumentType.getInteger(context, "x");
+                            int y = IntegerArgumentType.getInteger(context, "y");
+                            int z = IntegerArgumentType.getInteger(context, "z");
+                            placeBlockAtImageSpots(context.getSource().getPlayer(), new int[] {x}, new int[] {y}, new int[] {z}, "minecraft:stone");
                             return Command.SINGLE_SUCCESS;
-                        })))
+                        }))))
+            );
+        });
+
+        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+            dispatcher.register(
+                LiteralArgumentBuilder.<ServerCommandSource>literal("construction")
+                    .requires(source -> source.hasPermissionLevel(2)) // Admin only
+                    .executes(context -> {
+                        Raycaster.setLastPos(context.getSource().getPlayer());
+                        return Command.SINGLE_SUCCESS;
+                    })
             );
         });
 
     }
 
-    public static void placeBlockAtImageSpots(ServerPlayerEntity player, float[] x, float[] y, String blockType) {
-        for(int i = 0; i<Math.min(x.length, x.length); i++) {
+
+
+    public static void placeBlockAtImageSpots(ServerPlayerEntity player, int[] x, int[] y, int[] z, String blockType) {
+        
+        BlockPos pos = Raycaster.getLastPos(player.getUuid());
+
+        if(pos == null) return;
+        
+        for(int i = 0; i<Math.min(x.length, Math.min(y.length, z.length)); i++) {
             var X = x[i];
             var Y = y[i];
-            placeBlockAtImageSpot(player, X, Y, blockType);
+            var Z = z[i];
+            var p = new BlockPos(pos).add(X, Y, Z);
+            changeBlockAtPos(player, blockType, p);
         }
     }
 
-    public static void placeBlockAtImageSpot(ServerPlayerEntity player, float x, float y, String blockType) {
 
-        BlockPos pos = Raycaster.raycast(player, x, y);
+    public static String getBlockInfo(ServerPlayerEntity player) {
+        StringBuilder sb = new StringBuilder();
 
+        sb.append("Surrounding block info : \n");
+
+        BlockPos pos = Raycaster.getLastPos(player.getUuid());
+
+        if(pos == null) return "";
+        
+        var zone = 16;
+        sb.append("[\n");
+        for(int i = 0; i<zone; i++) {
+            for(int j = 0; j<zone; j++) {
+                for(int k = zone-1; k>-zone+1; k--) {
+                    Vec3i v = new Vec3i(i - zone/2, k - zone/2, j - zone/2);
+                    var p = new BlockPos(pos).add(v);
+                    BlockState state = player.getWorld().getBlockState(p);
+                    if(state.isAir()) {
+                        continue;
+                    } else {
+                        var name = state.getBlock().asItem().toString();
+                        sb.append("\"{x:" + v.getX() + ", y:" + v.getY() + ", z:" + v.getZ() + ", block: " + name + ",\n");
+                        break;
+                    }
+                }
+            }
+        }
+        sb.append("]");
+        return sb.toString();
+    }
+
+
+
+    public static void changeBlockAtPos(ServerPlayerEntity player, String blockType, BlockPos pos) {
         if (pos != null) {
             Item blockItem = getItemFromString(blockType);
             if (blockItem != null) {
@@ -175,8 +230,6 @@ public class ChatBotActions {
                 }
             }
         }
-
-
     }
 
 
