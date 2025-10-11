@@ -1,7 +1,7 @@
 package com.paul.brawl;
 
-import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -11,16 +11,19 @@ import com.openai.models.responses.ResponseInputItem;
 import net.minecraft.server.network.ServerPlayerEntity;
 
 public class ChatBotPlayerHistory {
-
+    public static int MAX_HISTORY = 10;
     public static Map<UUID, List<ResponseInputItem>> previousInputsPerPlayer = new HashMap<>();
 
     public static void addInput(ResponseInputItem item, ServerPlayerEntity player) {
         List<ResponseInputItem> list = previousInputsPerPlayer.get(player.getUuid());
         if(list == null) {
-            list = (List<ResponseInputItem>) new ArrayList<ResponseInputItem>();
+            list = (List<ResponseInputItem>) new LinkedList<ResponseInputItem>();
             previousInputsPerPlayer.put(player.getUuid(), list);
         }
-        list.add(item);
+        if (list.size() >= MAX_HISTORY) {
+            //list.removeFirst();
+        }
+        list.addLast(item);
     }
 
     public static List<ResponseInputItem> popInputs(ServerPlayerEntity player) {
