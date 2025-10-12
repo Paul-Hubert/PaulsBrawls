@@ -3,18 +3,15 @@ package com.paul.brawl;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.filter.FilteredMessage;
 import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.registry.RegistryKey;
 import net.minecraft.network.message.MessageType;
 import net.minecraft.network.message.SignedMessage;
 import net.minecraft.text.Text;
 
 import java.util.LinkedList;
-import java.util.List;
 
 public class ChatMessageHistory {
-    private static final int MAX_HISTORY = 200;
+    private static final int MAX_HISTORY = 40;
     private static final LinkedList<String> messageHistory = new LinkedList<>();
 
     public static void register() {
