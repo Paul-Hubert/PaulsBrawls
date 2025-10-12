@@ -134,3 +134,64 @@ task copyToClientMods(type: Copy) {
 
 build.finalizedBy(copyToMods)
 build.finalizedBy(copyToClientMods)
+
+// Development automation tasks
+task devBuild {
+    group = 'development'
+    description = 'Build the project and copy to mods folders'
+    dependsOn 'build'
+    finalizedBy 'copyToMods'
+    finalizedBy 'copyToClientMods'
+}
+
+task devTest {
+    group = 'development'
+    description = 'Run tests and build if successful'
+    dependsOn 'test'
+    finalizedBy 'build'
+}
+
+task devClean {
+    group = 'development'
+    description = 'Clean build directory and remove mods'
+    dependsOn 'clean'
+    doLast {
+        if (project.hasProperty('mods_folder') && !project.property('mods_folder').equals('path/to/your/mods')) {
+            delete fileTree(dir: project.property('mods_folder'), include: 'paulsbrawls-*.jar')
+            println "Removed old mods from ${project.property('mods_folder')}"
+        }
+        if (project.hasProperty('client_mods_folder') && !project.property('client_mods_folder').equals('path/to/your/mods')) {
+            delete fileTree(dir: project.property('client_mods_folder'), include: 'paulsbrawls-*.jar')
+            println "Removed old mods from ${project.property('client_mods_folder')}"
+        }
+    }
+}
+
+
+task devRestart {
+    group = 'development'
+    description = 'Full development cycle: clean, build, test, deploy'
+    dependsOn 'devClean'
+    finalizedBy 'devBuild'
+    finalizedBy 'devTest'
+    doLast {
+        println "Development restart completed!"
+        println "Mod has been built and deployed to mods folders"
+    }
+}
+
+// Quick development tasks
+task quickBuild {
+    group = 'development'
+    description = 'Quick build without tests'
+    dependsOn 'compileJava'
+    finalizedBy 'remapJar'
+    finalizedBy 'copyToMods'
+    finalizedBy 'copyToClientMods'
+}
+
+task quickTest {
+    group = 'development'
+    description = 'Quick test without full build'
+    dependsOn 'test'
+}
