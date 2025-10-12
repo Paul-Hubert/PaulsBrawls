@@ -40,6 +40,7 @@ public class ChatBot {
 
     public static String hardcodedPrompt = "";
     public static String prompt = "";
+    public static boolean hasImage = false;
 
     public static void register() {
         // Configures using the `OPENAI_API_KEY`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` environment variables
@@ -93,7 +94,9 @@ public class ChatBot {
         var prompts = getPromptList(player);
 
         // Don't save images to history to avoid too many tokens
-        prompts.add(imageInputItem);
+        if(hasImage) {
+            prompts.add(imageInputItem);
+        }
 
         addInput(prompts, player, messageInputItem);
 
@@ -142,7 +145,7 @@ public class ChatBot {
 
     public static ResponseCreateParams.Builder makeBuilder(ServerPlayerEntity player) {
         var builder = ResponseCreateParams.builder()
-            .model(ChatModel.O4_MINI);
+            .model(ChatModel.of("gpt-5"));//openai/gpt-oss-20b
         
         builder = ChatBotFunctions.registerTools(builder);
         
@@ -243,7 +246,11 @@ public class ChatBot {
     }
     
     private static void setPreviousId(Response response) {
-        previousResponseId = response.id();
+        try {
+            //previousResponseId = response.id();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     private static void addOutputsToHistory(Response response, ServerPlayerEntity player) {

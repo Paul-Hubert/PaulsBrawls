@@ -15,11 +15,11 @@ import net.minecraft.util.math.BlockPos;
 
 public class ChatBotFunctions {
 
-    @JsonClassDescription("Donne une récompense au joueur sous forme d'item.")
-    static class Recompense {
-        @JsonPropertyDescription("Le nom de l'item à donner. Exemples: minecraft:diamond, minecraft:enchanted_book[minecraft:enchantments={mending: 1, sharpness: 4, unbreaking: 3}]")
+    @JsonClassDescription("Gives a reward to the player in the form of an item.")
+    static class Reward {
+        @JsonPropertyDescription("The name of the item to give. Examples: minecraft:diamond, minecraft:enchanted_book[minecraft:enchantments={mending: 1, sharpness: 4, unbreaking: 3}]")
         public String itemName;
-        @JsonPropertyDescription("Le nombre d'item à donner.")
+        @JsonPropertyDescription("The number of items to give.")
         public int amount;
 
         public String execute(ServerPlayerEntity player) {
@@ -27,16 +27,16 @@ public class ChatBotFunctions {
         }
     }
 
-    @JsonClassDescription("Propose un échange au joueur.")
-    static class Echange {
-        @JsonPropertyDescription("Le nom de l'item à donner au joueur en échange. Exemple: minecraft:diamond")
+    @JsonClassDescription("Offers a trade to the player.")
+    static class Trade {
+        @JsonPropertyDescription("The name of the item to give to the player in the trade. Example: minecraft:diamond")
         public String giveItemName;
-        @JsonPropertyDescription("Le nombre d'item à donner au joueur en échange.")
+        @JsonPropertyDescription("The number of items to give to the player in the trade.")
         public int giveAmount;
 
-        @JsonPropertyDescription("Le nom de l'item à prendre au joueur en échange. Exemple: minecraft:diamond")
+        @JsonPropertyDescription("The name of the item to take from the player in the trade. Example: minecraft:diamond")
         public String takeItemName;
-        @JsonPropertyDescription("Le nombre d'item à prendre au joueur en échange.")
+        @JsonPropertyDescription("The number of items to take from the player in the trade.")
         public int takeAmount;
 
         public String execute(ServerPlayerEntity player) {
@@ -44,9 +44,9 @@ public class ChatBotFunctions {
         }
     }
 
-    @JsonClassDescription("Propose un échange au joueur.")
-    static class Punition {
-        @JsonPropertyDescription("Le nombre de punitions à infliger au joueur.")
+    @JsonClassDescription("Punishes the player by inflicting a number of punishments.")
+    static class Punishment {
+        @JsonPropertyDescription("The number of punishments to inflict to the player.")
         public int amount;
 
         public String execute(ServerPlayerEntity player) {
@@ -54,11 +54,11 @@ public class ChatBotFunctions {
         }
     }
 
-    @JsonClassDescription("Change la météo du monde du joueur.")
-    static class ChangerMeteo {
-        @JsonPropertyDescription("Type de météo à appliquer. Exemples: clear, rain, thunder")
+    @JsonClassDescription("Changes the weather of the player's world.")
+    static class ChangeWeather {
+        @JsonPropertyDescription("Type of weather to set. Examples: clear, rain, thunder")
         public String weatherType;
-        @JsonPropertyDescription("Durée de la météo en secondes. 0 pour permanent.")
+        @JsonPropertyDescription("Weather duration in seconds. 0 for permanent.")
         public int durationSeconds;
 
         public String execute(ServerPlayerEntity player) {
@@ -66,30 +66,55 @@ public class ChatBotFunctions {
         }
     }
 
-    @JsonClassDescription("Place un bloc à un emplacement choisi sur une image.")
-    static class Placer {
-        @JsonPropertyDescription("Coordonnée X de la position choisie à partir du milieu de l'image.")
+    @JsonClassDescription("Place a block at a chosen location, relative to the user defined pivot of the construction.")
+    static class Place {
+        @JsonPropertyDescription("X coordinate of the chosen position relative to the user defined pivot of the construction.")
         public int[] x;
-        @JsonPropertyDescription("Coordonnée Y de la position choisie à partir du milieu de l'image.")
+        @JsonPropertyDescription("Y coordinate of the chosen position relative to the user defined pivot of the construction.")
         public int[] y;
-        @JsonPropertyDescription("Coordonnée Z de la position choisie à partir du milieu de l'image.")
+        @JsonPropertyDescription("Z coordinate of the chosen position relative to the user defined pivot of the construction.")
         public int[] z;
-        @JsonPropertyDescription("Type de bloc à placer. Exemple: minecraft:stone")
+        @JsonPropertyDescription("Type of block to place. Example: minecraft:stone")
         public String blockType;
 
         public String execute(ServerPlayerEntity player) {
             ChatBotActions.placeBlockAtImageSpots(player, x, y, z, blockType);
-            return "Bloc placé.";
+            return "Block placed.";
         }
     }
 
+    /*
+    @JsonClassDescription("Fill a cube of blocks at a chosen location on an image.")
+    static class FillCube {
+        @JsonPropertyDescription("X coordinate of the beginning of the line.")
+        public int x;
+        @JsonPropertyDescription("Y coordinate of the beginning of the line.")
+        public int y;
+        @JsonPropertyDescription("Z coordinate of the beginning of the line.")
+        public int z;
+        @JsonPropertyDescription("X coordinate of the end of the line.")
+        public int x2;
+        @JsonPropertyDescription("Y coordinate of the end of the line.")
+        public int y2;
+        @JsonPropertyDescription("Z coordinate of the end of the line.")
+        public int z2; 
+        @JsonPropertyDescription("Type of block to place. Example: minecraft:stone")
+        public String blockType;
+
+        public String execute(ServerPlayerEntity player) {
+            ChatBotActions.placeBlockAtImageSpots(player, x, y, z, blockType);
+            return "Block placed.";
+        }
+    }
+    */
+
     public static Builder registerTools(Builder builder) {
         return builder
-            .addTool(Recompense.class)
-            .addTool(Echange.class)
-            .addTool(Punition.class)
-            .addTool(ChangerMeteo.class)
-            .addTool(Placer.class);
+            .addTool(Reward.class)
+            .addTool(Trade.class)
+            .addTool(Punishment.class)
+            .addTool(ChangeWeather.class)
+            .addTool(Place.class);
     }
 
     private static boolean hadFunctionCall = false;
@@ -108,20 +133,20 @@ public class ChatBotFunctions {
     private static boolean callFunction(ResponseFunctionToolCall function, ServerPlayerEntity player) {
         String ret = null;
         switch (function.name()) {
-            case "Recompense":
-                ret = function.arguments(Recompense.class).execute(player);
+            case "Reward":
+                ret = function.arguments(Reward.class).execute(player);
                 break;
-            case "Echange":
-                ret = function.arguments(Echange.class).execute(player);
+            case "Trade":
+                ret = function.arguments(Trade.class).execute(player);
                 break;
-            case "Punition":
-                ret = function.arguments(Punition.class).execute(player);
+            case "Punishment":
+                ret = function.arguments(Punishment.class).execute(player);
                 break;
-            case "ChangerMeteo":
-                ret = function.arguments(ChangerMeteo.class).execute(player);
+            case "ChangeWeather":
+                ret = function.arguments(ChangeWeather.class).execute(player);
                 break;
-            case "Placer":
-                ret = function.arguments(Placer.class).execute(player);
+            case "Place":
+                ret = function.arguments(Place.class).execute(player);
                 break;
             default:
                 throw new IllegalArgumentException("Unknown function: " + function.name());
