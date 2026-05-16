@@ -24,7 +24,7 @@ public class ChatCommand {
     public static void chatCommand() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("prier")
+                LiteralArgumentBuilder.<ServerCommandSource>literal("pray")
                     .requires(source -> source.hasPermissionLevel(0)) // Admin only
                     .then(CommandManager.argument("text", MessageArgumentType.message())
                     .executes(context -> {
@@ -42,7 +42,7 @@ public class ChatCommand {
         try {
             ChatPrinter.sendMessage(source.getPlayer(), source.getPlayer().getName().getString() + " : " + input);
         
-            ChatBot.sendChatRequest(input, source.getPlayer());
+            ChatBot.godBot.sendChatRequest(input, source.getPlayer());
         } catch(Exception e) {
             LOGGER.error(e.toString());
             e.printStackTrace();
@@ -63,7 +63,8 @@ public class ChatCommand {
                         .executes(context -> {
                             Text text = MessageArgumentType.getMessage(context, "text");
 
-                            ChatBot.prompt = text.getString();
+                            ChatBot.godBot.prompt = text.getString();
+                            ChatBot.buildBot.prompt = text.getString();
 
                             var message = "Changed prompt " + text;
                             ChatPrinter.sendMessage(context.getSource().getPlayer(), message);
@@ -79,8 +80,9 @@ public class ChatCommand {
                 LiteralArgumentBuilder.<ServerCommandSource>literal("prompt")
                     .requires(source -> source.hasPermissionLevel(2)) // Admin only
                         .executes(context -> {
-                            ChatBot.readPrompt();
-                            Text text = Text.literal("Hardcoded prompt : ").append(ChatBot.hardcodedPrompt).append("\nCustom Prompt : ").append(ChatBot.prompt);
+                            ChatBot.godBot.readPrompt();
+                            ChatBot.buildBot.readPrompt();
+                            Text text = Text.literal("Hardcoded prompt : ").append(ChatBot.godBot.hardcodedPrompt).append("\nCustom Prompt : ").append(ChatBot.godBot.prompt);
                             context.getSource().getPlayer().sendMessage(text);
                             return Command.SINGLE_SUCCESS;
                         })

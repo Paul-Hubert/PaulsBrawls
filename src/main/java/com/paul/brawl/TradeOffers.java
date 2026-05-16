@@ -34,12 +34,12 @@ public class TradeOffers {
 
             giveItem = ChatBotActions.getItemFromString(giveItemName);
             if(giveItem == null) {
-                return "L'échange est annulé. " + giveItemName + " n'est pas un item correct. Veuillez rééssayer.";
+                return "Trade cancelled. " + giveItemName + " was not a correct item. Please try again.";
             }
 
             takeItem = ChatBotActions.getItemFromString(takeItemName);
             if(takeItem == null) {
-                return "L'échange est annulé. " + takeItemName + " n'est pas un item correct. Veuillez rééssayer.";
+                return "Trade cancelled. " + takeItemName + " was not a correct item. Please try again.";
             }
 
             return null;
@@ -59,7 +59,7 @@ public class TradeOffers {
             int toBeRemoved = takeAmount;
 
             if(amount < toBeRemoved) {
-                ChatPrinter.sendMessage(player, "L'échange est annulé. Vous n'avez que " + amount + " " + takeItemName + " alors qu'il en faut " + takeAmount + ".");
+                ChatPrinter.sendMessage(player, "The trade is cancelled. You only have " + amount + " " + takeItemName + ", but " + takeAmount + " are required.");
                 return false;
             }
             
@@ -77,7 +77,7 @@ public class TradeOffers {
             }
 
             if(toBeRemoved != 0) {
-                ChatPrinter.sendMessage(player, "Retiré trop d'items");
+                ChatPrinter.sendMessage(player, "Trade didn't add up");
             }
 
             ChatBotActions.giveItem(player, giveItem, giveAmount);
@@ -97,7 +97,7 @@ public class TradeOffers {
     private static void registerTradeCommand() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("accepter")
+                LiteralArgumentBuilder.<ServerCommandSource>literal("accept")
                 .executes(context -> {
                     executeOffer(context.getSource().getPlayer());
                     return Command.SINGLE_SUCCESS;
@@ -109,7 +109,7 @@ public class TradeOffers {
     private static void executeOffer(ServerPlayerEntity player) {
         var offer = offers.get(player.getUuid());
         if(offer == null) {
-            ChatPrinter.sendMessage(player, "Vous n'avez pas de demande d'échange en cours, demandez à Dieu avec /prier.");
+            ChatPrinter.sendMessage(player, "You have no trade request in progress, ask God with /pray.");
             return;
         }
 

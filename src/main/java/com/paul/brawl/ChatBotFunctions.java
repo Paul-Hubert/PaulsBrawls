@@ -5,13 +5,8 @@ import com.fasterxml.jackson.annotation.JsonPropertyDescription;
 import com.openai.models.responses.Response;
 import com.openai.models.responses.ResponseCreateParams.Builder;
 import com.openai.models.responses.ResponseFunctionToolCall;
-import com.openai.models.responses.ResponseInputItem;
 
 import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.BlockPos;
 
 public class ChatBotFunctions {
 
@@ -66,71 +61,96 @@ public class ChatBotFunctions {
         }
     }
 
-    @JsonClassDescription("Place a block at a chosen location, relative to the user defined pivot of the construction.")
-    static class Place {
-        @JsonPropertyDescription("X coordinate of the chosen position relative to the user defined pivot of the construction.")
+    @JsonClassDescription("Place a block at a chosen location, relative to the user defined pivot of the construction (0,0,0). X Y and Z coordinates make a relative position that spawns a blockType block")
+    static class PlaceBlock {
+        @JsonPropertyDescription("X coordinate for the block relative to a fixed point.")
+        public int x;
+        @JsonPropertyDescription("Y coordinate for the block relative to a fixed point.")
+        public int y;
+        @JsonPropertyDescription("Z coordinate for the block relative to a fixed point.")
+        public int z;
+        @JsonPropertyDescription("Type of block to place. Example: minecraft:stone")
+        public String blockType;
+
+        public String execute(ServerPlayerEntity player) {
+            ChatBotActions.placeBlock(player, x, y, z, blockType);
+            return "Block placed.";
+        }
+    }
+
+    @JsonClassDescription("Place multiple blocks at a chosen location, relative to the user defined pivot of the construction (0,0,0). 3 lists with X Y and Z coordinates make length(X) positions that spawns blockType blocks")
+    static class PlaceBlocks {
+        @JsonPropertyDescription("X coordinates for each chosen position.")
         public int[] x;
-        @JsonPropertyDescription("Y coordinate of the chosen position relative to the user defined pivot of the construction.")
+        @JsonPropertyDescription("Y coordinates for each chosen position.")
         public int[] y;
-        @JsonPropertyDescription("Z coordinate of the chosen position relative to the user defined pivot of the construction.")
+        @JsonPropertyDescription("Z coordinates for each chosen position.")
         public int[] z;
         @JsonPropertyDescription("Type of block to place. Example: minecraft:stone")
         public String blockType;
 
         public String execute(ServerPlayerEntity player) {
-            ChatBotActions.placeBlockAtImageSpots(player, x, y, z, blockType);
-            return "Block placed.";
+            ChatBotActions.placeBlocks(player, x, y, z, blockType);
+            return "Blocks placed.";
         }
     }
 
-    /*
-    @JsonClassDescription("Fill a cube of blocks at a chosen location on an image.")
-    static class FillCube {
-        @JsonPropertyDescription("X coordinate of the beginning of the line.")
+    
+    @JsonClassDescription("Place a line of blocks at chosen locations, relative to the user defined pivot of the construction (0,0,0).")
+    static class PlaceLine {
+        @JsonPropertyDescription("X coordinate of the chosen beginning of the line")
         public int x;
-        @JsonPropertyDescription("Y coordinate of the beginning of the line.")
+        @JsonPropertyDescription("Y coordinate of the chosen beginning of the line")
         public int y;
-        @JsonPropertyDescription("Z coordinate of the beginning of the line.")
+        @JsonPropertyDescription("Z coordinate of the chosen beginning of the line")
         public int z;
-        @JsonPropertyDescription("X coordinate of the end of the line.")
+        @JsonPropertyDescription("X coordinate of the chosen end of the line.")
         public int x2;
-        @JsonPropertyDescription("Y coordinate of the end of the line.")
+        @JsonPropertyDescription("Y coordinate of the chosen end of the line.")
         public int y2;
-        @JsonPropertyDescription("Z coordinate of the end of the line.")
-        public int z2; 
+        @JsonPropertyDescription("Z coordinate of the chosen end of the line.")
+        public int z2;
         @JsonPropertyDescription("Type of block to place. Example: minecraft:stone")
         public String blockType;
 
         public String execute(ServerPlayerEntity player) {
-            ChatBotActions.placeBlockAtImageSpots(player, x, y, z, blockType);
-            return "Block placed.";
+            ChatBotActions.placeLine(player, x, y, z, x2, y2, z2, blockType);
+            return "Line placed.";
         }
     }
-    */
+    
+    public static Builder registerBuildTools(Builder builder) {
+        var b = builder
+            .addTool(PlaceBlocks.class)
+            .addTool(PlaceBlock.class)
+            .addTool(PlaceLine.class);
+        return b;
+    }
 
-    public static Builder registerTools(Builder builder) {
-        return builder
+    public static Builder registerGodTools(Builder builder) {
+        var b = builder
             .addTool(Reward.class)
             .addTool(Trade.class)
             .addTool(Punishment.class)
-            .addTool(ChangeWeather.class)
-            .addTool(Place.class);
+            .addTool(ChangeWeather.class);
+
+        return b;
     }
 
     private static boolean hadFunctionCall = false;
-    public static boolean checkForFunctions(Response r, ServerPlayerEntity player) {
+    public static boolean checkForFunctions(Response r, ServerPlayerEntity player, ChatBot chatBot) {
         hadFunctionCall = false;
         r.output().forEach(item -> {
             if (item.isFunctionCall()) {
                 ResponseFunctionToolCall functionCall = item.asFunctionCall();
-                boolean wasFunctionCall = callFunction(functionCall, player);
+                boolean wasFunctionCall = callFunction(functionCall, player, chatBot);
                 if(wasFunctionCall) hadFunctionCall = true;
             }
         });
         return hadFunctionCall;
     }
 
-    private static boolean callFunction(ResponseFunctionToolCall function, ServerPlayerEntity player) {
+    private static boolean callFunction(ResponseFunctionToolCall function, ServerPlayerEntity player, ChatBot chatBot) {
         String ret = null;
         switch (function.name()) {
             case "Reward":
@@ -145,25 +165,25 @@ public class ChatBotFunctions {
             case "ChangeWeather":
                 ret = function.arguments(ChangeWeather.class).execute(player);
                 break;
-            case "Place":
-                ret = function.arguments(Place.class).execute(player);
+            case "PlaceBlocks":
+                ret = function.arguments(PlaceBlocks.class).execute(player);
+                break;
+            case "PlaceBlock":
+                ret = function.arguments(PlaceBlock.class).execute(player);
+                break;
+            case "PlaceLine":
+                ret = function.arguments(PlaceLine.class).execute(player);
                 break;
             default:
                 throw new IllegalArgumentException("Unknown function: " + function.name());
         }
-        addFunctionReturn(ret, function, player);
+        addFunctionReturn(ret, function, player, chatBot);
         return true;
     }
 
-    private static void addFunctionReturn(String ret, ResponseFunctionToolCall function, ServerPlayerEntity player) {
+    private static void addFunctionReturn(String ret, ResponseFunctionToolCall function, ServerPlayerEntity player, ChatBot chatBot) {
         
-        var item1 = ResponseInputItem.ofFunctionCall(function);
-        ChatBotPlayerHistory.addInput(item1, player);
-        var item2 = ResponseInputItem.ofFunctionCallOutput(ResponseInputItem.FunctionCallOutput.builder()
-            .callId(function.callId())
-            .outputAsJson(ret)
-            .build());
-        ChatBotPlayerHistory.addInput(item2, player);
+        chatBot.sendFunctionOutput(ret, function, player);
         
     }
 

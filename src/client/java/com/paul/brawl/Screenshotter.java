@@ -45,7 +45,7 @@ public class Screenshotter {
 	public static void registerCommands() {
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
 			dispatcher.register(
-				ClientCommandManager.literal("prouver")
+				ClientCommandManager.literal("prove")
 						.then(ClientCommandManager.argument("text", string()))
 						.executes(context -> {
 							var s = getString(context, "text");
@@ -57,7 +57,7 @@ public class Screenshotter {
 
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
 			dispatcher.register(
-				ClientCommandManager.literal("construire")
+				ClientCommandManager.literal("build")
 						.then(ClientCommandManager.argument("text", string())
 						.executes(context -> {
 							var s = getString(context, "text");
@@ -69,11 +69,11 @@ public class Screenshotter {
 	}
 
 	public static void sendBuildScreenshot(String s) {
-		sendScreenshot("construire : " + s);
+		sendScreenshot("Build : " + s);
 	}
 
 	public static void sendProofScreenshot(String s) {
-		sendScreenshot("prouver : " + s);
+		sendScreenshot("Prove : " + s);
 	}
 
 	public static void sendScreenshot(String text) {

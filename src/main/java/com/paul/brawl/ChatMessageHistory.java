@@ -20,7 +20,7 @@ public class ChatMessageHistory {
         ServerMessageEvents.GAME_MESSAGE.register(ChatMessageHistory::onGameMessage);
     }
 
-    private static void addMessageToHistory(String content) {
+    public static void addMessageToHistory(String content) {
         synchronized (messageHistory) {
             if (messageHistory.size() >= MAX_HISTORY) {
                 messageHistory.removeFirst();

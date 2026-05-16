@@ -23,6 +23,16 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3i;
 import net.minecraft.world.World;
 
+
+import com.openai.client.OpenAIClientAsync;
+import com.openai.client.okhttp.OpenAIOkHttpClientAsync;
+import com.openai.models.ChatModel;
+import com.openai.models.responses.EasyInputMessage;
+import com.openai.models.responses.Response;
+import com.openai.models.responses.ResponseCreateParams;
+import com.openai.models.responses.ResponseInputImage;
+import com.openai.models.responses.ResponseInputItem;
+
 public class ChatBotActions {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("ChatBotActions");
@@ -45,24 +55,24 @@ public class ChatBotActions {
             return error;
         }
 
-        var message = "Dieu t'a proposé un échange : \n Tu reçois " + giveAmount + " " + giveItemName + " contre " + takeAmount + " " + takeItemName;
+        var message = "God has offered you a trade: \n You receive " + giveAmount + " " + giveItemName + " for " + takeAmount + " " + takeItemName;
         ChatPrinter.sendMessage(player, message);
 
-        return "Dieu a proposé un échange au joueur : Dieu donne "
-             + giveAmount + " " + giveItemName + " contre " + takeAmount + " " + takeItemName
-             + "\nLe joueur peut accepter, ou non, cet échange.";
+        return "God offered a trade to the player: God gives "
+             + giveAmount + " " + giveItemName + " for " + takeAmount + " " + takeItemName
+             + "\nThe player may accept or decline this trade.";
     }
 
     public static String giveItemFromString(ServerPlayerEntity player, String itemName, int amount) {
         
         var item = getItemFromString(itemName);
         if(item == null) {
-            return "Récompense annulée, l'item " + itemName + " n'existe pas, veuillez rééssayer.";
+            return "Reward cancelled, item " + itemName + " does not exist, please try again.";
         }
 
         giveItem(player, item, amount);
 
-        return "Vous avez donné une récompense au joueur : " + amount + " " + itemName;
+        return "You gave the player a reward: " + amount + " " + itemName;
     }
 
     public static String giveItemWithCommand(ServerPlayerEntity player, String item, int amount) {
@@ -120,7 +130,7 @@ public class ChatBotActions {
         for(int i = 0; i<amount; i++) {
             smite(player);
         }
-        return "Dieu a puni le joueur " + amount + " fois.";
+        return "God punished the player  " + amount + " times.";
     }
 
     public static void smite(ServerPlayerEntity player) {
@@ -141,7 +151,7 @@ public class ChatBotActions {
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("bloc")
+                LiteralArgumentBuilder.<ServerCommandSource>literal("block")
                     .requires(source -> source.hasPermissionLevel(2)) // Admin only
                     .then(CommandManager.argument("x", IntegerArgumentType.integer())
                     .then(CommandManager.argument("y", IntegerArgumentType.integer())
@@ -150,7 +160,7 @@ public class ChatBotActions {
                             int x = IntegerArgumentType.getInteger(context, "x");
                             int y = IntegerArgumentType.getInteger(context, "y");
                             int z = IntegerArgumentType.getInteger(context, "z");
-                            placeBlockAtImageSpots(context.getSource().getPlayer(), new int[] {x}, new int[] {y}, new int[] {z}, "minecraft:stone");
+                            placeBlock(context.getSource().getPlayer(), x, y, z, "minecraft:stone");
                             return Command.SINGLE_SUCCESS;
                         }))))
             );
@@ -162,6 +172,8 @@ public class ChatBotActions {
                     .requires(source -> source.hasPermissionLevel(2)) // Admin only
                     .executes(context -> {
                         Raycaster.setLastPos(context.getSource().getPlayer());
+                        ChatBot.buildBot.previousResponseId = ChatBot.NULL_ID;
+                        ChatBot.buildBot.chatBotPlayerHistory.popInputs(context.getSource().getPlayer());
                         return Command.SINGLE_SUCCESS;
                     })
             );
@@ -169,9 +181,37 @@ public class ChatBotActions {
 
     }
 
+    public static void placeLine(ServerPlayerEntity player, int x, int y, int z, int x2, int y2, int z2, String blockType) {
+        
+        BlockPos pos = Raycaster.getLastPos(player.getUuid());
 
+        if(pos == null) return;
 
-    public static void placeBlockAtImageSpots(ServerPlayerEntity player, int[] x, int[] y, int[] z, String blockType) {
+        // Place a block at every position in a straight line from (x, y, z) to (x2, y2, z2), inclusive
+        int dx = x2 - x;
+        int dy = y2 - y;
+        int dz = z2 - z;
+        int maxLen = Math.max(1, Math.max(Math.abs(dx), Math.max(Math.abs(dy), Math.abs(dz))));
+        for (int i = 0; i <= maxLen; i++) {
+            int X = x + dx * i / maxLen;
+            int Y = y + dy * i / maxLen;
+            int Z = z + dz * i / maxLen;
+            BlockPos p = new BlockPos(pos).add(X, Y, Z);
+            changeBlockAtPos(player, blockType, p);
+        }
+    }
+
+    public static void placeBlock(ServerPlayerEntity player, int x, int y, int z, String blockType) {
+        
+        BlockPos pos = Raycaster.getLastPos(player.getUuid());
+
+        if(pos == null) return;
+        
+        var p = new BlockPos(pos).add(x, y, z);
+        changeBlockAtPos(player, blockType, p);
+    }
+
+    public static void placeBlocks(ServerPlayerEntity player, int[] x, int[] y, int[] z, String blockType) {
         
         BlockPos pos = Raycaster.getLastPos(player.getUuid());
 
@@ -196,7 +236,7 @@ public class ChatBotActions {
 
         if(pos == null) return "";
         
-        var zone = 16;
+        var zone = 3;
         sb.append("[\n");
         for(int i = 0; i<zone; i++) {
             for(int j = 0; j<zone; j++) {

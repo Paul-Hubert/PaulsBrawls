@@ -26,7 +26,7 @@ public class ImageReceiver {
     }
 
     private static void checkProof(byte[] bytes, ServerPlayerEntity player, String text) {
-        ChatBot.sendImageChatRequest(text, bytes, player);
+        ChatBot.getCorrectChatBot(text).sendImageChatRequest(text, bytes, player);
     }
 
     private static void saveImage(byte[] bytes) {

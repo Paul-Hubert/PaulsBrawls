@@ -12,13 +12,13 @@ import java.util.function.BiConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.gson.JsonObject;
 import com.openai.client.OpenAIClientAsync;
 import com.openai.client.okhttp.OpenAIOkHttpClientAsync;
 import com.openai.models.ChatModel;
 import com.openai.models.responses.EasyInputMessage;
 import com.openai.models.responses.Response;
 import com.openai.models.responses.ResponseCreateParams;
+import com.openai.models.responses.ResponseFunctionToolCall;
 import com.openai.models.responses.ResponseInputImage;
 import com.openai.models.responses.ResponseInputItem;
 
@@ -26,27 +26,54 @@ import net.minecraft.server.network.ServerPlayerEntity;
 
 public class ChatBot {
 
-    public static OpenAIClientAsync client;
+    public static ChatBot godBot, buildBot;
+
+    public OpenAIClientAsync client;
 
     public static final String NULL_ID = "null"; 
-    public static String previousResponseId = NULL_ID;
+    public String previousResponseId = NULL_ID;
     
     public static String PROMPT_STATE_KEY = "prompt_state_key";
 
-    
     private static final Logger LOGGER = LoggerFactory.getLogger("ChatCommand");
 
-    public static final String promptPath = "prompt.txt";
+    public String promptPath = "prompt.txt";
 
-    public static String hardcodedPrompt = "";
-    public static String prompt = "";
-    public static boolean hasImage = false;
+    public String hardcodedPrompt = "";
+    public String prompt = "";
+
+    public boolean hasImage = true;
+    public boolean needsInfo = true;
+    public boolean needsHistory = false;
+    public boolean needsBuildTools = true;
+    public boolean needsGodTools = true;
+    public boolean needsPreviousResponse = true;
+
+    public ChatBotPlayerHistory chatBotPlayerHistory = new ChatBotPlayerHistory();
+
 
     public static void register() {
         // Configures using the `OPENAI_API_KEY`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` environment variables
-        client = OpenAIOkHttpClientAsync.fromEnv();
-        
-        ChatBot.readPrompt();
+        godBot = new ChatBot("prompt.txt");
+        buildBot = new ChatBot("build_prompt.txt");
+
+        godBot.hasImage = true;
+        buildBot.hasImage = false;
+
+        godBot.needsInfo = true;
+        buildBot.needsInfo = false;
+
+        godBot.needsHistory = false;
+        buildBot.needsHistory = false;
+
+        godBot.needsPreviousResponse = true;
+        buildBot.needsPreviousResponse = true;
+
+        godBot.needsBuildTools = false;
+        buildBot.needsBuildTools = true;
+
+        godBot.needsGodTools = true;
+        buildBot.needsGodTools = false;
 
         ChatMessageHistory.register();
 
@@ -62,17 +89,22 @@ public class ChatBot {
 
     }
 
+
+    public ChatBot(String promptPath) {
+        this.promptPath = promptPath;
+
+        client = OpenAIOkHttpClientAsync.fromEnv();
+        readPrompt();
+    }
     
 
-    public static CompletableFuture<Response> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player) {
+    public CompletableFuture<Response> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player) {
         return sendImageChatRequest(input, bytes, player, null);
     }
 
-    public static CompletableFuture<Response> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
+    public CompletableFuture<Response> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
 
-        var builder = makeBuilder(player);
-        
-        input = modifyImagePrompt(player, input);
+        var builder = buildBuilder();
 
         String base64url = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(bytes);
         
@@ -108,11 +140,11 @@ public class ChatBot {
 
     }
     
-    public static CompletableFuture<Response> sendChatRequest(String input, ServerPlayerEntity player) {
+    public CompletableFuture<Response> sendChatRequest(String input, ServerPlayerEntity player) {
         return sendChatRequest(input, player, null);
     }
 
-    public static CompletableFuture<Response> sendChatRequest(String input, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
+    public CompletableFuture<Response> sendChatRequest(String input, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
 
         var item = ResponseInputItem
             .ofEasyInputMessage(EasyInputMessage.builder()
@@ -124,13 +156,31 @@ public class ChatBot {
     }
 
 
-    public static CompletableFuture<Response> sendFunctionOutput(ServerPlayerEntity player) {
-        return sendRequest(null, player, null);
+    public CompletableFuture<Response> sendFunctionOutput(String ret, ResponseFunctionToolCall function, ServerPlayerEntity player) {
+        
+        var builder = makeBuilder();
+
+        builder = setPreviousResonse(builder);
+        
+        List<ResponseInputItem> l = new ArrayList<ResponseInputItem>();
+
+        //l.add(ResponseInputItem.ofFunctionCall(function));
+        l.add(ResponseInputItem.ofFunctionCallOutput(ResponseInputItem.FunctionCallOutput.builder()
+            .callId(function.callId())
+            .outputAsJson(ret)
+            .build()));
+
+        builder = builder.inputOfResponse(l);
+        
+        var response = sendBuilder(builder, player, null);
+
+        return response;
+
     }
 
-    public static CompletableFuture<Response> sendRequest(ResponseInputItem item, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
+    public CompletableFuture<Response> sendRequest(ResponseInputItem item, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
 
-        var builder = makeBuilder(player);
+        var builder = buildBuilder();
         
         var prompts = getPromptList(player);
 
@@ -143,22 +193,41 @@ public class ChatBot {
         return response;
     }
 
-    public static ResponseCreateParams.Builder makeBuilder(ServerPlayerEntity player) {
+    public ResponseCreateParams.Builder makeBuilder() {
         var builder = ResponseCreateParams.builder()
-            .model(ChatModel.of("gpt-5"));//openai/gpt-oss-20b
-        
-        builder = ChatBotFunctions.registerTools(builder);
-        
-        /*
-        if(!previousResponseId.equals(NULL_ID)) {
-            builder = builder.previousResponseId(previousResponseId);
-        }
-        */
-
+        .model(ChatModel.of("gpt-5.5"));//openai/gpt-oss-20b
         return builder;
     }
 
-    private static CompletableFuture<Response> sendBuilder(ResponseCreateParams.Builder builder, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
+    public ResponseCreateParams.Builder buildTools(ResponseCreateParams.Builder builder) {
+        if(needsBuildTools) {
+            builder = ChatBotFunctions.registerBuildTools(builder);
+        }
+
+        if(needsBuildTools) {
+            builder = ChatBotFunctions.registerGodTools(builder);
+        }
+        return builder;
+    }
+
+    public ResponseCreateParams.Builder setPreviousResonse(ResponseCreateParams.Builder builder) {
+        if(needsPreviousResponse && !previousResponseId.equals(NULL_ID)) {
+            builder = builder.previousResponseId(previousResponseId);
+        }
+        return builder;
+    }
+
+    public ResponseCreateParams.Builder buildBuilder() {
+        var builder = makeBuilder();
+        
+        builder = buildTools(builder);
+        
+        builder = setPreviousResonse(builder);
+        
+        return builder;
+    }
+
+    private CompletableFuture<Response> sendBuilder(ResponseCreateParams.Builder builder, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
 
         CompletableFuture<Response> response = client.responses().create(builder.build());
 
@@ -170,7 +239,7 @@ public class ChatBot {
     }
     
 
-    public static List<ResponseInputItem> getPromptList(ServerPlayerEntity player) {
+    public List<ResponseInputItem> getPromptList(ServerPlayerEntity player) {
         List<ResponseInputItem> l = new ArrayList<ResponseInputItem>();
 
         // prompt engineering roleplaying
@@ -179,52 +248,54 @@ public class ChatBot {
                 .content(hardcodedPrompt + "\n" + prompt)
                 .build()));
 
-        String jsonString = PlayerDataCollector.collect(player).toString();
+        if(needsInfo) {
+            String jsonString = PlayerDataCollector.collect(player).toString();
 
-        l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
-                .role(EasyInputMessage.Role.SYSTEM)
-                .content("Le joueur avec lequel tu intéragis as ses informations au format json ici : \n"
-                         + jsonString)
-                .build()));
+            l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
+                    .role(EasyInputMessage.Role.SYSTEM)
+                    .content("The player you are interacting with has their information in JSON format here: \n"
+                             + jsonString)
+                    .build()));
+    
+            l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
+                    .role(EasyInputMessage.Role.SYSTEM)
+                    .content("The history of chat, commands, and game messages is shown here: \n"
+                             + ChatMessageHistory.getHistory())
+                    .build()));
 
-        l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
-                .role(EasyInputMessage.Role.SYSTEM)
-                .content("L'historique du chat, des commandes et des messages du jeu est montré ici : \n"
-                         + ChatMessageHistory.getHistory())
-                .build()));
-
-        l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
-                .role(EasyInputMessage.Role.SYSTEM)
-                .content("Voici les informations sur les blocs à proximité du curseur du joueur : \n"
-                    + ChatBotActions.getBlockInfo(player))
-                .build()));
-        
-        var lf = ChatBotPlayerHistory.getInputs(player);
-
-        if(lf != null) {
-            l.addAll(lf);
+            l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
+                        .role(EasyInputMessage.Role.SYSTEM)
+                        .content("Here is the information about the blocks near the player's cursor: \n"
+                            + ChatBotActions.getBlockInfo(player))
+                        .build()));
         }
+        
+        if(needsHistory) {
+            var lf = chatBotPlayerHistory.getInputs(player);
+
+            if(lf != null) {
+                l.addAll(lf);
+            }
+        }
+        
         return l;
     }
 
-    public static void setupGeneralCallback(CompletableFuture<Response> response, ServerPlayerEntity player) {
+    public void setupGeneralCallback(CompletableFuture<Response> response, ServerPlayerEntity player) {
         response.thenAccept(r -> {
             try {
                 setPreviousId(r);
                 addOutputsToHistory(r, player);
                 printOutputs(r, player);
-                boolean hadFunctions = ChatBotFunctions.checkForFunctions(r, player);
+                ChatBotFunctions.checkForFunctions(r, player, this);
                 
-                if(hadFunctions) {
-                    sendFunctionOutput(player);
-                }
             } catch (Exception e) {
                 e.printStackTrace();
             }
         });
     }
 
-    public static void setupCustomCallback(CompletableFuture<Response> response, BiConsumer<? super Response, String> callback) {
+    public void setupCustomCallback(CompletableFuture<Response> response, BiConsumer<? super Response, String> callback) {
         
         response.handleAsync(
             (r, ex) -> {
@@ -240,40 +311,40 @@ public class ChatBot {
         );
     }
 
-    private static void addInput(List<ResponseInputItem> items, ServerPlayerEntity player, ResponseInputItem item) {
+    private void addInput(List<ResponseInputItem> items, ServerPlayerEntity player, ResponseInputItem item) {
         items.add(item);
-        ChatBotPlayerHistory.addInput(item, player);
+        chatBotPlayerHistory.addInput(item, player);
     }
     
-    private static void setPreviousId(Response response) {
+    private void setPreviousId(Response response) {
         try {
-            //previousResponseId = response.id();
+            previousResponseId = response.id();
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-    private static void addOutputsToHistory(Response response, ServerPlayerEntity player) {
+    private void addOutputsToHistory(Response response, ServerPlayerEntity player) {
         response.output().stream()
             .flatMap(item -> item.message().stream())
             .forEach(message -> {
-            ChatBotPlayerHistory.addInput(ResponseInputItem.ofResponseOutputMessage(message), player);
+            chatBotPlayerHistory.addInput(ResponseInputItem.ofResponseOutputMessage(message), player);
         });
         response.output().stream()
             .flatMap(item -> item.reasoning().stream())
             .forEach(reasoning -> {
-            ChatBotPlayerHistory.addInput(ResponseInputItem.ofReasoning(reasoning), player);
+            chatBotPlayerHistory.addInput(ResponseInputItem.ofReasoning(reasoning), player);
         });
     }
 
-    private static void printOutputs(Response response, ServerPlayerEntity player) {
+    private void printOutputs(Response response, ServerPlayerEntity player) {
         var text = getResponseText(response);
         if(text.isEmpty()) return;
         ChatPrinter.sendMessage(player, "Dieu : " + text);
     }
 
 
-    private static String getResponseText(Response response) {
+    private String getResponseText(Response response) {
 
         StringBuilder builder = new StringBuilder();
 
@@ -291,7 +362,7 @@ public class ChatBot {
     }
 
     
-    public static void readPrompt() {
+    public void readPrompt() {
         try {
             hardcodedPrompt = Files.readString(Path.of(promptPath));
         } catch (IOException e) {
@@ -299,13 +370,13 @@ public class ChatBot {
         }
     }
 
-    public static String modifyImagePrompt(ServerPlayerEntity player, String s) {
-        if(s.contains("prouver :")) {
-            return Prompts.proofPrompt + s;
-        } else if(s.contains("construire :")) {
-            return Prompts.buildPrompt + s;
+    public static ChatBot getCorrectChatBot(String s) {
+        if(s.contains("Prove :")) {
+            return godBot;
+        } else if(s.contains("Build :")) {
+            return buildBot;
         }
-        return s;
+        return godBot;
     }
     
 

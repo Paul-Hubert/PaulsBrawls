@@ -12,9 +12,9 @@ import net.minecraft.server.network.ServerPlayerEntity;
 
 public class ChatBotPlayerHistory {
     public static int MAX_HISTORY = 10;
-    public static Map<UUID, List<ResponseInputItem>> previousInputsPerPlayer = new HashMap<>();
+    public Map<UUID, List<ResponseInputItem>> previousInputsPerPlayer = new HashMap<>();
 
-    public static void addInput(ResponseInputItem item, ServerPlayerEntity player) {
+    public void addInput(ResponseInputItem item, ServerPlayerEntity player) {
         List<ResponseInputItem> list = previousInputsPerPlayer.get(player.getUuid());
         if(list == null) {
             list = (List<ResponseInputItem>) new LinkedList<ResponseInputItem>();
@@ -26,7 +26,7 @@ public class ChatBotPlayerHistory {
         list.addLast(item);
     }
 
-    public static List<ResponseInputItem> popInputs(ServerPlayerEntity player) {
+    public List<ResponseInputItem> popInputs(ServerPlayerEntity player) {
         var l = previousInputsPerPlayer.get(player.getUuid());
         if(l == null) return null;
         var nl = List.copyOf(l);
@@ -34,7 +34,7 @@ public class ChatBotPlayerHistory {
         return nl;
     }
 
-    public static List<ResponseInputItem> getInputs(ServerPlayerEntity player) {
+    public List<ResponseInputItem> getInputs(ServerPlayerEntity player) {
         return previousInputsPerPlayer.get(player.getUuid());
     }
     
