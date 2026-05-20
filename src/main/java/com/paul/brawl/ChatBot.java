@@ -30,9 +30,9 @@ public class ChatBot {
 
     public OpenAIClientAsync client;
 
-    public static final String NULL_ID = "null"; 
+    public static final String NULL_ID = "null";
     public String previousResponseId = NULL_ID;
-    
+
     public static String PROMPT_STATE_KEY = "prompt_state_key";
 
     private static final Logger LOGGER = LoggerFactory.getLogger("ChatCommand");
@@ -195,7 +195,7 @@ public class ChatBot {
 
     public ResponseCreateParams.Builder makeBuilder() {
         var builder = ResponseCreateParams.builder()
-        .model(ChatModel.of("gpt-5.5"));//openai/gpt-oss-20b
+            .model(ChatModel.of("gpt-5.5"));//openai/gpt-oss-20b
         return builder;
     }
 

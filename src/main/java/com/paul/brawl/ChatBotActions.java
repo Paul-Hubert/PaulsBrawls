@@ -134,16 +134,13 @@ public class ChatBotActions {
     }
 
     public static void smite(ServerPlayerEntity player) {
-        if (player != null && player.getWorld() != null) {
-            if (player != null && player.getWorld() != null) {
-                World world = player.getWorld();
-                BlockPos pos = player.getBlockPos();
-                LightningEntity lightning = EntityType.LIGHTNING_BOLT.create(world);
-                if (lightning != null) {
-                    lightning.refreshPositionAfterTeleport(pos.getX(), pos.getY(), pos.getZ());
-                    world.spawnEntity(lightning);
-                }
-            }
+        if (player == null || player.getWorld() == null) return;
+        World world = player.getWorld();
+        BlockPos pos = player.getBlockPos();
+        LightningEntity lightning = EntityType.LIGHTNING_BOLT.create(world);
+        if (lightning != null) {
+            lightning.refreshPositionAfterTeleport(pos.getX(), pos.getY(), pos.getZ());
+            world.spawnEntity(lightning);
         }
     }
 
