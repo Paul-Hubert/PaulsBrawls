@@ -6,15 +6,19 @@ import org.slf4j.LoggerFactory;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
+import net.minecraft.command.argument.BlockArgumentParser;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LightningEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.registry.RegistryWrapper;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -169,7 +173,7 @@ public class ChatBotActions {
                     .requires(source -> source.hasPermissionLevel(2)) // Admin only
                     .executes(context -> {
                         Raycaster.setLastPos(context.getSource().getPlayer());
-                        ChatBot.buildBot.previousResponseId = ChatBot.NULL_ID;
+                        ChatBot.buildBot.clearPreviousResponseId(context.getSource().getPlayer());
                         ChatBot.buildBot.chatBotPlayerHistory.popInputs(context.getSource().getPlayer());
                         return Command.SINGLE_SUCCESS;
                     })
@@ -179,12 +183,40 @@ public class ChatBotActions {
     }
 
     public static void placeLine(ServerPlayerEntity player, int x, int y, int z, int x2, int y2, int z2, String blockType) {
-        
+
         BlockPos pos = Raycaster.getLastPos(player.getUuid());
 
         if(pos == null) return;
 
-        // Place a block at every position in a straight line from (x, y, z) to (x2, y2, z2), inclusive
+        placeLineAt(player, pos, x, y, z, x2, y2, z2, blockType);
+    }
+
+    public static void placeBlock(ServerPlayerEntity player, int x, int y, int z, String blockType) {
+
+        BlockPos pos = Raycaster.getLastPos(player.getUuid());
+
+        if(pos == null) return;
+
+        placeBlockAt(player, pos, x, y, z, blockType);
+    }
+
+    public static void placeBlocks(ServerPlayerEntity player, int[] x, int[] y, int[] z, String blockType) {
+
+        BlockPos pos = Raycaster.getLastPos(player.getUuid());
+
+        if(pos == null) return;
+
+        placeBlocksAt(player, pos, x, y, z, blockType);
+    }
+
+    public static void placeBlockAt(ServerPlayerEntity player, BlockPos pivot, int x, int y, int z, String blockType) {
+        if (pivot == null) return;
+        // BlockPos.add(int, int, int) already returns a new BlockPos — no copy needed.
+        changeBlockAtPos(player, blockType, pivot.add(x, y, z));
+    }
+
+    public static void placeLineAt(ServerPlayerEntity player, BlockPos pivot, int x, int y, int z, int x2, int y2, int z2, String blockType) {
+        if (pivot == null) return;
         int dx = x2 - x;
         int dy = y2 - y;
         int dz = z2 - z;
@@ -193,33 +225,14 @@ public class ChatBotActions {
             int X = x + dx * i / maxLen;
             int Y = y + dy * i / maxLen;
             int Z = z + dz * i / maxLen;
-            BlockPos p = new BlockPos(pos).add(X, Y, Z);
-            changeBlockAtPos(player, blockType, p);
+            changeBlockAtPos(player, blockType, pivot.add(X, Y, Z));
         }
     }
 
-    public static void placeBlock(ServerPlayerEntity player, int x, int y, int z, String blockType) {
-        
-        BlockPos pos = Raycaster.getLastPos(player.getUuid());
-
-        if(pos == null) return;
-        
-        var p = new BlockPos(pos).add(x, y, z);
-        changeBlockAtPos(player, blockType, p);
-    }
-
-    public static void placeBlocks(ServerPlayerEntity player, int[] x, int[] y, int[] z, String blockType) {
-        
-        BlockPos pos = Raycaster.getLastPos(player.getUuid());
-
-        if(pos == null) return;
-        
-        for(int i = 0; i<Math.min(x.length, Math.min(y.length, z.length)); i++) {
-            var X = x[i];
-            var Y = y[i];
-            var Z = z[i];
-            var p = new BlockPos(pos).add(X, Y, Z);
-            changeBlockAtPos(player, blockType, p);
+    public static void placeBlocksAt(ServerPlayerEntity player, BlockPos pivot, int[] x, int[] y, int[] z, String blockType) {
+        if (pivot == null) return;
+        for (int i = 0; i < Math.min(x.length, Math.min(y.length, z.length)); i++) {
+            changeBlockAtPos(player, blockType, pivot.add(x[i], y[i], z[i]));
         }
     }
 
@@ -239,7 +252,7 @@ public class ChatBotActions {
             for(int j = 0; j<zone; j++) {
                 for(int k = zone-1; k>-zone+1; k--) {
                     Vec3i v = new Vec3i(i - zone/2, k - zone/2, j - zone/2);
-                    var p = new BlockPos(pos).add(v);
+                    var p = pos.add(v);
                     BlockState state = player.getWorld().getBlockState(p);
                     if(state.isAir()) {
                         continue;
@@ -258,13 +271,32 @@ public class ChatBotActions {
 
 
     public static void changeBlockAtPos(ServerPlayerEntity player, String blockType, BlockPos pos) {
-        if (pos != null) {
-            Item blockItem = getItemFromString(blockType);
-            if (blockItem != null) {
-                Block block = Block.getBlockFromItem(blockItem);
-                if (block != null) {
-                    player.getWorld().setBlockState(pos, block.getDefaultState());
-                }
+        if (pos == null) return;
+        BlockState state = parseBlockState(player, blockType);
+        if (state == null) return;
+        player.getWorld().setBlockState(pos, state);
+    }
+
+    private static BlockState parseBlockState(ServerPlayerEntity player, String blockType) {
+        if (blockType == null || player.getServer() == null) return null;
+        RegistryWrapper<Block> wrapper = player.getServer().getRegistryManager()
+            .getWrapperOrThrow(RegistryKeys.BLOCK);
+        try {
+            return BlockArgumentParser.block(wrapper, blockType, false).blockState();
+        } catch (CommandSyntaxException e) {
+            int bracket = blockType.indexOf('[');
+            if (bracket < 0) {
+                LOGGER.warn("Failed to parse block {}: {}", blockType, e.getMessage());
+                return null;
+            }
+            String base = blockType.substring(0, bracket);
+            LOGGER.warn("Failed to parse blockstate {}, falling back to {}: {}",
+                blockType, base, e.getMessage());
+            try {
+                return BlockArgumentParser.block(wrapper, base, false).blockState();
+            } catch (CommandSyntaxException ex) {
+                LOGGER.warn("Fallback also failed for {}: {}", base, ex.getMessage());
+                return null;
             }
         }
     }

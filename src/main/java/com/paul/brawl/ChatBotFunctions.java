@@ -1,5 +1,13 @@
 package com.paul.brawl;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.fasterxml.jackson.annotation.JsonClassDescription;
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
 import com.openai.models.responses.Response;
@@ -9,6 +17,8 @@ import com.openai.models.responses.ResponseFunctionToolCall;
 import net.minecraft.server.network.ServerPlayerEntity;
 
 public class ChatBotFunctions {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("ChatBotFunctions");
 
     @JsonClassDescription("Gives a reward to the player in the form of an item.")
     static class Reward {
@@ -61,70 +71,98 @@ public class ChatBotFunctions {
         }
     }
 
-    @JsonClassDescription("Place a block at a chosen location, relative to the user defined pivot of the construction (0,0,0). X Y and Z coordinates make a relative position that spawns a blockType block")
-    static class PlaceBlock {
-        @JsonPropertyDescription("X coordinate for the block relative to a fixed point.")
-        public int x;
-        @JsonPropertyDescription("Y coordinate for the block relative to a fixed point.")
-        public int y;
-        @JsonPropertyDescription("Z coordinate for the block relative to a fixed point.")
-        public int z;
-        @JsonPropertyDescription("Type of block to place. Example: minecraft:stone")
-        public String blockType;
-
-        public String execute(ServerPlayerEntity player) {
-            ChatBotActions.placeBlock(player, x, y, z, blockType);
-            return "Block placed.";
-        }
+    @JsonClassDescription("One isolated build job inside a BuildPlan. Each SubBuild becomes its own sub-agent with its own anchor pivot and its own chat history — it does NOT see the other SubBuilds, only its own description, style, size, and purpose. Coordinates are integer block offsets from the admin's /construction pivot.")
+    public static class SubBuild {
+        @JsonPropertyDescription("Offset on the X axis (east+, west-) from the admin's /construction pivot. The sub-agent treats this point as its local origin (0,0,0). Pick values that put sub-builds at least 8 blocks apart so they do not overlap.")
+        public int anchorX;
+        @JsonPropertyDescription("Offset on the Y axis (up+, down-) from the admin's /construction pivot. Usually 0 to keep sub-builds on the same ground level, positive for floating structures, negative for cellars.")
+        public int anchorY;
+        @JsonPropertyDescription("Offset on the Z axis (south+, north-) from the admin's /construction pivot.")
+        public int anchorZ;
+        @JsonPropertyDescription("Full natural-language description of what to build at this anchor. Be specific about footprint dimensions, materials, openings, defining features. The sub-agent sees ONLY this description (plus style, size, purpose) — no other context, so do not refer to the player or the rest of the plan here.")
+        public String description;
+        @JsonPropertyDescription("Architectural style for this sub-build. Examples: medieval-stone, japanese-pagoda, modern-glass-and-concrete, rustic-log-cabin, desert-adobe, nordic-longhouse, sandstone-temple, brutalist-bunker.")
+        public String style;
+        @JsonPropertyDescription("Rough footprint and height. Either a label (small / medium / large) or explicit dimensions like 8x8x12 (X by Z by Y in blocks). Stay under ~32 blocks per axis.")
+        public String size;
+        @JsonPropertyDescription("Functional purpose — what is this structure for? Used by the sub-agent to pick interior furniture and detailing. Examples: dwelling, watchtower, well, market stall, smithy, granary, shrine, statue, bridge, gatehouse, decorative ruin.")
+        public String purpose;
     }
 
-    @JsonClassDescription("Place multiple blocks at a chosen location, relative to the user defined pivot of the construction (0,0,0). 3 lists with X Y and Z coordinates make length(X) positions that spawns blockType blocks")
-    static class PlaceBlocks {
-        @JsonPropertyDescription("X coordinates for each chosen position.")
-        public int[] x;
-        @JsonPropertyDescription("Y coordinates for each chosen position.")
-        public int[] y;
-        @JsonPropertyDescription("Z coordinates for each chosen position.")
-        public int[] z;
-        @JsonPropertyDescription("Type of block to place. Example: minecraft:stone")
-        public String blockType;
+    @JsonClassDescription("Plans a multi-structure build by dispatching N independent sub-builds in parallel, each at its own anchor offset relative to the admin's /construction pivot. Use this whenever the player's request implies more than one structure (village, fortified compound, farm with outbuildings, town square, harbour, etc.). Each sub-build runs in its own isolated agent that sees only its own description, style, size, and purpose — they cannot coordinate, so make each one self-contained. After each sub-agent finishes its initial structure, it automatically gets follow-up refinement passes (gap-fix, interior, exterior, roof/walls-under-roof, final). Returns a confirmation string; the actual builds run asynchronously.")
+    static class BuildPlan {
+        @JsonPropertyDescription("The list of independent sub-builds. Each becomes a separate isolated sub-agent. Order does not matter — they all run in parallel.")
+        public java.util.List<SubBuild> builds;
 
         public String execute(ServerPlayerEntity player) {
-            ChatBotActions.placeBlocks(player, x, y, z, blockType);
-            return "Blocks placed.";
-        }
-    }
+            net.minecraft.util.math.BlockPos basePivot = Raycaster.getLastPos(player.getUuid());
+            if (basePivot == null) {
+                return "Aucun point de référence : l'admin doit lancer /construction avant d'utiliser BuildPlan.";
+            }
+            if (builds == null || builds.isEmpty()) {
+                return "BuildPlan reçu sans aucun sous-build — rien à faire.";
+            }
+            if (ChatBot.buildBot == null) {
+                LOGGER.warn("BuildPlan invoked but ChatBot.buildBot is null — register() must run before BuildPlan can dispatch sub-agents.");
+                return "Erreur interne : buildBot non initialisé. Impossible de lancer les sous-constructions.";
+            }
 
-    
-    @JsonClassDescription("Place a line of blocks at chosen locations, relative to the user defined pivot of the construction (0,0,0).")
-    static class PlaceLine {
-        @JsonPropertyDescription("X coordinate of the chosen beginning of the line")
-        public int x;
-        @JsonPropertyDescription("Y coordinate of the chosen beginning of the line")
-        public int y;
-        @JsonPropertyDescription("Z coordinate of the chosen beginning of the line")
-        public int z;
-        @JsonPropertyDescription("X coordinate of the chosen end of the line.")
-        public int x2;
-        @JsonPropertyDescription("Y coordinate of the chosen end of the line.")
-        public int y2;
-        @JsonPropertyDescription("Z coordinate of the chosen end of the line.")
-        public int z2;
-        @JsonPropertyDescription("Type of block to place. Example: minecraft:stone")
-        public String blockType;
+            // Filter nulls upfront so labels (i/n) match what we actually spawn.
+            java.util.List<SubBuild> live = new java.util.ArrayList<>(builds.size());
+            for (SubBuild sb : builds) {
+                if (sb != null) live.add(sb);
+            }
+            if (live.isEmpty()) {
+                return "BuildPlan ne contenait que des sous-builds nuls — rien à faire.";
+            }
 
-        public String execute(ServerPlayerEntity player) {
-            ChatBotActions.placeLine(player, x, y, z, x2, y2, z2, blockType);
-            return "Line placed.";
+            int n = live.size();
+            for (int i = 0; i < n; i++) {
+                SubBuild sb = live.get(i);
+
+                net.minecraft.util.math.BlockPos subPivot =
+                    basePivot.add(sb.anchorX, sb.anchorY, sb.anchorZ);
+
+                String label = (i + 1) + "/" + n + " " + safe(sb.purpose, "structure");
+
+                String systemPrompt = ChatBot.buildBot.hardcodedPrompt
+                    + "\n" + ChatBot.buildBot.prompt
+                    + "\n\n# Sub-build assignment\n"
+                    + "You are one of " + n + " parallel sub-agents in a BuildPlan. You can NOT see the others. "
+                    + "Build exactly one thing — described below — at integer offsets from your own pivot (0,0,0). "
+                    + "You will get follow-up refinement messages after each pass that tell you to fix blind spots, "
+                    + "do interior, exterior, roof and walls-under-roof, replace glass panes with full glass blocks, etc. "
+                    + "Respond to each pass with PlaceBlock / PlaceLine / PlaceBlocks lines, then reply with zero call lines "
+                    + "to signal that pass is finished and receive the next refinement.";
+
+                String initialUser =
+                    "Sub-build " + label + ".\n"
+                    + "Purpose: " + safe(sb.purpose, "(unspecified)") + "\n"
+                    + "Style: " + safe(sb.style, "(unspecified)") + "\n"
+                    + "Size: " + safe(sb.size, "(unspecified)") + "\n\n"
+                    + "Description:\n" + safe(sb.description, "(no description)") + "\n\n"
+                    + "Pass 1 — primary structure. Build the floor, walls, and roof in that order. "
+                    + "Emit PlaceBlock / PlaceLine / PlaceBlocks lines. When this pass is done, reply with no call lines "
+                    + "and the next refinement pass will be sent automatically.";
+
+                BuildSubAgent agent = new BuildSubAgent(
+                    player,
+                    subPivot,
+                    systemPrompt,
+                    initialUser,
+                    label,
+                    BuildSubAgent.DEFAULT_REFINEMENTS
+                );
+                agent.start();
+            }
+
+            return "Plan accepté : " + n + " sous-construction(s) lancée(s) en parallèle. "
+                 + "Chaque sous-agent fera ~" + (1 + BuildSubAgent.DEFAULT_REFINEMENTS.size()) + " passes (initiale + refinements).";
         }
-    }
-    
-    public static Builder registerBuildTools(Builder builder) {
-        var b = builder
-            .addTool(PlaceBlocks.class)
-            .addTool(PlaceBlock.class)
-            .addTool(PlaceLine.class);
-        return b;
+
+        private static String safe(String s, String fallback) {
+            return (s == null || s.isBlank()) ? fallback : s;
+        }
     }
 
     public static Builder registerGodTools(Builder builder) {
@@ -137,54 +175,208 @@ public class ChatBotFunctions {
         return b;
     }
 
-    private static boolean hadFunctionCall = false;
+    public static Builder registerBuildPlanTool(Builder builder) {
+        return builder.addTool(BuildPlan.class);
+    }
+
+    public record FunctionResult(ResponseFunctionToolCall call, String result) {}
+
     public static boolean checkForFunctions(Response r, ServerPlayerEntity player, ChatBot chatBot) {
-        hadFunctionCall = false;
+        List<FunctionResult> results = new ArrayList<>();
         r.output().forEach(item -> {
             if (item.isFunctionCall()) {
                 ResponseFunctionToolCall functionCall = item.asFunctionCall();
-                boolean wasFunctionCall = callFunction(functionCall, player, chatBot);
-                if(wasFunctionCall) hadFunctionCall = true;
+                String ret = executeFunction(functionCall, player);
+                results.add(new FunctionResult(functionCall, ret));
             }
         });
-        return hadFunctionCall;
-    }
-
-    private static boolean callFunction(ResponseFunctionToolCall function, ServerPlayerEntity player, ChatBot chatBot) {
-        String ret = null;
-        switch (function.name()) {
-            case "Reward":
-                ret = function.arguments(Reward.class).execute(player);
-                break;
-            case "Trade":
-                ret = function.arguments(Trade.class).execute(player);
-                break;
-            case "Punishment":
-                ret = function.arguments(Punishment.class).execute(player);
-                break;
-            case "ChangeWeather":
-                ret = function.arguments(ChangeWeather.class).execute(player);
-                break;
-            case "PlaceBlocks":
-                ret = function.arguments(PlaceBlocks.class).execute(player);
-                break;
-            case "PlaceBlock":
-                ret = function.arguments(PlaceBlock.class).execute(player);
-                break;
-            case "PlaceLine":
-                ret = function.arguments(PlaceLine.class).execute(player);
-                break;
-            default:
-                throw new IllegalArgumentException("Unknown function: " + function.name());
-        }
-        addFunctionReturn(ret, function, player, chatBot);
+        if (results.isEmpty()) return false;
+        LOGGER.info("Submitting {} function call output(s) for player {}", results.size(), player.getName().getString());
+        chatBot.sendFunctionOutputs(results, player);
         return true;
     }
 
-    private static void addFunctionReturn(String ret, ResponseFunctionToolCall function, ServerPlayerEntity player, ChatBot chatBot) {
-        
-        chatBot.sendFunctionOutput(ret, function, player);
-        
+    private static String executeFunction(ResponseFunctionToolCall function, ServerPlayerEntity player) {
+        return switch (function.name()) {
+            case "Reward" -> function.arguments(Reward.class).execute(player);
+            case "Trade" -> function.arguments(Trade.class).execute(player);
+            case "Punishment" -> function.arguments(Punishment.class).execute(player);
+            case "ChangeWeather" -> function.arguments(ChangeWeather.class).execute(player);
+            case "BuildPlan" -> function.arguments(BuildPlan.class).execute(player);
+            default -> throw new IllegalArgumentException("Unknown function: " + function.name());
+        };
+    }
+
+    // Tolerates arbitrary whitespace, negative ints, and four block-name styles:
+    // "minecraft:stone", 'minecraft:stone', `minecraft:stone`, or bare minecraft:stone.
+    private static final String INT = "-?\\d+";
+    private static final String WS = "\\s*";
+    private static final String BLOCK_ID = "[A-Za-z][A-Za-z0-9_]*:[A-Za-z][A-Za-z0-9_/]*(?:\\[[^\\]]*\\])?";
+    private static final String BLOCK_NAME =
+        "(?:\"(" + BLOCK_ID + ")\"|'(" + BLOCK_ID + ")'|`(" + BLOCK_ID + ")`|(" + BLOCK_ID + "))";
+    private static final String INT_ARRAY = "\\[" + WS + "(" + INT + "(?:" + WS + "," + WS + INT + ")*)?" + WS + "\\]";
+
+    private static final Pattern PLACE_BLOCK_PATTERN = Pattern.compile(
+        "PlaceBlock" + WS + "\\(" + WS
+        + "(" + INT + ")" + WS + "," + WS
+        + "(" + INT + ")" + WS + "," + WS
+        + "(" + INT + ")" + WS + "," + WS
+        + BLOCK_NAME + WS + "\\)");
+
+    private static final Pattern PLACE_LINE_PATTERN = Pattern.compile(
+        "PlaceLine" + WS + "\\(" + WS
+        + "(" + INT + ")" + WS + "," + WS
+        + "(" + INT + ")" + WS + "," + WS
+        + "(" + INT + ")" + WS + "," + WS
+        + "(" + INT + ")" + WS + "," + WS
+        + "(" + INT + ")" + WS + "," + WS
+        + "(" + INT + ")" + WS + "," + WS
+        + BLOCK_NAME + WS + "\\)");
+
+    private static final Pattern PLACE_BLOCKS_PATTERN = Pattern.compile(
+        "PlaceBlocks" + WS + "\\(" + WS
+        + "(" + INT_ARRAY + ")" + WS + "," + WS
+        + "(" + INT_ARRAY + ")" + WS + "," + WS
+        + "(" + INT_ARRAY + ")" + WS + "," + WS
+        + BLOCK_NAME + WS + "\\)");
+
+    private static final Pattern INT_TOKEN_PATTERN = Pattern.compile(INT);
+
+    private static String firstNonNull(String... strs) {
+        for (String s : strs) {
+            if (s != null) return s;
+        }
+        return null;
+    }
+
+    public static String stripTextualFunctionCalls(String text) {
+        if (text == null) return "";
+        text = PLACE_BLOCKS_PATTERN.matcher(text).replaceAll("");
+        text = PLACE_LINE_PATTERN.matcher(text).replaceAll("");
+        text = PLACE_BLOCK_PATTERN.matcher(text).replaceAll("");
+        text = text.replaceAll("[ \\t]+(?=\\R)", "");
+        text = text.replaceAll("(?:\\R){3,}", "\n\n");
+        return text.trim();
+    }
+
+    public static int checkForTextualFunctions(Response r, ServerPlayerEntity player, ChatBot chatBot) {
+        String text = extractResponseText(r);
+        if (text.isEmpty()) return 0;
+        return scanAndExecute(text, player, null);
+    }
+
+    public static int scanAndExecuteWithPivot(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot) {
+        if (text == null || text.isEmpty()) return 0;
+        return scanAndExecute(text, player, pivot);
+    }
+
+    public static String extractResponseText(Response r) {
+        StringBuilder builder = new StringBuilder();
+        r.output().stream()
+                .flatMap(item -> item.message().stream())
+                .flatMap(message -> message.content().stream())
+                .flatMap(content -> content.outputText().stream())
+                .forEach(outputText -> {
+                    builder.append(outputText.text());
+                    builder.append("\n");
+                });
+        return builder.toString();
+    }
+
+    private static int scanAndExecute(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot) {
+        int total = 0;
+        total += scanPlaceBlock(text, player, pivot);
+        total += scanPlaceLine(text, player, pivot);
+        total += scanPlaceBlocks(text, player, pivot);
+        return total;
+    }
+
+    private static int scanPlaceBlock(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot) {
+        Matcher m = PLACE_BLOCK_PATTERN.matcher(text);
+        int count = 0;
+        while (m.find()) {
+            String match = m.group();
+            try {
+                int x = Integer.parseInt(m.group(1));
+                int y = Integer.parseInt(m.group(2));
+                int z = Integer.parseInt(m.group(3));
+                String blockType = firstNonNull(m.group(4), m.group(5), m.group(6), m.group(7));
+                if (pivot == null) {
+                    ChatBotActions.placeBlock(player, x, y, z, blockType);
+                } else {
+                    ChatBotActions.placeBlockAt(player, pivot, x, y, z, blockType);
+                }
+                count++;
+            } catch (Exception e) {
+                LOGGER.warn("Failed to parse textual PlaceBlock call: {}", match, e);
+            }
+        }
+        if (count > 0) LOGGER.info("Executed {} textual PlaceBlock call(s) for player {}", count, player.getName().getString());
+        return count;
+    }
+
+    private static int scanPlaceLine(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot) {
+        Matcher m = PLACE_LINE_PATTERN.matcher(text);
+        int count = 0;
+        while (m.find()) {
+            String match = m.group();
+            try {
+                int x = Integer.parseInt(m.group(1));
+                int y = Integer.parseInt(m.group(2));
+                int z = Integer.parseInt(m.group(3));
+                int x2 = Integer.parseInt(m.group(4));
+                int y2 = Integer.parseInt(m.group(5));
+                int z2 = Integer.parseInt(m.group(6));
+                String blockType = firstNonNull(m.group(7), m.group(8), m.group(9), m.group(10));
+                if (pivot == null) {
+                    ChatBotActions.placeLine(player, x, y, z, x2, y2, z2, blockType);
+                } else {
+                    ChatBotActions.placeLineAt(player, pivot, x, y, z, x2, y2, z2, blockType);
+                }
+                count++;
+            } catch (Exception e) {
+                LOGGER.warn("Failed to parse textual PlaceLine call: {}", match, e);
+            }
+        }
+        if (count > 0) LOGGER.info("Executed {} textual PlaceLine call(s) for player {}", count, player.getName().getString());
+        return count;
+    }
+
+    private static int scanPlaceBlocks(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot) {
+        Matcher m = PLACE_BLOCKS_PATTERN.matcher(text);
+        int count = 0;
+        while (m.find()) {
+            String match = m.group();
+            try {
+                int[] xs = parseIntArray(m.group(1));
+                int[] ys = parseIntArray(m.group(3));
+                int[] zs = parseIntArray(m.group(5));
+                String blockType = firstNonNull(m.group(7), m.group(8), m.group(9), m.group(10));
+                if (pivot == null) {
+                    ChatBotActions.placeBlocks(player, xs, ys, zs, blockType);
+                } else {
+                    ChatBotActions.placeBlocksAt(player, pivot, xs, ys, zs, blockType);
+                }
+                count++;
+            } catch (Exception e) {
+                LOGGER.warn("Failed to parse textual PlaceBlocks call: {}", match, e);
+            }
+        }
+        if (count > 0) LOGGER.info("Executed {} textual PlaceBlocks call(s) for player {}", count, player.getName().getString());
+        return count;
+    }
+
+    private static int[] parseIntArray(String arrayLiteral) {
+        List<Integer> values = new ArrayList<>();
+        Matcher m = INT_TOKEN_PATTERN.matcher(arrayLiteral);
+        while (m.find()) {
+            values.add(Integer.parseInt(m.group()));
+        }
+        int[] out = new int[values.size()];
+        for (int i = 0; i < values.size(); i++) {
+            out[i] = values.get(i);
+        }
+        return out;
     }
 
 }
