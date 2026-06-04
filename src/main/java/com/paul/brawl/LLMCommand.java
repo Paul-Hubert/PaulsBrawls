@@ -1,6 +1,7 @@
 package com.paul.brawl;
 
 import com.mojang.brigadier.Command;
+import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
@@ -64,8 +65,110 @@ public class LLMCommand {
                             return Command.SINGLE_SUCCESS;
                         })
                     )
+                    .then(CommandManager.literal("bridge")
+                        .executes(ctx -> {
+                            printBridgeStatus(ctx.getSource());
+                            return Command.SINGLE_SUCCESS;
+                        })
+                        .then(CommandManager.literal("enabled")
+                            .then(CommandManager.argument("on", BoolArgumentType.bool())
+                                .executes(ctx -> setBridgeEnabled(ctx.getSource(), BoolArgumentType.getBool(ctx, "on")))
+                            )
+                        )
+                        .then(CommandManager.literal("url")
+                            .then(CommandManager.argument("url", StringArgumentType.greedyString())
+                                .executes(ctx -> setBridgeUrl(ctx.getSource(), StringArgumentType.getString(ctx, "url")))
+                            )
+                        )
+                        .then(CommandManager.literal("bot")
+                            .then(CommandManager.argument("name", StringArgumentType.word())
+                                .executes(ctx -> setBotUsername(ctx.getSource(), StringArgumentType.getString(ctx, "name")))
+                            )
+                        )
+                        .then(CommandManager.literal("griefing")
+                            .then(CommandManager.argument("on", BoolArgumentType.bool())
+                                .executes(ctx -> setGriefing(ctx.getSource(), BoolArgumentType.getBool(ctx, "on")))
+                            )
+                        )
+                        .then(CommandManager.literal("waitmax")
+                            .then(CommandManager.argument("seconds", IntegerArgumentType.integer(1, 600))
+                                .executes(ctx -> setWaitMax(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "seconds")))
+                            )
+                        )
+                        .then(CommandManager.literal("spawnmax")
+                            .then(CommandManager.argument("count", IntegerArgumentType.integer(1, 64))
+                                .executes(ctx -> setSpawnMax(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "count")))
+                            )
+                        )
+                        .then(CommandManager.literal("idle")
+                            .then(CommandManager.argument("seconds", IntegerArgumentType.integer(5, 3600))
+                                .executes(ctx -> setIdleTimeout(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "seconds")))
+                            )
+                        )
+                    )
             );
         });
+    }
+
+    private static int setBridgeEnabled(ServerCommandSource source, boolean on) {
+        BridgeConfig.INSTANCE.enabled = on;
+        BridgeConfig.INSTANCE.save();
+        printBridgeStatus(source);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int setBridgeUrl(ServerCommandSource source, String url) {
+        BridgeConfig.INSTANCE.bridgeUrl = url;
+        BridgeConfig.INSTANCE.save();
+        printBridgeStatus(source);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int setBotUsername(ServerCommandSource source, String name) {
+        BridgeConfig.INSTANCE.botUsername = name;
+        BridgeConfig.INSTANCE.save();
+        printBridgeStatus(source);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int setGriefing(ServerCommandSource source, boolean on) {
+        BridgeConfig.INSTANCE.creatureGriefingAllowed = on;
+        BridgeConfig.INSTANCE.save();
+        printBridgeStatus(source);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int setWaitMax(ServerCommandSource source, int seconds) {
+        BridgeConfig.INSTANCE.waitMaxSeconds = seconds;
+        // Keep the idle watchdog strictly above the longest deliberate Wait.
+        if (BridgeConfig.INSTANCE.idleTimeoutSeconds <= seconds) {
+            BridgeConfig.INSTANCE.idleTimeoutSeconds = seconds + 30;
+        }
+        BridgeConfig.INSTANCE.save();
+        printBridgeStatus(source);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int setSpawnMax(ServerCommandSource source, int count) {
+        BridgeConfig.INSTANCE.spawnCountMax = count;
+        BridgeConfig.INSTANCE.save();
+        printBridgeStatus(source);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int setIdleTimeout(ServerCommandSource source, int seconds) {
+        if (seconds <= BridgeConfig.INSTANCE.waitMaxSeconds) {
+            source.sendError(Text.literal("idle timeout must exceed waitMax (" + BridgeConfig.INSTANCE.waitMaxSeconds + "s)"));
+            return 0;
+        }
+        BridgeConfig.INSTANCE.idleTimeoutSeconds = seconds;
+        BridgeConfig.INSTANCE.save();
+        printBridgeStatus(source);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static void printBridgeStatus(ServerCommandSource source) {
+        source.sendFeedback(() -> Text.literal(BridgeConfig.INSTANCE.describe()), false);
     }
 
     private static int setActiveProvider(ServerCommandSource source, String name) {

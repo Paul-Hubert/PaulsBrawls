@@ -18,6 +18,7 @@ public class ChatCommand {
     public static void register() {
         chatCommand();
         registerPromptCommand();
+        registerKillSwitch();
     }
 
     // chat with god
@@ -25,30 +26,86 @@ public class ChatCommand {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
                 LiteralArgumentBuilder.<ServerCommandSource>literal("pray")
-                    .requires(source -> source.hasPermissionLevel(0)) // Admin only
+                    .requires(source -> source.hasPermissionLevel(0)) // Open to everyone
+                    .then(CommandManager.literal("stop")
+                        .executes(context -> {
+                            // Player can end their own active session.
+                            var player = context.getSource().getPlayer();
+                            if (player != null && GodSessionManager.isActive(player)) {
+                                ChatBot.endPrayerSession(player);
+                                ChatPrinter.sendMessage(player, "Dieu : (la séance est close.)");
+                            }
+                            return Command.SINGLE_SUCCESS;
+                        })
+                    )
                     .then(CommandManager.argument("text", MessageArgumentType.message())
-                    .executes(context -> {
-                        Text input = MessageArgumentType.getMessage(context, "text");
-                        onChatCommand(context.getSource(), input.getString());
-                        return Command.SINGLE_SUCCESS;
-                    })
-            ));
+                        .executes(context -> {
+                            Text input = MessageArgumentType.getMessage(context, "text");
+                            onChatCommand(context.getSource(), input.getString());
+                            return Command.SINGLE_SUCCESS;
+                        })
+                    )
+            );
         });
 
     }
 
+    /**
+     * Admin kill-switch — force-end whatever session is live, drop everything
+     * pending, and (re)stop the bridge until re-enabled.
+     */
+    public static void registerKillSwitch() {
+        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+            dispatcher.register(
+                LiteralArgumentBuilder.<ServerCommandSource>literal("godbody")
+                    .requires(source -> source.hasPermissionLevel(2))
+                    .then(CommandManager.literal("off")
+                        .executes(ctx -> {
+                            int dropped = GodActionQueue.clear();
+                            GodBody.vanish();
+                            GodSessionManager.forceEndSession();
+                            BridgeConfig.INSTANCE.enabled = false;
+                            BridgeConfig.INSTANCE.save();
+                            ctx.getSource().sendFeedback(
+                                () -> Text.literal("Killed god-body: " + dropped + " queued action(s) dropped, session released, bridge disabled."),
+                                true);
+                            return Command.SINGLE_SUCCESS;
+                        })
+                    )
+                    .then(CommandManager.literal("on")
+                        .executes(ctx -> {
+                            BridgeConfig.INSTANCE.enabled = true;
+                            BridgeConfig.INSTANCE.save();
+                            ctx.getSource().sendFeedback(() -> Text.literal("Bridge re-enabled."), true);
+                            return Command.SINGLE_SUCCESS;
+                        })
+                    )
+            );
+        });
+    }
+
     public static void onChatCommand(ServerCommandSource source, String input) {
-        
+
         try {
-            ChatPrinter.sendMessage(source.getPlayer(), source.getPlayer().getName().getString() + " : " + input);
-        
-            ChatBot.godBot.sendChatRequest(input, source.getPlayer());
+            var player = source.getPlayer();
+            ChatPrinter.sendMessage(player, player.getName().getString() + " : " + input);
+
+            // Try to claim the single shared avatar. If another player owns it,
+            // serve the prayer bodiless (text only — God still answers, but the
+            // bot won't manifest). If the claim succeeds, the LLM gets to call
+            // Appear when it chooses; we never auto-teleport here.
+            boolean owned = GodSessionManager.claim(player);
+            if (!owned) {
+                ChatPrinter.sendMessage(player, "Dieu : (occupé ailleurs — je t'écoute, mais sans forme.)");
+            }
+
+            ChatBot.godBot.sendChatRequest(input, player);
         } catch(Exception e) {
             LOGGER.error(e.toString());
             e.printStackTrace();
         }
-        
-        
+
+
     }
 
 

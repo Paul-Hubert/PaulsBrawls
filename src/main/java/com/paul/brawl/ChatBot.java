@@ -14,14 +14,19 @@ import java.util.function.BiConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.openai.client.OpenAIClientAsync;
-import com.openai.models.ChatModel;
-import com.openai.models.responses.EasyInputMessage;
-import com.openai.models.responses.Response;
-import com.openai.models.responses.ResponseCreateParams;
-import com.openai.models.responses.ResponseFunctionToolCall;
-import com.openai.models.responses.ResponseInputImage;
-import com.openai.models.responses.ResponseInputItem;
+import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.ImageContent;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.TextContent;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.memory.ChatMemory;
+import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 
 import net.minecraft.server.network.ServerPlayerEntity;
 
@@ -29,22 +34,17 @@ public class ChatBot {
 
     public static ChatBot godBot, buildBot;
 
-    public OpenAIClientAsync client;
-
-    public static final String NULL_ID = "null";
-    public ConcurrentHashMap<UUID, String> previousResponseIds = new ConcurrentHashMap<>();
-
     public static final int MAX_FUNCTION_CALL_DEPTH = 100;
     public ConcurrentHashMap<UUID, Integer> functionCallDepth = new ConcurrentHashMap<>();
 
-    public String getPreviousResponseId(ServerPlayerEntity player) {
-        return previousResponseIds.getOrDefault(player.getUuid(), NULL_ID);
-    }
-
-    public void clearPreviousResponseId(ServerPlayerEntity player) {
-        previousResponseIds.remove(player.getUuid());
-        functionCallDepth.remove(player.getUuid());
-    }
+    /**
+     * Per-player conversation memory. Holds every user/assistant/tool message in the
+     * encounter (the {@link SystemMessage}s carrying the persona + dynamic context are
+     * rebuilt fresh each turn and prepended at send time, not stored here). Replaces
+     * the OpenAI Responses API's server-side {@code previousResponseId} chain.
+     */
+    public static final int MAX_MEMORY_MESSAGES = 40;
+    public ConcurrentHashMap<UUID, ChatMemory> memories = new ConcurrentHashMap<>();
 
     public static String PROMPT_STATE_KEY = "prompt_state_key";
 
@@ -57,17 +57,12 @@ public class ChatBot {
 
     public boolean hasImage = true;
     public boolean needsInfo = true;
-    public boolean needsHistory = false;
     public boolean needsBuildTools = true;
     public boolean needsGodTools = true;
     public boolean needsBuildPlan = false;
-    public boolean needsPreviousResponse = true;
-
-    public ChatBotPlayerHistory chatBotPlayerHistory = new ChatBotPlayerHistory();
 
 
     public static void register() {
-        // Configures using the `OPENAI_API_KEY`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` environment variables
         godBot = new ChatBot("prompt.txt");
         buildBot = new ChatBot("build_prompt.txt");
 
@@ -76,12 +71,6 @@ public class ChatBot {
 
         godBot.needsInfo = true;
         buildBot.needsInfo = false;
-
-        godBot.needsHistory = false;
-        buildBot.needsHistory = false;
-
-        godBot.needsPreviousResponse = true;
-        buildBot.needsPreviousResponse = true;
 
         godBot.needsBuildTools = false;
         buildBot.needsBuildTools = true;
@@ -108,207 +97,152 @@ public class ChatBot {
 
     }
 
+    /**
+     * Drops the cached {@link ChatModel} and wipes every player's memory so the next
+     * request rebuilds against current settings. Used by /llm when provider /
+     * host / port / api key change.
+     */
     public static void reloadClients() {
         LLMConfig.INSTANCE.invalidateClient();
         if (godBot != null) {
-            godBot.client = LLMConfig.INSTANCE.sharedClient();
-            godBot.previousResponseIds.clear();
+            godBot.memories.clear();
             godBot.functionCallDepth.clear();
-            godBot.chatBotPlayerHistory.clearAll();
         }
         if (buildBot != null) {
-            buildBot.client = LLMConfig.INSTANCE.sharedClient();
-            buildBot.previousResponseIds.clear();
+            buildBot.memories.clear();
             buildBot.functionCallDepth.clear();
-            buildBot.chatBotPlayerHistory.clearAll();
         }
     }
 
 
     public ChatBot(String promptPath) {
         this.promptPath = promptPath;
-
-        client = LLMConfig.INSTANCE.sharedClient();
         readPrompt();
     }
-    
 
-    public CompletableFuture<Response> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player) {
+    /** Clears the player's conversation memory and depth guard. */
+    public void clearMemory(ServerPlayerEntity player) {
+        memories.remove(player.getUuid());
+        functionCallDepth.remove(player.getUuid());
+    }
+
+    /** Returns the player's {@link ChatMemory}, creating a fresh window if needed. */
+    public ChatMemory memoryFor(ServerPlayerEntity player) {
+        return memories.computeIfAbsent(player.getUuid(),
+            k -> MessageWindowChatMemory.withMaxMessages(MAX_MEMORY_MESSAGES));
+    }
+
+
+    public CompletableFuture<ChatResponse> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player) {
         return sendImageChatRequest(input, bytes, player, null);
     }
 
-    public CompletableFuture<Response> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
+    public CompletableFuture<ChatResponse> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player, BiConsumer<? super ChatResponse, String> callback) {
 
         functionCallDepth.put(player.getUuid(), 0);
 
-        var builder = buildBuilder(player);
+        ChatMemory memory = memoryFor(player);
 
-        String base64url = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(bytes);
-        
-        ResponseInputImage image = ResponseInputImage.builder()
-                .detail(ResponseInputImage.Detail.AUTO)
-                .imageUrl(base64url)
-                .build();
-
-        ResponseInputItem imageInputItem = ResponseInputItem.ofMessage(ResponseInputItem.Message.builder()
-                .role(ResponseInputItem.Message.Role.USER)
-                .addContent(image)
-                .build());
-
-        ResponseInputItem messageInputItem = ResponseInputItem.ofMessage(ResponseInputItem.Message.builder()
-                .role(ResponseInputItem.Message.Role.USER)
-                .addInputTextContent(input)
-                .build());
-        
-        var prompts = getPromptList(player);
-
-        // Don't save images to history to avoid too many tokens
-        if(hasImage) {
-            prompts.add(imageInputItem);
+        // hasImage gates whether the screenshot rides along. Both bots historically
+        // accepted images at the API layer; the flag exists so build_prompt sub-agents
+        // that don't need vision can save tokens.
+        if (hasImage) {
+            String base64 = Base64.getEncoder().encodeToString(bytes);
+            UserMessage userMsg = UserMessage.from(
+                TextContent.from(input),
+                ImageContent.from(base64, "image/jpeg")
+            );
+            memory.add(userMsg);
+        } else {
+            memory.add(UserMessage.from(input));
         }
 
-        addInput(prompts, player, messageInputItem);
-
-        builder = builder.inputOfResponse(prompts);
-
-        var response = sendBuilder(builder, player, callback);
-
-        return response;
-
+        return doRequest(player, callback);
     }
-    
-    public CompletableFuture<Response> sendChatRequest(String input, ServerPlayerEntity player) {
+
+    public CompletableFuture<ChatResponse> sendChatRequest(String input, ServerPlayerEntity player) {
         return sendChatRequest(input, player, null);
     }
 
-    public CompletableFuture<Response> sendChatRequest(String input, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
+    public CompletableFuture<ChatResponse> sendChatRequest(String input, ServerPlayerEntity player, BiConsumer<? super ChatResponse, String> callback) {
+        functionCallDepth.put(player.getUuid(), 0);
 
-        var item = ResponseInputItem
-            .ofEasyInputMessage(EasyInputMessage.builder()
-            .role(EasyInputMessage.Role.USER)
-            .content(input)
-            .build());
+        ChatMemory memory = memoryFor(player);
+        memory.add(UserMessage.from(input));
 
-        return sendRequest(item, player, callback);
+        return doRequest(player, callback);
     }
 
 
-    public CompletableFuture<Response> sendFunctionOutputs(List<ChatBotFunctions.FunctionResult> results, ServerPlayerEntity player) {
+    public CompletableFuture<ChatResponse> sendFunctionOutputs(List<ChatBotFunctions.FunctionResult> results, ServerPlayerEntity player) {
 
         int depth = functionCallDepth.merge(player.getUuid(), 1, Integer::sum);
         if (depth > MAX_FUNCTION_CALL_DEPTH) {
             LOGGER.warn("Reached max function call depth ({}) for player {}, stopping chain and resetting it.",
                 MAX_FUNCTION_CALL_DEPTH, player.getName().getString());
-            // The last response was already recorded as previousResponseId and contains
-            // function_calls we are choosing not to answer. Leaving the chain in that
-            // state breaks every subsequent turn (OpenAI requires matching outputs), so
-            // wipe it — the next user message will start a fresh first turn.
-            clearPreviousResponseId(player);
+            // The most recent assistant turn carries tool_calls we are choosing not to
+            // answer. Leaving them in memory unmatched would corrupt the next request
+            // (assistant tool_call must be followed by its tool_result), so wipe the
+            // memory — the next user message starts a fresh conversation.
+            clearMemory(player);
             ChatPrinter.sendMessage(player, "Dieu : (chaîne d'appels coupée — relance ta requête.)");
+            // Same exit hygiene as the natural terminal: vanish + release lock.
+            if (this.needsGodTools && GodSessionManager.isActive(player)) {
+                endPrayerSession(player);
+            }
             return CompletableFuture.completedFuture(null);
         }
 
-        var builder = buildBuilder(player);
-
-        List<ResponseInputItem> l = new ArrayList<>();
-        for (var r : results) {
-            l.add(ResponseInputItem.ofFunctionCallOutput(ResponseInputItem.FunctionCallOutput.builder()
-                .callId(r.call().callId())
-                .outputAsJson(r.result())
-                .build()));
+        ChatMemory memory = memoryFor(player);
+        for (ChatBotFunctions.FunctionResult r : results) {
+            memory.add(ToolExecutionResultMessage.from(r.call(), r.result()));
         }
 
-        builder = builder.inputOfResponse(l);
-
-        return sendBuilder(builder, player, null);
+        return doRequest(player, null);
     }
 
-    public CompletableFuture<Response> sendTextualContinuation(int placedCount, ServerPlayerEntity player) {
+    public CompletableFuture<ChatResponse> sendTextualContinuation(int placedCount, ServerPlayerEntity player) {
 
         int depth = functionCallDepth.merge(player.getUuid(), 1, Integer::sum);
         if (depth > MAX_FUNCTION_CALL_DEPTH) {
             LOGGER.warn("Reached max function call depth ({}) for player {}, stopping textual chain and resetting it.",
                 MAX_FUNCTION_CALL_DEPTH, player.getName().getString());
-            // The textual loop doesn't have outstanding function_calls (those are pure text),
-            // so the chain is technically still valid — but we've hit the safety cap and want
-            // a clean slate for the next request rather than picking up a runaway thread.
-            clearPreviousResponseId(player);
+            clearMemory(player);
             ChatPrinter.sendMessage(player, "Dieu : (construction interrompue — limite de tours atteinte.)");
             return CompletableFuture.completedFuture(null);
         }
-
-        var builder = buildBuilder(player);
 
         String msg = "[system] Executed " + placedCount + " textual placement call(s) from your previous reply. "
             + "If the build is now complete, reply with one short French sentence and no call lines. "
             + "Otherwise emit more PlaceBlock / PlaceLine / PlaceBlocks lines and the system will call you again.";
 
-        var item = ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
-            .role(EasyInputMessage.Role.USER)
-            .content(msg)
-            .build());
+        ChatMemory memory = memoryFor(player);
+        memory.add(UserMessage.from(msg));
 
-        builder = builder.inputOfResponse(List.of(item));
-
-        return sendBuilder(builder, player, null);
+        return doRequest(player, null);
     }
 
-    public CompletableFuture<Response> sendRequest(ResponseInputItem item, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
+    /**
+     * Builds the full per-turn message list (system + dynamic context + memory),
+     * attaches the tool specs, and submits the request on the shared blocking-LLM
+     * worker pool. Returns a {@link CompletableFuture} so callers retain the old
+     * async / callback style ({@code thenAccept}, {@code whenComplete}).
+     */
+    private CompletableFuture<ChatResponse> doRequest(ServerPlayerEntity player, BiConsumer<? super ChatResponse, String> callback) {
+        List<ChatMessage> messages = buildMessageList(player);
+        List<ToolSpecification> tools = ChatBotFunctions.buildToolSpecs(needsGodTools, needsBuildPlan);
 
-        functionCallDepth.put(player.getUuid(), 0);
-
-        var builder = buildBuilder(player);
-        
-        var prompts = getPromptList(player);
-
-        if(item != null) addInput(prompts, player, item);
-
-        builder = builder.inputOfResponse(prompts);
-        
-        var response = sendBuilder(builder, player, callback);
-
-        return response;
-    }
-
-    public ResponseCreateParams.Builder makeBuilder() {
-        var builder = ResponseCreateParams.builder()
-            .model(ChatModel.of(LLMConfig.INSTANCE.model()));
-        return builder;
-    }
-
-    public ResponseCreateParams.Builder buildTools(ResponseCreateParams.Builder builder) {
-        // Direct block placement is text-only — there is no PlaceBlock/PlaceLine/PlaceBlocks tool to register.
-        // needsBuildTools still gates the text scanner in setupGeneralCallback.
-        if(needsGodTools) {
-            builder = ChatBotFunctions.registerGodTools(builder);
+        ChatRequest.Builder rb = ChatRequest.builder().messages(messages);
+        if (!tools.isEmpty()) {
+            rb = rb.toolSpecifications(tools);
         }
-        if(needsBuildPlan) {
-            builder = ChatBotFunctions.registerBuildPlanTool(builder);
-        }
-        return builder;
-    }
+        ChatRequest req = rb.build();
 
-    public ResponseCreateParams.Builder setPreviousResponse(ResponseCreateParams.Builder builder, ServerPlayerEntity player) {
-        String id = getPreviousResponseId(player);
-        if(needsPreviousResponse && !id.equals(NULL_ID)) {
-            builder = builder.previousResponseId(id);
-        }
-        return builder;
-    }
-
-    public ResponseCreateParams.Builder buildBuilder(ServerPlayerEntity player) {
-        var builder = makeBuilder();
-
-        builder = buildTools(builder);
-
-        builder = setPreviousResponse(builder, player);
-
-        return builder;
-    }
-
-    private CompletableFuture<Response> sendBuilder(ResponseCreateParams.Builder builder, ServerPlayerEntity player, BiConsumer<? super Response, String> callback) {
-
-        CompletableFuture<Response> response = client.responses().create(builder.build());
+        ChatModel model = LLMConfig.INSTANCE.sharedModel();
+        CompletableFuture<ChatResponse> response = CompletableFuture.supplyAsync(
+            () -> model.chat(req),
+            LLMConfig.INSTANCE.sharedExecutor()
+        );
 
         response.whenComplete((r, ex) -> {
             if (ex != null) logApiError(ex, player);
@@ -325,85 +259,74 @@ public class ChatBot {
         Throwable root = ex;
         while (root.getCause() != null && root.getCause() != root) root = root.getCause();
 
-        try {
-            var bodyMethod = root.getClass().getMethod("body");
-            Object body = bodyMethod.invoke(root);
-            if (body != null) LOGGER.error("Response body: {}", body);
-        } catch (NoSuchMethodException ignored) {
-        } catch (Exception reflectErr) {
-            LOGGER.debug("Could not extract body via reflection", reflectErr);
+        // LangChain4j surfaces HTTP errors as RuntimeExceptions with a message
+        // containing the status/body; we don't try to reflectively unwrap an SDK
+        // type anymore. Logging the root preserves the original stack trace.
+        LOGGER.error("LLM API call failed for player {}", player.getName().getString(), root);
+        // Don't leave the avatar hanging if the call failed mid-encounter.
+        if (this.needsGodTools && GodSessionManager.isActive(player)) {
+            endPrayerSession(player);
         }
-
-        try {
-            var statusMethod = root.getClass().getMethod("statusCode");
-            Object status = statusMethod.invoke(root);
-            if (status != null) LOGGER.error("Status code: {}", status);
-        } catch (NoSuchMethodException ignored) {
-        } catch (Exception ignored) {}
-
-        LOGGER.error("OpenAI API call failed for player {}", player.getName().getString(), root);
     }
-    
 
-    public List<ResponseInputItem> getPromptList(ServerPlayerEntity player) {
-        List<ResponseInputItem> l = new ArrayList<ResponseInputItem>();
 
-        boolean isFollowUp = needsPreviousResponse && !getPreviousResponseId(player).equals(NULL_ID);
+    /**
+     * The per-turn message list: persona system prompt, optional dynamic context
+     * (player JSON / chat log / nearby blocks), then the player's memory. Today
+     * the OpenAI server retained the persona via the response-id chain; LangChain4j
+     * requires the full list every call, so we always send it.
+     */
+    public List<ChatMessage> buildMessageList(ServerPlayerEntity player) {
+        List<ChatMessage> messages = new ArrayList<>();
 
-        if(!isFollowUp) {
-            // prompt engineering roleplaying — server retains it via previousResponseId chain on follow-ups
-            l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
-                    .role(EasyInputMessage.Role.SYSTEM)
-                    .content(hardcodedPrompt + "\n" + prompt)
-                    .build()));
-        }
+        messages.add(SystemMessage.from(hardcodedPrompt + "\n" + prompt));
 
-        if(needsInfo) {
+        if (needsInfo) {
             String jsonString = PlayerDataCollector.collect(player).toString();
 
-            l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
-                    .role(EasyInputMessage.Role.SYSTEM)
-                    .content("The player you are interacting with has their information in JSON format here: \n"
-                             + jsonString)
-                    .build()));
+            messages.add(SystemMessage.from(
+                "The player you are interacting with has their information in JSON format here: \n"
+                + jsonString));
 
-            l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
-                    .role(EasyInputMessage.Role.SYSTEM)
-                    .content("The history of chat, commands, and game messages is shown here: \n"
-                             + ChatMessageHistory.getHistory())
-                    .build()));
+            messages.add(SystemMessage.from(
+                "The history of chat, commands, and game messages is shown here: \n"
+                + ChatMessageHistory.getHistory()));
 
-            l.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
-                        .role(EasyInputMessage.Role.SYSTEM)
-                        .content("Here is the information about the blocks near the player's cursor: \n"
-                            + ChatBotActions.getBlockInfo(player))
-                        .build()));
+            messages.add(SystemMessage.from(
+                "Here is the information about the blocks near the player's cursor: \n"
+                + ChatBotActions.getBlockInfo(player)));
         }
 
-        if(needsHistory && !isFollowUp) {
-            var lf = chatBotPlayerHistory.getInputs(player);
+        ChatMemory memory = memoryFor(player);
+        messages.addAll(memory.messages());
 
-            if(lf != null) {
-                l.addAll(lf);
-            }
-        }
-
-        return l;
+        return messages;
     }
 
-    public void setupGeneralCallback(CompletableFuture<Response> response, ServerPlayerEntity player) {
+    public void setupGeneralCallback(CompletableFuture<ChatResponse> response, ServerPlayerEntity player) {
         response.thenAccept(r -> {
             try {
+                if (r == null) return;
                 logResponseShape(r, player);
-                setPreviousId(r, player);
-                addOutputsToHistory(r, player);
+                addAssistantToHistory(r, player);
                 printOutputs(r, player);
+
+                // Did this turn keep the conversation alive? Compute once,
+                // then vanish only if nothing continues AND this prayer owns
+                // an active session. This branch sits OUTSIDE needsBuildTools
+                // so it fires for godBot (needsBuildTools == false).
                 boolean hadFunctionCalls = ChatBotFunctions.checkForFunctions(r, player, this);
-                if(this.needsBuildTools && !hadFunctionCalls) {
+                boolean willContinue = hadFunctionCalls;
+                if (this.needsBuildTools && !hadFunctionCalls) {
                     int placed = ChatBotFunctions.checkForTextualFunctions(r, player, this);
                     if (placed > 0) {
                         this.sendTextualContinuation(placed, player);
+                        willContinue = true;
                     }
+                }
+
+                if (!willContinue && this.needsGodTools && GodSessionManager.isActive(player)) {
+                    endPrayerSession(player);
                 }
 
             } catch (Exception e) {
@@ -412,63 +335,61 @@ public class ChatBot {
         });
     }
 
-    private void logResponseShape(Response r, ServerPlayerEntity player) {
-        // Independent counters: an item could in principle carry more than one aspect
-        // (e.g. a future API revision exposing reasoning alongside a message). Counting
-        // each aspect on its own surfaces that case as totals > items rather than
-        // silently undercounting.
-        int messages = 0, calls = 0, reasoning = 0, unclassified = 0;
-        for (var item : r.output()) {
-            boolean matched = false;
-            if (item.isFunctionCall())         { calls++;     matched = true; }
-            if (item.message().isPresent())    { messages++;  matched = true; }
-            if (item.reasoning().isPresent())  { reasoning++; matched = true; }
-            if (!matched) unclassified++;
+    /**
+     * Tear down a prayer session: send the body home, clear invuln, release the
+     * busy lock. Idempotent — safe to call from depth-cap, error exits, the
+     * kill switch, and the natural zero-tool-call terminal.
+     */
+    public static void endPrayerSession(ServerPlayerEntity player) {
+        if (player == null) return;
+        if (GodSessionManager.hasManifested()) {
+            GodActionQueue.submit(() -> ChatBotActions.restoreAvatar(player));
+            GodBody.vanish();
         }
-        LOGGER.info("Response id={} for player {}: {} message(s), {} function_call(s), {} reasoning, {} unclassified",
-            r.id(), player.getName().getString(), messages, calls, reasoning, unclassified);
+        GodSessionManager.endSession(player);
     }
 
-    public void setupCustomCallback(CompletableFuture<Response> response, BiConsumer<? super Response, String> callback) {
+    private void logResponseShape(ChatResponse r, ServerPlayerEntity player) {
+        AiMessage msg = r.aiMessage();
+        boolean hasText = msg != null && msg.text() != null && !msg.text().isEmpty();
+        int calls = (msg != null && msg.hasToolExecutionRequests()) ? msg.toolExecutionRequests().size() : 0;
+        LOGGER.info("Response for player {}: text={}, function_call(s)={}, finishReason={}",
+            player.getName().getString(), hasText ? 1 : 0, calls,
+            r.finishReason() == null ? "?" : r.finishReason().toString());
+    }
+
+    public void setupCustomCallback(CompletableFuture<ChatResponse> response, BiConsumer<? super ChatResponse, String> callback) {
         if (callback == null) return;
         // thenAccept skips the exceptional branch by design — errors are already
-        // logged centrally in sendBuilder's whenComplete.
+        // logged centrally in doRequest's whenComplete.
         response.thenAccept(r -> callback.accept(r, ChatBotFunctions.extractResponseText(r)));
     }
 
-    private void addInput(List<ResponseInputItem> items, ServerPlayerEntity player, ResponseInputItem item) {
-        items.add(item);
-        chatBotPlayerHistory.addInput(item, player);
-    }
-    
-    private void setPreviousId(Response response, ServerPlayerEntity player) {
-        try {
-            previousResponseIds.put(player.getUuid(), response.id());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void addOutputsToHistory(Response response, ServerPlayerEntity player) {
-        response.output().stream()
-            .flatMap(item -> item.message().stream())
-            .forEach(message -> {
-            chatBotPlayerHistory.addInput(ResponseInputItem.ofResponseOutputMessage(message), player);
-        });
-        response.output().stream()
-            .flatMap(item -> item.reasoning().stream())
-            .forEach(reasoning -> {
-            chatBotPlayerHistory.addInput(ResponseInputItem.ofReasoning(reasoning), player);
-        });
+    /**
+     * Appends the assistant turn to the player's memory so it sits between their
+     * preceding {@link UserMessage} and the {@link ToolExecutionResultMessage}s that
+     * {@link #sendFunctionOutputs} will add. Ordering matters here: client-side
+     * memory must keep each {@code assistant tool_call} immediately followed by its
+     * matching tool result, or the next request is malformed.
+     */
+    private void addAssistantToHistory(ChatResponse response, ServerPlayerEntity player) {
+        AiMessage aiMessage = response.aiMessage();
+        if (aiMessage == null) return;
+        memoryFor(player).add(aiMessage);
     }
 
-    private void printOutputs(Response response, ServerPlayerEntity player) {
+    private void printOutputs(ChatResponse response, ServerPlayerEntity player) {
         var text = ChatBotFunctions.extractResponseText(response);
         if(needsBuildTools) {
             text = ChatBotFunctions.stripTextualFunctionCalls(text);
         }
         if(text.isEmpty()) return;
         ChatPrinter.sendMessage(player, "Dieu : " + text);
+        // Once God has a body, speak the line aloud too so nearby players see
+        // the avatar talk. Bodiless (no Appear yet) prayers stay text-only.
+        if (needsGodTools && GodSessionManager.isActive(player) && GodSessionManager.hasManifested()) {
+            GodBody.say(text);
+        }
     }
 
 
@@ -488,6 +409,6 @@ public class ChatBot {
         }
         return godBot;
     }
-    
+
 
 }

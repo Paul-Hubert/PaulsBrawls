@@ -1,5 +1,7 @@
 package com.paul.brawl;
 
+import java.util.UUID;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,34 +14,40 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.command.argument.BlockArgumentParser;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LightningEntity;
+import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.RegistryKeys;
 import net.minecraft.registry.RegistryWrapper;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3i;
 import net.minecraft.world.World;
 
 
-import com.openai.client.OpenAIClientAsync;
-import com.openai.client.okhttp.OpenAIOkHttpClientAsync;
-import com.openai.models.ChatModel;
-import com.openai.models.responses.EasyInputMessage;
-import com.openai.models.responses.Response;
-import com.openai.models.responses.ResponseCreateParams;
-import com.openai.models.responses.ResponseInputImage;
-import com.openai.models.responses.ResponseInputItem;
-
 public class ChatBotActions {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("ChatBotActions");
+
+    /**
+     * Latest known {@link MinecraftServer}, captured during server start/stop
+     * lifecycle (see {@link ServerEntryPoint}). Lets off-thread callers (the
+     * idle watchdog, /llm-driven kill switch) look up the bot avatar without
+     * holding a player reference.
+     */
+    private static volatile MinecraftServer SERVER;
+
+    public static void setServer(MinecraftServer server) { SERVER = server; }
+    public static MinecraftServer server() { return SERVER; }
 
     public static void register() {
         registerCommandMessageEvent();
@@ -68,12 +76,15 @@ public class ChatBotActions {
     }
 
     public static String giveItemFromString(ServerPlayerEntity player, String itemName, int amount) {
-        
+
         var item = getItemFromString(itemName);
         if(item == null) {
             return "Reward cancelled, item " + itemName + " does not exist, please try again.";
         }
 
+        // Caller is responsible for thread confinement — see the dispatch in
+        // ChatBotFunctions.executeFunction, which queues this on the main
+        // thread via GodActionQueue.submit().join().
         giveItem(player, item, amount);
 
         return "You gave the player a reward: " + amount + " " + itemName;
@@ -173,8 +184,9 @@ public class ChatBotActions {
                     .requires(source -> source.hasPermissionLevel(2)) // Admin only
                     .executes(context -> {
                         Raycaster.setLastPos(context.getSource().getPlayer());
-                        ChatBot.buildBot.clearPreviousResponseId(context.getSource().getPlayer());
-                        ChatBot.buildBot.chatBotPlayerHistory.popInputs(context.getSource().getPlayer());
+                        // Under LangChain4j the per-player conversation lives in the
+                        // mod, so clearing the chain is just dropping the memory window.
+                        ChatBot.buildBot.clearMemory(context.getSource().getPlayer());
                         return Command.SINGLE_SUCCESS;
                     })
             );
@@ -312,6 +324,107 @@ public class ChatBotActions {
             command
         );
         return "La météo a été changée en " + weatherType + " pour " + (durationSeconds > 0 ? durationSeconds + " secondes." : "une durée indéterminée.");
+    }
+
+    /**
+     * Spawn {@code count} of {@code entityType} near {@code player} at a block
+     * offset. Runs server-side (no bridge dependency) — picked because the
+     * MCP server has no /summon tool and a single canonical path avoids
+     * drift. Must run on the main thread (see GOD_BOT_INTEGRATION_PLAN.md §6a,
+     * §7); caller is expected to wrap via {@link GodActionQueue}.
+     */
+    public static String spawnCreature(ServerPlayerEntity player, String entityType, int count, int x, int y, int z) {
+        if (player == null || !(player.getWorld() instanceof ServerWorld world)) {
+            return "Impossible de spawner : joueur ou monde invalide.";
+        }
+        if (entityType == null || entityType.isBlank()) {
+            return "Spawn annulé : entityType vide.";
+        }
+
+        Identifier id;
+        try {
+            id = Identifier.of(entityType.trim());
+        } catch (Exception e) {
+            return "Spawn annulé : identifiant invalide '" + entityType + "'.";
+        }
+        EntityType<?> type = Registries.ENTITY_TYPE.getOrEmpty(id).orElse(null);
+        if (type == null) {
+            return "Spawn annulé : type d'entité inconnu '" + entityType + "'.";
+        }
+
+        int clamped = Math.max(1, Math.min(count, Math.max(1, BridgeConfig.INSTANCE.spawnCountMax)));
+        BlockPos basePos = player.getBlockPos().add(x, y, z);
+
+        boolean griefAllowed = BridgeConfig.INSTANCE.creatureGriefingAllowed;
+
+        int spawned = 0;
+        for (int i = 0; i < clamped; i++) {
+            // Fan creatures out by ±1 block so a count > 1 doesn't stack at one pos.
+            BlockPos spawnPos = basePos.add((i % 3) - 1, 0, (i / 3) % 3 - 1);
+            Entity entity = type.create(world);
+            if (entity == null) continue;
+            entity.refreshPositionAndAngles(
+                spawnPos.getX() + 0.5,
+                spawnPos.getY(),
+                spawnPos.getZ() + 0.5,
+                player.getYaw() + 180f, 0f);
+            if (entity instanceof MobEntity mob && !griefAllowed) {
+                // Vanilla flag for "can pick up blocks / break grass"; only some
+                // mobs honour it, but it's the cheapest knob we have.
+                mob.setCanPickUpLoot(false);
+            }
+            if (world.spawnEntity(entity)) spawned++;
+        }
+        return "God a fait apparaître " + spawned + " " + entityType + (spawned > 1 ? "s" : "")
+            + " près du joueur" + (griefAllowed ? "" : " (griefing désactivé)") + ".";
+    }
+
+    /** Looks up the bot avatar by the configured username, or null if not joined. */
+    public static ServerPlayerEntity findAvatar(ServerPlayerEntity prayingPlayer) {
+        MinecraftServer s = (prayingPlayer != null && prayingPlayer.getServer() != null)
+            ? prayingPlayer.getServer()
+            : SERVER;
+        if (s == null) return null;
+        return s.getPlayerManager().getPlayer(BridgeConfig.INSTANCE.botUsername);
+    }
+
+    /**
+     * Mark the avatar invulnerable for the duration of an encounter. Cheap and
+     * race-free under the busy lock — exactly one session sets/clears the
+     * flag. Must run on the main thread; caller wraps via {@link GodActionQueue}.
+     */
+    public static String buffAvatar(ServerPlayerEntity prayingPlayer) {
+        ServerPlayerEntity bot = findAvatar(prayingPlayer);
+        if (bot == null) {
+            LOGGER.info("buffAvatar: bot '{}' not found (not joined?)", BridgeConfig.INSTANCE.botUsername);
+            return "Avatar introuvable (pas de buff).";
+        }
+        bot.setInvulnerable(true);
+        bot.extinguish();
+        return "Avatar rendu invincible.";
+    }
+
+    public static String restoreAvatar(ServerPlayerEntity prayingPlayer) {
+        ServerPlayerEntity bot = findAvatar(prayingPlayer);
+        if (bot == null) return "Avatar introuvable.";
+        bot.setInvulnerable(false);
+        return "Avatar redevenu mortel.";
+    }
+
+    /**
+     * Called from the idle watchdog (off-thread). Queues vanish + restoreAvatar
+     * on the main thread without needing a live player reference.
+     */
+    public static void dismissAvatarOnWatchdog(UUID ownerUuid) {
+        MinecraftServer s = SERVER;
+        if (s == null) return;
+        GodActionQueue.submit(() -> {
+            ServerPlayerEntity bot = s.getPlayerManager().getPlayer(BridgeConfig.INSTANCE.botUsername);
+            if (bot != null) bot.setInvulnerable(false);
+            return "watchdog cleared invuln";
+        });
+        // Bridge call: not main-thread-bound, fire it off directly.
+        GodBody.vanish();
     }
 
 }

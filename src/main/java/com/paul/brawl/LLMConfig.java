@@ -6,12 +6,16 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.openai.client.OpenAIClientAsync;
-import com.openai.client.okhttp.OpenAIOkHttpClientAsync;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.openai.OpenAiChatModel;
 
 public class LLMConfig {
 
@@ -46,7 +50,8 @@ public class LLMConfig {
     public final Map<String, ProviderSettings> providers = new LinkedHashMap<>();
     public String activeProvider = OPENAI;
 
-    private OpenAIClientAsync sharedClient;
+    private ChatModel sharedModel;
+    private ExecutorService sharedExecutor;
 
     private LLMConfig() {
         providers.put(OPENAI, new ProviderSettings("https://api.openai.com", 443, "gpt-5", ""));
@@ -70,35 +75,61 @@ public class LLMConfig {
         return true;
     }
 
-    public OpenAIClientAsync buildClient() {
+    /**
+     * Builds a fresh {@link ChatModel} for the active provider. LangChain4j's
+     * OpenAI module accepts a custom {@code baseUrl}, so the same builder serves
+     * api.openai.com, LM Studio's localhost:1234, and Ollama's localhost:11434.
+     */
+    public ChatModel buildModel() {
         ProviderSettings p = active();
-        var builder = OpenAIOkHttpClientAsync.builder()
+        OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
             .baseUrl(p.baseUrl())
-            .apiKey(resolveApiKey(p));
+            .apiKey(resolveApiKey(p))
+            .modelName(p.model);
 
         if (OPENAI.equals(activeProvider)) {
             String org = System.getenv("OPENAI_ORG_ID");
-            if (org != null && !org.isEmpty()) builder = builder.organization(org);
+            if (org != null && !org.isEmpty()) builder = builder.organizationId(org);
             String project = System.getenv("OPENAI_PROJECT_ID");
-            if (project != null && !project.isEmpty()) builder = builder.project(project);
+            if (project != null && !project.isEmpty()) builder = builder.projectId(project);
         }
 
         return builder.build();
     }
 
     /**
-     * Returns a cached client for the active provider. All ChatBots and sub-agents
-     * should use this so we open a single OkHttp pool instead of one per consumer.
-     * Invalidated by {@link #invalidateClient()} when settings change.
+     * Returns a cached model for the active provider. All ChatBots and sub-agents
+     * should use this so we open a single HTTP client pool instead of one per
+     * consumer. Invalidated by {@link #invalidateClient()} when settings change.
      */
-    public synchronized OpenAIClientAsync sharedClient() {
-        if (sharedClient == null) sharedClient = buildClient();
-        return sharedClient;
+    public synchronized ChatModel sharedModel() {
+        if (sharedModel == null) sharedModel = buildModel();
+        return sharedModel;
     }
 
-    /** Drops the cached client so the next {@link #sharedClient()} rebuilds with current settings. */
+    /**
+     * Shared worker pool for wrapping {@link ChatModel#chat} (blocking) calls in
+     * {@link java.util.concurrent.CompletableFuture#supplyAsync} so callers retain
+     * the existing async/callback contract. Threads are daemon so they don't keep
+     * the JVM alive at shutdown.
+     */
+    public synchronized ExecutorService sharedExecutor() {
+        if (sharedExecutor == null) {
+            sharedExecutor = Executors.newFixedThreadPool(4, new ThreadFactory() {
+                private final AtomicInteger seq = new AtomicInteger();
+                @Override public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "llm-worker-" + seq.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
+        }
+        return sharedExecutor;
+    }
+
+    /** Drops the cached model so the next {@link #sharedModel()} rebuilds with current settings. */
     public synchronized void invalidateClient() {
-        sharedClient = null;
+        sharedModel = null;
     }
 
     private String resolveApiKey(ProviderSettings p) {
@@ -107,7 +138,7 @@ public class LLMConfig {
             String envKey = System.getenv("OPENAI_API_KEY");
             if (envKey != null && !envKey.isEmpty()) return envKey;
         }
-        // Local servers (LM Studio, Ollama) don't validate the key but the SDK requires one.
+        // Local servers (LM Studio, Ollama) don't validate the key but the client requires one.
         return activeProvider;
     }
 

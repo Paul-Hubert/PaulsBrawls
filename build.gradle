@@ -35,34 +35,40 @@ dependencies {
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 	
-	implementation ("com.openai:openai-java:2.9.0")
-	
-	include 'com.squareup.okhttp3:okhttp:4.12.0'
-	include 'com.squareup.okhttp3:logging-interceptor:4.12.0'
-	include 'com.squareup.okio:okio:3.6.0'
+	// LangChain4j replaces the OpenAI Java SDK. langchain4j-open-ai keeps the
+	// custom-baseUrl path working for LM Studio / Ollama (see LLMConfig.buildModel).
+	implementation ("dev.langchain4j:langchain4j:1.0.0")
+	implementation ("dev.langchain4j:langchain4j-open-ai:1.0.0")
+	// langchain4j-mcp lets godBot consume tools exposed by the local
+	// minecraft-mcp-server subprocess (see MCPGateway). The stdio transport
+	// is part of this module — no extra dep required.
+	implementation ("dev.langchain4j:langchain4j-mcp:1.0.0")
 
-	include ("com.openai:openai-java:2.9.0")
-	include ("com.openai:openai-java-core:2.9.0")
-	include ("com.openai:openai-java-client-okhttp:2.9.0")
+	include ("dev.langchain4j:langchain4j:1.0.0")
+	include ("dev.langchain4j:langchain4j-core:1.0.0")
+	include ("dev.langchain4j:langchain4j-open-ai:1.0.0")
+	include ("dev.langchain4j:langchain4j-http-client:1.0.0")
+	include ("dev.langchain4j:langchain4j-http-client-jdk:1.0.0")
+	include ("dev.langchain4j:langchain4j-mcp:1.0.0")
+	// langchain4j-core pulls jspecify for @NullMarked / @Nullable annotations that
+	// are retained at runtime — ship it so reflection / annotation lookups don't NCDFE.
+	include ("org.jspecify:jspecify:1.0.0")
 
+	// LangChain4j depends on Jackson; keep these includes so the jar-in-jar runtime
+	// closure ships them. ChatBotFunctions' tool POJOs still rely on
+	// @JsonClassDescription / @JsonPropertyDescription, and JsonSchemaAdapter walks
+	// them reflectively to build LangChain4j ToolSpecifications.
 	include ("com.fasterxml.jackson.core:jackson-databind:2.19.1")
 	include ("com.fasterxml.jackson.core:jackson-core:2.19.1")
 	include ("com.fasterxml.jackson:jackson-bom:2.18.2")
 	include ("com.fasterxml.jackson.core:jackson-annotations:2.19.1")
-	include 'com.fasterxml.jackson.module:jackson-module-kotlin:2.19.1'
 	include 'com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.19.1'
 	include 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.19.1'
 
-	// https://mvnrepository.com/artifact/org.jetbrains.kotlin/kotlin-reflect
-	include 'org.jetbrains.kotlin:kotlin-reflect:1.8.10'
-	// https://mvnrepository.com/artifact/org.jetbrains.kotlin/kotlin-stdlib-common
-	include 'org.jetbrains.kotlin:kotlin-stdlib-common:1.8.10'
-	include 'org.jetbrains.kotlin:kotlin-stdlib:1.8.10'
-	include 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.0'
-
-	include 'com.github.victools:jsonschema-generator:4.38.0'
-	include 'com.github.victools:jsonschema-module-jackson:4.38.0'
-	include 'com.fasterxml:classmate:1.7.0'
+	// LangChain4j ships its own HTTP client (java.net.http); the okhttp / okio /
+	// kotlin pile fed the old OpenAI SDK's Kotlin core and is no longer needed.
+	// victools jsonschema-* fed addTool(Class) in the OpenAI SDK; replaced by
+	// JsonSchemaAdapter, which uses plain reflection.
 }
 
 processResources {

@@ -8,12 +8,14 @@ import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.openai.client.OpenAIClientAsync;
-import com.openai.models.ChatModel;
-import com.openai.models.responses.EasyInputMessage;
-import com.openai.models.responses.Response;
-import com.openai.models.responses.ResponseCreateParams;
-import com.openai.models.responses.ResponseInputItem;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.memory.ChatMemory;
+import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.math.BlockPos;
@@ -23,7 +25,7 @@ import net.minecraft.util.math.BlockPos;
  *
  * One BuildSubAgent owns:
  *  - its own pivot (origin (0,0,0) for textual placements)
- *  - its own previousResponseId chain (does NOT see the planner's history)
+ *  - its own {@link ChatMemory} (does NOT see the planner's history)
  *  - a queue of refinement prompts that fire after the model signals "done"
  *
  * Loop per sub-agent:
@@ -51,15 +53,13 @@ public class BuildSubAgent {
         "Final pass. Look over the whole build once more. Anywhere you see a missing block, asymmetry, or place where weather could get in, place blocks to close it. When the build is truly finished, reply with ONE short French sentence and zero call lines."
     );
 
-    private final OpenAIClientAsync client;
     private final ServerPlayerEntity player;
     private final BlockPos pivot;
-    private final String fullSystemPrompt;
     private final String initialUserMessage;
     private final String label;
     private final Queue<String> refinementQueue;
+    private final ChatMemory memory;
 
-    private String previousResponseId = ChatBot.NULL_ID;
     private int turnsTaken = 0;
     private int totalPlacements = 0;
 
@@ -69,54 +69,47 @@ public class BuildSubAgent {
                          String initialUserMessage,
                          String label,
                          List<String> refinements) {
-        this.client = LLMConfig.INSTANCE.sharedClient();
         this.player = player;
         this.pivot = pivot;
-        this.fullSystemPrompt = fullSystemPrompt;
         this.initialUserMessage = initialUserMessage;
         this.label = label;
         this.refinementQueue = new LinkedList<>(refinements);
+        // Each sub-agent's memory is private; the system prompt is seeded once and
+        // re-sent on every call (LangChain4j has no server-retained chain).
+        this.memory = MessageWindowChatMemory.withMaxMessages(MAX_TURNS * 2 + 2);
+        this.memory.add(SystemMessage.from(fullSystemPrompt));
     }
 
     public void start() {
         ChatPrinter.sendMessage(player, "[sub-build " + label + "] start @ "
             + pivot.getX() + "," + pivot.getY() + "," + pivot.getZ());
-        sendTurn(initialUserMessage, true);
+        sendTurn(initialUserMessage);
     }
 
-    private void sendTurn(String userMessage, boolean includeSystemPrompt) {
+    private void sendTurn(String userMessage) {
         if (++turnsTaken > MAX_TURNS) {
             LOGGER.warn("Sub-build '{}' hit MAX_TURNS={}, stopping.", label, MAX_TURNS);
             ChatPrinter.sendMessage(player, "[sub-build " + label + "] arrêt — limite de tours atteinte (" + totalPlacements + " blocs).");
             return;
         }
 
-        var builder = ResponseCreateParams.builder()
-            .model(ChatModel.of(LLMConfig.INSTANCE.model()));
+        memory.add(UserMessage.from(userMessage));
 
-        if (!previousResponseId.equals(ChatBot.NULL_ID)) {
-            builder = builder.previousResponseId(previousResponseId);
-        }
+        ChatRequest req = ChatRequest.builder()
+            .messages(memory.messages())
+            .build();
 
-        // System prompt only on the first turn — the chain retains it for follow-ups (just like ChatBot.getPromptList).
-        var inputs = new java.util.ArrayList<ResponseInputItem>();
-        if (includeSystemPrompt) {
-            inputs.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
-                .role(EasyInputMessage.Role.SYSTEM)
-                .content(fullSystemPrompt)
-                .build()));
-        }
-        inputs.add(ResponseInputItem.ofEasyInputMessage(EasyInputMessage.builder()
-            .role(EasyInputMessage.Role.USER)
-            .content(userMessage)
-            .build()));
+        ChatModel model = LLMConfig.INSTANCE.sharedModel();
+        CompletableFuture<ChatResponse> future = CompletableFuture.supplyAsync(
+            () -> model.chat(req),
+            LLMConfig.INSTANCE.sharedExecutor()
+        );
 
-        builder = builder.inputOfResponse(inputs);
-
-        CompletableFuture<Response> future = client.responses().create(builder.build());
         future.whenComplete((r, ex) -> {
             if (ex != null) {
-                LOGGER.error("Sub-build '{}' API call failed: {}", label, ex.toString());
+                Throwable root = ex;
+                while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+                LOGGER.error("Sub-build '{}' API call failed", label, root);
                 return;
             }
             try {
@@ -127,8 +120,9 @@ public class BuildSubAgent {
         });
     }
 
-    private void handleResponse(Response r) {
-        previousResponseId = r.id();
+    private void handleResponse(ChatResponse r) {
+        AiMessage aiMessage = r.aiMessage();
+        if (aiMessage != null) memory.add(aiMessage);
 
         String text = ChatBotFunctions.extractResponseText(r);
         int placed = ChatBotFunctions.scanAndExecuteWithPivot(text, player, pivot);
@@ -146,14 +140,14 @@ public class BuildSubAgent {
             String cont = "[system] Executed " + placed + " textual placement call(s) from your previous reply. "
                 + "If this pass is now complete, reply with one short French sentence and no call lines. "
                 + "Otherwise emit more PlaceBlock / PlaceLine / PlaceBlocks lines and the system will call you again.";
-            sendTurn(cont, false);
+            sendTurn(cont);
             return;
         }
 
         // No placements — the model thinks this pass is done.
         if (!refinementQueue.isEmpty()) {
             String next = refinementQueue.poll();
-            sendTurn(next, false);
+            sendTurn(next);
             return;
         }
 

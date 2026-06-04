@@ -1,7 +1,5 @@
 package com.paul.brawl;
 
-import com.openai.models.images.ImageEditParams.Image;
-
 import net.minecraft.network.RegistryByteBuf;
 import net.minecraft.network.codec.PacketCodec;
 import net.minecraft.network.codec.PacketCodecs;
