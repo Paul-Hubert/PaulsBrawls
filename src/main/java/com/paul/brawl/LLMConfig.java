@@ -3,6 +3,7 @@ package com.paul.brawl;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
@@ -50,6 +51,18 @@ public class LLMConfig {
     public final Map<String, ProviderSettings> providers = new LinkedHashMap<>();
     public String activeProvider = OPENAI;
 
+    /**
+     * HTTP request timeout applied to every LLM call. Shared across all providers
+     * (per-provider knobs would be overkill — just match the slowest one you use).
+     *
+     * <p>Default is 180 s because OpenAI reasoning models (gpt-5 and friends) routinely
+     * exceed langchain4j's built-in 60 s default on long chats with tool definitions.
+     * Bumped via {@code /llm timeout <seconds>}; persisted as {@code timeout_seconds}.
+     * The cached {@link #sharedModel} is invalidated whenever this changes so the
+     * builder picks up the new value on next call (callers go through {@link ChatBot#reloadClients()}).</p>
+     */
+    public int timeoutSeconds = 180;
+
     private ChatModel sharedModel;
     private ExecutorService sharedExecutor;
 
@@ -85,7 +98,8 @@ public class LLMConfig {
         OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
             .baseUrl(p.baseUrl())
             .apiKey(resolveApiKey(p))
-            .modelName(p.model);
+            .modelName(p.model)
+            .timeout(Duration.ofSeconds(timeoutSeconds));
 
         if (OPENAI.equals(activeProvider)) {
             String org = System.getenv("OPENAI_ORG_ID");
@@ -145,6 +159,7 @@ public class LLMConfig {
     public synchronized void save() {
         Properties props = new Properties();
         props.setProperty("active", activeProvider);
+        props.setProperty("timeout_seconds", Integer.toString(timeoutSeconds));
         for (var entry : providers.entrySet()) {
             String prefix = entry.getKey() + ".";
             ProviderSettings p = entry.getValue();
@@ -171,6 +186,10 @@ public class LLMConfig {
         }
         String act = props.getProperty("active");
         if (act != null && providers.containsKey(act)) activeProvider = act;
+        String t = props.getProperty("timeout_seconds");
+        if (t != null) {
+            try { timeoutSeconds = Integer.parseInt(t); } catch (NumberFormatException ignored) {}
+        }
         for (var entry : providers.entrySet()) {
             String prefix = entry.getKey() + ".";
             ProviderSettings p = entry.getValue();

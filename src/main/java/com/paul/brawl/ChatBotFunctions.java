@@ -3,6 +3,8 @@ package com.paul.brawl;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -130,6 +132,42 @@ public class ChatBotFunctions {
             BridgeConfig cfg = BridgeConfig.INSTANCE;
             int clamped = Math.max(cfg.waitMinSeconds, Math.min(seconds, cfg.waitMaxSeconds));
             return "Le temps passe… " + clamped + " seconde(s) se sont écoulées.";
+        }
+    }
+
+    @JsonClassDescription("Lists every tool currently attached to your conversation — name plus one-line purpose. Call this with no arguments when you are unsure what you can call. Returns exactly the set the model received in this request's tool specs, so the answer never lies; there are no hidden tools. Costs one round trip — do not call it before every action, only when you actually need to refresh.")
+    static class ListTools {
+        public String execute(ChatBot bot) {
+            boolean needGod  = bot != null && bot.needsGodTools;
+            boolean needPlan = bot != null && bot.needsBuildPlan;
+            boolean needMcp  = bot != null && bot.needsMcpTools;
+            boolean needText = bot != null && bot.needsBuildTools;
+
+            List<ToolSpecification> specs = buildToolSpecs(needGod, needPlan, needMcp);
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("Tools attached to this request (").append(specs.size()).append("):\n");
+            for (ToolSpecification s : specs) {
+                sb.append("- ").append(s.name());
+                String d = s.description();
+                if (d != null && !d.isBlank()) {
+                    // Collapse to one line and cap at ~220 chars so a 30-tool
+                    // godBot listing stays under a few KB. The full schemas are
+                    // already in the model's tool-spec list — this is a recall
+                    // aid, not a redefinition.
+                    String oneLine = d.replace('\n', ' ').replace('\r', ' ').trim();
+                    if (oneLine.length() > 220) oneLine = oneLine.substring(0, 217) + "...";
+                    sb.append(": ").append(oneLine);
+                }
+                sb.append('\n');
+            }
+            if (needText) {
+                sb.append("\nText placement (NOT tool calls — emit as plain text in your reply, the server regex-scans them):\n");
+                sb.append("- PlaceBlock(x, y, z, \"minecraft:foo\")\n");
+                sb.append("- PlaceLine(x1, y1, z1, x2, y2, z2, \"minecraft:foo\")\n");
+                sb.append("- PlaceBlocks([x...], [y...], [z...], \"minecraft:foo\")\n");
+            }
+            return sb.toString();
         }
     }
 
@@ -270,12 +308,20 @@ public class ChatBotFunctions {
             tools.add(JsonSchemaAdapter.toolSpec(Appear.class));
             tools.add(JsonSchemaAdapter.toolSpec(Vanish.class));
             tools.add(JsonSchemaAdapter.toolSpec(Wait.class));
+            tools.add(JsonSchemaAdapter.toolSpec(QueryTerrain.class));
         }
         if (needsBuildPlan) {
             tools.add(JsonSchemaAdapter.toolSpec(BuildPlan.class));
         }
         if (needsMcpTools) {
             tools.addAll(MCPGateway.INSTANCE.tools());
+        }
+        // Meta-tool: only useful if there's something to list. Cheap enough
+        // that we always include it whenever any other tool is attached so
+        // the model has a recovery path for "did I have X?" hallucinations
+        // (it used to get a hard error from executeFunction's default arm).
+        if (!tools.isEmpty()) {
+            tools.add(JsonSchemaAdapter.toolSpec(ListTools.class));
         }
         return tools;
     }
@@ -297,7 +343,7 @@ public class ChatBotFunctions {
         List<FunctionResult> results = new ArrayList<>();
         int waitSeconds = 0;
         for (ToolExecutionRequest req : requests) {
-            String ret = executeFunction(req, player);
+            String ret = executeFunction(req, player, chatBot);
             results.add(new FunctionResult(req, ret));
             if ("Wait".equals(req.name())) {
                 // Multiple Waits in one batch: take the longest (more dramatic
@@ -353,29 +399,94 @@ public class ChatBotFunctions {
      * thread via {@link GodActionQueue}; the {@code .join()} blocks the LLM
      * callback thread for ~one tick, which is the existing contract — never
      * call this on the main thread (deadlock).
+     *
+     * <p>{@code chatBot} is the bot that owns the request — used by
+     * {@link ListTools} to enumerate exactly what was attached to this turn.
+     * It may be null when called from a test or legacy path; ListTools then
+     * falls back to godBot's flag profile.</p>
      */
-    private static String executeFunction(ToolExecutionRequest req, ServerPlayerEntity player) {
-        return switch (req.name()) {
-            case "Reward" -> runOnMain(() -> parseArgs(req, Reward.class).execute(player));
-            case "Trade" -> runOnMain(() -> parseArgs(req, Trade.class).execute(player));
-            case "Punishment" -> runOnMain(() -> parseArgs(req, Punishment.class).execute(player));
-            case "ChangeWeather" -> runOnMain(() -> parseArgs(req, ChangeWeather.class).execute(player));
-            case "SpawnCreature" -> runOnMain(() -> parseArgs(req, SpawnCreature.class).execute(player));
-            // Appear, Vanish, Wait don't mutate world/entity state from
-            // off-thread — Appear queues its own buffAvatar, Vanish queues
-            // its own restoreAvatar, Wait is a pure scheduling token.
-            case "Appear" -> parseArgs(req, Appear.class).execute(player);
-            case "Vanish" -> parseArgs(req, Vanish.class).execute(player);
-            case "Wait" -> parseArgs(req, Wait.class).execute(player);
-            case "BuildPlan" -> parseArgs(req, BuildPlan.class).execute(player);
-            default -> throw new IllegalArgumentException("Unknown function: " + req.name());
-        };
+    private static String executeFunction(ToolExecutionRequest req, ServerPlayerEntity player, ChatBot chatBot) {
+        // Contract: never throw. The assistant turn carrying this tool_call is
+        // already in memory (addAssistantToHistory ran before checkForFunctions).
+        // Throwing here aborts the dispatch loop before sendFunctionOutputs adds
+        // the matching tool_result, leaving an orphaned tool_call that 400s the
+        // next request on "tool_call without tool_result". Every exit path here
+        // must produce a string the model can read.
+        String name = (req == null || req.name() == null) ? "?" : req.name();
+        try {
+            return switch (name) {
+                case "Reward" -> runOnMain(() -> parseArgs(req, Reward.class).execute(player));
+                case "Trade" -> runOnMain(() -> parseArgs(req, Trade.class).execute(player));
+                case "Punishment" -> runOnMain(() -> parseArgs(req, Punishment.class).execute(player));
+                case "ChangeWeather" -> runOnMain(() -> parseArgs(req, ChangeWeather.class).execute(player));
+                case "SpawnCreature" -> runOnMain(() -> parseArgs(req, SpawnCreature.class).execute(player));
+                // Appear, Vanish, Wait don't mutate world/entity state from
+                // off-thread — Appear queues its own buffAvatar, Vanish queues
+                // its own restoreAvatar, Wait is a pure scheduling token.
+                case "Appear" -> parseArgs(req, Appear.class).execute(player);
+                case "Vanish" -> parseArgs(req, Vanish.class).execute(player);
+                case "Wait" -> parseArgs(req, Wait.class).execute(player);
+                case "BuildPlan" -> parseArgs(req, BuildPlan.class).execute(player);
+                // Read-only world inspection (heightmap + biome + block-state
+                // probes). Wrapped in runOnMain to stay consistent with every
+                // other world-touching tool and to avoid off-thread chunk
+                // loads at the edge of the loaded area.
+                case "QueryTerrain" -> runOnMain(() -> parseArgs(req, QueryTerrain.class).execute(player));
+                // Pure introspection — no world state, no main-thread hop.
+                // Reads the calling bot's flags directly and rebuilds the same
+                // spec list buildToolSpecs already produced for this request.
+                case "ListTools" -> new ListTools().execute(chatBot);
+                default -> {
+                    // MCP-sourced tools (Mineflayer side) use kebab-case names that
+                    // can never collide with the PascalCase Java POJO names above,
+                    // so a fallthrough check is safe.
+                    if (MCPGateway.INSTANCE.handlesTool(name)) {
+                        yield MCPGateway.INSTANCE.execute(req);
+                    }
+                    // Genuinely unknown name (model hallucination, or a tool we
+                    // removed). Point at ListTools so the model has a one-call
+                    // recovery instead of guessing.
+                    LOGGER.warn("Unknown tool '{}' requested for player {}; returning error string.",
+                        name, player.getName().getString());
+                    yield "Unknown tool '" + name + "'. Pick from the tool specs attached to this request; "
+                        + "do not invent names. If you are unsure what you have, call `ListTools` "
+                        + "(no arguments) to enumerate the exact set attached to this turn.";
+                }
+            };
+        } catch (Exception e) {
+            // Most likely a parseArgs JSON failure on Appear/Vanish/Wait/BuildPlan
+            // (the runOnMain arms already swallow their own exceptions). Could
+            // also be an NPE inside a tool's execute() that slipped past its own
+            // guards. Either way: log it loudly, return a readable error so memory
+            // stays balanced and the model can recover.
+            LOGGER.warn("Tool '{}' dispatch threw — returning error string to keep memory balanced: {}",
+                name, e.getMessage(), e);
+            return "Erreur lors de l'exécution de '" + name + "': "
+                + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+        }
     }
 
-    /** Queue + join: returns the supplier's result run on the main server thread. */
+    /**
+     * Queue + join: returns the supplier's result run on the main server thread.
+     *
+     * <p>Bounded {@code .get(5, SECONDS)} so a stalled drain (server frozen,
+     * paused-on-focus-lost singleplayer, {@code SERVER_STOPPING} mid-flight)
+     * can't pin an {@code llm-worker} thread forever. With only 4 workers in
+     * {@link LLMConfig#sharedExecutor()}, four such stalls would deadlock godBot
+     * until JVM restart.
+     *
+     * <p>5 s is generous: a normal tick is 50 ms and {@link GodActionQueue#MAX_PER_TICK}
+     * is 8, so the queue would have to be ~800 deep to legitimately take that
+     * long. On {@link TimeoutException} we return a readable error so memory
+     * stays tool-call/tool-result balanced; the model sees the failure and can
+     * proceed to the next tool instead of leaving an orphan.
+     */
     private static String runOnMain(java.util.function.Supplier<String> body) {
         try {
-            return GodActionQueue.submit(body).get();
+            return GodActionQueue.submit(body).get(5, TimeUnit.SECONDS);
+        } catch (TimeoutException te) {
+            LOGGER.warn("Main-thread queue did not drain within 5s — server frozen/paused/stopping?");
+            return "Erreur côté serveur: action différée non exécutée (serveur indisponible).";
         } catch (Exception e) {
             LOGGER.warn("Main-thread queue join failed: {}", e.getMessage(), e);
             return "Erreur côté serveur lors de l'exécution de cette action.";

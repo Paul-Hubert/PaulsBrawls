@@ -58,6 +58,11 @@ public class LLMCommand {
                             .executes(ctx -> setApiKey(ctx.getSource(), StringArgumentType.getString(ctx, "key")))
                         )
                     )
+                    .then(CommandManager.literal("timeout")
+                        .then(CommandManager.argument("seconds", IntegerArgumentType.integer(5, 1800))
+                            .executes(ctx -> setTimeout(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "seconds")))
+                        )
+                    )
                     .then(CommandManager.literal("reload")
                         .executes(ctx -> {
                             ChatBot.reloadClients();
@@ -217,11 +222,21 @@ public class LLMCommand {
         return Command.SINGLE_SUCCESS;
     }
 
+    private static int setTimeout(ServerCommandSource source, int seconds) {
+        LLMConfig.INSTANCE.timeoutSeconds = seconds;
+        LLMConfig.INSTANCE.save();
+        // Cached OpenAiChatModel was built with the old timeout — rebuild it.
+        ChatBot.reloadClients();
+        LOGGER.info("Set LLM request timeout to {}s", seconds);
+        printStatus(source);
+        return Command.SINGLE_SUCCESS;
+    }
+
     private static void printStatus(ServerCommandSource source) {
         var c = LLMConfig.INSTANCE;
         var p = c.active();
         StringBuilder sb = new StringBuilder();
-        sb.append("LLM active provider: ").append(c.activeProvider).append("\n");
+        sb.append("LLM active provider: ").append(c.activeProvider).append(" | timeout=").append(c.timeoutSeconds).append("s\n");
         for (var entry : c.providers.entrySet()) {
             String marker = entry.getKey().equals(c.activeProvider) ? "* " : "  ";
             var s = entry.getValue();

@@ -42,8 +42,21 @@ public class ChatBot {
      * encounter (the {@link SystemMessage}s carrying the persona + dynamic context are
      * rebuilt fresh each turn and prepended at send time, not stored here). Replaces
      * the OpenAI Responses API's server-side {@code previousResponseId} chain.
+     *
+     * <p><b>Capacity</b>: 200 messages. Tool-heavy turns burn 6+ messages each
+     * (user + assistant-with-N-calls + N tool_results), so the old 40-cap could
+     * evict an {@code AiMessage(tool_calls=…)} while keeping its {@code ToolExecutionResultMessage}s,
+     * 400-ing the next request on "tool_result without tool_call". LC4j's window
+     * tries to keep pairs together but the safety margin matters more than the
+     * memory cost — 200 messages is ~tens of KB even on chatty sessions.
+     *
+     * <p><b>Concurrency</b>: {@link dev.langchain4j.memory.chat.MessageWindowChatMemory}
+     * is NOT thread-safe (LinkedList-backed). Every {@code add} / {@code messages()}
+     * call in this file is wrapped in {@code synchronized(memory)} so concurrent
+     * prayer chains (double-{@code /pray}, {@code Wait} callback landing while the
+     * user re-prays) can't corrupt the list.
      */
-    public static final int MAX_MEMORY_MESSAGES = 40;
+    public static final int MAX_MEMORY_MESSAGES = 200;
     public ConcurrentHashMap<UUID, ChatMemory> memories = new ConcurrentHashMap<>();
 
     public static String PROMPT_STATE_KEY = "prompt_state_key";
@@ -60,6 +73,10 @@ public class ChatBot {
     public boolean needsBuildTools = true;
     public boolean needsGodTools = true;
     public boolean needsBuildPlan = false;
+    /** Append MCPGateway tools (Mineflayer-driven) to the per-turn tool list.
+     *  Only meaningful for the God bot — build sub-agents emit their own
+     *  PlaceBlock/PlaceLine/PlaceBlocks text and don't need Mineflayer. */
+    public boolean needsMcpTools = false;
 
 
     public static void register() {
@@ -80,6 +97,9 @@ public class ChatBot {
 
         godBot.needsBuildPlan = false;
         buildBot.needsBuildPlan = true;
+
+        godBot.needsMcpTools = true;
+        buildBot.needsMcpTools = false;
 
         ChatMessageHistory.register();
 
@@ -146,15 +166,17 @@ public class ChatBot {
         // hasImage gates whether the screenshot rides along. Both bots historically
         // accepted images at the API layer; the flag exists so build_prompt sub-agents
         // that don't need vision can save tokens.
-        if (hasImage) {
-            String base64 = Base64.getEncoder().encodeToString(bytes);
-            UserMessage userMsg = UserMessage.from(
-                TextContent.from(input),
-                ImageContent.from(base64, "image/jpeg")
-            );
-            memory.add(userMsg);
-        } else {
-            memory.add(UserMessage.from(input));
+        synchronized (memory) {
+            if (hasImage) {
+                String base64 = Base64.getEncoder().encodeToString(bytes);
+                UserMessage userMsg = UserMessage.from(
+                    TextContent.from(input),
+                    ImageContent.from(base64, "image/jpeg")
+                );
+                memory.add(userMsg);
+            } else {
+                memory.add(UserMessage.from(input));
+            }
         }
 
         return doRequest(player, callback);
@@ -168,7 +190,9 @@ public class ChatBot {
         functionCallDepth.put(player.getUuid(), 0);
 
         ChatMemory memory = memoryFor(player);
-        memory.add(UserMessage.from(input));
+        synchronized (memory) {
+            memory.add(UserMessage.from(input));
+        }
 
         return doRequest(player, callback);
     }
@@ -194,8 +218,10 @@ public class ChatBot {
         }
 
         ChatMemory memory = memoryFor(player);
-        for (ChatBotFunctions.FunctionResult r : results) {
-            memory.add(ToolExecutionResultMessage.from(r.call(), r.result()));
+        synchronized (memory) {
+            for (ChatBotFunctions.FunctionResult r : results) {
+                memory.add(ToolExecutionResultMessage.from(r.call(), r.result()));
+            }
         }
 
         return doRequest(player, null);
@@ -217,7 +243,9 @@ public class ChatBot {
             + "Otherwise emit more PlaceBlock / PlaceLine / PlaceBlocks lines and the system will call you again.";
 
         ChatMemory memory = memoryFor(player);
-        memory.add(UserMessage.from(msg));
+        synchronized (memory) {
+            memory.add(UserMessage.from(msg));
+        }
 
         return doRequest(player, null);
     }
@@ -227,20 +255,29 @@ public class ChatBot {
      * attaches the tool specs, and submits the request on the shared blocking-LLM
      * worker pool. Returns a {@link CompletableFuture} so callers retain the old
      * async / callback style ({@code thenAccept}, {@code whenComplete}).
+     *
+     * <p><b>Why the assembly happens inside {@code supplyAsync}:</b> {@code buildToolSpecs}
+     * touches {@link MCPGateway#tools()} which lazily handshakes with the unified
+     * node process on first call — a synchronous {@code listTools()} round-trip
+     * bounded by {@code MCPConfig.timeoutSeconds}. If we built the request on the
+     * caller's thread (the main server thread when {@code /pray} fires), a
+     * down/wrong-port node process would freeze the tick loop for the timeout
+     * window and trip every connected client's keepalive. Doing the assembly on
+     * the worker keeps the main thread free; the worker just stalls for itself.
      */
     private CompletableFuture<ChatResponse> doRequest(ServerPlayerEntity player, BiConsumer<? super ChatResponse, String> callback) {
-        List<ChatMessage> messages = buildMessageList(player);
-        List<ToolSpecification> tools = ChatBotFunctions.buildToolSpecs(needsGodTools, needsBuildPlan);
-
-        ChatRequest.Builder rb = ChatRequest.builder().messages(messages);
-        if (!tools.isEmpty()) {
-            rb = rb.toolSpecifications(tools);
-        }
-        ChatRequest req = rb.build();
-
         ChatModel model = LLMConfig.INSTANCE.sharedModel();
         CompletableFuture<ChatResponse> response = CompletableFuture.supplyAsync(
-            () -> model.chat(req),
+            () -> {
+                List<ChatMessage> messages = buildMessageList(player);
+                List<ToolSpecification> tools = ChatBotFunctions.buildToolSpecs(needsGodTools, needsBuildPlan, needsMcpTools);
+
+                ChatRequest.Builder rb = ChatRequest.builder().messages(messages);
+                if (!tools.isEmpty()) {
+                    rb = rb.toolSpecifications(tools);
+                }
+                return model.chat(rb.build());
+            },
             LLMConfig.INSTANCE.sharedExecutor()
         );
 
@@ -297,8 +334,16 @@ public class ChatBot {
                 + ChatBotActions.getBlockInfo(player)));
         }
 
+        // Snapshot the memory under its lock so a concurrent add (from a
+        // parallel chain's setupGeneralCallback / Wait-deferral landing) can't
+        // produce a half-mutated list during iteration. ArrayList copy keeps
+        // the snapshot independent of any LC4j-internal aliasing.
         ChatMemory memory = memoryFor(player);
-        messages.addAll(memory.messages());
+        List<ChatMessage> snapshot;
+        synchronized (memory) {
+            snapshot = new ArrayList<>(memory.messages());
+        }
+        messages.addAll(snapshot);
 
         return messages;
     }
@@ -308,6 +353,21 @@ public class ChatBot {
             try {
                 if (r == null) return;
                 logResponseShape(r, player);
+
+                // Session-ended-mid-flight check: the idle watchdog, /pray stop,
+                // or /godbody off may have released this player's lock while the
+                // LLM call was in flight (especially after a long Wait + a slow
+                // chat() return). Don't execute world-mutating tools on a phantom
+                // session, and DON'T commit the assistant turn to memory — that
+                // would leave an orphaned tool_call(s) and the next /pray would
+                // 400 on "tool_call without tool_result". Wipe and bail.
+                if (this.needsGodTools && !GodSessionManager.isActive(player)) {
+                    LOGGER.info("Dropping LLM response for player {} — session no longer active (idle watchdog / kill switch).",
+                        player.getName().getString());
+                    clearMemory(player);
+                    return;
+                }
+
                 addAssistantToHistory(r, player);
                 printOutputs(r, player);
 
@@ -375,7 +435,10 @@ public class ChatBot {
     private void addAssistantToHistory(ChatResponse response, ServerPlayerEntity player) {
         AiMessage aiMessage = response.aiMessage();
         if (aiMessage == null) return;
-        memoryFor(player).add(aiMessage);
+        ChatMemory memory = memoryFor(player);
+        synchronized (memory) {
+            memory.add(aiMessage);
+        }
     }
 
     private void printOutputs(ChatResponse response, ServerPlayerEntity player) {
