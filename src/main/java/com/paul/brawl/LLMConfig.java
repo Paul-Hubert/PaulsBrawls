@@ -10,7 +10,6 @@ import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -124,19 +123,29 @@ public class LLMConfig {
     /**
      * Shared worker pool for wrapping {@link ChatModel#chat} (blocking) calls in
      * {@link java.util.concurrent.CompletableFuture#supplyAsync} so callers retain
-     * the existing async/callback contract. Threads are daemon so they don't keep
-     * the JVM alive at shutdown.
+     * the existing async/callback contract.
+     *
+     * <p><b>Virtual threads</b> (JDK 21+). The previous design — fixed pool of 4
+     * platform threads — was a hard ceiling on concurrent LLM activity: one
+     * BuildPlan spawning 6 sub-agents already saturated it, queuing godBot's
+     * prayer turn behind every sub-agent call. The HTTP work is entirely
+     * blocking I/O on {@code java.net.http.HttpClient} — exactly the workload
+     * virtual threads are designed for. Each {@code supplyAsync} now gets its
+     * own virtual thread; the JVM multiplexes them onto a small carrier pool.
+     *
+     * <p>Side effect on {@link ChatBotFunctions#runOnMain}: the {@code .get(5,
+     * SECONDS)} wait inside a virtual thread parks instead of pinning a platform
+     * thread, so a queue stall no longer wastes a carrier either.
+     *
+     * <p>Virtual threads are inherently daemon — JVM exit no longer needs the
+     * explicit {@code setDaemon(true)}.
      */
     public synchronized ExecutorService sharedExecutor() {
         if (sharedExecutor == null) {
-            sharedExecutor = Executors.newFixedThreadPool(4, new ThreadFactory() {
-                private final AtomicInteger seq = new AtomicInteger();
-                @Override public Thread newThread(Runnable r) {
-                    Thread t = new Thread(r, "llm-worker-" + seq.incrementAndGet());
-                    t.setDaemon(true);
-                    return t;
-                }
-            });
+            ThreadFactory factory = Thread.ofVirtual()
+                .name("llm-worker-", 1)
+                .factory();
+            sharedExecutor = Executors.newThreadPerTaskExecutor(factory);
         }
         return sharedExecutor;
     }
