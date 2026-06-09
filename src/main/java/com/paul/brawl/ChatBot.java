@@ -115,6 +115,8 @@ public class ChatBot {
 
 		LLMCommand.register();
 
+		MCPCommand.register();
+
     }
 
     /**
