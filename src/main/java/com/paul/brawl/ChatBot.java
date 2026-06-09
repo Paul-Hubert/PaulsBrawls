@@ -23,8 +23,10 @@ import dev.langchain4j.data.message.TextContent;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
-import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.memory.chat.TokenWindowChatMemory;
+import dev.langchain4j.model.TokenCountEstimator;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.openai.OpenAiTokenCountEstimator;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 
@@ -43,20 +45,40 @@ public class ChatBot {
      * rebuilt fresh each turn and prepended at send time, not stored here). Replaces
      * the OpenAI Responses API's server-side {@code previousResponseId} chain.
      *
-     * <p><b>Capacity</b>: 200 messages. Tool-heavy turns burn 6+ messages each
-     * (user + assistant-with-N-calls + N tool_results), so the old 40-cap could
-     * evict an {@code AiMessage(tool_calls=…)} while keeping its {@code ToolExecutionResultMessage}s,
-     * 400-ing the next request on "tool_result without tool_call". LC4j's window
-     * tries to keep pairs together but the safety margin matters more than the
-     * memory cost — 200 messages is ~tens of KB even on chatty sessions.
+     * <p><b>Capacity</b>: 16 000 tokens via {@link TokenWindowChatMemory}, sized
+     * by {@link #TOKEN_ESTIMATOR}. The earlier message-count cap was the wrong
+     * dimension — one image content block can weigh more than 50 chat lines,
+     * and a single MCP tool result can be 1 KB+ of JSON. Token-budgeting
+     * matches what the model actually consumes and leaves a safety margin
+     * inside a typical 128k context for the per-turn system + dynamic-context
+     * preamble that {@link #buildMessageList} prepends fresh each call.
      *
-     * <p><b>Concurrency</b>: {@link dev.langchain4j.memory.chat.MessageWindowChatMemory}
-     * is NOT thread-safe (LinkedList-backed). Every {@code add} / {@code messages()}
-     * call in this file is wrapped in {@code synchronized(memory)} so concurrent
-     * prayer chains (double-{@code /pray}, {@code Wait} callback landing while the
+     * <p>LC4j's TokenWindowChatMemory keeps a {@code tool_call} assistant and
+     * its following {@code tool_result} messages together when evicting, so the
+     * old "400 on tool_call without tool_result" failure mode after window
+     * crossover is gone too.
+     *
+     * <p><b>Concurrency</b>: {@link TokenWindowChatMemory} is not thread-safe
+     * (LinkedList-backed). Every {@code add} / {@code messages()} call in this
+     * file is wrapped in {@code synchronized(memory)} so concurrent prayer
+     * chains (double-{@code /pray}, {@code Wait} callback landing while the
      * user re-prays) can't corrupt the list.
      */
-    public static final int MAX_MEMORY_MESSAGES = 200;
+    public static final int MAX_MEMORY_TOKENS = 16_000;
+
+    /**
+     * Shared {@link TokenCountEstimator} used to budget the per-player window.
+     * The "gpt-4o" tokenizer uses o200k_base, which is the encoding the current
+     * GPT-5 / o-series reasoning models use too. For LM Studio / Ollama the
+     * estimator is approximate (different vocab), but being off by 10–15 % is
+     * fine for a 16 000-token cap — we're budgeting, not accounting.
+     *
+     * <p>OpenAiTokenCountEstimator is stateless and thread-safe, so one
+     * instance serves every player.
+     */
+    private static final TokenCountEstimator TOKEN_ESTIMATOR =
+        new OpenAiTokenCountEstimator("gpt-4o");
+
     public ConcurrentHashMap<UUID, ChatMemory> memories = new ConcurrentHashMap<>();
 
     public static String PROMPT_STATE_KEY = "prompt_state_key";
@@ -148,10 +170,10 @@ public class ChatBot {
         functionCallDepth.remove(player.getUuid());
     }
 
-    /** Returns the player's {@link ChatMemory}, creating a fresh window if needed. */
+    /** Returns the player's {@link ChatMemory}, creating a fresh token window if needed. */
     public ChatMemory memoryFor(ServerPlayerEntity player) {
         return memories.computeIfAbsent(player.getUuid(),
-            k -> MessageWindowChatMemory.withMaxMessages(MAX_MEMORY_MESSAGES));
+            k -> TokenWindowChatMemory.withMaxTokens(MAX_MEMORY_TOKENS, TOKEN_ESTIMATOR));
     }
 
 
