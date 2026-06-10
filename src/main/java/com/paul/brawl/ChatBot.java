@@ -9,7 +9,10 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,6 +84,30 @@ public class ChatBot {
 
     public ConcurrentHashMap<UUID, ChatMemory> memories = new ConcurrentHashMap<>();
 
+    /**
+     * Per-player flag: did the current conversation start while owning the
+     * avatar session? Set at each user entry point ({@link #sendChatRequest} /
+     * {@link #sendImageChatRequest}). Distinguishes "session ended mid-flight —
+     * drop the response" from "never had a session — bodiless prayer, answer
+     * normally". Without it, a player praying while the avatar is busy
+     * elsewhere (or a {@code /prove} outside a session) matched the drop
+     * predicate and never received any reply.
+     */
+    public ConcurrentHashMap<UUID, Boolean> sessionBound = new ConcurrentHashMap<>();
+
+    /** A scheduled Wait continuation plus the tool results it will submit. */
+    private record PendingDeferral(ScheduledFuture<?> handle, List<ChatBotFunctions.FunctionResult> results) {}
+
+    /**
+     * Pending Wait deferral per player. While one exists, the assistant turn
+     * holding the tool_calls is already in memory but its tool results are
+     * withheld for up to {@code waitMaxSeconds} — a new user message landing in
+     * that window would malform the next request (tool_call without
+     * tool_result). The entry points cancel + flush via
+     * {@link #flushPendingDeferral} before adding the new {@link UserMessage}.
+     */
+    private final ConcurrentHashMap<UUID, PendingDeferral> pendingDeferrals = new ConcurrentHashMap<>();
+
     public static String PROMPT_STATE_KEY = "prompt_state_key";
 
     private static final Logger LOGGER = LoggerFactory.getLogger("ChatCommand");
@@ -149,12 +176,16 @@ public class ChatBot {
     public static void reloadClients() {
         LLMConfig.INSTANCE.invalidateClient();
         if (godBot != null) {
+            godBot.cancelAllDeferrals();
             godBot.memories.clear();
             godBot.functionCallDepth.clear();
+            godBot.sessionBound.clear();
         }
         if (buildBot != null) {
+            buildBot.cancelAllDeferrals();
             buildBot.memories.clear();
             buildBot.functionCallDepth.clear();
+            buildBot.sessionBound.clear();
         }
     }
 
@@ -164,10 +195,20 @@ public class ChatBot {
         readPrompt();
     }
 
-    /** Clears the player's conversation memory and depth guard. */
+    /** Clears the player's conversation memory, depth guard, session flag, and
+     *  any pending Wait deferral (its memory is being wiped — a continuation
+     *  would submit orphaned tool results into a fresh conversation). */
     public void clearMemory(ServerPlayerEntity player) {
+        PendingDeferral pd = pendingDeferrals.remove(player.getUuid());
+        if (pd != null) pd.handle().cancel(false);
         memories.remove(player.getUuid());
         functionCallDepth.remove(player.getUuid());
+        sessionBound.remove(player.getUuid());
+    }
+
+    private void cancelAllDeferrals() {
+        pendingDeferrals.values().forEach(pd -> pd.handle().cancel(false));
+        pendingDeferrals.clear();
     }
 
     /** Returns the player's {@link ChatMemory}, creating a fresh token window if needed. */
@@ -183,7 +224,9 @@ public class ChatBot {
 
     public CompletableFuture<ChatResponse> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player, BiConsumer<? super ChatResponse, String> callback) {
 
+        flushPendingDeferral(player);
         functionCallDepth.put(player.getUuid(), 0);
+        if (needsGodTools) sessionBound.put(player.getUuid(), GodSessionManager.isActive(player));
 
         ChatMemory memory = memoryFor(player);
 
@@ -211,7 +254,9 @@ public class ChatBot {
     }
 
     public CompletableFuture<ChatResponse> sendChatRequest(String input, ServerPlayerEntity player, BiConsumer<? super ChatResponse, String> callback) {
+        flushPendingDeferral(player);
         functionCallDepth.put(player.getUuid(), 0);
+        if (needsGodTools) sessionBound.put(player.getUuid(), GodSessionManager.isActive(player));
 
         ChatMemory memory = memoryFor(player);
         synchronized (memory) {
@@ -223,6 +268,21 @@ public class ChatBot {
 
 
     public CompletableFuture<ChatResponse> sendFunctionOutputs(List<ChatBotFunctions.FunctionResult> results, ServerPlayerEntity player) {
+
+        // A deferred Wait continuation can land after its session ended
+        // (/pray stop, idle watchdog, /godbody off). The response callback
+        // would drop it anyway — skip the LLM call entirely. Memory is wiped
+        // for the same reason the drop path wipes it: the assistant turn's
+        // tool_calls would otherwise sit unanswered at the tail. Bodiless
+        // conversations (sessionBound == false) pass through untouched.
+        if (this.needsGodTools
+                && sessionBound.getOrDefault(player.getUuid(), false)
+                && !GodSessionManager.isActive(player)) {
+            LOGGER.info("Skipping function outputs for player {} — session ended while waiting.",
+                player.getName().getString());
+            clearMemory(player);
+            return CompletableFuture.completedFuture(null);
+        }
 
         int depth = functionCallDepth.merge(player.getUuid(), 1, Integer::sum);
         if (depth > MAX_FUNCTION_CALL_DEPTH) {
@@ -249,6 +309,54 @@ public class ChatBot {
         }
 
         return doRequest(player, null);
+    }
+
+    /**
+     * Schedule {@link #sendFunctionOutputs} after a {@code Wait}, remembering
+     * the handle so a new user message can cancel + flush it (see
+     * {@link #flushPendingDeferral}). Falls back to running the outputs
+     * immediately if the scheduler is down.
+     */
+    public void deferFunctionOutputs(List<ChatBotFunctions.FunctionResult> results, ServerPlayerEntity player, int seconds) {
+        final UUID id = player.getUuid();
+        ScheduledFuture<?> handle = null;
+        try {
+            handle = GodScheduler.schedule(() -> {
+                pendingDeferrals.remove(id);
+                sendFunctionOutputs(results, player);
+            }, seconds);
+        } catch (Exception schedFail) {
+            LOGGER.warn("Wait deferral failed ({}), running outputs now", schedFail.getMessage());
+        }
+        if (handle == null) {
+            sendFunctionOutputs(results, player);
+            return;
+        }
+        pendingDeferrals.put(id, new PendingDeferral(handle, results));
+    }
+
+    /**
+     * If a Wait deferral is pending for this player, cancel it and write its
+     * tool results into memory WITHOUT firing the LLM continuation. Called
+     * from the user entry points before the new {@link UserMessage} is added:
+     * the assistant turn holding the tool_calls is already in memory, and
+     * leaving it unanswered ahead of a new user message malforms the next
+     * request (tool_call without tool_result). If {@code cancel()} loses the
+     * race the task is already mid-flight — the exposure shrinks back to the
+     * milliseconds it was before Wait existed.
+     */
+    private void flushPendingDeferral(ServerPlayerEntity player) {
+        PendingDeferral pd = pendingDeferrals.remove(player.getUuid());
+        if (pd == null) return;
+        if (!pd.handle().cancel(false)) return;
+        ChatMemory memory = memoryFor(player);
+        synchronized (memory) {
+            for (ChatBotFunctions.FunctionResult r : pd.results()) {
+                memory.add(ToolExecutionResultMessage.from(r.call(), r.result()));
+            }
+        }
+        LOGGER.info("Flushed {} deferred tool result(s) for player {} — new message interrupted a Wait.",
+            pd.results().size(), player.getName().getString());
     }
 
     public CompletableFuture<ChatResponse> sendTextualContinuation(int placedCount, ServerPlayerEntity player) {
@@ -343,19 +451,19 @@ public class ChatBot {
         messages.add(SystemMessage.from(hardcodedPrompt + "\n" + prompt));
 
         if (needsInfo) {
-            String jsonString = PlayerDataCollector.collect(player).toString();
+            String[] ctx = collectDynamicContext(player);
 
             messages.add(SystemMessage.from(
                 "The player you are interacting with has their information in JSON format here: \n"
-                + jsonString));
+                + ctx[0]));
 
             messages.add(SystemMessage.from(
                 "The history of chat, commands, and game messages is shown here: \n"
-                + ChatMessageHistory.getHistory()));
+                + ctx[1]));
 
             messages.add(SystemMessage.from(
                 "Here is the information about the blocks near the player's cursor: \n"
-                + ChatBotActions.getBlockInfo(player)));
+                + ctx[2]));
         }
 
         // Snapshot the memory under its lock so a concurrent add (from a
@@ -372,6 +480,45 @@ public class ChatBot {
         return messages;
     }
 
+    /**
+     * Gathers the per-turn dynamic context (player JSON, chat log, nearby
+     * blocks) on the main server thread. {@link #buildMessageList} runs on an
+     * llm-worker thread (request assembly lives inside {@code supplyAsync} —
+     * see {@link #doRequest}), but {@link PlayerDataCollector} iterates live
+     * entity state (inventory, status effects) and
+     * {@link ChatBotActions#getBlockInfo} reads block states — both racy
+     * off-thread; iterating status effects while the main thread mutates them
+     * is a ConcurrentModificationException. One bounded queue hop (~1 tick)
+     * keeps the reads on the owning thread, same contract as
+     * {@code ChatBotFunctions.runOnMain}. On timeout/failure the turn degrades
+     * to empty context instead of failing.
+     */
+    private static String[] collectDynamicContext(ServerPlayerEntity player) {
+        final String[] ctx = { "", "", "" };
+        Supplier<String> body = () -> {
+            ctx[0] = PlayerDataCollector.collect(player).toString();
+            ctx[1] = ChatMessageHistory.getHistory();
+            ctx[2] = ChatBotActions.getBlockInfo(player);
+            return "ok";
+        };
+        var server = player.getServer();
+        if (server != null && server.isOnThread()) {
+            // Defensive: never queue-and-join from the main thread (deadlock
+            // against the END_SERVER_TICK drain). Collect directly.
+            body.get();
+            return ctx;
+        }
+        try {
+            GodActionQueue.submit(body).get(5, TimeUnit.SECONDS);
+            return ctx;
+        } catch (Exception e) {
+            LOGGER.warn("Dynamic-context collection on main thread failed ({}); sending turn without context.",
+                e.toString());
+            // Fresh array: on timeout the queued action may still write ctx later.
+            return new String[] { "", "", "" };
+        }
+    }
+
     public void setupGeneralCallback(CompletableFuture<ChatResponse> response, ServerPlayerEntity player) {
         response.thenAccept(r -> {
             try {
@@ -381,11 +528,17 @@ public class ChatBot {
                 // Session-ended-mid-flight check: the idle watchdog, /pray stop,
                 // or /godbody off may have released this player's lock while the
                 // LLM call was in flight (especially after a long Wait + a slow
-                // chat() return). Don't execute world-mutating tools on a phantom
-                // session, and DON'T commit the assistant turn to memory — that
-                // would leave an orphaned tool_call(s) and the next /pray would
-                // 400 on "tool_call without tool_result". Wipe and bail.
-                if (this.needsGodTools && !GodSessionManager.isActive(player)) {
+                // chat() return). Only applies to conversations that STARTED
+                // with the session (sessionBound) — a deliberately bodiless
+                // prayer (avatar busy elsewhere, or /prove without a session)
+                // never owned the lock and must be answered normally. For ended
+                // sessions: don't execute tools on a phantom session, and DON'T
+                // commit the assistant turn to memory — that would leave
+                // orphaned tool_call(s) and the next /pray would 400 on
+                // "tool_call without tool_result". Wipe and bail.
+                if (this.needsGodTools
+                        && sessionBound.getOrDefault(player.getUuid(), false)
+                        && !GodSessionManager.isActive(player)) {
                     LOGGER.info("Dropping LLM response for player {} — session no longer active (idle watchdog / kill switch).",
                         player.getName().getString());
                     clearMemory(player);

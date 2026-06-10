@@ -110,6 +110,10 @@ public class BuildSubAgent {
                 Throwable root = ex;
                 while (root.getCause() != null && root.getCause() != root) root = root.getCause();
                 LOGGER.error("Sub-build '{}' API call failed", label, root);
+                // Without this the sub-build dies silently — the player saw
+                // "start" and then nothing, with refinement passes lost.
+                ChatPrinter.sendMessage(player, "[sub-build " + label + "] échec de l'appel LLM — construction interrompue ("
+                    + totalPlacements + " blocs placés).");
                 return;
             }
             try {

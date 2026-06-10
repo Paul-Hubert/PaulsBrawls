@@ -26,7 +26,14 @@ public class ImageReceiver {
     }
 
     private static void checkProof(byte[] bytes, ServerPlayerEntity player, String text) {
-        ChatBot.getCorrectChatBot(text).sendImageChatRequest(text, bytes, player);
+        ChatBot bot = ChatBot.getCorrectChatBot(text);
+        // /prove rides the same encounter semantics as /pray: try to claim the
+        // single shared avatar so God may Appear in response to the proof. If
+        // another player holds it, the reply is simply bodiless.
+        if (bot.needsGodTools && !GodSessionManager.claim(player)) {
+            ChatPrinter.sendMessage(player, "Dieu : (occupé ailleurs — je regarde ta preuve, mais sans forme.)");
+        }
+        bot.sendImageChatRequest(text, bytes, player);
     }
 
     private static void saveImage(byte[] bytes) {

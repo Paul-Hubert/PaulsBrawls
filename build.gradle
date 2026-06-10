@@ -42,14 +42,19 @@ dependencies {
 	// langchain4j-mcp lets godBot consume tools exposed by the local
 	// minecraft-mcp-server subprocess (see MCPGateway). The stdio transport
 	// is part of this module — no extra dep required.
-	implementation ("dev.langchain4j:langchain4j-mcp:1.0.0")
+	// NOTE: langchain4j-mcp never released a stable 1.0.0 — latest is 1.0.0-beta5
+	// (May 2025). The McpClient / StdioMcpTransport APIs MCPGateway uses are
+	// stable across the betas, so this pin is safe alongside langchain4j:1.0.0.
+	implementation ("dev.langchain4j:langchain4j-mcp:1.0.0-beta5")
+	implementation ("dev.langchain4j:langchain4j-anthropic:1.0.0-beta5")
 
 	include ("dev.langchain4j:langchain4j:1.0.0")
 	include ("dev.langchain4j:langchain4j-core:1.0.0")
 	include ("dev.langchain4j:langchain4j-open-ai:1.0.0")
 	include ("dev.langchain4j:langchain4j-http-client:1.0.0")
 	include ("dev.langchain4j:langchain4j-http-client-jdk:1.0.0")
-	include ("dev.langchain4j:langchain4j-mcp:1.0.0")
+	include ("dev.langchain4j:langchain4j-mcp:1.0.0-beta5")
+	include ("dev.langchain4j:langchain4j-anthropic:1.0.0-beta5")
 	// langchain4j-core pulls jspecify for @NullMarked / @Nullable annotations that
 	// are retained at runtime — ship it so reflection / annotation lookups don't NCDFE.
 	include ("org.jspecify:jspecify:1.0.0")
@@ -65,8 +70,20 @@ dependencies {
 	include 'com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.19.1'
 	include 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.19.1'
 
-	// LangChain4j ships its own HTTP client (java.net.http); the okhttp / okio /
-	// kotlin pile fed the old OpenAI SDK's Kotlin core and is no longer needed.
+	// LangChain4j's LLM HTTP client is JDK-native (java.net.http), so the okhttp pile
+	// the OpenAI SDK once pulled in is no longer needed there. BUT langchain4j-mcp's
+	// HttpMcpTransport is OkHttp-based — the SSE handshake goes through okhttp +
+	// okhttp-sse, which transitively need okio and the Kotlin stdlib. Without these
+	// includes the first /pray that builds tools NCDFEs on okhttp3/Interceptor inside
+	// HttpMcpTransport$Builder.build. Versions track the resolved runtime classpath
+	// (run `./gradlew dependencyInsight --dependency okhttp` after bumping mcp-beta).
+	include ("com.squareup.okhttp3:okhttp:4.12.0")
+	include ("com.squareup.okhttp3:okhttp-sse:4.12.0")
+	include ("com.squareup.okio:okio:3.6.0")
+	include ("com.squareup.okio:okio-jvm:3.6.0")
+	include ("org.jetbrains.kotlin:kotlin-stdlib:1.9.10")
+	include ("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.10")
+	include ("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.10")
 	// victools jsonschema-* fed addTool(Class) in the OpenAI SDK; replaced by
 	// JsonSchemaAdapter, which uses plain reflection.
 }

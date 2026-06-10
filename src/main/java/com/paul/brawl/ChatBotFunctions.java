@@ -2,7 +2,6 @@ package com.paul.brawl;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
@@ -100,6 +99,12 @@ public class ChatBotFunctions {
         public Boolean lookAtPlayer;
 
         public String execute(ServerPlayerEntity player) {
+            // Ownership gate: a bodiless prayer (another player holds the
+            // avatar) must not teleport the shared body, flip its invuln, or
+            // touch the owner's watchdog.
+            if (!GodSessionManager.isActive(player)) {
+                return "Le corps de Dieu est occupé avec un autre fidèle — cette rencontre reste sans forme.";
+            }
             BridgeConfig cfg = BridgeConfig.INSTANCE;
             double d = (distance == null ? 3.0 : distance);
             double h = (height   == null ? 0.0 : height);
@@ -117,8 +122,16 @@ public class ChatBotFunctions {
     @JsonClassDescription("Send God's physical body away. Call this to disappear deliberately when the encounter is over. Optional — if you stop calling tools the body vanishes automatically.")
     static class Vanish {
         public String execute(ServerPlayerEntity player) {
+            // Same ownership gate as Appear — only the session owner may send
+            // the shared body home.
+            if (!GodSessionManager.isActive(player)) {
+                return "Tu ne tiens pas le corps de Dieu — rien à faire disparaître.";
+            }
             GodActionQueue.submit(() -> ChatBotActions.restoreAvatar(player));
             GodBody.vanish();
+            // The body is gone but the session continues — stop routing speech
+            // and gestures through the parked bot until the next Appear.
+            GodSessionManager.clearManifested();
             return "God a disparu.";
         }
     }
@@ -361,23 +374,14 @@ public class ChatBotFunctions {
             results.size(), player.getName().getString(), waitSeconds);
 
         if (waitSeconds > 0) {
-            // Defer the next LLM call by N seconds; the body sits still until then.
-            // GodScheduler runs the task on its own thread — sendFunctionOutputs
-            // is safe to call there, it only mutates per-player ChatMemory and
-            // submits another supplyAsync.
-            final int finalWait = waitSeconds;
-            ScheduledFuture<?> handle = null;
-            try {
-                handle = GodScheduler.schedule(() -> chatBot.sendFunctionOutputs(results, player), finalWait);
-            } catch (Exception schedFail) {
-                LOGGER.warn("Wait deferral failed ({}), running outputs now", schedFail.getMessage());
-            }
-            // Extend the idle watchdog so the deferred call doesn't trip it.
+            // Defer the next LLM call by N seconds; the body sits still until
+            // then. ChatBot tracks the handle so a new prayer landing inside
+            // the window cancels + flushes it instead of racing the deferred
+            // continuation (see ChatBot.flushPendingDeferral).
+            chatBot.deferFunctionOutputs(results, player, waitSeconds);
+            // Extend the idle watchdog so the deferred call doesn't trip it
+            // (no-op unless this player owns the avatar session).
             GodSessionManager.resetIdleTimer(player);
-            if (handle == null) {
-                // Scheduler down — fall back to running it now.
-                chatBot.sendFunctionOutputs(results, player);
-            }
         } else {
             chatBot.sendFunctionOutputs(results, player);
         }
@@ -403,7 +407,7 @@ public class ChatBotFunctions {
      * <p>{@code chatBot} is the bot that owns the request — used by
      * {@link ListTools} to enumerate exactly what was attached to this turn.
      * It may be null when called from a test or legacy path; ListTools then
-     * falls back to godBot's flag profile.</p>
+     * sees every flag as false and lists nothing.</p>
      */
     private static String executeFunction(ToolExecutionRequest req, ServerPlayerEntity player, ChatBot chatBot) {
         // Contract: never throw. The assistant turn carrying this tool_call is

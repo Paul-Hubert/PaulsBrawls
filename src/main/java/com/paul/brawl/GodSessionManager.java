@@ -72,6 +72,13 @@ public final class GodSessionManager {
         manifested = true;
     }
 
+    /** Clears the manifested flag after a deliberate {@code Vanish} so speech
+     *  and gestures stop routing through the parked bot while the session
+     *  continues; a later {@code Appear} sets it again. */
+    public static void clearManifested() {
+        manifested = false;
+    }
+
     /** Whether the avatar has been teleported in for the current session. */
     public static boolean hasManifested() {
         return manifested;
@@ -106,8 +113,12 @@ public final class GodSessionManager {
      * body around indefinitely.
      */
     public static synchronized void resetIdleTimer(ServerPlayerEntity player) {
+        // Ownership guard: only the session owner may touch the watchdog. A
+        // bodiless prayer reaching this via Appear/Wait would otherwise cancel
+        // the real owner's watchdog and pin a replacement to the wrong UUID
+        // (whose body then no-ops on the cur.equals(pinned) check).
+        if (player == null || !player.getUuid().equals(owner.get())) return;
         if (watchdog != null) watchdog.cancel(false);
-        if (player == null) return;
         final UUID pinned = player.getUuid();
         int seconds = Math.max(BridgeConfig.INSTANCE.idleTimeoutSeconds,
                                BridgeConfig.INSTANCE.waitMaxSeconds + 5);

@@ -24,6 +24,7 @@ public class LLMConfig {
     public static final String OPENAI = "openai";
     public static final String LMSTUDIO = "lmstudio";
     public static final String OLLAMA = "ollama";
+    public static final String ANTHROPIC = "anthropic";
 
     public static final Path CONFIG_PATH = Path.of("llm_config.properties");
 
@@ -69,6 +70,7 @@ public class LLMConfig {
         providers.put(OPENAI, new ProviderSettings("https://api.openai.com", 443, "gpt-5", ""));
         providers.put(LMSTUDIO, new ProviderSettings("http://localhost", 1234, "openai/gpt-oss-20b", "lm-studio"));
         providers.put(OLLAMA, new ProviderSettings("http://localhost", 11434, "llama3.2", "ollama"));
+        providers.put(ANTHROPIC, new ProviderSettings("https://api.anthropic.com", 443, "claude-opus-4-8", ""));
         load();
     }
 
@@ -91,9 +93,19 @@ public class LLMConfig {
      * Builds a fresh {@link ChatModel} for the active provider. LangChain4j's
      * OpenAI module accepts a custom {@code baseUrl}, so the same builder serves
      * api.openai.com, LM Studio's localhost:1234, and Ollama's localhost:11434.
+     * For Anthropic the dedicated {@code AnthropicChatModel} builder is used instead.
      */
     public ChatModel buildModel() {
         ProviderSettings p = active();
+
+        if (ANTHROPIC.equals(activeProvider)) {
+            return dev.langchain4j.model.anthropic.AnthropicChatModel.builder()
+                .apiKey(resolveApiKey(p))
+                .modelName(p.model)
+                .timeout(Duration.ofSeconds(timeoutSeconds))
+                .build();
+        }
+
         OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
             .baseUrl(p.baseUrl())
             .apiKey(resolveApiKey(p))
@@ -159,6 +171,10 @@ public class LLMConfig {
         if (p.apiKey != null && !p.apiKey.isEmpty()) return p.apiKey;
         if (OPENAI.equals(activeProvider)) {
             String envKey = System.getenv("OPENAI_API_KEY");
+            if (envKey != null && !envKey.isEmpty()) return envKey;
+        }
+        if (ANTHROPIC.equals(activeProvider)) {
+            String envKey = System.getenv("ANTHROPIC_API_KEY");
             if (envKey != null && !envKey.isEmpty()) return envKey;
         }
         // Local servers (LM Studio, Ollama) don't validate the key but the client requires one.
