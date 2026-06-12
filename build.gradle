@@ -58,6 +58,10 @@ dependencies {
 	// langchain4j-core pulls jspecify for @NullMarked / @Nullable annotations that
 	// are retained at runtime — ship it so reflection / annotation lookups don't NCDFE.
 	include ("org.jspecify:jspecify:1.0.0")
+	// langchain4j-open-ai's OpenAiTokenCountEstimator (ChatBot's token-window
+	// budgeter) loads jtokkit at class-init — without this include the server
+	// dies on boot with NCDFE com/knuddels/jtokkit/Encodings.
+	include ("com.knuddels:jtokkit:1.1.0")
 
 	// LangChain4j depends on Jackson; keep these includes so the jar-in-jar runtime
 	// closure ships them. ChatBotFunctions' tool POJOs still rely on

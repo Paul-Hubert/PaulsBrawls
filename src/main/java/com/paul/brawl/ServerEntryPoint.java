@@ -35,16 +35,21 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 		GodActionQueue.register();
 		GodScheduler.register();
 
+		// AI village (see VILLAGE_PLAN.md): trade settlement + admin command.
+		VillageCommand.register();
+
 		// Track the live server so off-thread callers (idle watchdog) can
 		// reach the bot without holding a player reference.
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			ChatBotActions.setServer(server);
 			LOGGER.info("BridgeConfig loaded: {}", BridgeConfig.INSTANCE.describe());
+			VillageHttpListener.start(server);
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			GodActionQueue.clear();
 			GodSessionManager.forceEndSession();
 			ChatBotActions.setServer(null);
+			VillageHttpListener.stop();
 		});
 
 		// Op the bot on join so it can run /tp. The check matches the
