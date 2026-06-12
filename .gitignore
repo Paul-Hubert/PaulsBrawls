@@ -97,3 +97,6 @@ nb-configuration.xml
 ## Miscellaneous
 ##############################
 *.log
+
+
+run/world/
