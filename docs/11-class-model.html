@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>11 — UML class model</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font: 16px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif; color: #1f2328; margin: 0; background: #fff; }
+  main { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem 6rem; }
+  h1, h2 { border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+  .diagram { overflow-x: auto; border: 1px solid #d1d9e0; border-radius: 8px; padding: 12px; margin: 1rem 0; background: #fff; }
+  table { border-collapse: collapse; margin: 1rem 0; }
+  th, td { border: 1px solid #d1d9e0; padding: 6px 12px; text-align: left; vertical-align: top; }
+  code { background: #f0f1f3; padding: .1em .3em; border-radius: 4px; font-size: 85%; }
+  pre code { display: block; padding: 12px; overflow-x: auto; }
+  .error { color: #b91c1c; white-space: pre-wrap; font-family: monospace; }
+</style>
+</head>
+<body>
+<main id="content"><p>Rendering… (this page needs internet access for the mermaid + marked CDN)</p></main>
+<script type="text/plain" id="src">
+# 11 — UML class model
+
+A class-level companion view of the Eden framework. The linked specs
+([01](01-architecture.md)–[08](08-extension-recipes.md)) remain normative — if a
+diagram here disagrees with them, the spec wins and this doc gets fixed (S8).
+The model encodes the structural rules directly: the dependency law (strict
+downward imports; layer-3 actors never reference each other), S1 (extensibility
+via **registries, not branches**), S2 (one writer per state), S5 (no DI
+containers or plugin loaders — every seam is a small interface or a typed
+registry, wired only in the composition root), and P5 (policy as data,
+capability as code).
+
+**Rendering without GitHub:** open [11-class-model.html](11-class-model.html)
+in a browser (needs internet for the mermaid CDN). Regenerate it after editing
+this file with `node docs/render-docs.mjs`. The dynamic views (sequences,
+lifecycles, data, deployment) are in [12-architecture-views.md](12-architecture-views.md).
+
+**M0 as-built:** the design here spans M0–M7. For the M0 spine that's actually
+implemented, see [15-m0-as-built.md](15-m0-as-built.md) — four diagrams (package/layer,
+class, boot, runtime) matching code as it exists under `eden/src/`.
+
+## 1. Package / layer overview (the dependency law)
+
+```mermaid
+flowchart TD
+    MAIN["EdenHost<br/>(main.ts — only composition root)"]
+    ADMIN["admin/<br/>AdminServer (nothing imports it, deletable)"]
+    subgraph L3["layer 3 — actors (never import each other)"]
+        GOD["god/"]
+        VIL["villagers/"]
+        SOC["social/"]
+    end
+    subgraph L2["layer 2 — engines"]
+        SK["skills/"]
+        LLM["llm/"]
+    end
+    subgraph L1["layer 1 — substrate"]
+        BOTS["bots/"]
+        JRN["journal/"]
+        CFG["config"]
+    end
+    L0["layer 0 — types/ (interfaces only, zero logic)"]
+    MAIN --> ADMIN & GOD & VIL & SOC
+    ADMIN -. "reads · sanctioned verbs" .-> L3 & L2 & L1
+    GOD --> SK & LLM
+    VIL --> SK & LLM
+    SOC --> SK
+    SK --> BOTS & JRN
+    LLM --> JRN
+    BOTS --> L0
+    JRN --> L0
+    CFG --> L0
+```
+
+Layer-3 classes hold references only to layer-1/2 objects (library, engine,
+journal, scheduler, inboxes), injected as constructor arguments by `EdenHost`.
+God never holds a `Villager`; it reaches villagers through their `Inbox`.
+
+## 2. Layer 0 — core domain types (pure data, no behavior)
+
+Subscriptions, directives, tasks, and filters are deliberately modeled as data
+classes with *no* methods — putting `execute()` on them would re-create v1's
+policy-woven-through-code failure mode (P5). The engines below are the only
+behavior holders.
+
+```mermaid
+classDiagram
+    direction LR
+
+    class Tier {
+        <<enumeration>>
+        mortal
+        divine
+    }
+    class SkillStatus {
+        <<enumeration>>
+        draft
+        active-probation «D-12: runnable+retrievable, NOT composable»
+        active
+        quarantined
+        archived
+    }
+    class AbortCause {
+        <<enumeration>>
+        preempted
+        stalled
+        timeout
+    }
+    class Priority {
+        <<enumeration>>
+        background
+        normal
+        interrupt
+    }
+
+    class SkillManifest {
+        +name: string
+        +summary: string
+        +description: string
+        +params: JsonSchema
+        +returns: JsonSchema
+        +signature: string «rendered from schemas»
+        +tags: string[]
+        +tier: Tier
+        +exemplar: boolean
+    }
+    class SkillVersion {
+        +name: string
+        +version: int «append-only»
+        +codePath: string
+        +codeHash: string
+        +status: SkillStatus
+        +probationRunsLeft: int? «D-12: 0 ⇒ graduate to active»
+        +author: Author
+        +provenance: Provenance?
+        +createdAt: number
+    }
+    class Author {
+        +kind: god | villager | stock
+        +name?: string
+    }
+    class Provenance {
+        +rolloutId: string
+        +verdictId: string
+    }
+    class SkillStats {
+        +runs +successes +failures +stalls
+        +avgMs +lastError? +lastRunAt?
+    }
+
+    class RunReport {
+        +runId +rolloutId?
+        +skill +version +villager
+        +args: object
+        +outcome: Ok | Err
+        +aborted: AbortCause?
+        +startedAt +durationMs +pulses +deepestDepth
+        +callTree: CallFrame[]
+        +worldBefore: Snapshot
+        +worldAfter: Snapshot
+    }
+    class CallFrame {
+        +skill +version +ok +ms
+    }
+    class Snapshot {
+        +biome +time +position
+        +health +hunger +equipment
+        +inventory +nearbyEntities
+        +nearbyBlocks +knownChests
+    }
+
+    class Task {
+        +id +goal +assignee?
+        +successCriteria: string
+        +check?: ItemCheck «D-12: failed ⇒ one-directional admit veto»
+        +context: string «QA-cache answer»
+        +maxRetries: int = 4
+        +parent?: string
+        +currentRolloutId?: string «D-09: live rollout; cleared on boot abandon»
+    }
+    class TaskLedger {
+        +completed: TaskRecord[]
+        +failed: TaskRecord[]
+        +open: Task[]
+    }
+    class Directive {
+        +id
+        +to: string | string[] | all
+        +goal +reason
+        +priority: Priority
+        +taskRef? +expiresAt?
+        +standing?: boolean
+    }
+    class CriticTicket {
+        +id
+        +source: rollout | tripwire | plea | second-opinion
+        +runReportRef +taskRef?
+        +filedAt
+    }
+    class Verdict {
+        +ticketId
+        +success: boolean
+        +score?: 0..10
+        +critique: string «the product»
+        +libraryAction: admit | keep-draft | quarantine | archive | none
+        +followUp?: DirectiveSuggestion | TaskSuggestion
+        +praise?: string
+    }
+    class Rollout {
+        +id +taskId +villager
+        +attempt: int
+        +draftVersions: int[]
+        +critiqueChain: string[]
+        +open: boolean
+    }
+    class Dossier {
+        +villager
+        +competence «per-tag success rates»
+        +recentVerdicts: VerdictRef[]
+        +notes: string[]
+        +standingOrders?: string
+    }
+
+    class EdenEvent {
+        <<union>>
+        hurt | entity-spotted | entity-lost
+        player-chat | villager-chat | inbox
+        item-received | health-low
+        night-falls | new-day | died
+        run-finished | block-broken-nearby | tick-30s
+    }
+    class Envelope {
+        +at: number
+        +villager: string
+        +event: EdenEvent
+    }
+    class Subscription {
+        +id +villager
+        +on: EventType
+        +filter?: Filter
+        +handler: SkillHandler | DeliberateHandler
+        +cooldownMs?
+        +source: role-default | self | god | admin
+        +enabled: boolean
+    }
+    class Filter {
+        +within? +entityKind? +nameMatches?
+        +timeOfDay? +healthBelow? +foodBelow?
+        +notWhileRunning?: string[]
+    }
+    class SkillHandler {
+        +kind = skill
+        +name: string
+        +args: object | ArgTemplate
+    }
+    class DeliberateHandler {
+        +kind = deliberate
+        +hint: string
+        +priority?: Priority
+    }
+
+    class JournalEvent {
+        +id: ulid
+        +at: number
+        +actor: string
+        +kind: JournalKind
+        +payload: object
+        +refs: Refs
+    }
+    class Refs {
+        +runId? +rolloutId? +taskId? +verdictId?
+        +directiveId? +skill? +skillVersion?
+        +conversationId? +tradeId? +llmCallId?
+    }
+    class InboxMessage {
+        +from: god | villager
+        +kind: directive | critique | tell
+        +payload +at
+    }
+    class MemoryEntry {
+        +kind: event | social | trade | thought | system
+        +text +tags
+        +importance: 0..10
+        +at
+    }
+    class RunnerRef {
+        +name +role
+        +tier: Tier
+    }
+
+    SkillManifest "1" --> "1..*" SkillVersion : versions
+    SkillVersion ..> SkillStats : aggregated from journal
+    SkillVersion *-- Author
+    SkillVersion *-- Provenance
+    RunReport *-- CallFrame : callTree
+    RunReport *-- Snapshot : before/after
+    RunReport --> AbortCause
+    TaskLedger o-- Task
+    Verdict ..> CriticTicket : answers
+    Rollout ..> Task : attempts
+    Subscription *-- Filter
+    Subscription *-- SkillHandler
+    Subscription *-- DeliberateHandler
+    Envelope *-- EdenEvent
+    JournalEvent *-- Refs
+```
+
+`EdenEvent` is a closed discriminated union — adding a variant is a
+registry-row change ([08 §recipes](08-extension-recipes.md#add-a-normalized-event-type)),
+so it is data, not a class hierarchy with virtual dispatch.
+
+## 3. Layer 1 — substrate (journal, bots, config)
+
+```mermaid
+classDiagram
+    class Journal {
+        «sole writer of the eden.db journal table»
+        +append(actor, kind, payload, refs) ulid
+        +query(filter: JournalQuery) JournalEvent[]
+        +subscribe(listener) Unsubscribe
+        -db: Sqlite «WAL mode»
+    }
+    class JournalKindRegistry {
+        «journal/kinds.ts — S1 registry»
+        +register(kind, payloadSchema, doc)
+        +describe() KindDoc[] «admin exposes this»
+    }
+    class EdenConfig {
+        +load(path) EdenConfig
+        +validate() «warn unknown keys, adopt aliases (R22)»
+        +minecraft +villagers +god +llm
+        +skills +settlement +admin +journal
+    }
+    class BotPool {
+        «owns all 11 bot connections»
+        +spawnAll() «staggered ~2 s, avatar last (R13)»
+        +bot(name) Bot?
+        +avatar() Bot?
+        +onRaw(name, signal, handler)
+        -reconnect(name) «backoff»
+    }
+    class Hardening {
+        «bots/hardening.ts — the v1 corpus, R1–R10»
+        +boundPathfinder(bot)
+        +abortActiveTasks(bot) «ordered abort sequence»
+        +craftQuiescence(bot)
+        +installChatInterceptor(bot) Removable «R25»
+    }
+    class BotHelpers {
+        «plain functions (bot, …) — composed by exemplar skills»
+        +goToHops(bot, pos, range) «≤40-block legs»
+        +useChest(bot, pos, fn)
+        +deposit(bot, items)
+        +withdraw(bot, items)
+    }
+    class Logger {
+        «only module allowed console.*»
+        +line(actor, msg, ms?)
+    }
+
+    Journal --> JournalKindRegistry : validates kind
+    BotPool ..> Hardening : applies at spawn
+    BotHelpers ..> Hardening : built on
+```
+
+## 4. Layer 2 — the skill engine (the core asset)
+
+```mermaid
+classDiagram
+    direction TB
+
+    class GrantPolicy {
+        <<interface>>
+        «the economy seam — owner decision #3»
+        +canRetrieve(villager, skill) boolean
+        +canRun(villager, skill) boolean
+    }
+    class AllGranted {
+        «v0: constant true»
+    }
+    class LedgerGrants {
+        «future: the skill market»
+    }
+    GrantPolicy <|.. AllGranted
+    GrantPolicy <|.. LedgerGrants
+
+    class SkillLibrary {
+        «sole writer of skill state — append-only versioning»
+        +upsertDraft(name, manifest, code) SkillVersion
+        +admit(name, version, provenance) «→ active-probation (D-12)»
+        +recordProbationRun(name, ok) «N clean runs ⇒ graduate to active»
+        +quarantine(name, reason)
+        +unquarantine(name) «self-healing → active-probation on re-trial success (D-12)»
+        +archive(name, version)
+        +activeVersion(name) SkillVersion?
+        +read(name, version?) CodeAndManifest
+        +exemplars(tier) SkillVersion[]
+        +verifyHashes() «boot: quarantine mismatches»
+    }
+    class SkillRetriever {
+        «embedding cosine + keyword fallback · tier-filtered (P2): active + active-probation»
+        +search(query, tier, k = 8) RankedSkill[]
+    }
+    class Instrumenter {
+        «acorn pass — hang prevention, NOT a sandbox»
+        +parse(code) Ast
+        +injectLoopBudget(ast) string «reset on real await»
+    }
+    class DescriptionPass {
+        «fast-tier LLM — description FROM final code, at admission»
+        +derive(code) ManifestPatch
+    }
+
+    class SkillEngine {
+        «the only executor of skill code»
+        +run(name, args, runner, opts?) Promise~RunReport~
+        -tierGate(runner, manifest)
+        -validateArgs(args, paramsSchema)
+        -validateReturn(value) «draft trials only»
+        -detectCycle(chain) «depth cap 8»
+        -buildContext(depth) SkillContext
+    }
+    class BotRunQueue {
+        «D-05: one skill tree per bot»
+        +enqueue(tree)
+        +preempt() «interrupt directives»
+    }
+    class RunSupervisor {
+        «one per running tree»
+        +wallClockCapMs «default 120 s, hard 2 h»
+        +abort(cause: AbortCause)
+    }
+    class StallDetector {
+        «a skill is never supposed to pause (D-10)»
+        +pulse(kind) «a DISCRETE progress event, never a state»
+        +arm(stallSeconds = 20) «uniform; in-memory counters (R44/R46)»
+        -subscribeBuiltins(bot) «pos/inv/window/dig + pathfinder path_update/path_reset (R26 fix)»
+    }
+    class SkillContext {
+        +skills: SkillComposer
+        +log(msg) «→ journal skill.log»
+        +signal: AbortSignal
+        +runner: RunnerRef
+        +depth: int
+    }
+    class SkillComposer {
+        +run~T~(name, args) Promise~T~ «gates: tier → probation (D-12) → grant»
+    }
+    class FailureTripwire {
+        «autoQuarantineAfter: 5 — files a CriticTicket either way»
+        +recordFailure(skill)
+    }
+
+    SkillEngine --> SkillLibrary : resolve versions
+    SkillEngine --> GrantPolicy : every run
+    SkillRetriever --> GrantPolicy : every retrieval
+    SkillRetriever --> SkillLibrary
+    SkillEngine --> Instrumenter : before first run
+    SkillEngine *-- BotRunQueue : one per bot
+    SkillEngine *-- RunSupervisor : one per tree
+    RunSupervisor *-- StallDetector
+    RunSupervisor ..> Hardening : abort protocol (R4–R5)
+    SkillEngine ..> SkillContext : injects
+    SkillContext *-- SkillComposer
+    SkillEngine ..> RunReport : produces → journal + critic queue
+    SkillEngine --> FailureTripwire
+    SkillLibrary --> DescriptionPass : on admit
+    SkillLibrary ..> Journal : skill.* events
+
+    note for SkillEngine "tierGate is a fixed engine invariant — mortal never runs or calls divine. Deliberately separate from the mutable GrantPolicy."
+```
+
+## 5. Layer 2 — LLM plumbing
+
+```mermaid
+classDiagram
+    class LlmClient {
+        «provider-agnostic /v1/chat/completions»
+        +chat(messages, tools, tier) LlmResult
+    }
+    class ProviderRegistry {
+        «strong / fast model tiers — config data»
+        +get(tier) ProviderConfig «baseUrl · model · inputTokenBudget (D-11)»
+    }
+    class LlmScheduler {
+        «global concurrency cap · lanes · coalescing»
+        +enqueue(req: WakeupRequest) Promise~LlmResult~
+        -lanes: player, combat, conversation, directive, job, idle
+        -godPreempts() «desk calls outrank villager lanes»
+        -rolloutImmunity(req) «density invariant — no suppression inside a rollout»
+        -rateCap() «dumb N-per-minute circuit breaker»
+    }
+    class BudgetTracker {
+        «per-desk daily call/token caps»
+        +spend(desk, tokens)
+        +degraded(desk) boolean «graceful fallback mode»
+    }
+    class EmbeddingsService {
+        «multilingual MiniLM in-process · 3 failures → keywords-only»
+        +embed(texts) Vector[]
+        +cosine(a, b) number
+    }
+
+    LlmClient --> ProviderRegistry
+    LlmScheduler --> LlmClient
+    LlmScheduler --> BudgetTracker
+    LlmScheduler ..> Journal : llm.call (no prompt bodies)
+    SkillRetriever ..> EmbeddingsService
+```
+
+## 6. Layer 3 — God (one entity, three desks, a body)
+
+`combineDesks: true` is a wiring change in `EdenHost` (one queue, one prompt),
+not a class change — the desk classes stay; only their dispatch merges.
+
+```mermaid
+classDiagram
+    class GodService {
+        «owns GodState · wires desks at construction»
+        +fileTicket(t: CriticTicket)
+        +requestCurriculumTick(trigger)
+        +notifyEvent(envelope) «world events routed to God»
+    }
+    class GodState {
+        «shared state, never a shared context window (D-06)»
+        +ledger: TaskLedger
+        +dossiers «per-villager Dossier»
+        +knowledge: QaCache
+        +directivesOpen: Directive[]
+        +criticQueue: CriticTicket[]
+        +budget «per-desk token caps (default null) + degradeOnBreach (D-13)»
+    }
+    class Desk {
+        <<abstract>>
+        #promptFile «god/prompts/(desk).md — the prompt IS the behavior»
+        #modelTier: strong | fast
+        #tools: ToolRegistry
+        +tick() «drain my queue via LlmScheduler»
+    }
+    class CriticDesk {
+        «sole authority on success — bounded by 3 deterministic rails (D-12)»
+        +judge(ticket) Verdict «sees FULL code + RunReport + snapshots»
+        -checkVeto(task, worldAfter) «failed check ⇒ force success=false (one-directional)»
+        -routeVerdict(v) «library action · inbox critique · ledger · dossier»
+        -voidDivineOverreach(task) «interventions never complete villager tasks»
+    }
+    class CurriculumDesk {
+        «sole writer of the TaskLedger»
+        +proposeTask(villager?) Task «one task at the edge of ability»
+        +decompose(goal) Task[]
+        -warmupGate() «config table»
+    }
+    class OrchestratorDesk {
+        «sole writer of Directives»
+        +dispatch(trigger) Directive[]
+        -antiThrash() «max 1 open per villager · no repeat interrupt within 5 min»
+        +intervene(skill, args) «divine stage-setting — never does the task»
+    }
+    class QaCache {
+        «the village's Minecraft handbook — embedding-deduped»
+        +howTo(question) string
+    }
+    class GodBody {
+        «typed sugar over divine skill runs — deterministic theatrics»
+        +appearNear(villager)
+        +vanish()
+        +gesture(type)
+        +deliverVerdict(v) «when embodiedVerdicts»
+        +demonstrate(mortalSkill, args) «chat interceptor armed (R25)»
+    }
+
+    GodService *-- GodState
+    GodService *-- CriticDesk
+    GodService *-- CurriculumDesk
+    GodService *-- OrchestratorDesk
+    Desk <|-- CriticDesk
+    Desk <|-- CurriculumDesk
+    Desk <|-- OrchestratorDesk
+    CurriculumDesk --> QaCache
+    CriticDesk ..> SkillLibrary : libraryAction
+    CriticDesk ..> Verdict : → journal god.verdict
+    OrchestratorDesk ..> Directive : → villager Inbox
+    GodBody ..> SkillEngine : run(divine, runner = Dieu)
+    Desk --> LlmScheduler
+    GodService ..> Journal : god.* events
+```
+
+## 7. Layer 3 — villager runtime
+
+Note what is *absent* by design: there are no `go_to`/`dig` micro-action tool
+classes — all world effects go through `run_skill`, which keeps the library the
+single vocabulary of action (P2).
+
+```mermaid
+classDiagram
+    class Villager {
+        +name: string «also the MC username»
+        +role: string
+        +anchors: Anchors «hints, self-healed»
+        +inbox: Inbox
+        +currentRun?: RunRef
+        +bot() Bot? «null while disconnected»
+    }
+    class Inbox {
+        «the only God→villager channel — keeps layer 3 decoupled»
+        +deliver(m: InboxMessage) «journals inbox.delivered, fires inbox event»
+        +drain() InboxMessage[]
+    }
+    class EventRouter {
+        «normalizes raw mineflayer signals → EdenEvent envelopes»
+        +wire(villager, bot)
+        +route(envelope) «match subscriptions → dispatch»
+        -emitters «Registry of EventType→Emitter · hysteresis lives HERE»
+    }
+    class SubscriptionStore {
+        «sole writer of subscriptions — persisted»
+        +subscribe(s)
+        +unsubscribe(id)
+        +forVillager(name) Subscription[]
+        +seedRoleDefaults(villager) «roles.json — data, not code»
+    }
+    class FilterEvaluator {
+        «declarative only (P5) — no predicate code»
+        -clauses «Registry of ClauseName→ClauseFn»
+        +matches(filter, envelope) boolean «AND-composed»
+        +substitute(argTemplate, envelope) object «$event.* paths»
+    }
+    class Brain {
+        «one deliberation = one LLM conversation»
+        +deliberate(pack: ContextPack) «tool turns until done»
+        +activeRollout?: Rollout «revision context persists — density invariant»
+    }
+    class ToolRegistry {
+        «S1 registry: schema + handler per tool · tier-filters the villager view»
+        +register(name, schema, handler)
+        +dispatch(call) ToolResult
+        search_skills · read_skill · write_skill «caps maxSkillLines (D-11)» · run_skill
+        subscribe · unsubscribe · list_subscriptions
+        say · tell · conversations · trade tools
+        remember · recall · report_to_god · done
+    }
+    class ContextPackBuilder {
+        «deterministic 8-section assembly · token ceiling per section»
+        +build(triggers, villager) ContextPack
+        -renderSnapshot(s: Snapshot) string «ONE Voyager renderer, shared with God»
+        -fitBudget(pack) «D-11: never trim current density payload; history oldest-first as R20 pairs; per-tier inputTokenBudget»
+    }
+    class VillagerMemory {
+        «window ~200 → archive 2000 + rolling life summary»
+        +remember(entry)
+        +recall(query) MemoryEntry[]
+        -summarizeEvictedBatch() «fast LLM: keywords, importance, lessons»
+    }
+    class MemoryRetriever {
+        «0.5·relevance + 0.25·recency + 0.25·importance»
+        +rank(query, entries) MemoryEntry[]
+    }
+    class AnchorService {
+        «boot + call-time self-healing · overrides persist»
+        +heal(villager)
+    }
+
+    Villager *-- Inbox
+    Villager *-- VillagerMemory
+    Villager --> SubscriptionStore : owns rows in
+    EventRouter --> SubscriptionStore
+    EventRouter --> FilterEvaluator
+    EventRouter ..> SkillEngine : handler kind=skill (zero tokens)
+    EventRouter ..> LlmScheduler : handler kind=deliberate → Brain wake-up
+    Brain --> ToolRegistry
+    Brain --> ContextPackBuilder
+    ToolRegistry ..> SkillEngine : run_skill
+    ToolRegistry ..> SkillLibrary : write_skill / read_skill / search_skills
+    VillagerMemory --> MemoryRetriever
+    MemoryRetriever ..> EmbeddingsService
+    ContextPackBuilder ..> VillagerMemory : §6 retrieved past
+    ContextPackBuilder ..> Journal : §5 recent past
+    AnchorService ..> Villager : heals anchors
+```
+
+## 8. Layer 3 — social, plus admin and composition root
+
+```mermaid
+classDiagram
+    class ConversationManager {
+        «v1 design kept: in-process inboxes, turn caps, deadlines»
+        +start(a, b, topic) ConversationId
+        +turn(id, from, text)
+        +leave(id, opinion, note, headline) «feeds relations + memory»
+        -mirrorToGameChat() «only with a player in earshot, rate-limited»
+    }
+    class TradeService {
+        +propose(from, to, offer: TypedOffer) TradeId
+        +settle(id) «journals trade.settled»
+    }
+    class TypedOffer {
+        +give: OfferSide
+        +want: OfferSide
+        «OfferSide grows a grant variant when the economy lands»
+    }
+    class SettlementClient {
+        «HTTP → Java listener 127.0.0.1:8767/trade/execute — atomic»
+        +execute(swap)
+    }
+    class AdminServer {
+        «imports anything, nothing imports it — deletable»
+        +routes: RouteTable «S1 registry»
+        +ws: JournalStream «live fan-out, ?kinds= filter»
+        +pause()
+        +resume() «journaled actor=admin»
+        +prompt(villager, text) «inbox event kind=tell — the website's talk box»
+    }
+    class DerivedView {
+        <<abstract>>
+        «derived state, not duplicate state — rebuildable by replay»
+        +fold(e: JournalEvent)
+        +rebuildByReplay(journal)
+    }
+    class SkillStatsView
+    class CompetenceView
+    class RelationsView
+    class TradeLedgerView
+    class EdenHost {
+        «main.ts — the ONLY composition root · no singletons»
+        +start() «config → journal → pool → engine → god → villagers → admin»
+        +stop() «crash-only: nothing important happens here»
+    }
+
+    DerivedView <|-- SkillStatsView
+    DerivedView <|-- CompetenceView
+    DerivedView <|-- RelationsView
+    DerivedView <|-- TradeLedgerView
+    TradeService --> SettlementClient
+    TradeService *-- TypedOffer
+    ConversationManager ..> Journal : conversation.* events
+    AdminServer ..> Journal : query + subscribe
+    AdminServer ..> DerivedView : reads
+    AdminServer ..> EventRouter : prompt → inbox event
+    DerivedView ..> Journal : folds over events
+    EdenHost ..> AdminServer : wires
+    EdenHost ..> GodService : wires
+    EdenHost ..> EventRouter : wires
+```
+
+## 9. Where the extensibility actually lives
+
+Every future feature in [06-future-extensions.md](06-future-extensions.md) maps
+to a specific construct above:
+
+| Future need | UML seam | Mechanism |
+|---|---|---|
+| Skill economy | `GrantPolicy` interface (strategy) | Swap `AllGranted` → `LedgerGrants`; both call sites (`SkillEngine.run`, `SkillRetriever.search`) already exist |
+| New event type | `EdenEvent` union + emitter row in `EventRouter.emitters` | Registry row, no dispatch edits (S1) |
+| New journal kind | `JournalKindRegistry` | Registry row + one writer (S2) |
+| New villager tool | `ToolRegistry` | Schema + handler row |
+| New filter clause | `FilterEvaluator.clauses` | Clause function row |
+| New divine power | New exemplar `SkillVersion(tier=divine)` | Data, zero engine change — the tier gate is on the runner |
+| Desk behavior change | `Desk.promptFile` | The prompt is the behavior; class only changes if the contract does |
+| Per-villager proficiency | `RunReport` already records villager × skill × outcome | One modifier function in `SkillEngine` |
+| Multi-village | `GodState` is instance state, not global | Second `EdenHost` process |
+| Website | `AdminServer` + `JournalStream` | Consumer of existing routes; controls (villager prompt box) ride the admin POST verbs → `inbox` events |
+| Voice | One emitter row (`player-voice`) + effector on `say` | Context packs untouched |
+| Event-loop saturation | `BotRunQueue` / `SkillEngine` boundary | Sanctioned worker-thread escape hatch |
+
+## 10. Modeling stance — two deliberate deviations from classic UML instinct
+
+1. **Anemic policy objects on purpose.** `Subscription`, `Directive`, `Task`,
+   `Filter` carry no behavior; the engines (`SkillEngine`, `EventRouter`, the
+   desks) execute them. Behavior-rich policy objects are exactly how v1's
+   "policy woven through code paths" failure mode started.
+2. **No factory/plugin layer anywhere** (S5). Every open point is either a
+   typed registry (`JournalKindRegistry`, `ToolRegistry`, `FilterEvaluator.clauses`,
+   `EventRouter.emitters`, `RouteTable`) or one small interface
+   (`GrantPolicy`, `Desk`, `DerivedView`), and all wiring happens in `EdenHost`
+   — plain constructor arguments, no container.
+
+</script>
+<script type="module">
+import { marked } from 'https://cdn.jsdelivr.net/npm/marked/+esm';
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+const src = document.getElementById('src').textContent;
+const content = document.getElementById('content');
+content.innerHTML = marked.parse(src);
+
+mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'loose', maxTextSize: 200000, maxEdges: 2000 });
+
+let n = 0;
+for (const code of [...content.querySelectorAll('code.language-mermaid')]) {
+  const holder = document.createElement('div');
+  holder.className = 'diagram';
+  code.closest('pre').replaceWith(holder);
+  try {
+    const { svg } = await mermaid.render('diagram-' + (n++), code.textContent);
+    holder.innerHTML = svg;
+    const el = holder.querySelector('svg');
+    if (el) el.style.maxWidth = '100%';
+  } catch (err) {
+    const p = document.createElement('p');
+    p.className = 'error';
+    p.textContent = 'Mermaid error: ' + (err && err.message ? err.message : err) + '\n\n--- source ---\n' + code.textContent;
+    holder.replaceChildren(p);
+  }
+}
+</script>
+</body>
+</html>
