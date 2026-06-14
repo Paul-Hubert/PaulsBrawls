@@ -1,0 +1,72 @@
+{
+  // Eden config template. Copy to eden.json (gitignored) and edit.
+  // Unknown keys WARN loudly (R22); a handful of common aliases are adopted.
+  //
+  // ── PORT REGISTRY (R24) ─────────────────────────────────────────────
+  //   8770  Eden admin HTTP + WS              (this process — admin.port)
+  //   8767  Java trade settlement (shared)    (settlement.url — stateless per request)
+  //   25599 Minecraft dedicated dev server    (minecraft.port)
+  //   8765 / 8766  RESERVED by v1 (npm run unified / village) — never reuse while v1 runs.
+  // ────────────────────────────────────────────────────────────────────
+  "minecraft": { "host": "127.0.0.1", "port": 25599, "version": "1.21.1" },
+
+  "villagers": [
+    // coordinates are HINTS — self-healing at boot (home snaps to ground, chest re-discovered).
+    { "name": "Firmin", "role": "farmer", "home": [120, 64, -40], "chest": [122, 64, -40] }
+  ],
+
+  "god": {
+    "name": "Dieu",                 // avatar username — MUST differ from every villager and from v1's LLMBot
+    "gamemode": "creative",         // the avatar is the only divine-tier runner (op'd via the Java mod)
+    "authoring": "villager",        // | "god" — who writes drafts (per-task overridable)
+    "desks": {
+      "critic":       { "model": "strong" },
+      "curriculum":   { "model": "strong" },
+      "orchestrator": { "model": "fast" }
+    },
+    "budget": {                     // D-13: throughput-limited; caps are a safety valve, not the throttle.
+      "perDesk": {
+        "critic":       { "dailyTokens": null },   // null = uncapped (the maxConcurrent ceiling bounds it)
+        "curriculum":   { "dailyTokens": null },
+        "orchestrator": { "dailyTokens": null }
+      },
+      "degradeOnBreach": true       // critic->check+template, curriculum->repeat, orchestrator->urgent-only
+    },
+    "combineDesks": false,          // true = one prompt does all three (cheap mode)
+    "embodiedVerdicts": true        // avatar shows up to deliver critiques
+  },
+
+  "behavior": { "drives": false },  // optional rest/social drives that generate wake-ups
+
+  "llm": {
+    "providers": {
+      "strong": { "baseUrl": "http://127.0.0.1:1234/v1", "model": "strong-model", "inputTokenBudget": 48000 },
+      "fast":   { "baseUrl": "http://127.0.0.1:1234/v1", "model": "fast-model",   "inputTokenBudget": 16000 }
+    },
+    // inputTokenBudget = per-call INPUT ceiling (D-11): current density payload never trimmed,
+    //   history trimmed oldest-first. Lower it for small-context models.
+    "maxConcurrent": 3,
+    "perVillagerCooldownSeconds": 15
+  },
+
+  "skills": {
+    "runDefaultTimeoutMs": 120000,  // per-call wall-clock ceiling (caller may raise up to 2h)
+    "stallSeconds": 20,             // async no-pulse abort; uniform. pulse = a discrete progress EVENT (D-10)
+    "maxCallDepth": 8,
+    "maxSkillLines": 400,           // hard cap at write_skill so the density payload always fits (D-11)
+    "probationRuns": 3,             // clean re-judged runs before an admitted skill becomes composable (D-12)
+    "autoQuarantineAfter": 5        // consecutive-failure tripwire that files a critic ticket
+  },
+
+  "settlement": { "url": "http://127.0.0.1:8767/trade/execute" },
+
+  "admin": { "port": 8770 },
+
+  "journal": {
+    "vitalsIntervalSeconds": 10,    // per-bot snapshot cadence (1.1 ev/s @ 11 bots); pulses never journaled (D-07)
+    // WAL + synchronous=NORMAL on the shared loop; lag-monitor threshold (1000ms) is hardcoded, not a key.
+    // TODO(G1): "configurable 7-day retention window" for vitals / subscription.fired has no key yet —
+    //   owner call to add `journal.retentionDays` or keep 7d hardcoded. Treated as hardcoded-7d for now.
+    "debugPrompts": false           // true = write full LLM transcripts to .eden-data/llm/<id>.json
+  }
+}

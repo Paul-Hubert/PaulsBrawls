@@ -1,0 +1,466 @@
+# 12 — Architecture views: runtime, lifecycles, data, deployment
+
+The dynamic half of the architectural description. [11-class-model.md](11-class-model.md)
+shows the static structure (classes, packages, seams); this doc shows the system
+*moving*: who calls whom in what order, what states things pass through, where
+the data lives, and what runs where. Like doc 11, this is a companion view — the
+prose specs ([01](01-architecture.md)–[08](08-extension-recipes.md)) are
+normative and win on conflict (S8); §11 below maps every diagram back to its
+normative source.
+
+**Rendering without GitHub:** open [12-architecture-views.html](12-architecture-views.html)
+in a browser. Regenerate after edits with `node docs/render-docs.mjs`.
+
+## 1. How the views fit together
+
+| View | Question it answers | Where |
+|---|---|---|
+| Module topology + layout | what are the parts and files | [01 §Topology](01-architecture.md#topology), [01 §Modules](01-architecture.md#modules) |
+| Class model | what are the types and seams | [11-class-model.md](11-class-model.md) |
+| Deployment & processes | what runs where, which ports | §2 below |
+| Startup | how the system boots | §3 below |
+| Refinement loop | how a skill gets learned | §4 below |
+| Event routing | how a villager reacts | §5 below |
+| Skill execution | how code runs under supervision | §6 below |
+| Trade settlement | the one cross-process hop | §7 below |
+| Lifecycles | what states things pass through | §8 below |
+| Data architecture | what is stored, where, how rebuilt | §9 below |
+| LLM scheduling | who gets tokens, when | §10 below |
+
+## 2. Deployment & process view
+
+```mermaid
+flowchart LR
+    subgraph BOX["one machine — private server, no auth, localhost-only ports"]
+        subgraph EDEN["Eden host — Node 22, ONE process (D-01)"]
+            BP["bot pool<br/>10 villagers + Dieu (avatar)"]
+            ENG["skill engine + God service<br/>+ villager brains"]
+            JDB[("eden.db<br/>SQLite, WAL")]
+            FS[(".eden-data/<br/>skill .js · memory .json")]
+            ADM["admin server :8770<br/>REST + WS journal stream"]
+        end
+        subgraph MC["Minecraft dedicated server — Fabric 1.21.1 :25599"]
+            MOD["pauls-brawls Java mod<br/>Gibber coins · op-on-join"]
+            SETTLE["trade settlement listener :8767"]
+        end
+        subgraph V1["v1 village (coexists until parity, then decommissioned)"]
+            UNI["unified entrypoint :8765<br/>(bot LLMBot)"]
+            VADM["village admin :8766"]
+        end
+    end
+    LLMP["LLM providers — strong / fast tiers<br/>/v1/chat/completions (HTTP)"]
+    WEB["future website<br/>(views + controls, e.g. villager prompt)"]
+
+    BP -- "Minecraft protocol<br/>11 staggered logins (R13)" --> MC
+    ENG -- "POST /trade/execute" --> SETTLE
+    ENG --> JDB
+    ENG --> FS
+    ENG -- "HTTP" --> LLMP
+    MOD -. "ops Dieu on join (R14) —<br/>villagers are never op'd" .-> BP
+    WEB -. "REST + WS" .-> ADM
+    UNI -- "Minecraft protocol" --> MC
+```
+
+| Port | Owner | Purpose | Notes |
+|---|---|---|---|
+| 25599 | MC dedicated server | game protocol | config example value; server, mod, and bots all pinned to 1.21.1 (R11) |
+| 8767 | Java mod | atomic trade settlement | **shared** with v1 — stateless per request, serves either system (D-02) |
+| 8770 | Eden admin server | REST + WS journal stream | new port so v1 can run side-by-side |
+| 8765 / 8766 | v1 unified / v1 admin | legacy | coexistence during transition only |
+
+Identity constraints (R12): bot usernames must be unique across **all**
+processes — Eden's avatar is `Dieu`, never v1's `LLMBot`; villager names are
+their Minecraft usernames; a duplicate login gets the first session kicked.
+
+## 3. Startup sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Main as EdenHost (main.ts)
+    participant Cfg as EdenConfig
+    participant Db as eden.db
+    participant Lib as SkillLibrary
+    participant Pool as BotPool
+    participant Anc as AnchorService
+    participant Subs as SubscriptionStore
+    participant God as GodService
+    participant Adm as AdminServer
+    Main->>Cfg: load eden.json + validate (warn on unknown keys, adopt aliases — R22)
+    Main->>Db: open + migrate (no replay — journal is history, live state has its own tables)
+    Main->>Lib: load index + verify code file hashes
+    Lib-->>Lib: quarantine hash mismatches
+    Main->>Pool: spawnAll (staggered ~4 s apart, avatar LAST)
+    Pool->>Anc: heal anchors per villager (home snaps to standable ground, chest re-discovered)
+    Main->>Subs: install persisted subscriptions + role defaults for new villagers
+    Main->>God: start (load ledger + dossiers)
+    God-->>God: recover crashed rollouts (D-09): open task with currentRolloutId set → journal god.rollout-abandoned, clear pointer, re-enqueue
+    God-->>God: enqueue boot-survey curriculum tick
+    Main->>Adm: start :8770
+    Main->>Db: journal system.boot (config snapshot, secrets redacted)
+    Note over Main,Db: crash-only design (D-08/D-09) — pm2 respawn · state persists when it changes · kill -9 loses at most in-flight LLM calls and current actions (no journal buffer — D-07 writes are synchronous)
+```
+
+## 4. The refinement loop (the heart — M3)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Cur as CurriculumDesk
+    participant Orc as OrchestratorDesk
+    participant Inb as Villager Inbox
+    participant Brn as Brain
+    participant Lib as SkillLibrary
+    participant Eng as SkillEngine
+    participant Crt as CriticDesk
+    participant Jr as Journal
+    Cur->>Orc: Task {goal, successCriteria, context, maxRetries=4}
+    Orc->>Inb: Directive {to, goal, reason, taskRef}
+    Inb->>Brn: wake-up with context pack (trigger + snapshot + memories + capabilities)
+    Brn->>Lib: search_skills / read_skill — reuse an active skill if one fits
+    alt reuse
+        Brn->>Eng: run_skill(name, args)
+    else author
+        Brn->>Lib: write_skill (upsert) → draft vN
+        Lib-->>Brn: parse / instrumentation errors returned inline for immediate retry
+        Brn->>Eng: trial run (draft runnable ONLY inside this rollout — P2)
+    end
+    Eng->>Jr: skill.run (full RunReport + world before/after)
+    Eng->>Crt: CriticTicket (rollout completion — always)
+    Crt->>Crt: judge — full code + report + snapshots + dossier + last critique in chain
+    Crt->>Crt: check-veto (D-12) — a failed task check forces success=false regardless of verdict
+    alt verdict success (check not failed)
+        Crt->>Lib: admit → status active-probation (D-12: composable after probationRuns clean runs) + description-from-code pass
+        Crt->>Cur: ledger ✓ (task completed)
+        Crt->>Orc: followUp → next assignment
+    else failure, retries left
+        Crt->>Inb: critique (high-priority wake-up)
+        Inb->>Brn: revision turn — ONE message with full draft code + verbatim error + rendered world + critique
+        Note over Brn,Eng: density invariant (D-11) — current payload never trimmed; history oldest-first as R20 pairs; no coalescing/cooldown/suppression inside an open rollout
+        Brn->>Lib: write_skill → draft vN+1
+        Brn->>Eng: retry (attempt ≤ maxRetries)
+    else retries exhausted
+        Crt->>Cur: ledger ✗ (failed — the frontier learns · God may file an easier task)
+        Crt->>Lib: archive the draft
+    end
+    opt embodiedVerdicts
+        Crt->>Eng: run divine appear-near / gesture — verdict delivered in person, journaled like any skill run (P4)
+    end
+```
+
+## 5. Event routing — reflex vs deliberation
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant MF as mineflayer bot
+    participant Rt as EventRouter
+    participant Fl as FilterEvaluator
+    participant Eng as SkillEngine
+    participant Sch as LlmScheduler
+    participant CPB as ContextPackBuilder
+    participant Brn as Brain
+    participant Jr as Journal
+    MF->>Rt: raw signal (hurt, entitySpawn, chat, time, …)
+    Rt->>Rt: normalize → EdenEvent envelope (hysteresis for edge events lives in the emitter)
+    Rt->>Fl: match subscriptions (declarative AND-composed clauses, cooldownMs honored)
+    Fl-->>Rt: matching subscriptions
+    alt handler kind = skill (zero tokens — v1's reflex, rebuilt as data)
+        Rt->>Eng: skills.run(name, args with $event.* substituted)
+        Eng->>Jr: skill.run report — a failing handler files a normal critic tripwire, never silent
+    else handler kind = deliberate (LLM escalation)
+        Rt->>Sch: wake-up {villager, priority lane, hint}
+        Sch->>Sch: coalesce same-kind · per-villager cooldown · God preempts · per-minute rate cap
+        Sch->>CPB: assemble context pack (8 ordered sections, token ceiling each)
+        CPB-->>Brn: pack (identity, trigger, snapshot, activity, recent past, retrieved memories, capabilities, inbox)
+        Brn->>Brn: tool turns until done(summary, mood?)
+        Brn->>Jr: brain.wakeup (+ section sizes) · brain.tool-call · brain.done
+    end
+```
+
+## 6. Skill execution & supervision
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as caller (brain / subscription / God desk)
+    participant Eng as SkillEngine
+    participant Q as BotRunQueue
+    participant Sup as RunSupervisor
+    participant Bot as mineflayer bot
+    participant Jr as Journal
+    participant Crt as CriticDesk
+    C->>Eng: run(name, args, runner, timeoutMs?)
+    Eng->>Eng: tier gate — mortal never runs or calls divine (throws before any code)
+    Eng->>Eng: GrantPolicy.canRun (v0 AllGranted)
+    Eng->>Eng: validate args against params schema (readable boundary error)
+    Eng->>Eng: instrument once per version (acorn loop budget 1e6, reset on real await · scope shim neuters process.exit/kill/abort — D-08, not a sandbox)
+    Eng->>Q: enqueue — one skill tree per bot (D-05)
+    opt priority interrupt
+        Q->>Sup: abort the running tree (cause preempted — the critic knows it is benign)
+    end
+    Q->>Sup: start (wall clock ≤ timeoutMs, default 120 s, hard 2 h · stall ≤ 20 s without a pulse)
+    Sup->>Bot: execute skill(bot, args, ctx)
+    Bot-->>Sup: progress pulses — DISCRETE events (D-10): position, inventory, window, dig/place, pathfinder path_update/path_reset (R26), ctx.log, sleep
+    loop composition — ctx.skills.run, gates tier → probation (D-12) → grant, depth ≤ 8, cycle detection
+        Bot->>Eng: callee args validated · same budget, signal, and report for the whole tree
+    end
+    alt resolves
+        Sup-->>Eng: outcome ok + structured return value (validated in draft trials)
+    else stall / timeout / preemption
+        Sup->>Bot: hardened abort protocol (R4–R5 — collect targets, pvp stop, pathfinder stop THEN setGoal(null), close window, settle)
+        Sup-->>Eng: outcome error + aborted cause
+    end
+    Eng->>Jr: skill.run (full RunReport with callTree and snapshots)
+    Eng->>Crt: ticket when warranted (rollout trial always · active-skill tripwire at 5 consecutive failures)
+    Eng-->>C: value or error verbatim — crash escalation, never suppression
+```
+
+## 7. Trade settlement (the one cross-process hop)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as villager A (brain)
+    participant Cv as ConversationManager
+    participant B as villager B (brain)
+    participant Tr as TradeService
+    participant Sc as SettlementClient
+    participant Jl as Java listener :8767
+    participant MT as MC main thread
+    participant Jr as Journal
+    A->>Cv: start_conversation(B, topic)
+    Cv->>B: in-process turns (mirrored to game chat only with a player in earshot)
+    A->>Tr: typed offer {give, want} — coin resolves to paulsbrawls:coin
+    Tr->>B: offer delivered
+    B->>Tr: accept
+    Tr->>Sc: settle(tradeId)
+    Sc->>Jl: POST /trade/execute (swap spec)
+    Jl->>MT: server.submit — re-validate + swap inventories atomically
+    MT-->>Jl: ok / rejected
+    Jl-->>Sc: result
+    Tr->>Jr: trade.settled or trade.failed (refs tradeId, conversationId)
+    Note over Tr,Jl: the economy seam — a future skill sale is the same flow with one OfferSide variant carrying a grant (Eden-internal, the Java side still only swaps items and coins)
+```
+
+## 8. Lifecycles
+
+### SkillVersion status
+
+```mermaid
+stateDiagram-v2
+    [*] --> draft : write_skill (upsert — create = update; caps maxSkillLines — D-11)
+    draft --> draft : verdict failure (or check-veto — D-12) → critique → vN+1 supersedes
+    draft --> active_probation : verdict success AND check not failed (admit + description pass + provenance)
+    active_probation --> active : probationRuns clean re-judged runs (D-12)
+    active_probation --> quarantined : God review
+    active --> quarantined : God review — the 5-consecutive-failure tripwire only FILES the ticket
+    quarantined --> active_probation : self-healing — forced re-trial succeeds (D-12, R37)
+    draft --> archived : retries exhausted / God / admin
+    active --> archived : God / admin
+    quarantined --> archived : God / admin
+    archived --> [*]
+    note right of active_probation : active + active-probation are what normal retrieval and run_skill see (both proven — P2); active-probation is NOT composable by other skills until it graduates (D-12). Drafts run solely inside their own rollout's trials.
+```
+
+### Rollout
+
+```mermaid
+stateDiagram-v2
+    [*] --> open : task assigned (rolloutId minted)
+    open --> trialing : draft vN ready
+    trialing --> judging : RunReport → CriticTicket
+    judging --> admitted : verdict success
+    judging --> revising : verdict failure, attempt < maxRetries
+    revising --> trialing : draft vN+1 — one dense revision message (density invariant — D-11)
+    judging --> exhausted : attempt = maxRetries
+    admitted --> [*] : ledger ✓
+    exhausted --> [*] : ledger ✗ · draft archived · curriculum learns the frontier
+    open --> abandoned : kill -9 then boot recovery (D-09 — no resume)
+    trialing --> abandoned : kill -9 then boot recovery (D-09)
+    revising --> abandoned : kill -9 then boot recovery (D-09)
+    abandoned --> [*] : god.rollout-abandoned journaled · task re-enters assignment (fresh maxRetries)
+```
+
+### Directive
+
+```mermaid
+stateDiagram-v2
+    [*] --> issued : orchestrator emits (max 1 open non-standing per villager)
+    issued --> delivered : inbox (journaled inbox.delivered)
+    delivered --> acting : brain takes it up (interrupt preempts the current tree first)
+    delivered --> refused : villager pushes back via report_to_god — information, journaled, dossier-noted
+    issued --> superseded : conflicting directive auto-supersedes oldest-first (journaled)
+    issued --> expired : expiresAt
+    acting --> expired : expiresAt
+    acting --> closed : done / verdict closes the task
+    closed --> [*]
+    refused --> [*]
+    superseded --> [*]
+    expired --> [*]
+    note right of issued : standing directives skip closure — they live on in the dossier as standing orders
+```
+
+## 9. Data architecture
+
+D-03 fixes **what** lives in SQLite vs files; the column detail below is an
+illustrative starting schema for the implementing agent, not a frozen contract.
+
+```mermaid
+erDiagram
+    JOURNAL {
+        text id PK "ulid — sortable, unique"
+        integer at "epoch ms · index (at)"
+        text actor "index (actor, at)"
+        text kind "index (kind, at) · registry-validated"
+        text payload "JSON, schema per kind"
+        text refs "JSON causality column · expression indexes on runId, rolloutId, skill"
+    }
+    SKILL ||--|{ SKILL_VERSION : "append-only versions"
+    SKILL ||--o| SKILL_STATS : "derived stats"
+    SKILL {
+        text name PK "kebab-case"
+        text summary "one English line"
+        text description "LLM-derived from final code at admission"
+        text params_schema "JSON Schema"
+        text returns_schema "JSON Schema"
+        text tags ""
+        text tier "mortal or divine"
+        integer exemplar ""
+    }
+    SKILL_VERSION {
+        text name FK ""
+        integer version "monotonic, never reused"
+        text code_path "library/(name)/v(k).js — files never deleted"
+        text code_hash "verified at boot"
+        text status "draft, active-probation, active, quarantined, archived (D-12)"
+        integer probation_runs_left "nullable — 0 ⇒ graduate to active (D-12)"
+        text author "god, villager, or stock"
+        text provenance "rolloutId + verdictId of the admitting run"
+        integer created_at ""
+    }
+    SKILL_STATS {
+        text name PK "fold over skill.run events — rebuildable by replay"
+        integer runs ""
+        integer successes ""
+        integer failures ""
+        integer stalls ""
+        real avg_ms ""
+    }
+    TASK {
+        text id PK ""
+        text goal ""
+        text assignee "nullable — orchestrator picks"
+        text success_criteria "prose the critic judges against"
+        text check_item "optional inventory check — failed ⇒ one-directional admit veto (D-12)"
+        text context "QA-cache answer, attached forever"
+        integer max_retries "default 4"
+        text status "open, completed, failed"
+        text current_rollout_id "nullable — live rollout; cleared on boot abandon (D-09)"
+        text parent "decomposition tree"
+    }
+    TASK ||--o{ DIRECTIVE : "assignment"
+    DIRECTIVE {
+        text id PK ""
+        text to_villager ""
+        text goal ""
+        text reason "God explains itself"
+        text priority "background, normal, interrupt"
+        text task_ref ""
+        integer expires_at ""
+        integer standing ""
+        text status ""
+    }
+    SUBSCRIPTION {
+        text id PK ""
+        text villager ""
+        text on_event ""
+        text filter "declarative JSON clauses (P5)"
+        text handler "skill binding or deliberate hint"
+        integer cooldown_ms ""
+        text source "role-default, self, god, admin"
+        integer enabled ""
+    }
+    QA_CACHE {
+        text question PK "embedding-deduped"
+        text answer "answered once by the fast tier"
+    }
+```
+
+What stays **outside** SQLite, on purpose (human-editable or greppable):
+
+```
+.eden-data/
+  eden.db                    # everything above, one file, WAL mode + synchronous=NORMAL (D-07)
+  library/<skill>/v<k>.js    # skill code — plain files, diffable, never deleted
+  bots/<name>/memory.json    # episodic window + archive (ported v1 format)
+  llm/<llmCallId>.json       # full prompt/completion transcripts, ONLY when debugPrompts: true
+eden.json                    # config (copy of eden.example.json, gitignored)
+```
+
+Rules that make this trustworthy ([05](05-observability.md)):
+
+- The journal is **append-only**; live state lives in its own tables — no
+  event-sourcing replay at boot.
+- Every non-journal table that summarizes history (stats, competence,
+  relations, trade ledger, who-is-doing-what) is a **derived view**: one fold,
+  one writer (S2), rebuildable via `eden rebuild-stats`.
+- Retention: keep everything, except the two high-volume kinds (`vitals`,
+  `subscription.fired`) which get a 7-day rolling window with downsampled
+  aggregates kept forever.
+- Backpressure (D-07): writes are **synchronous** on the shared loop; safe because
+  **pulses are in-memory counters, never journaled** (R44) and RunReports stay small.
+  v1's event-loop lag monitor is the canary (`system.loop-lag` on a `max ≥ 1000 ms`
+  spike); the async write queue / writer isolation are the pre-decided escape hatches,
+  built only on its evidence.
+
+## 10. LLM scheduling & cost control
+
+```mermaid
+flowchart TD
+    subgraph SRC["wake-up sources"]
+        EVT["subscriptions<br/>(kind = deliberate)"]
+        INBX["inbox<br/>(directive / critique / tell)"]
+        DESK["God desks<br/>critic · curriculum · orchestrator"]
+        ROLL["open-rollout<br/>revision turns"]
+    end
+    GATE["lane queues<br/>player, combat, conversation, directive, job, idle"]
+    COAL["coalesce same-kind<br/>per villager"]
+    CD["per-villager cooldown"]
+    CAP["global concurrency cap (default 3)<br/>≈3000 calls/day ceiling — the real limiter (D-13)"]
+    FREE["zero-token path<br/>subscription → skill handlers · QA-cache hits"]
+    CALL["LlmClient → provider<br/>strong=novelty · fast=dispatch/reactive/QA (D-13 tier split)"]
+    BUD["BudgetTracker<br/>per-desk token caps default null — safety valve (D-13)"]
+    JR2["journal llm.call<br/>latency + tokens — never prompt bodies"]
+
+    EVT --> GATE
+    INBX --> GATE
+    DESK -- "God preempts villager lanes<br/>(no cooldown — God is the bottleneck, not the spam risk)" --> CAP
+    ROLL -- "rollout immunity — bypasses<br/>coalescing, cooldown, suppression" --> CAP
+    GATE --> COAL --> CD --> CAP --> CALL
+    FREE -- "kind = skill subscription — no LLM, the main cost lever (D-13)" --> RUNZ["skill.run<br/>(journaled · 0 tokens)"]
+    CALL --> BUD
+    BUD -- "breach → graceful degradation:<br/>templated critique · re-issued task type · urgent-only dispatch" --> CALL
+    CALL --> JR2
+```
+
+The only engine-side suppression that survives from v1 is a dumb per-minute
+rate cap per villager — repeated failure is **curriculum signal** (God changes
+the task or quarantines the skill), not something the scheduler swallows
+([04 §Scheduling](04-villager-runtime.md#scheduling)).
+
+## 11. Traceability — every view to its normative source
+
+| View (this doc) | Normative spec |
+|---|---|
+| §2 Deployment, ports, identity | [01 §Topology](01-architecture.md#topology), [01 §Config](01-architecture.md#configuration-sketch-edenjson), [07 R11–R14](07-hard-won-lessons.md) |
+| §3 Startup | [01 §Startup sequence](01-architecture.md#startup-sequence); **D-08** (pm2 crash-only), **D-09** (rollout recovery) |
+| §4 Refinement loop | [03 §Refinement loop](03-god.md#the-refinement-loop), [02 §Admission](02-skill-system.md#admission-pipeline); **D-11** (density), **D-12** (critic rails) |
+| §5 Event routing | [04 §Event system](04-villager-runtime.md#the-event-system), [04 §Context pack](04-villager-runtime.md#the-context-pack) |
+| §6 Skill execution | [02 §Validation & supervision](02-skill-system.md#validation--runtime-supervision), [02 §Composition](02-skill-system.md#composition), D-05; **D-08** (syscall shim), **D-10** (pulses), **D-12** (probation gate) |
+| §7 Trade settlement | [01 D-02](01-architecture.md#decision-d-02-the-java-mod-keeps-only-server-authority-duties), [06 §Economy](06-future-extensions.md#the-skill-economy) |
+| §8 SkillVersion lifecycle | [02 §Library](02-skill-system.md#the-library); **D-12** (active-probation, self-healing) |
+| §8 Rollout lifecycle | [03 §Refinement loop](03-god.md#the-refinement-loop); **D-09** (abandon on crash) |
+| §8 Directive lifecycle | [03 §Orchestrator desk](03-god.md#the-orchestrator-desk) |
+| §9 Data architecture | [01 D-03](01-architecture.md#decision-d-03-sqlite-as-the-spine), [05 §Journal](05-observability.md#the-journal), [05 §Derived state](05-observability.md#derived-state-not-duplicate-state); **D-07** (backpressure) |
+| §10 LLM scheduling | [03 §Cost control](03-god.md#cost-control), [04 §Scheduling](04-villager-runtime.md#scheduling); **D-13** (throughput-limited budget) |

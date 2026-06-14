@@ -100,3 +100,10 @@ nb-configuration.xml
 
 
 run/world/
+run/logs/
+run/usercache.json/
+
+##############################
+## Secrets — never track (holds a live LLM provider API key)
+##############################
+run/llm_config.properties

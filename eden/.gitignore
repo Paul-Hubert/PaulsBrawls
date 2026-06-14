@@ -1,0 +1,11 @@
+node_modules/
+.eden-data/
+.eden-eval-data/
+eden.json
+logs/
+*.log
+*.db
+dist/
+coverage/
+ecosystem.config.cjs
+.smoke/

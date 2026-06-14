@@ -38,7 +38,12 @@ lifecycles, data, deployment) are in [12-architecture-views.md](12-architecture-
 
 **M0 as-built:** the design here spans M0–M7. For the M0 spine that's actually
 implemented, see [15-m0-as-built.md](15-m0-as-built.md) — four diagrams (package/layer,
-class, boot, runtime) matching code as it exists under `eden/src/`.
+class, boot, runtime) matching code as it exists under `eden/src/`. Where M0 code diverges
+from this model, doc 15 is authoritative and the code wins: in §3 below `JournalKindRegistry`
+is a compile-time `as const` registry (`JOURNAL_KINDS` + `KIND_REGISTRY` + `describeKinds()`,
+no runtime `register()`), `EdenConfig.load()/validate()` are the free functions
+`loadConfig`/`parseConfig` (config is a pure data interface), and `Journal` also exposes
+`count()`/`close()`.
 
 ## 1. Package / layer overview (the dependency law)
 
@@ -312,6 +317,18 @@ so it is data, not a class hierarchy with virtual dispatch.
 
 ## 3. Layer 1 — substrate (journal, bots, config)
 
+> **Decision D-14 (M1) — the `Bot` seam is a narrowed interface in `types/` (layer 0).** M0
+> deliberately kept `Bot` out of `types/`; M1 needs one type that BOTH the real mineflayer bot
+> and the test `FakeBot` satisfy. Rather than depend on `mineflayer`'s sprawling typed-emitter
+> surface, [`types/bot.ts`](../eden/src/types/bot.ts) declares a **narrowed `Bot`** covering only
+> what `bots/hardening`, `bots/helpers`, and `bots/pool` actually touch (entity/inventory/`_client`,
+> the optional plugin objects, `chat`/`dig`/`blockAt`/`openContainer`/`loadPlugin`/`quit`). The real
+> `mineflayer.Bot` structurally satisfies it; `bots/pool.ts` casts the freshly-created bot through
+> `unknown` at the **one** `createBot` boundary, because the plugin objects (`pathfinder`/`pvp`/…)
+> attach POST-spawn so a direct assignment wouldn't typecheck anyway. `FakeBot` is pinned to the
+> seam by a compile-time `const _: Bot = new FakeBot()`. This keeps `bots/` layer-1 (imports nothing
+> above `types/`) and CI fakes-only.
+
 ```mermaid
 classDiagram
     class Journal {
@@ -334,10 +351,13 @@ classDiagram
     }
     class BotPool {
         «owns all 11 bot connections»
-        +spawnAll() «staggered ~2 s, avatar last (R13)»
+        +spawnAll() «staggered ~4 s (I1), avatar last (R13)»
+        +start() «world-stamp (R32) + spawnAll + vitals»
         +bot(name) Bot?
         +avatar() Bot?
-        +onRaw(name, signal, handler)
+        +roster() Member[] «tiers — op is avatar-only (R14)»
+        +startVitals() «per-bot snapshot (M1-5)»
+        -onDeath(name, packet) «world.death (R27)»
         -reconnect(name) «backoff»
     }
     class Hardening {
@@ -349,10 +369,11 @@ classDiagram
     }
     class BotHelpers {
         «plain functions (bot, …) — composed by exemplar skills»
-        +goToHops(bot, pos, range) «≤40-block legs»
+        +goToHops(bot, pos, range) «≤40-block legs (R7)»
+        +collectTrunk(bot, base) «column-to-ground, skip floating (R10)»
         +useChest(bot, pos, fn)
-        +deposit(bot, items)
-        +withdraw(bot, items)
+        +deposit(bot, pos, items)
+        +withdraw(bot, pos, items)
     }
     class Logger {
         «only module allowed console.*»

@@ -1,0 +1,41 @@
+{
+  // Role-default subscriptions (04 §Subscriptions) — seeded into each villager AT FIRST BOOT only.
+  // Policy as DATA (P5): each entry is a declarative "when X (filtered), do Y" reflex, no code. `Y` is
+  // either a free zero-token skill run ({ kind:'skill', name, args }) or a brain wake-up
+  // ({ kind:'deliberate', hint, priority? }). Filters are AND-composed declarative clauses
+  // (within/entityKind/nameMatches/timeOfDay/healthBelow/foodBelow/notWhileRunning). ArgTemplate
+  // "$event.*" paths in a skill handler's args resolve from the event at fire time.
+  //
+  // "everyone" seeds every villager regardless of role; a named role block adds to it. A role spec that
+  // duplicates an everyone spec (same event + handler kind) is skipped (no double-reflex).
+  // Edit freely — re-seeding only happens on a villager's FIRST boot (delete its
+  // .eden-data/subscriptions/<name>.json to re-adopt these).
+
+  "everyone": [
+    // Took damage → flee to safety (a free reflex). notWhileRunning suppresses it while already fleeing.
+    { "on": "hurt", "filter": { "notWhileRunning": ["flee-to-safety"] }, "handler": { "kind": "skill", "name": "flee-to-safety", "args": {} }, "cooldownMs": 3000 },
+    // Health crossed low (hysteresis-edged emitter) → think about what to do (eat, retreat, call for help).
+    { "on": "health-low", "handler": { "kind": "deliberate", "hint": "ta santé est basse — décide quoi faire (manger, fuir, demander de l'aide)", "priority": "interrupt" } },
+    // A player speaks within earshot → deliberate (they may want to trade or talk).
+    { "on": "player-chat", "filter": { "within": 8 }, "handler": { "kind": "deliberate", "hint": "un joueur te parle — réponds en français", "priority": "normal" }, "cooldownMs": 2000 },
+    // Something landed in your inbox (a directive/critique/tell from God) → deliberate.
+    { "on": "inbox", "handler": { "kind": "deliberate", "hint": "tu as reçu un message de Dieu — lis-le et agis", "priority": "normal" } },
+    // Night fell → go home (a free reflex) so villagers don't wander into the dark.
+    { "on": "night-falls", "handler": { "kind": "skill", "name": "go-home", "args": {} } }
+  ],
+
+  "guard": [
+    // A hostile entered perception → deliberate at high priority (decide: fight, warn, retreat).
+    { "on": "entity-spotted", "filter": { "entityKind": "hostile", "within": 16 }, "handler": { "kind": "deliberate", "hint": "un ennemi est repéré — décide d'attaquer, d'alerter ou de te replier", "priority": "interrupt" }, "cooldownMs": 5000 }
+  ],
+
+  "farmer": [
+    // A new day began → harvest the home field (a free reflex; the skill reads the farmer's home anchor).
+    { "on": "new-day", "handler": { "kind": "skill", "name": "harvest-field", "args": {} } }
+  ],
+
+  "miner": [
+    // A new day began → think about the day's mining plan.
+    { "on": "new-day", "handler": { "kind": "deliberate", "hint": "nouveau jour — planifie ta session de minage", "priority": "background" } }
+  ]
+}
