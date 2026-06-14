@@ -63,6 +63,9 @@ export interface EdenHost {
   readonly journal: Journal;
   /** The refinement-loop coordinator (M4-3) — present only when God is wired (a real run). */
   readonly coordinator?: RolloutCoordinator;
+  /** The God service — present only when God is wired. Exposed so a direct-boot driver (e.g. a smoke
+   *  harness) can inject a task via `god.addTask(...)` before handing it to the coordinator. */
+  readonly god?: GodService;
   stop(): Promise<void>;
 }
 
@@ -212,6 +215,7 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
     config,
     journal,
     coordinator: wiring?.coordinator,
+    god: wiring?.god,
     async stop() {
       pool?.stop();
       lag.stop();
