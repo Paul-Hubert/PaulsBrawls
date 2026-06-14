@@ -45,3 +45,11 @@ Setup:
 3. The bot joins, gets opped automatically (`ServerEntryPoint` watches for `BridgeConfig.botUsername` on join), and waits in a parking spot until God calls `Appear`. Toggle / clamp behaviour with `/llm bridge …`; kill-switch with `/godbody off`.
 
 The full architecture lives in [GOD_BOT_INTEGRATION_PLAN.md](GOD_BOT_INTEGRATION_PLAN.md). End-to-end verification checklist: [VERIFICATION.md](VERIFICATION.md).
+
+## AI Village (Eden)
+
+Ten LM-powered villagers + a God (critic / curriculum / orchestrator desks + an avatar) acting through one shared, God-judged library of typed, composable skills. The village brain is **Eden**, a from-scratch rewrite living in [eden/](eden/) (one Node process: `tsx eden/src/main.ts eden/eden.json`, admin on `8770`).
+
+The Java mod keeps only server-authority duties Eden depends on: the `:8767` trade-settlement listener, Gibber coins (the village currency), and op-on-join. Eden's avatar is **`Dieu`**.
+
+The earlier Node "village" brain (`minecraft-mcp-server/`, `npm run village`) is now **legacy** — see [minecraft-mcp-server/DEPRECATED.md](minecraft-mcp-server/DEPRECATED.md). Parity sign-off + cut-over plan: [docs/17-parity-signoff.md](docs/17-parity-signoff.md).

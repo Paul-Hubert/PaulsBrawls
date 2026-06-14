@@ -1,5 +1,16 @@
 # Village Simulator — Supervisor Protocol
 
+> [!WARNING]
+> **LEGACY — this protocol describes the v1 village brain (`npm run village`), which is
+> now deprecated.** The village brain is **Eden** (primary): entrypoint
+> `tsx eden/src/main.ts eden/eden.json`, admin HTTP/WS on **8770** (`GET /status`,
+> `/journal`, `/villagers`, `/skills`, `/tasks`; `POST /pause` `/resume`
+> `/villagers/<name>/prompt`). See [`../docs/17-parity-signoff.md`](../docs/17-parity-signoff.md)
+> and [`../eden/CLAUDE.md`](../eden/CLAUDE.md). v1 stays runnable until Eden passes the
+> smoke gates + a soak (docs/17 §5); the two must never share bot usernames (Eden's
+> avatar is **`Dieu`**, op'd on join). The endpoints/log paths below are v1-specific and
+> kept as legacy reference.
+
 The benchmark: **how much food does the village produce** over a long run, with
 an AI supervisor (Claude Code) watching the logs, steering the villagers like a
 god, fixing real bugs, and logging every problem + every skill the bots write.
@@ -9,7 +20,8 @@ god, fixing real bugs, and logging every problem + every skill the bots write.
 | Thing | Where |
 |---|---|
 | Minecraft dev server | port **25599** (java, mod's trade listener on 8767) |
-| Village process | `npm run village -- --host 127.0.0.1 --port 25599 --roster village3-farm.json --admin-port 8766` (cwd `minecraft-mcp-server/`) |
+| Village process (PRIMARY — Eden) | `tsx eden/src/main.ts eden/eden.json` (cwd repo root); admin on **8770**. The village brain going forward. |
+| Village process (LEGACY — v1) | `npm run village -- --host 127.0.0.1 --port 25599 --roster village3-farm.json --admin-port 8766` (cwd `minecraft-mcp-server/`) — deprecated; runnable until Eden parity (docs/17 §5) |
 | Roster | `minecraft-mcp-server/village3-farm.json` — Jacques (gatherer), Jean (farmer), Pierre (crafter); dataDir `.village3-farm-data` |
 | Village log | `minecraft-mcp-server/logs/village-<stamp>.log` (new file per restart) |
 | Skill audit | `minecraft-mcp-server/logs/skills-<stamp>.jsonl` — every created/updated/re-enabled/seeded-stock/removed/strike/disabled/rejected-* event, with full code |
