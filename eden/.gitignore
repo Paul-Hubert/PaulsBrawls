@@ -1,5 +1,6 @@
 node_modules/
 .eden-data/
+.eden-data*/
 .eden-eval-data/
 eden.json
 logs/
