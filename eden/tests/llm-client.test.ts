@@ -162,6 +162,32 @@ test('R21 (EPIPE/UND_ERR_SOCKET): other transient socket codes are also retried'
   assert.equal(calls, 2, 'a direct (non-wrapped) retriable code retries');
 });
 
+// ── env-based auth: remote (OpenAI) gets a bearer; a local endpoint never does ──
+test('auth: a REMOTE provider carries Authorization: Bearer; a LOCAL one does NOT; no key → no header', async () => {
+  const journal = new MemoryJournal();
+  const okBody = {
+    choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  };
+  const seen: Array<string | null> = [];
+  const capFetch: typeof fetch = (_url, init) => {
+    seen.push(new Headers(init?.headers).get('authorization'));
+    return Promise.resolve(new Response(JSON.stringify(okBody), { status: 200, headers: { 'content-type': 'application/json' } }));
+  };
+
+  // Remote (https) + key → bearer present.
+  await new LlmClient({ providers: providers('https://api.openai.com/v1'), journal, fetchImpl: capFetch, apiKey: 'sk-test-123' }).chat(ask());
+  assert.equal(seen[0], 'Bearer sk-test-123', 'a remote provider carries the bearer (OpenAI 401s without it)');
+
+  // Local (127.0.0.1) + key → NO header (never leak the key to a local endpoint).
+  await new LlmClient({ providers: providers('http://127.0.0.1:1234/v1'), journal, fetchImpl: capFetch, apiKey: 'sk-test-123' }).chat(ask());
+  assert.equal(seen[1], null, 'a localhost provider sends no Authorization header');
+
+  // Remote but no key → NO header (nothing to send).
+  await new LlmClient({ providers: providers('https://api.openai.com/v1'), journal, fetchImpl: capFetch, apiKey: '' }).chat(ask());
+  assert.equal(seen[2], null, 'no key configured → no Authorization header even for a remote provider');
+});
+
 test('R21: HTTP 500 is an error, not a silent retry-forever', async () => {
   const journal = new MemoryJournal();
   let calls = 0;

@@ -119,6 +119,14 @@ export interface LlmClientOptions {
   /** Injectable fetch + clock for deterministic tests (R42). */
   fetchImpl?: typeof fetch;
   now?: () => number;
+  /**
+   * Bearer token for REMOTE (non-local) providers — sent as `Authorization: Bearer <key>`
+   * ONLY when the provider baseUrl is non-local (OpenAI 401s without it; local LM Studio /
+   * Ollama need none, so we never leak a key to a local endpoint). Defaults to
+   * `process.env.OPENAI_API_KEY`. NEVER sourced from eden.json or the journal — the key lives
+   * only in the environment, and the debug transcript dumps the request BODY only (no headers).
+   */
+  apiKey?: string;
 }
 
 interface WireMessage {
@@ -158,6 +166,18 @@ function isRetriableReset(e: unknown): boolean {
   return false;
 }
 
+/** A localhost provider (LM Studio/Ollama) needs no auth; a remote one (OpenAI) gets a bearer.
+ *  Unparseable URLs are treated as remote — better to send a key than to silently 401. */
+function isLocalBaseUrl(baseUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname;
+  } catch {
+    return false;
+  }
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0';
+}
+
 /** The OpenAI-compatible chat client. Provider-agnostic; one method, `chat`. */
 export class LlmClient {
   private readonly providers: ProviderRegistry;
@@ -168,6 +188,7 @@ export class LlmClient {
   private readonly dataDir: string;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
+  private readonly apiKey: string | undefined;
 
   constructor(opts: LlmClientOptions) {
     this.providers = opts.providers;
@@ -178,6 +199,7 @@ export class LlmClient {
     this.dataDir = opts.dataDir ?? '.eden-data';
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.now = opts.now ?? Date.now;
+    this.apiKey = opts.apiKey ?? process.env.OPENAI_API_KEY;
   }
 
   /** One chat completion. Retries ONLY on connection-reset (R21); journals metrics, never bodies. */
@@ -219,11 +241,16 @@ export class LlmClient {
   ): Promise<LlmResult> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // Auth header for remote providers only (OpenAI). A local endpoint never receives the key.
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (this.apiKey && !isLocalBaseUrl(provider.baseUrl)) {
+      headers['authorization'] = `Bearer ${this.apiKey}`;
+    }
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: JSON.stringify(wireBody),
         signal: controller.signal,
       });
