@@ -43,17 +43,45 @@ export const LOOP_BUDGET_MESSAGE = 'loop budget';
  */
 export const DENIED_PROCESS_METHODS = Object.freeze(['exit', 'reallyExit', 'abort', 'kill'] as const);
 
-/** Result of {@link parse} — never throws; a syntax error returns inline for write_skill feedback. */
-export type ParseResult = { ok: true; program: acorn.Program } | { ok: false; error: string };
+/**
+ * Result of {@link parse} — never throws; a syntax error returns inline for write_skill feedback.
+ * `offset` is how many chars the program's node positions are shifted relative to the ORIGINAL
+ * `code` string (0 for a direct parse; >0 when we fell back to a wrapped-expression parse — see
+ * below). Callers that splice by AST offsets MUST subtract it before indexing into `code`.
+ */
+export type ParseResult =
+  | { ok: true; program: acorn.Program; offset: number }
+  | { ok: false; error: string };
 
-/** Parse skill source (ecmaVersion 2022). Full power — no banned identifiers, no import scan (P3). */
+/** The single-char prefix the expression-wrapper fallback adds — every node shifts right by this. */
+const WRAP_PREFIX = '(';
+const WRAP_OFFSET = WRAP_PREFIX.length;
+
+/**
+ * Parse skill source (ecmaVersion 2022). Full power — no banned identifiers, no import scan (P3).
+ *
+ * A NAMED top-level `async function name(){}` parses directly as a FunctionDeclaration. An anonymous
+ * `async function(){}` or an arrow `async (a)=>{}` is NOT a legal statement in script mode (acorn
+ * rejects `Unexpected token`), but both are valid function EXPRESSIONS. So on a script-mode failure we
+ * retry by wrapping the code as `(code)` — a parenthesized expression. The wrapper shifts every node
+ * offset right by {@link WRAP_OFFSET}; the returned `offset` records that so {@link instrument} can
+ * subtract it before splicing into the original (unwrapped) string. Robustness: the author shouldn't
+ * be punished for a valid-but-unnamed function (P1).
+ */
 export function parse(code: string): ParseResult {
   try {
     const program = acorn.parse(code, { ecmaVersion: 2022, sourceType: 'script' });
-    return { ok: true, program };
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: `parse error: ${message}` };
+    return { ok: true, program, offset: 0 };
+  } catch (directError) {
+    // Fallback: maybe it's a bare function/arrow EXPRESSION, illegal only as a statement. Wrap + retry.
+    try {
+      const program = acorn.parse(`${WRAP_PREFIX}${code})`, { ecmaVersion: 2022, sourceType: 'script' });
+      return { ok: true, program, offset: WRAP_OFFSET };
+    } catch {
+      // The wrapped parse failed too — report the ORIGINAL (direct) error, the one the author can act on.
+      const message = directError instanceof Error ? directError.message : String(directError);
+      return { ok: false, error: `parse error: ${message}` };
+    }
   }
 }
 
@@ -88,15 +116,19 @@ export function instrument(code: string): InstrumentResult {
   const parsed = parse(code);
   if (!parsed.ok) return parsed;
 
+  // Node offsets are relative to whatever parse() actually parsed; if it fell back to the wrapped
+  // form (`(code)`), every position is shifted right by `parsed.offset`. We splice into the ORIGINAL
+  // `code`, so subtract the wrapper prefix before recording each edit position (P1 — anonymous/arrow).
+  const off = parsed.offset;
   const edits: Edit[] = [];
   const injectLoopBody = (node: unknown): void => {
     const body = (node as LoopNode).body;
     if (body.type === 'BlockStatement') {
-      edits.push({ pos: body.start + 1, text: '__loopBudget();', order: 0 });
+      edits.push({ pos: body.start - off + 1, text: '__loopBudget();', order: 0 });
     } else {
       // Bare-statement body (`while(x) stmt;`) — brace it so the budget call is legal.
-      edits.push({ pos: body.start, text: '{__loopBudget();', order: 0 });
-      edits.push({ pos: body.end, text: '}', order: 1 });
+      edits.push({ pos: body.start - off, text: '{__loopBudget();', order: 0 });
+      edits.push({ pos: body.end - off, text: '}', order: 1 });
     }
   };
   walkSimple(parsed.program, {
@@ -107,8 +139,8 @@ export function instrument(code: string): InstrumentResult {
     ForOfStatement: injectLoopBody,
     AwaitExpression: (node: unknown): void => {
       const arg = (node as AwaitNode).argument;
-      edits.push({ pos: arg.start, text: '__aw(', order: 0 });
-      edits.push({ pos: arg.end, text: ')', order: 1 });
+      edits.push({ pos: arg.start - off, text: '__aw(', order: 0 });
+      edits.push({ pos: arg.end - off, text: ')', order: 1 });
     },
   });
 

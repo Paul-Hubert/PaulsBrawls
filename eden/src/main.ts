@@ -16,6 +16,7 @@ import { AdminServer } from './admin/server';
 import { SkillLibrary, AllGranted } from './skills/library';
 import { SkillEngine } from './skills/engine';
 import { SkillRetriever } from './skills/retrieve';
+import { STOCK_SKILLS, seedStockSkills } from './skills/exemplars/index';
 import { LlmClient, ProviderRegistry } from './llm/client';
 import { LlmScheduler, BudgetTracker } from './llm/scheduler';
 import { EmbeddingsService, localBackend, providerBackend } from './llm/embeddings';
@@ -267,6 +268,11 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   });
 
   const library = new SkillLibrary({ dataDir, journal, probationRuns: config.skills.probationRuns });
+  // P2a: seed the stock skills (Voyager primitives — go-to/mine-block/collect-blocks/…) into the library
+  // at `active` (curated review IS their probation, D-12). Without this the library boots EMPTY:
+  // search_skills returns nothing and a villager has nothing to compose. seedStock appends a version, so
+  // a re-seed on a populated library is harmless (the active version is just re-asserted).
+  seedStockSkills(library);
   const grants = new AllGranted();
   const engine = new SkillEngine({
     library, journal, grants,
@@ -312,7 +318,30 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   void new SettlementClient({ url: config.settlement.url, journal });
 
   const roster = new Map<string, RosterEntry>(config.villagers.map((v) => [v.name, { name: v.name, role: v.role, persona: `Tu es ${v.name}, ${v.role} du village. Tu parles français.` }]));
-  const coordinator = new RolloutCoordinator({ god, curriculum, orchestrator, critic, brain, library, inboxes, roster });
+  // P2b: the always-in-prompt teaching set — the exemplar mortal stock skills' working NAMED-function
+  // code, so the model sees the dialect every authoring turn. Villagers are mortal: NEVER leak divine
+  // skill code (tier-filtered out of every villager prompt, 02 §Tiers).
+  const exemplars = STOCK_SKILLS.filter((s) => s.exemplar && s.tier !== 'divine').map((s) => ({ name: s.name, code: s.code }));
+  // P2c: a best-effort live snapshot from the bot seam (D-14). The narrowed Bot exposes position/health/
+  // food/inventory SYNCHRONOUSLY; biome/time/nearbyBlocks/etc. are NOT on the seam, so they stay
+  // DEFAULT-ish. This only feeds the §SITUATION prompt section — the run-time `bot.findBlock`/`blockAt`
+  // inside a skill sees the REAL world regardless, so an approximate situation block can't break a run.
+  const pool = args.pool;
+  const snapshotFor = pool
+    ? (villager: string): Snapshot => {
+        const bot = pool.bot(villager);
+        if (!bot) return DEFAULT_SNAPSHOT;
+        const pos = bot.entity?.position;
+        return {
+          ...DEFAULT_SNAPSHOT,
+          position: pos ? [Math.round(pos.x), Math.round(pos.y), Math.round(pos.z)] : DEFAULT_SNAPSHOT.position,
+          health: bot.health ?? DEFAULT_SNAPSHOT.health,
+          hunger: bot.food ?? DEFAULT_SNAPSHOT.hunger,
+          inventory: bot.inventory.items().map((i) => ({ name: i.name, count: i.count })),
+        };
+      }
+    : undefined;
+  const coordinator = new RolloutCoordinator({ god, curriculum, orchestrator, critic, brain, library, inboxes, roster, exemplars, ...(snapshotFor ? { snapshotFor } : {}) });
   return { god, curriculum, orchestrator, coordinator, library, scheduler, inboxes, memories };
 }
 
@@ -351,6 +380,10 @@ export interface RolloutCoordinatorOptions {
   library: SkillLibrary;
   inboxes: Map<string, Inbox>;
   roster: Map<string, RosterEntry>;
+  /** P2b: the exemplar stock skills' `{name, code}` — working NAMED-function code injected into every
+   *  authoring deliberation so the model learns the dialect by example. Mortal exemplars only (no divine
+   *  code in a villager prompt). Defaults to none (M3/M4 tests that don't need exemplars). */
+  exemplars?: Array<{ name: string; code: string }>;
   /** Resolve the villager's current world snapshot (the BotPool provides it live; tests stub it). */
   snapshotFor?: (villager: string) => Snapshot;
   now?: () => number;
@@ -435,7 +468,7 @@ export class RolloutCoordinator {
         snapshot, runningSkill: null,
         directive: { goal: directiveMsg?.goal ?? task.goal, reason: directiveMsg?.reason ?? task.successCriteria },
         openTask: { goal: task.goal },
-        recentEvents: [], memories: [], retrievedSkills: [], exemplars: [], includeExemplarCode: true,
+        recentEvents: [], memories: [], retrievedSkills: [], exemplars: this.o.exemplars ?? [], includeExemplarCode: true,
         toolNames, inbox,
         density: draftVersion !== undefined && draftName !== undefined
           ? { draft: { name: draftName, version: draftVersion, code: draftCode! }, runReport: lastRunReport, critique: lastCritique }

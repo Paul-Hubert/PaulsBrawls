@@ -4,7 +4,9 @@ import tseslint from 'typescript-eslint';
 export default tseslint.config(
   {
     // node_modules, runtime data, and CommonJS tooling config (linted as ESM otherwise).
-    ignores: ['node_modules/**', '.eden-data/**', 'dist/**', 'coverage/**', '**/*.cjs'],
+    // .smoke/** is gitignored, throwaway smoke-harness scripts (Node CLI: console/process/Buffer by
+    // design) — not shipped code, never part of the lint gate.
+    ignores: ['node_modules/**', '.eden-data/**', 'dist/**', 'coverage/**', '**/*.cjs', '.smoke/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

@@ -96,7 +96,7 @@ export class ToolRegistry {
           summary: { type: 'string', description: 'une ligne décrivant ce que fait le skill' },
           params: { ...SCHEMA_OBJECT, description: 'JSON Schema des arguments' },
           returns: { ...SCHEMA_OBJECT, description: 'JSON Schema de la valeur de retour' },
-          code: { type: 'string', description: 'async function(bot, args, ctx) { … } — seuls bot/args/ctx sont en portée' },
+          code: { type: 'string', description: 'async function nom(bot, args, ctx) { … } — nomme la fonction; seuls bot/args/ctx sont en portée' },
         },
         required: ['name', 'summary', 'params', 'returns', 'code'],
       }),
