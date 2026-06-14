@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 
 import { loadConfig, type EdenConfig } from './config';
 import { logger } from './logger';
-import { Journal } from './journal/journal';
+import { Journal, type JournalAppender } from './journal/journal';
 import { createLagMonitor, type LagMonitor } from './journal/lag-monitor';
 import { BotPool } from './bots/pool';
 import { AdminServer } from './admin/server';
@@ -55,6 +55,12 @@ export interface EdenHostOptions {
    * directly with fakes, so the M0 spine stays a no-op there).
    */
   enableGod?: boolean;
+  /**
+   * Blocker Z: install process-level `uncaughtException`/`unhandledRejection` guards that JOURNAL and
+   * SURVIVE instead of letting the host die. Default FALSE — a real boot sets it true; CI/tests must
+   * NEVER install it (a global handler would swallow test-runner failures). See {@link installProcessGuards}.
+   */
+  installProcessGuards?: boolean;
 }
 
 /** The handle to a running host: the bound admin port, the loaded config, the journal, and `stop`. */
@@ -93,6 +99,13 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
   // The event-loop lag monitor is the backpressure canary (D-07).
   const lag: LagMonitor = createLagMonitor(journal);
   lag.start();
+
+  // Blocker Z: a rogue skill can throw ASYNCHRONOUSLY from mineflayer's physics timer (e.g. a bad
+  // pathfinder goal → `stateGoal.isValid is not a function`), which escapes the per-run try/catch and
+  // would otherwise crash the whole host. Install last-resort process guards that journal + survive.
+  // Opt-in (a real boot sets it) so CI/tests — which call start() — never install a global handler.
+  let removeProcessGuards: (() => void) | undefined;
+  if (opts.installProcessGuards) removeProcessGuards = installProcessGuards(journal);
 
   // Derived views (views/, LAYER 1) — fold the journal LIVE off its subscribe stream (P4/S2: derived
   // state, never primary). The admin + website read these; `eden rebuild-stats` rebuilds them by replay
@@ -218,6 +231,7 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
     coordinator: wiring?.coordinator,
     god: wiring?.god,
     async stop() {
+      removeProcessGuards?.();
       pool?.stop();
       lag.stop();
       await admin.stop();
@@ -529,13 +543,42 @@ function redactSecrets(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Blocker Z: last-resort process guards. An async throw from mineflayer's physics tick (a rogue skill
+ * handing pathfinder a bad goal, etc.) escapes every per-run try/catch and lands on the PROCESS. Left
+ * unhandled, Node prints the trace and EXITS — one bad skill kills the whole village. These handlers
+ * journal a `system.error` (S10: name the subject + the message) and DO NOT call process.exit, so the
+ * host survives. Install ONLY on a real boot (the direct-run entrypoint / `installProcessGuards:true`):
+ * a global handler installed under `npm test` would swallow the test runner's own failures. Returns a
+ * detacher so `stop()` removes exactly these listeners (no cross-test leakage).
+ */
+export function installProcessGuards(journal: JournalAppender): () => void {
+  const onUncaught = (err: unknown): void => {
+    const e = err instanceof Error ? err : new Error(String(err));
+    logger.error('engine', `host: uncaughtException survived — ${e.message}`);
+    journal.append('engine', 'system.error', { message: `host: uncaughtException survived — ${e.message}`, ...(e.stack ? { stack: e.stack } : {}) });
+  };
+  const onRejection = (reason: unknown): void => {
+    const e = reason instanceof Error ? reason : new Error(String(reason));
+    logger.error('engine', `host: unhandledRejection survived — ${e.message}`);
+    journal.append('engine', 'system.error', { message: `host: unhandledRejection survived — ${e.message}`, ...(e.stack ? { stack: e.stack } : {}) });
+  };
+  process.on('uncaughtException', onUncaught);
+  process.on('unhandledRejection', onRejection);
+  return (): void => {
+    process.removeListener('uncaughtException', onUncaught);
+    process.removeListener('unhandledRejection', onRejection);
+  };
+}
+
 // Run directly: `tsx src/main.ts [path/to/eden.json]`.
 const invokedDirectly =
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {
   const configPath = process.argv[2] ?? 'eden.json';
-  // A real boot connects the bots; CI/tests call start() directly with spawnBots default false.
-  start(configPath, { spawnBots: true }).catch((err: unknown) => {
+  // A real boot connects the bots AND installs the host crash guards (Blocker Z); CI/tests call
+  // start() directly with both defaults false, so no global process handler leaks into the runner.
+  start(configPath, { spawnBots: true, installProcessGuards: true }).catch((err: unknown) => {
     logger.error('engine', `boot FAILED: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
     process.exitCode = 1;
   });

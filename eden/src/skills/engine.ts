@@ -11,6 +11,8 @@
 //   • FailureTripwire (autoQuarantineAfter) files one critic ticket on a failure streak (R36 valve).
 
 import { monotonicFactory } from 'ulid';
+import { Vec3 } from 'vec3';
+import pathfinderPkg from 'mineflayer-pathfinder';
 
 import type {
   AbortCause,
@@ -35,6 +37,16 @@ import {
 
 const ulid = monotonicFactory();
 const HARD_CEILING_MS = 2 * 60 * 60 * 1000; // v1's routine cap — the ultimate wall-clock ceiling.
+
+// Blocker Z: real mineflayer rejects plain {x,y,z} bags — `bot.blockAt` calls `.floored()` on its
+// arg, and `mineflayer-pathfinder` calls `.isValid()` on its goal (the latter throws ASYNCHRONOUSLY
+// from the physics tick, escaping every try/catch and crashing the host). The skill scope is only
+// (bot, args, ctx) and the D-08 require-shim returns undefined, so a skill cannot `require('vec3')`.
+// We therefore inject the REAL constructors into ctx. Both expose `.x/.y/.z`, so the FakeBot seam
+// (which keys positions/goals on `.x/.y/.z`) keeps passing untouched. `goals` is destructured the
+// same flagless-CJS way bots/helpers.ts does (R15). Direct npm imports in skills/ are legal: the
+// dependency law (depcruise) only forbids UPWARD local imports, not external deps.
+const { goals } = pathfinderPkg;
 
 // ── Pre-execution errors (the brain catches these as tool-result strings; never a RunReport) ──
 /** The named skill has no runnable version (P2: drafts run only inside their own rollout trial). */
@@ -255,6 +267,8 @@ export class SkillEngine {
       signal: ctrl.signal,
       runner,
       depth,
+      Vec3,
+      goals,
     });
 
     const composerRun = async (calleeName: string, calleeArgs: object, depth: number): Promise<unknown> => {
@@ -343,6 +357,21 @@ export interface SkillContext {
   signal: AbortSignal;
   runner: RunnerRef;
   depth: number;
+  /**
+   * Blocker Z: the REAL `vec3` Vec3 constructor. A skill builds positions with `new ctx.Vec3(x,y,z)`
+   * for `bot.blockAt`/`bot.placeBlock`/`bot.creative.flyTo` — real mineflayer calls `.floored()` on a
+   * plain `{x,y,z}` and throws. Typed loosely (skills are runtime strings; this type is for the engine).
+   */
+  Vec3: new (x: number, y: number, z: number) => { x: number; y: number; z: number };
+  /**
+   * Blocker Z: mineflayer-pathfinder's `goals` module. A skill targets `bot.pathfinder.goto` with
+   * `new ctx.goals.GoalNear(x,y,z,range)` — a plain `{x,y,z,range}` makes pathfinder throw
+   * `stateGoal.isValid is not a function` ASYNCHRONOUSLY from the physics tick (host-crashing).
+   */
+  goals: {
+    GoalNear: new (x: number, y: number, z: number, range: number) => unknown;
+    GoalBlock?: new (x: number, y: number, z: number) => unknown;
+  };
 }
 
 /** D-05: one skill tree per bot. Concurrent runs queue; an `interrupt` preempts the running tree. */

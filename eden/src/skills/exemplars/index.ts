@@ -51,10 +51,10 @@ const GO_TO: StockSkill = {
     const remaining = Math.hypot(dx, dy, dz);
     if (remaining <= MAX_HOP) break;
     const t = MAX_HOP / remaining;
-    await bot.pathfinder.goto({ x: p.x + dx * t, y: p.y + dy * t, z: p.z + dz * t, range: 2 });
+    await bot.pathfinder.goto(new ctx.goals.GoalNear(p.x + dx * t, p.y + dy * t, p.z + dz * t, 2));
     ctx.log('hop toward ' + x + ',' + y + ',' + z);
   }
-  await bot.pathfinder.goto({ x, y, z, range });
+  await bot.pathfinder.goto(new ctx.goals.GoalNear(x, y, z, range));
   return { arrived: true };
 }`,
 };
@@ -68,7 +68,7 @@ const MINE_BLOCK: StockSkill = {
   exemplar: true,
   tags: ['mining'],
   code: `async function mineBlock(bot, { x, y, z }, ctx) {
-  const block = bot.blockAt({ x, y, z });
+  const block = bot.blockAt(new ctx.Vec3(x, y, z));
   if (!block) throw new Error('no block at ' + x + ',' + y + ',' + z + ' (absent or chunk unloaded)');
   await bot.dig(block);
   return { mined: block.name };
@@ -89,7 +89,7 @@ const COLLECT_BLOCKS: StockSkill = {
   const isLog = (n) => /(_log|_wood|_stem|_hyphae)$/.test(n);
   let collected = 0;
   for (let dy = 0; dy < maxHeight; dy++) {
-    const block = bot.blockAt({ x, y: y + dy, z });
+    const block = bot.blockAt(new ctx.Vec3(x, y + dy, z));
     if (!block || !isLog(block.name)) break;
     try { await bot.dig(block); collected++; }
     catch (e) { ctx.log('skip undiggable log: ' + e.message); }
@@ -145,7 +145,7 @@ const USE_CHEST: StockSkill = {
   // Composes go-to; pauses the autonomous mutators around the window work (R3).
   code: `async function useChest(bot, { x, y, z, deposit = [], withdraw = [] }, ctx) {
   await ctx.skills.run('go-to', { x, y, z, range: 3 });
-  const block = bot.blockAt({ x, y, z });
+  const block = bot.blockAt(new ctx.Vec3(x, y, z));
   if (!block) throw new Error('no chest at ' + x + ',' + y + ',' + z + ' (gone or chunk unloaded)');
   bot.autoEat.disableAuto();
   if (bot.armorManager && bot.armorManager.pause) bot.armorManager.pause();
@@ -224,9 +224,9 @@ const PLACE_ITEM: StockSkill = {
   tags: ['building'],
   code: `async function placeItem(bot, { item, x, y, z, faceX = 0, faceY = 1, faceZ = 0 }, ctx) {
   await bot.equip(bot.registry.itemsByName[item].id, 'hand');
-  const ref = bot.blockAt({ x, y, z });
+  const ref = bot.blockAt(new ctx.Vec3(x, y, z));
   if (!ref) throw new Error('no reference block at ' + x + ',' + y + ',' + z);
-  await bot.placeBlock(ref, { x: faceX, y: faceY, z: faceZ });
+  await bot.placeBlock(ref, new ctx.Vec3(faceX, faceY, faceZ));
   return { placed: true };
 }`,
 };
@@ -286,7 +286,7 @@ const DIVINE: StockSkill[] = [
   divine('gesture', 'jouer un geste corporel (swing/jump/sneak/nod)', obj({ type: S }, ['type']), obj({ ok: { type: 'boolean' } }), ['body'],
     `async function gesture(bot, { type }, ctx) { if (type === 'swing') bot.swingArm(); else if (type === 'jump') { bot.setControlState('jump', true); await new Promise((r) => setTimeout(r, 200)); bot.setControlState('jump', false); } return { ok: true }; }`),
   divine('fly-to', 'voler (mode créatif) vers une position', obj({ x: N, y: N, z: N }, ['x', 'y', 'z']), obj({ arrived: { type: 'boolean' } }), ['movement'],
-    `async function flyTo(bot, { x, y, z }, ctx) { await bot.creative.flyTo({ x, y, z }); return { arrived: true }; }`),
+    `async function flyTo(bot, { x, y, z }, ctx) { await bot.creative.flyTo(new ctx.Vec3(x, y, z)); return { arrived: true }; }`),
   divine('summon-creature', 'invoquer une créature', obj({ entity: S, x: N, y: N, z: N, count: N }, ['entity', 'x', 'y', 'z']), obj({ summoned: N }), ['spawn'],
     `async function summonCreature(bot, { entity, x, y, z, count = 1 }, ctx) { for (let i = 0; i < count; i++) bot.chat('/summon ' + entity + ' ' + x + ' ' + y + ' ' + z); return { summoned: count }; }`),
   divine('smite', 'frapper une cible de la foudre', obj({ x: N, y: N, z: N }, ['x', 'y', 'z']), obj({ ok: { type: 'boolean' } }), ['punish'],
