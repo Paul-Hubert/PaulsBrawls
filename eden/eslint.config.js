@@ -4,9 +4,12 @@ import tseslint from 'typescript-eslint';
 export default tseslint.config(
   {
     // node_modules, runtime data, and CommonJS tooling config (linted as ESM otherwise).
+    // `**/.eden-data*/**` covers the live journal dir AND the preserved run snapshots (.eden-data.run1,
+    // live-tests/.runs/<x>/.eden-data, …) — all hold generated skill `.js` the lint gate must not judge,
+    // mirroring the gitignore's `.eden-data*/`. live-tests/.runs/** also holds per-run evidence + configs.
     // .smoke/** is gitignored, throwaway smoke-harness scripts (Node CLI: console/process/Buffer by
     // design) — not shipped code, never part of the lint gate.
-    ignores: ['node_modules/**', '.eden-data/**', 'dist/**', 'coverage/**', '**/*.cjs', '.smoke/**'],
+    ignores: ['node_modules/**', '**/.eden-data*/**', 'live-tests/.runs/**', 'dist/**', 'coverage/**', '**/*.cjs', '.smoke/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

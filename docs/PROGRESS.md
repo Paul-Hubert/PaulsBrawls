@@ -3,6 +3,63 @@
 One dated section per session: what was done, decisions taken, what's next,
 surprises. Newest first.
 
+## 2026-06-14 — Live villager test suite (real server + real LLM)
+
+- Done: built [`eden/live-tests/`](../eden/live-tests/) — a reusable, parameterized live-scenario harness
+  (the tracked successor to the throwaway `.smoke/` run) + the first three scenarios. `runScenario()`:
+  read `run/server.properties` (R28) → assemble config (no secret; key env-only) → apply an RCON arena →
+  boot a REAL host (`spawnBots`+`enableGod`+`installProcessGuards`) → wait for assignees to connect →
+  `prepare` (tp/clear/give/summon) → `god.addTask` + `coordinator.assignAndRun` (concurrent for cooperative
+  scenarios) → assert on journal + world → preserve evidence. New `npm run live-test [name]`. Modules:
+  typed multi-packet-safe `rcon.ts`, `arenas.ts` (`litBox`/`combatArena`), `checks.ts` (inventory via
+  non-destructive `clear … 0`, mob presence via `execute if entity`, the draft→run→ticket→verdict→admit
+  chain, deaths/errors), `config.ts`, `catalogue.ts`.
+- Scenarios: **farm-wheat** (crop-break + pickup — baseline, should reach a clean `admit`),
+  **craft-wooden-tools** (`bot.craft` + crafting-table windows, R1–R3 — the likely next gap),
+  **cooperative-mob-defense** (`bot.pvp` + armor + multi-villager; cooperation dispatched as one task per
+  guard run concurrently — decision documented). All authoring-demanding (French `write_skill` phrasing) so
+  the full chain fires; objective `check` is the hard pass.
+- Docs: [docs/19-live-test-suite.md](19-live-test-suite.md) (suite reference: architecture + assertion
+  vocabulary + findings log W/C/D1/D2/E), [docs/20-live-test-process.md](20-live-test-process.md) (the
+  run→diagnose→fix→re-run process + diagnostic playbook: reading the journal, RCON ground truth,
+  symptom→cause patterns, the worked example), [`eden/live-tests/README.md`](../eden/live-tests/README.md)
+  (prereqs/run/evidence), indexed 18/19/20 in docs/README.md.
+- Decisions/notes: live scenarios are EXCLUDED from `npm run check` (server + paid key, non-deterministic),
+  mirroring `eden/eval/`. The harness is typed + lint-clean and `tsc`-included; a CI test
+  ([`tests/live-tests-catalogue.test.ts`](../eden/tests/live-tests-catalogue.test.ts)) pins the catalogue
+  STRUCTURE (names/assignees/idempotent arenas/valid rosters) with no Minecraft. Broadened the ESLint ignore
+  to `**/.eden-data*/**` + `live-tests/.runs/**` (matching the gitignore's `.eden-data*/`) so preserved run
+  snapshots' generated skill `.js` don't fail the lint gate. `npm run check` GREEN — **383 → 396** (+13:
+  7 catalogue tests; existing 389 unchanged).
+- First live run + **gap W (CRITICAL), found and FIXED**: the suite booted against the live dev server and
+  immediately surfaced a serious hole. farm-wheat authored `harvest_wheat`, ran it, **collected 9 wheat**
+  (real `bot.dig`/Vec3 works), critic revised — then on revision 5 the villager wrote a `while(true){ await
+  noop(); }` loop. The `await` of an immediately-resolved promise **resets the loop budget every iteration**
+  (`__aw`) AND starves the macrotask queue, so the loop budget, the 3 engine supervisors (StallDetector /
+  wallTimer / sampler) and the harness `setTimeout` deadline — all macrotasks — were ALL defeated. The host
+  wedged 23 min; bots kicked `Timed out`. A villager can freeze the whole village. Fix (2 layers, `npm run
+  check` green @ **396 → 399**): (1) engine — a macrotask-starvation canary (`setInterval` heartbeat +
+  synchronous `checkProgress` guard injected into `createLoopBudget`) that throws `EngineAbort('stalled')`
+  from inside the loop when `now()−lastTick > macrotaskStallMs` (8 s; below the 30 s keep-alive kick, above
+  any legit sync burst; heartbeat scaled to the window so legit macrotask-yielding loops never false-trip);
+  (2) harness — process isolation (each scenario in a killable child, parent SIGKILLs a wedge from its own
+  healthy event loop). Filed in [docs/19](19-live-test-suite.md) findings log (W).
+- Re-runs + more fixes: run-2 (W fixed) → **farm-wheat PASS with `skill.admit`** (first clean end-to-end
+  convergence the project has captured), and surfaced gap **C** (stock `craft-item` passed the item NAME to
+  `bot.recipesFor` which needs a numeric id + the crafting-table block → crafting wholly broken — the craft
+  analog of Z) plus D1 (defense `difficulty hard` → zombie reinforcement swarm killed the guards) and D2
+  (peaceful fall death). Fixed all three (C in stock-skills, D1 `difficulty easy`, D2 shorter litBox);
+  run-3 → **2/3 PASS** (farm + defense; defense now 0 deaths, both guards fight). craft still FAIL but for a
+  NEW deeper reason (gap **E**, OPEN): stock `collect-blocks` (`bot.dig`) doesn't reliably pick up the drop
+  (lands out of the ~1-block auto-collect range), so there are no logs to craft from — plus LLM
+  non-convergence (skills return `{status:'échec'}` with `ok=true`). All filed in [docs/19](19-live-test-suite.md).
+- Next: gap E (collect-blocks walk-onto-drop pickup) + craft tuning (more oak, higher maxRetries) is the
+  next fix to chase craft → green. `npm run check` green @ 399 throughout.
+- Surprises: (1) `ctx.log` pulses the stall detector, so a logging wedge masks any pulse-based guard — the
+  canary had to measure the macrotask queue itself, not progress. (2) leftover smoke run-dirs
+  (`.eden-data.run1/2/3`) were already breaking `eslint .` (the old `.eden-data/**` ignore didn't cover the
+  `.run*` variants) — fixed alongside.
+
 ## 2026-06-14 — Test-validity + coverage audit — completed
 
 - Goal: make the M0–M7 test suite **trustworthy**, not bigger — every test must actually exercise the real

@@ -37,6 +37,14 @@ import {
 
 const ulid = monotonicFactory();
 const HARD_CEILING_MS = 2 * 60 * 60 * 1000; // v1's routine cap — the ultimate wall-clock ceiling.
+/** Gap W — the macrotask-starvation canary. A `setInterval` is a MACROTASK; a loop that only awaits
+ *  immediately-resolved promises starves the macrotask queue, so this interval FREEZES while `now()`
+ *  keeps advancing. The synchronous loop-budget guard reads `now() - lastTick`; once it exceeds the
+ *  stall window the run aborts from INSIDE the loop (the only path a timer-starved supervisor can't take).
+ *  The window is well below Minecraft's ~30 s keep-alive timeout (so the bot survives) and well above any
+ *  legitimate per-iteration synchronous burst (so a real skill is never false-aborted). */
+const MACROTASK_HEARTBEAT_MS = 100;
+const DEFAULT_MACROTASK_STALL_MS = 8_000;
 
 // Blocker Z: real mineflayer rejects plain {x,y,z} bags — `bot.blockAt` calls `.floored()` on its
 // arg, and `mineflayer-pathfinder` calls `.isValid()` on its goal (the latter throws ASYNCHRONOUSLY
@@ -117,6 +125,9 @@ export interface SkillEngineOptions {
   /** Called when a skill's consecutive-failure streak trips the tripwire (M3 files a critic ticket). */
   onTripwire?: (skill: string, report: RunReport) => void;
   now?: () => number;
+  /** Gap W: ms of macrotask starvation before a run is aborted from inside its loop. Default 8 s; tests
+   *  lower it to assert the canary deterministically. Production never sets it. */
+  macrotaskStallMs?: number;
 }
 
 /** The executor. One per host; owns a per-bot run queue and the compile cache. */
@@ -130,6 +141,7 @@ export class SkillEngine {
   private readonly maxCallDepth: number;
   private readonly onTripwire?: (skill: string, report: RunReport) => void;
   private readonly now: () => number;
+  private readonly macrotaskStallMs: number;
   private readonly tripwire: FailureTripwire;
   private readonly queues = new Map<string, BotRunQueue>();
   private readonly factories = new Map<string, SkillFactory>();
@@ -144,6 +156,7 @@ export class SkillEngine {
     this.maxCallDepth = opts.maxCallDepth;
     this.onTripwire = opts.onTripwire;
     this.now = opts.now ?? Date.now;
+    this.macrotaskStallMs = opts.macrotaskStallMs ?? DEFAULT_MACROTASK_STALL_MS;
     this.tripwire = new FailureTripwire(opts.autoQuarantineAfter);
   }
 
@@ -199,7 +212,6 @@ export class SkillEngine {
     const rolloutId = opts.rolloutId;
     const startedAt = this.now();
     const worldBefore = captureSnapshot(bot);
-    const budget = createLoopBudget();
     const callTree: CallFrame[] = [];
     const chain: string[] = [];
     let pulses = 0;
@@ -228,6 +240,25 @@ export class SkillEngine {
     const wallMs = Math.min(Math.max(opts.timeoutMs ?? this.runDefaultTimeoutMs, 1), HARD_CEILING_MS);
     const wallTimer = setTimeout(() => triggerAbort('timeout'), wallMs);
     unref(wallTimer);
+
+    // Gap W: the macrotask-starvation canary + the synchronous loop-budget guard that reads it. `lastTick`
+    // is refreshed by a MACROTASK interval; a loop that only awaits immediately-resolved promises starves
+    // that interval (it never runs) while `this.now()` advances — so the guard, which runs synchronously
+    // inside every loop body, sees the gap grow and aborts the run as a stall. `ctx.log`/sleep pulses can't
+    // mask it (this measures the macrotask queue itself, not progress pulses), and `wallTimer`/StallDetector
+    // remain the bounds for loops that DO yield to macrotasks.
+    let lastTick = this.now();
+    // The heartbeat must fire several times INSIDE the stall window or a legit (macrotask-yielding) loop
+    // would trip before the first refresh — so cap it at a quarter of the window (≤ MACROTASK_HEARTBEAT_MS).
+    const heartbeatMs = Math.max(10, Math.min(MACROTASK_HEARTBEAT_MS, Math.floor(this.macrotaskStallMs / 4)));
+    const heartbeat = setInterval(() => { lastTick = this.now(); }, heartbeatMs);
+    unref(heartbeat);
+    const budget = createLoopBudget(undefined, () => {
+      if (this.now() - lastTick > this.macrotaskStallMs) {
+        triggerAbort('stalled');
+        throw new EngineAbort('stalled');
+      }
+    });
 
     // R25: when the op'd avatar (divine runner) runs a MORTAL skill — a demo or a trial of
     // villager-authored code — intercept its chat and drop `/`-commands for the run's duration
@@ -316,6 +347,7 @@ export class SkillEngine {
       }
     } finally {
       clearTimeout(wallTimer);
+      clearInterval(heartbeat);
       detector.disarm();
       cleanupBuiltins();
       removeInterceptor?.();

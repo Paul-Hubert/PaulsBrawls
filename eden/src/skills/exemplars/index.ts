@@ -94,6 +94,13 @@ const COLLECT_BLOCKS: StockSkill = {
     try { await bot.dig(block); collected++; }
     catch (e) { ctx.log('skip undiggable log: ' + e.message); }
   }
+  // Gap E: bot.dig leaves the drops on the ground and mineflayer auto-collects only within ~1 block, but
+  // the bot digs from up to its reach — so the logs land out of pickup range. Walk onto the trunk base
+  // (the drops fall there) to gather them; best-effort so a NoPath never fails the harvest.
+  if (collected > 0 && bot.pathfinder && bot.pathfinder.goto && ctx.goals) {
+    await bot.pathfinder.goto(new ctx.goals.GoalNear(x, y, z, 1)).catch((e) => ctx.log('pickup walk skipped: ' + e.message));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
   return { collected };
 }`,
 };
@@ -109,14 +116,24 @@ const CRAFT_ITEM: StockSkill = {
   // R1: close any stray window (clickWindow routes to bot.currentWindow regardless of intent).
   // R3: pause auto-eat AND armor-manager (both corrupt a multi-click sequence).
   // R2: trust packet quiescence (set_slot/window_items), NOT the resolved promise.
+  // Gap C: mineflayer's recipesFor wants the NUMERIC item id (NOT the name), and 3×3 recipes also need
+  // the crafting-table BLOCK in reach — passing the name returns nothing ("no recipe for X"). Locate the
+  // table, walk to it if needed, and pass both the id and the table.
   code: `async function craftItem(bot, { item, count = 1 }, ctx) {
   if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
   bot.autoEat.disableAuto();
   if (bot.armorManager && bot.armorManager.pause) bot.armorManager.pause();
   try {
-    const recipe = bot.recipesFor(item)[0];
-    if (!recipe) throw new Error('no recipe for ' + item);
-    await bot.craft(recipe, count);
+    const entry = bot.registry.itemsByName[item];
+    const id = entry && entry.id;
+    if (id === undefined || id === null) throw new Error('objet inconnu: ' + item);
+    let table = bot.findBlock ? bot.findBlock({ matching: (b) => b.name === 'crafting_table', maxDistance: 24 }) : null;
+    if (table && bot.entity.position.distanceTo(table.position) > 3) {
+      await ctx.skills.run('go-to', { x: table.position.x, y: table.position.y, z: table.position.z, range: 2 });
+    }
+    const recipe = bot.recipesFor(id, null, 1, table || null)[0];
+    if (!recipe) throw new Error('pas de recette pour ' + item + (table ? '' : ' (aucun établi à portée pour une recette 3×3)'));
+    await bot.craft(recipe, count, table || undefined);
     await new Promise((resolve) => {
       let timer;
       const onPacket = () => { clearTimeout(timer); arm(); };

@@ -25,7 +25,7 @@ interface Harness {
   tripwired: string[];
 }
 
-function harness(opts: { stallSeconds?: number; bot?: FakeBot } = {}): Harness {
+function harness(opts: { stallSeconds?: number; bot?: FakeBot; macrotaskStallMs?: number } = {}): Harness {
   const dir = mkdtempSync(join(tmpdir(), 'eden-engine-'));
   const journal = new MemoryJournal();
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
@@ -41,6 +41,7 @@ function harness(opts: { stallSeconds?: number; bot?: FakeBot } = {}): Harness {
     maxCallDepth: 8,
     autoQuarantineAfter: 5,
     onTripwire: (skill) => tripwired.push(skill),
+    ...(opts.macrotaskStallMs !== undefined ? { macrotaskStallMs: opts.macrotaskStallMs } : {}),
   });
   return { engine, library, journal, bot, tripwired };
 }
@@ -102,6 +103,32 @@ test('D-10(i): a synchronous while(true) ends as a loop-budget error, NOT a stal
   assert.equal(report.outcome.ok, false);
   assert.match(report.outcome.ok ? '' : report.outcome.error, /loop budget/);
   assert.equal(report.aborted, undefined, 'the loop budget is not an external abort');
+});
+
+// ── Gap W: macrotask-starvation canary (live-test finding 2026-06-14) ─────────
+test('gap W: a loop that only awaits an immediately-resolved promise aborts as a stall', async () => {
+  const h = harness({ macrotaskStallMs: 50 });
+  // `await Promise.resolve()` each iteration RESETS the loop budget (a microtask yield), so the budget
+  // counter can NEVER trip — yet it never drains the macrotask queue, so wallTimer + StallDetector (both
+  // timers) are starved. Only the synchronous canary guard can stop it. Without the fix this never returns
+  // (the host wedges and the bots are kicked — the exact farm-wheat wedge the live suite surfaced).
+  seed(h.library, { name: 'wedge', code: 'async function wedge(bot, a, c) { while (true) { await Promise.resolve(); } }' });
+  const report = await h.engine.run('wedge', {}, MORTAL);
+  assert.equal(report.outcome.ok, false);
+  assert.equal(report.aborted, 'stalled', 'the macrotask-starvation canary aborts the run as a stall');
+});
+
+test('gap W: a loop that awaits a REAL macrotask (setTimeout) is NOT false-aborted by the canary', async () => {
+  // The canary must only fire on MICROTASK starvation. A loop awaiting a real timer drains the macrotask
+  // queue (the heartbeat keeps refreshing), so the canary never trips — the run ends on its own terms.
+  const h = harness({ macrotaskStallMs: 50 });
+  seed(h.library, {
+    name: 'paced',
+    code: 'async function paced(bot, a, c) { for (let i = 0; i < 5; i++) { await new Promise((r) => setTimeout(r, 20)); } return { done: true }; }',
+  });
+  const report = await h.engine.run('paced', {}, MORTAL);
+  assert.equal(report.outcome.ok, true, 'a macrotask-yielding loop is never starvation-aborted');
+  assert.equal(report.aborted, undefined);
 });
 
 test('D-10(ii): pathfinder path_update pulses keep a long, stationary goTo alive (R26)', async () => {

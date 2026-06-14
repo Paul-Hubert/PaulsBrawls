@@ -6,6 +6,7 @@ import {
   instrument,
   compile,
   makeShim,
+  createLoopBudget,
   SkillForbiddenError,
   SkillStalledError,
   DENIED_PROCESS_METHODS,
@@ -102,6 +103,22 @@ test('the loop budget resets on every real await — an all-sleep spin never tri
     run('async function f(bot, a, c) { while (true) { await sleep(0); } }', {}, { sleep, loopBudget: 5 }),
     (e: unknown) => (e as Error).message === 'stop',
   );
+});
+
+test('gap W: the loop budget runs the engine-injected synchronous progress guard on every tick', () => {
+  // The seam the engine uses to defeat macrotask starvation (gap W): `checkProgress` runs inside
+  // `__loopBudget` each tick and may throw to abort. The reset-on-await above can zero `count` forever,
+  // so this injected guard is the ONLY thing that can stop an await-of-a-microtask loop.
+  let ticks = 0;
+  const budget = createLoopBudget(1_000_000, () => {
+    if (++ticks >= 3) throw new SkillStalledError('macrotask starvation');
+  });
+  budget.__loopBudget();
+  budget.__loopBudget();
+  assert.equal(ticks, 2, 'the guard ran on every tick');
+  assert.throws(() => budget.__loopBudget(), (e: unknown) => e instanceof SkillStalledError, 'a throwing guard aborts the loop');
+  // An await still resets the iteration counter — the guard, not the counter, is what stops a microtask spin.
+  assert.equal(budget.__aw(7), 7, '__aw passes the awaited value through');
 });
 
 test('a clean skill returns its structured value through the shim', async () => {

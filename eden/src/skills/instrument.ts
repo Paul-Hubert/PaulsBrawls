@@ -228,14 +228,21 @@ export interface LoopBudget {
   __aw: <T>(p: T) => T;
 }
 
-/** Create a loop budget — `__loopBudget` ticks (throws past `max`), `__aw` resets it on every await. */
-export function createLoopBudget(max: number = DEFAULT_LOOP_BUDGET): LoopBudget {
+/** Create a loop budget — `__loopBudget` ticks (throws past `max`), `__aw` resets it on every await.
+ *  `checkProgress` is an OPTIONAL engine-injected SYNCHRONOUS guard run on every loop tick (gap W). The
+ *  count-reset-on-await assumption breaks when a loop `await`s an immediately-resolved promise: it resets
+ *  `count` every iteration (a microtask yield) yet NEVER drains the macrotask queue, so every timer-based
+ *  supervisor (wall-clock timeout, stall detector) is starved and can't fire. `checkProgress` runs inside
+ *  the loop body — the only unstarvable path — so the engine can abort a macrotask-starving loop. */
+export function createLoopBudget(max: number = DEFAULT_LOOP_BUDGET, checkProgress?: () => void): LoopBudget {
   let count = 0;
   return {
     __loopBudget: (): void => {
       if (++count > max) throw new SkillStalledError(LOOP_BUDGET_MESSAGE);
+      checkProgress?.();
     },
-    // A real await is a yield, not a sync spin — reset the budget when one is reached.
+    // A real await is a yield, not a sync spin — reset the budget when one is reached. (A microtask-only
+    // await still resets here, which is why `checkProgress` above is the load-bearing guard for gap W.)
     __aw: <T>(p: T): T => {
       count = 0;
       return p;

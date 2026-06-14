@@ -38,6 +38,9 @@ interaction has a typed interface, and every non-obvious choice has a decision r
 | [15-m0-as-built.md](15-m0-as-built.md) | M0 spine **as built** — package/layer, class, boot, and runtime-path diagrams of the code that exists today |
 | [16-m0-reference.md](16-m0-reference.md) | M0 **reference** — module-by-module prose guide to the shipped spine: public surface, invariants, error modes, recipes, the test that pins each behavior |
 | [17-parity-signoff.md](17-parity-signoff.md) | M7 **parity sign-off + v1 decommission checklist** — what "Eden reaches parity" means, the identity/port coexistence law (R12/R24), world-stamp (R32), the smoke procedure, and the cut-over steps |
+| [18-real-villager-tests-prompt.md](18-real-villager-tests-prompt.md) | Agent **kickoff prompt** for the live (real-server + real-LLM) villager test suite |
+| [19-live-test-suite.md](19-live-test-suite.md) | The **live test suite** reference — harness architecture, assertion vocabulary, the three scenarios (farm/craft/defense), the real-mineflayer surface each exercises, and the findings log |
+| [20-live-test-process.md](20-live-test-process.md) | The **live-testing process** — the run→diagnose→fix→re-run loop, the diagnostic playbook (reading the journal, RCON ground truth, symptom→cause patterns), and the worked example that drove five fixes (W/C/D1/D2/E) |
 
 Docs 11–12 render on GitHub, or locally without it: open the matching `.html`
 (same folder), regenerated via `node docs/render-docs.mjs`.

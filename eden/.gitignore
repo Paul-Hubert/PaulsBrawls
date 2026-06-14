@@ -10,3 +10,4 @@ dist/
 coverage/
 ecosystem.config.cjs
 .smoke/
+live-tests/.runs/
