@@ -28,7 +28,7 @@ test('the assembled M0 spine boots, serves /status + /journal, and journals syst
   });
 
   const status = (await (await fetch(`http://127.0.0.1:${host.adminPort}/status`)).json()) as any;
-  assert.equal(status.bots, 0);
+  assert.equal(status.botsConnected, 0); // dashboard mission-control shape
   assert.equal(typeof status.uptimeMs, 'number');
 
   const boot = (await (

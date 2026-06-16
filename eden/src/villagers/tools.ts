@@ -60,10 +60,14 @@ export interface ToolRegistryOptions {
   /** M5: the reactivity store backing subscribe/unsubscribe/list_subscriptions. Optional so M3/M4 tests
    *  that don't wire reactivity keep the tools as honest "(reactivity not wired)" stubs. */
   subscriptions?: SubscriptionStore;
-  /** M6: the villager's memory backing remember/recall. Optional so M3/M4 tests keep honest stubs.
-   *  Note: this is the SAME VillagerMemory main.ts injects into social/ via the MemoryWriter seam, so a
-   *  conversation's leave-headline and a `remember` tool call land in one store (one writer, S2). */
-  memory?: VillagerMemory;
+  /** M6: resolve the ACTING villager's memory backing remember/recall. The registry is SHARED across all
+   *  villagers (deliberation state lives in `ctx`, not the registry), so memory MUST be resolved per
+   *  `ctx.villager` — a single instance would hand one villager's memory to every other. Returns undefined
+   *  for an unknown actor (e.g. the avatar) → the tools degrade to an honest "(mémoire non câblée)" stub.
+   *  Optional so M3/M4 tests keep honest stubs. The resolved VillagerMemory is the SAME instance main.ts
+   *  injects into social/ via the MemoryWriter seam, so a conversation's leave-headline and a `remember`
+   *  tool call land in one store (one writer, S2). */
+  memoryFor?: (villager: string) => VillagerMemory | undefined;
 }
 
 const SCHEMA_OBJECT = { type: 'object' } as const;
@@ -96,7 +100,7 @@ export class ToolRegistry {
           summary: { type: 'string', description: 'une ligne décrivant ce que fait le skill' },
           params: { ...SCHEMA_OBJECT, description: 'JSON Schema des arguments' },
           returns: { ...SCHEMA_OBJECT, description: 'JSON Schema de la valeur de retour' },
-          code: { type: 'string', description: 'async function nom(bot, args, ctx) { … } — nomme la fonction; seuls bot/args/ctx sont en portée' },
+          code: { type: 'string', description: 'async function nom(bot, args, ctx) { … } — nomme la fonction; seuls bot/args/ctx sont en portée. VÉRIFIE l’effet dans le monde avant de renvoyer { ok: true } (relis l’état, attribue tout gain d’items à CETTE exécution); sinon renvoie { ok: false, error: "<cause>" }.' },
         },
         required: ['name', 'summary', 'params', 'returns', 'code'],
       }),
@@ -171,7 +175,7 @@ export class ToolRegistry {
         case 'remember':
           return this.remember(a, ctx);
         case 'recall':
-          return await this.recall(a);
+          return await this.recall(a, ctx);
         case 'subscribe':
           return this.subscribe(a, ctx);
         case 'unsubscribe':
@@ -265,19 +269,18 @@ export class ToolRegistry {
 
   // ── M6 memory: remember / recall (04 §Memory) ─────────────────────────────────────────────────────
   private remember(a: Record<string, unknown>, ctx: ToolContext): ToolOutcome {
-    const mem = this.opts.memory;
+    const mem = this.opts.memoryFor?.(ctx.villager);
     if (!mem) return { content: '(mémoire non câblée — souvenir ignoré)', ok: false };
     const text = String(a['text'] ?? '').trim();
     if (!text) return { content: 'Erreur: remember requiert un "text".', ok: false };
     const tags = Array.isArray(a['tags']) ? (a['tags'] as unknown[]).filter((t): t is string => typeof t === 'string') : undefined;
     // A villager-authored memory is a `thought` (its own reflection), not an observed event.
     mem.remember({ kind: 'thought', text, ...(tags && tags.length > 0 ? { tags } : {}) });
-    void ctx;
     return { content: 'Souvenir noté.' };
   }
 
-  private async recall(a: Record<string, unknown>): Promise<ToolOutcome> {
-    const mem = this.opts.memory;
+  private async recall(a: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome> {
+    const mem = this.opts.memoryFor?.(ctx.villager);
     if (!mem) return { content: '(mémoire non câblée — aucun souvenir)' };
     const query = String(a['query'] ?? '').trim();
     if (!query) return { content: 'Erreur: recall requiert un "query".', ok: false };

@@ -17,14 +17,17 @@ const HARVEST = /harvest|mine|wheat|crop|collect|recolt|bl[eé]|moisson/i;
 export const farmWheat: Scenario = {
   name: 'farm-wheat',
   description: 'A farmer authors + runs a skill that breaks mature wheat until it holds 3 wheat.',
-  roster: [{ name: BOT, role: 'farmer', home: [0, 199, 0], chest: [5, 199, 0] }],
+  roster: [{ name: BOT, role: 'farmer' }],
   arena: [
     ...litBox(),
     // A 3×3 farmland bed on the floor with mature wheat on top — 9 ready crops (≥ maxRetries harvests).
     'fill 1 198 1 3 198 3 minecraft:farmland',
     'fill 1 199 1 3 199 3 minecraft:wheat[age=7]',
   ],
-  prepare: () => [`tp ${BOT} 0 199 0`, `clear ${BOT}`],
+  // `force-gamemode=false` (server.properties) means the bot keeps its PERSISTED gamemode — pin survival
+  // explicitly so a villager that ever logged in creative still drops blocks when it mines (no drops in
+  // creative → wheat never reaches 3 → spurious FAIL). The defense scenario pins survival for the same reason.
+  prepare: () => [`gamemode survival ${BOT}`, `tp ${BOT} 0 199 0`, `clear ${BOT}`],
   tasks: [
     {
       id: ulid(),

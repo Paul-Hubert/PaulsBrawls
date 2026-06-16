@@ -52,6 +52,9 @@ export function buildEvalRoster(count: number): EvalRoster {
   // scenario points the client at the scripted mock LLM's ephemeral port instead.
   const config: EdenConfig = {
     minecraft: { host: '127.0.0.1', port: 25565, version: '1.21.1' }, // PaulsBrawlsVanilla (R28) — smoke only
+    scenario: undefined,
+    provider: undefined,
+    apiKeyEnv: undefined,
     villagers,
     god: {
       name: godName,

@@ -92,6 +92,10 @@ export class Journal implements IJournal {
       clauses.push('actor = ?');
       params.push(q.actor);
     }
+    if (q.id !== undefined) {
+      clauses.push('id = ?');
+      params.push(q.id);
+    }
     if (q.since !== undefined) {
       clauses.push('at >= ?');
       params.push(q.since);
@@ -106,12 +110,17 @@ export class Journal implements IJournal {
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const hasLimit = typeof q.limit === 'number' && q.limit > 0;
-    // With a limit, return the most recent N (still chronological); without, full history ascending.
-    const order = hasLimit ? 'ORDER BY at DESC, id DESC' : 'ORDER BY at ASC, id ASC';
+    const wantDesc = q.order === 'desc';
+    // A limit must select the most-recent N (the tail of the timeline), which needs a DESC scan + LIMIT.
+    // Without a limit we scan directly in the requested order. After the scan the rows are newest-first
+    // iff `scanDesc`; we then flip to the caller's requested order (default asc / chronological).
+    const scanDesc = hasLimit || wantDesc;
+    const order = scanDesc ? 'ORDER BY at DESC, id DESC' : 'ORDER BY at ASC, id ASC';
     const limit = hasLimit ? ` LIMIT ${Math.floor(q.limit as number)}` : '';
     const rows = this.db.prepare(`SELECT * FROM journal ${where} ${order}${limit}`).all(...params) as Row[];
     const events = rows.map(rowToEvent);
-    return hasLimit ? events.reverse() : events;
+    if (wantDesc) return scanDesc ? events : events.reverse();
+    return scanDesc ? events.reverse() : events;
   }
 
   subscribe(listener: JournalListener): Unsubscribe {

@@ -36,9 +36,17 @@ export interface JournalEvent {
 export interface JournalQuery {
   kinds?: string[];
   actor?: string;
+  /** Match the single event with this exact ulid (the command bar's id-resolution path). */
+  id?: string;
   /** Match any event whose refs contain this exact value (any ref field). */
   ref?: string;
   since?: number;
   until?: number;
   limit?: number;
+  /**
+   * Result ordering. Default `asc` (chronological). `desc` returns newest-first — what the dashboard's
+   * live feeds request. With a `limit`, BOTH orders select the most-recent N (the limit window is the
+   * tail of the timeline); only the order they are returned in differs.
+   */
+  order?: 'asc' | 'desc';
 }

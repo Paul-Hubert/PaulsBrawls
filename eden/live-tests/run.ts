@@ -1,11 +1,19 @@
-// Live-scenario CLI + parent SUPERVISOR: `npm run live-test [name]`. Each scenario runs in its OWN child
-// process ([run-one.ts]); the parent enforces a hard wall-clock kill from THIS (healthy) event loop, so a
-// wedge in the code-under-test can never hang the suite — the parent SIGKILLs the child and records a
-// timeout FAIL, then moves on. With no name it runs the full suite in the suggested order (farm-wheat ->
-// craft-wooden-tools -> cooperative-mob-defense). Exit code = number of FAILED scenarios (0 = all pass).
+// Live-scenario CLI + parent SUPERVISOR: `npm run live-test [name] [-- --provider <name>]`.
+// Each scenario runs in its OWN child process ([run-one.ts]); the parent enforces a hard wall-clock
+// kill from THIS (healthy) event loop, so a wedge in the code-under-test can never hang the suite —
+// the parent SIGKILLs the child and records a timeout FAIL, then moves on. With no name it runs the
+// full suite in the suggested order (farm-wheat -> craft-wooden-tools -> cooperative-mob-defense).
+// Exit code = number of FAILED scenarios (0 = all pass).
 //
-// REQUIRES a running dev server (port + RCON from run/server.properties) and process.env.OPENAI_API_KEY.
+// REQUIRES a running dev server (port + RCON from run/server.properties), live-tests/providers.json,
+// and the API key for the chosen provider in api-keys.env or the environment.
 // EXCLUDED from `npm run check`. See README.md.
+//
+// Usage:
+//   npm run live-test                             # all scenarios, default provider (deepseek)
+//   npm run live-test -- farm-wheat               # one scenario, default provider
+//   npm run live-test -- --provider openai        # all scenarios, openai
+//   npm run live-test -- farm-wheat --provider openai
 
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -15,6 +23,7 @@ import { pathToFileURL } from 'node:url';
 import { logger } from '../src/logger';
 import { makeRunDir, type Scenario } from './harness';
 import { SCENARIOS } from './catalogue';
+import { loadApiKeys, setupProviderEnv, DEFAULT_PROVIDER } from './config';
 
 /** Extra wall-clock the parent grants beyond a scenario's per-task timeout — covers boot, the ≤120 s bot
  *  connect wait, prepare, assert, and shutdown — before it force-kills the child as wedged. */
@@ -45,17 +54,34 @@ function hardKill(pid: number): void {
   }
 }
 
+/** Parse CLI args: optional positional scenario name + optional --provider flag. */
+function parseArgs(): { scenarioName: string | undefined; providerName: string } {
+  const argv = process.argv.slice(2);
+  let scenarioName: string | undefined;
+  let providerName: string = DEFAULT_PROVIDER;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === '--provider' || a === '-p') {
+      if (argv[i + 1]) providerName = argv[++i]!;
+    } else if (!a.startsWith('--')) {
+      scenarioName = a;
+    }
+  }
+  return { scenarioName, providerName };
+}
+
 /** Run one scenario in a killable child; the parent's timer (healthy event loop) bounds it absolutely. */
-async function superviseScenario(scenario: Scenario): Promise<SupervisedResult> {
+async function superviseScenario(scenario: Scenario, providerName: string): Promise<SupervisedResult> {
   const runDir = makeRunDir(scenario.name);
   const t0 = Date.now();
   const killAfter = scenario.timeoutMs + KILL_GRACE_MS;
   logger.info('live-test', `── ${scenario.name} ── ${scenario.description}`);
-  logger.info('live-test', `  spawning isolated child (hard-kill after ${(killAfter / 1000).toFixed(0)}s) → ${runDir}`);
+  logger.info('live-test', `  provider:${providerName} — spawning isolated child (hard-kill after ${(killAfter / 1000).toFixed(0)}s) → ${runDir}`);
 
   const child = spawn(process.execPath, ['--import', 'tsx', 'live-tests/run-one.ts', scenario.name], {
     cwd: process.cwd(),
-    env: { ...process.env, EDEN_LIVE_RUNDIR: runDir },
+    // OPENAI_API_KEY is already normalised in process.env by main(); the child inherits it.
+    env: { ...process.env, EDEN_LIVE_RUNDIR: runDir, EDEN_LIVE_PROVIDER: providerName },
     stdio: ['ignore', 'inherit', 'inherit'],
   });
 
@@ -92,31 +118,49 @@ async function superviseScenario(scenario: Scenario): Promise<SupervisedResult> 
 }
 
 function usage(): void {
-  logger.info('live-test', `usage: npm run live-test [name]`);
-  logger.info('live-test', `  names: ${SCENARIOS.map((s) => s.name).join(', ')}  (omit to run all, in order)`);
+  logger.info('live-test', `usage: npm run live-test [-- [name] [--provider <name>]]`);
+  logger.info('live-test', `  names:     ${SCENARIOS.map((s) => s.name).join(', ')}  (omit to run all, in order)`);
+  logger.info('live-test', `  providers: defined in live-tests/providers.json  (default: ${DEFAULT_PROVIDER})`);
 }
 
 async function main(): Promise<number> {
-  const arg = process.argv[2];
-  if (arg === '--help' || arg === '-h') {
+  const { scenarioName, providerName } = parseArgs();
+  if (scenarioName === '--help' || scenarioName === '-h') {
     usage();
     return 0;
   }
-  if (!process.env['OPENAI_API_KEY']) {
-    logger.error('live-test', 'OPENAI_API_KEY is not set — live scenarios drive a real LLM. Export it and retry.');
+
+  // Load api-keys.env into env BEFORE setupProviderEnv so the file's keys are available.
+  loadApiKeys();
+
+  let entry;
+  try {
+    entry = setupProviderEnv(providerName);
+  } catch (err) {
+    logger.error('live-test', String(err instanceof Error ? err.message : err));
     return 2;
   }
-  const selected = arg ? SCENARIOS.filter((s) => s.name === arg) : SCENARIOS;
-  if (arg && selected.length === 0) {
-    logger.error('live-test', `unknown scenario "${arg}".`);
+
+  const keyEnv = entry.apiKeyEnv;
+  if (keyEnv && !process.env['OPENAI_API_KEY']) {
+    logger.error('live-test', `no API key for provider "${providerName}" — set ${keyEnv} in api-keys.env or the environment`);
+    return 2;
+  }
+  if (!keyEnv) {
+    logger.info('live-test', `provider "${providerName}" uses a local endpoint — no API key required`);
+  }
+
+  const selected = scenarioName ? SCENARIOS.filter((s) => s.name === scenarioName) : SCENARIOS;
+  if (scenarioName && selected.length === 0) {
+    logger.error('live-test', `unknown scenario "${scenarioName}".`);
     usage();
     return 2;
   }
 
-  logger.info('live-test', `running ${selected.length} scenario(s), process-isolated: ${selected.map((s) => s.name).join(', ')}`);
+  logger.info('live-test', `provider:${providerName} — running ${selected.length} scenario(s), process-isolated: ${selected.map((s) => s.name).join(', ')}`);
   const reports: SupervisedResult[] = [];
   for (let i = 0; i < selected.length; i++) {
-    const report = await superviseScenario(selected[i]!);
+    const report = await superviseScenario(selected[i]!, providerName);
     reports.push(report);
     logger.info('live-test', `${report.pass ? 'PASS' : 'FAIL'} ${report.name} (${(report.durationMs / 1000).toFixed(0)}s)`);
     for (const line of report.report.split('\n')) logger.info('live-test', `    ${line}`);

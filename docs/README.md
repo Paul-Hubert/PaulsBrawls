@@ -27,7 +27,7 @@ interaction has a typed interface, and every non-obvious choice has a decision r
 | [04-villager-runtime.md](04-villager-runtime.md) | Villager lifecycle, event subscriptions & filters, deliberation, action engine, memory |
 | [05-observability.md](05-observability.md) | The journal, admin API, live-stream contract for the future website |
 | [06-future-extensions.md](06-future-extensions.md) | Skill economy, proficiency, multi-village, website — seams reserved now, built later |
-| [07-hard-won-lessons.md](07-hard-won-lessons.md) | Mineflayer/runtime landmines from v1 that the rewrite MUST NOT re-discover (R1–R49, acceptance criteria) |
+| [07-hard-won-lessons.md](07-hard-won-lessons.md) | Mineflayer/runtime landmines from v1 that the rewrite MUST NOT re-discover (R1–R61, acceptance criteria) |
 | [08-extension-recipes.md](08-extension-recipes.md) | The dependency law, anti-blow-up rules (S1–S10), step-by-step recipes for safe additions, scaling escape hatches |
 | [09-agent-kickoff-prompt.md](09-agent-kickoff-prompt.md) | Copy-paste kickoff prompt for the implementing agent (reading order, ground rules, milestone DoD) |
 | [10-architecture-summary.md](10-architecture-summary.md) | Executive summary: every architectural choice (chosen + rejected + why), part by part — the ten-minute orientation read |

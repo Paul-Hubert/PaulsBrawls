@@ -65,6 +65,13 @@ export interface BotPoolOptions {
   staggerMs?: number;
   /** Which skill (if any) a bot is currently running — for the vitals snapshot. Default: none. */
   currentRunOf?: (name: string) => string | null;
+  /**
+   * Fired after a bot finishes spawning — AND again on every reconnect (each reconnect re-spawns). The
+   * host wires per-villager reactivity here (EventRouter onto the live bot); it must therefore be
+   * reconnect-safe (detach the stale router before re-attaching). The avatar fires it too; the handler
+   * filters to known villagers. Default: none (CI/no-reactivity boots).
+   */
+  onBotSpawn?: (name: string, bot: Bot) => void;
 }
 
 interface BotRecord {
@@ -137,6 +144,9 @@ export class BotPool {
 
   /** Stamp the data dir with the world id (R32), then spawn all bots staggered + start vitals. */
   async start(): Promise<void> {
+    // Restart-safe: a prior stop() left `stopping=true`, which would suppress reconnects (R53 — the pool is
+    // reused across /villagers stop→start in the deferred-spawn model, not recreated). Clear it before spawning.
+    this.stopping = false;
     const stamp = stampWorldId(this.opts.dataDir, this.opts.worldId);
     if (stamp.status === 'mismatch') {
       // R32: a regenerated world leaves stale BELIEFS, not just coordinates. The quarantine-behind-
@@ -173,34 +183,52 @@ export class BotPool {
     rec.bot = bot;
     rec.state = 'connecting';
 
+    // R66: every lifecycle listener closes over THIS bot instance and the handler is identity-guarded
+    // (rec.bot !== bot → ignore). A /villagers restart calls stop() (fire-and-forget quit, TCP FIN not
+    // yet processed server-side) then immediately start(), so a fresh login briefly overlaps the old
+    // session and the server evicts one with multiplayer.disconnect.duplicate_login. Without the guard,
+    // the SUPERSEDED instance's end/kicked — looked up by NAME — clobbered its replacement's record and
+    // (stopping already reset to false) scheduled a phantom reconnect: a self-inflicted ~1 Hz kick storm.
     bot.once('spawn', () => this.onSpawn(member, bot));
-    bot.on('end', (...args: unknown[]) => this.onEnd(member, String(args[0] ?? 'end')));
-    bot.on('kicked', (...args: unknown[]) => this.onEnd(member, `kicked: ${String(args[0] ?? '')}`));
+    bot.on('end', (...args: unknown[]) => this.onEnd(member, bot, formatEndReason('end', args[0])));
+    bot.on('kicked', (...args: unknown[]) => this.onEnd(member, bot, formatEndReason('kicked', args[0])));
     // R27/G2: the authoritative cause of death is the packet, not entity inference.
-    bot._client.on('death_combat_event', (...args: unknown[]) => this.onDeath(member, args[0]));
+    bot._client.on('death_combat_event', (...args: unknown[]) => this.onDeath(member, bot, args[0]));
   }
 
   private onSpawn(member: Member, bot: Bot): void {
     const rec = this.records.get(member.name);
-    if (!rec) return;
+    if (!rec || rec.bot !== bot) return; // a stale spawn from a superseded instance — ignore (R66)
     rec.state = 'connected';
     rec.reconnectAttempts = 0; // healthy again — reset the backoff
     boundPathfinder(bot); // R6
     loadPlugins(bot, { onWarn: (m) => logger.warn(`bot:${member.name}`, m) }); // R15/R16/R17
     this.opts.journal.append(`bot:${member.name}`, 'system.bot-connected', { name: member.name });
     logger.info(`bot:${member.name}`, `spawned (${member.tier})`);
+    // Reactivity attaches here (and re-attaches on reconnect) — fired AFTER connected is journaled so the
+    // host's bot-spawn handler sees a connected bot. Best-effort: a handler throw must not kill the spawn.
+    try {
+      this.opts.onBotSpawn?.(member.name, bot);
+    } catch (e) {
+      logger.warn(`bot:${member.name}`, `onBotSpawn handler threw: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
-  private onEnd(member: Member, reason: string): void {
+  private onEnd(member: Member, bot: Bot, reason: string): void {
     const rec = this.records.get(member.name);
-    if (!rec || rec.state === 'disconnected') return;
+    // R66: ignore an end/kicked from a bot we've already replaced (restart/reconnect swap) — only the
+    // CURRENT instance dropping clears the record + schedules a reconnect. (This subsumes the old
+    // already-disconnected guard: the first end nulls rec.bot, so a second from the same bot is stale.)
+    if (!rec || rec.bot !== bot) return;
     rec.state = 'disconnected';
     rec.bot = null;
     this.opts.journal.append(`bot:${member.name}`, 'system.bot-disconnected', { name: member.name, reason });
     if (!this.stopping) this.scheduleReconnect(member);
   }
 
-  private onDeath(member: Member, packet: unknown): void {
+  private onDeath(member: Member, bot: Bot, packet: unknown): void {
+    const rec = this.records.get(member.name);
+    if (!rec || rec.bot !== bot) return; // a stale death from a superseded instance — ignore (R66)
     const cause = deathCause(packet);
     this.opts.journal.append(
       `bot:${member.name}`,
@@ -263,6 +291,42 @@ export class BotPool {
       rec.bot = null;
     }
   }
+}
+
+/**
+ * R66: render a disconnect/kick reason legibly. The `kicked` payload on 1.21 is a chat-component
+ * OBJECT (e.g. `{ translate: 'multiplayer.disconnect.duplicate_login' }`), and `String(obj)` yields
+ * "[object Object]" — destroying the single most useful diagnostic (S10: errors carry evidence). Pull
+ * text out of the common chat-component shapes; fall back to JSON so nothing is ever lost.
+ */
+function formatEndReason(event: 'end' | 'kicked', raw: unknown): string {
+  const text = reasonText(raw);
+  if (event === 'kicked') return text ? `kicked: ${text}` : 'kicked';
+  return text || 'end';
+}
+
+/** Best-effort human text from a mineflayer end/kick reason (string, JSON string, or chat component). */
+function reasonText(raw: unknown): string {
+  if (raw == null) return '';
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return reasonText(JSON.parse(trimmed));
+      } catch {
+        /* not JSON — fall through and use the string verbatim */
+      }
+    }
+    return raw;
+  }
+  if (typeof raw === 'object') {
+    const o = raw as Record<string, unknown>;
+    if (typeof o.text === 'string' && o.text) return o.text; // {text: '...'}
+    if (typeof o.value === 'string' && o.value) return o.value; // NBT-string component {value: '...'}
+    if (typeof o.translate === 'string') return o.translate; // {translate: 'multiplayer.disconnect.*'}
+    return JSON.stringify(raw);
+  }
+  return String(raw);
 }
 
 /** Pull a human cause out of a death_combat_event packet (R27); shape varies, so be defensive. */

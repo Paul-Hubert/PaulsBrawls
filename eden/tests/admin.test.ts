@@ -59,6 +59,26 @@ test('GET /journal filters by kind/actor/ref/limit', async (t) => {
   assert.equal(limited.events[0].payload.message, 'b'); // most recent
 });
 
+test('GET /journal?order=desc returns newest-first — the dashboard live-feed order', async (t) => {
+  const journal = new MemoryJournal();
+  const admin = new AdminServer({ port: 0, journal });
+  const { port } = await admin.start();
+  t.after(() => admin.stop());
+
+  journal.append('engine', 'system.error', { message: 'a' });
+  journal.append('engine', 'system.error', { message: 'b' });
+  journal.append('engine', 'system.error', { message: 'c' });
+
+  const desc = await getJson(`http://127.0.0.1:${port}/journal?order=desc`);
+  assert.deepEqual(desc.events.map((e: any) => e.payload.message), ['c', 'b', 'a']);
+
+  const top2 = await getJson(`http://127.0.0.1:${port}/journal?order=desc&limit=2`);
+  assert.deepEqual(top2.events.map((e: any) => e.payload.message), ['c', 'b'], 'the 2 newest, newest-first');
+
+  const asc = await getJson(`http://127.0.0.1:${port}/journal`);
+  assert.deepEqual(asc.events.map((e: any) => e.payload.message), ['a', 'b', 'c'], 'default stays chronological');
+});
+
 test('GET /kinds exposes the registry so the website can render unknown kinds', async (t) => {
   const journal = new MemoryJournal();
   const admin = new AdminServer({ port: 0, journal });

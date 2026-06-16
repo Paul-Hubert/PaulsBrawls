@@ -145,6 +145,19 @@ API exposes the registry so the website can render unknown kinds generically.
 > EXCLUSIVE seed collision guard); the v1 decommission + parity sign-off is
 > [17-parity-signoff.md](17-parity-signoff.md).
 
+> **As-built (post-M7 — website API gaps).** Designing the future website surfaced three command-bar/
+> dashboard needs the M7 routes couldn't serve. Resolution kept the pure-consumer posture (reads fold the
+> journal; add surface only where existing routes can't express it): (1) **`RolloutsView`** — a FIFTH
+> derived view in [`views/index.ts`](../eden/src/views/index.ts) (now in `ALL_VIEWS`, so the rebuild==live
+> law + `eden rebuild-stats` cover it), folding the `refs.rolloutId`-tagged stream into a per-rollout index
+> with status `open|admitted|exhausted|abandoned` (`admitted` from a `success` verdict, `abandoned` from
+> `god.rollout-abandoned`, `exhausted` from `god.task-closed{outcome:'failed'}` since retries-exhausted has
+> no per-rollout terminal event) — surfaced as **`GET /rollouts`**; the replay stays `GET /journal?ref=`.
+> (2) **`GET /journal?id=<ulid>`** — a one-event resolver for the command bar (`JournalQuery.id`); no new
+> `/resolve` route (names resolve client-side against `/villagers`+`/skills`, ulids via `?ref=`/`?id=`).
+> (3) **Budget history** is NOT an API gap — it folds `llm.call` (token-bearing, retained forever) on the
+> client; `/status` keeps the live spend. NO new journal kind (S1 — reads + folds existing ones).
+
 ### Retention
 
 The journal is the history product, so default is **keep everything**;
@@ -237,7 +250,8 @@ M7 added the rest) — see the "As-built (M7)" note above for the wiring.
 | `GET /villagers` / `GET /villagers/:name` | identity, vitals, subscriptions, inbox depth, current run, dossier summary |
 | `GET /skills` / `GET /skills/:name` | manifests + stats; `?version=` for history; `?code=1` includes source |
 | `GET /tasks` / `GET /verdicts` / `GET /directives` | ledger views with refs |
-| `GET /journal?kinds=&actor=&ref=&since=&limit=` | filtered event page (the universal debugger) |
+| `GET /rollouts` | the rollout index (RolloutsView fold): `{rolloutId, taskId?, villager?, skill?, status, trials, startedAt, endedAt}` per rollout — the navigation entry point for the replay view (the replay itself is `GET /journal?ref=<rolloutId>`) |
+| `GET /journal?kinds=&actor=&id=&ref=&since=&limit=` | filtered event page (the universal debugger); `id=` resolves one event by ulid (the command bar's id-resolution path) |
 | `GET /journal/stream` (WebSocket) | live fan-out of every appended event, same JSON as rows; optional `?kinds=` filter |
 | `POST /pause` `POST /resume` | gate LLM scheduling (skills/subscriptions keep running — v1 semantics) |
 | `POST /skills/:name/quarantine` | admin kill switch, journaled as `actor: 'admin'` |

@@ -77,9 +77,15 @@ export interface ArmorManagerLike {
   resume?(): void;
 }
 
-/** Item id lookup — mineflayer exposes this as `bot.registry.itemsByName` (deposit/withdraw need ids). */
+/**
+ * Item/block id lookup — mineflayer exposes this as `bot.registry` (the prismarine-registry /
+ * minecraft-data instance). `itemsByName` backs deposit/withdraw; `blocksByName` backs find-block's
+ * numeric matcher. Surfaced to skills as `ctx.mcData` (Blocker D1), so the LLM's idiomatic
+ * `mcData.itemsByName[name].id` resolves instead of dereferencing `undefined`.
+ */
 export interface ItemRegistry {
   itemsByName: Record<string, { id: number } | undefined>;
+  blocksByName?: Record<string, { id: number } | undefined>;
 }
 
 /** An open container window (a chest), narrowed to what deposit/withdraw use. */

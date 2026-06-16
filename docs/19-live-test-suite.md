@@ -99,11 +99,13 @@ Supporting modules: [rcon.ts](../eden/live-tests/rcon.ts) (typed, multi-packet-s
 ### Cooperation dispatch — decision
 
 Three ways to make BOTH villagers act were available: **(a)** one task per villager, **(b)** an orchestrator
-directive `to:'all'`, **(c)** a seeded `on:'hurt'` reactivity subscription (M5). The suite uses **(a)**: it
-is the most deterministic — it guarantees both villagers deliberate without depending on the orchestrator's
-fan-out heuristics or a reactivity seam the coordinator doesn't wire at the harness level — and it directly
-produces the "≥2 distinct villagers ran a combat skill" signal. (b)/(c) are natural follow-ups once the pvp
-surface itself is proven.
+directive `to:'all'`, **(c)** a seeded `on:'hurt'` reactivity subscription (M5). The suite still injects
+**(a)** for the authoring signal (it deterministically produces "≥2 distinct villagers ran a combat skill"),
+but as of finding **G** (2026-06-15) **(c) is now WIRED and active too**: the live host assembles
+per-villager reactivity, so each guard's seeded `hurt → defend-self` reflex fires zero-token within a tick
+of the first hit — ahead of the (a) deliberation it used to lose the race to. The two compose: the reflex
+keeps the guard alive in the first seconds; the deliberation authors + admits the durable combat skill.
+(b) remains a natural follow-up.
 
 ## Findings log
 
@@ -118,6 +120,29 @@ minimal repro + a proposed one-spot fix, classified by severity, and (when fixed
 | D1 | 2026-06-14 | cooperative-mob-defense | LOW (tuning) | `difficulty hard` triggers zombie REINFORCEMENTS (`doMobSpawning false` doesn't stop them) — 3 summoned became 11; guards cleared them all but died to the swarm. pvp + cooperation themselves WORK. | **FIXED** (`difficulty easy` → 0 deaths) |
 | D2 | 2026-06-14 | craft-wooden-tools | LOW | Firmin died once to `death.fell.accident.generic` — peaceful does NOT prevent fall damage; pathfinder jitter in the box chipped it. | **FIXED** (shorter litBox → 0 deaths) |
 | **E** | 2026-06-14 | craft-wooden-tools | MEDIUM | Stock `collect-blocks` (`bot.dig`) breaks the log but does NOT reliably pick up the drop — the bot digs from up to reach distance, so the item lands out of the ~1-block auto-collect range. Journal: `"Les bûches collectées ne sont pas dans l'inventaire"` → `pas de recette pour oak_planks` (no ingredients). Plus the LLM authored skills returning `{status:'…échec…'}` while `ok=true` and didn't converge in 6 retries. | **FIX IN PLACE** — live validation pending (the validation re-run hit OpenAI **HTTP 429 quota-exceeded**: the account's API credits were exhausted by the prior runs). `collect-blocks` now walks onto the trunk base to gather drops; craft arena uses 3-tall oak columns + `maxRetries 8`. |
+| **G** | 2026-06-15 | cooperative-mob-defense | **HIGH** | The whole M5 reactivity system (EventRouter / SubscriptionRouter / store / role-defaults) was **built + unit-tested but never assembled in `main.ts`**, so a hit waited ~16 s for the LLM to author combat: Alban **died at +11.7 s** while his first combat `skill.run` was at **+16.9 s**. Time-to-first-defensive-action > survival-time. | **FIXED + VALIDATED PASS** — wired per-villager reactivity (signal adapter → EventRouter → SubscriptionRouter), seeded role-defaults at boot, added the reflex stock skills, and gave guards `hurt → defend-self` (D-15). Re-run: **PASS** (98 s, 0 deaths). See below. |
+
+### Re-run results (2026-06-15, after G fixed — `cooperative-mob-defense`)
+
+| Scenario | Result | Evidence |
+|---|---|---|
+| cooperative-mob-defense | **PASS** ✓ | All 4 checks green: zombies all dead ✓, **0 deaths** (was a death at +11.7 s) ✓, ≥2 combat runners (Alban, Firmin) ✓, 0 `system.error` ✓. Run dir `cooperative-mob-defense-2026-06-15T14-17-32`. |
+
+**The reflex-before-LLM proof (journal-report timeline).** Both guards fire the zero-token reflex the
+instant the first hit lands, and `defend-self` runs to a clean RunReport BEFORE the first `brain.wakeup`:
+
+```
++9.2s  | villager:Alban  | subscription.fired      | {on:hurt, outcome:skill, target:defend-self}
++9.2s  | villager:Firmin | subscription.fired      | {on:hurt, outcome:skill, target:defend-self}
++10.2s | villager:Alban  | subscription.suppressed | {on:hurt, reason:not-while-running}   ← no pile-up
++12.0s | villager:Alban  | skill.run               | {skill:defend-self, ok:true}
++12.0s | villager:Firmin | skill.run               | {skill:defend-self, ok:true}
++13.1s | villager:Alban  | brain.wakeup            | (the FIRST deliberation — AFTER the reflex defended)
+```
+
+Net: the reflex collapses time-to-first-defensive-action from +16.9 s (LLM-authored) to +9.2 s
+(zero-token), eliminating the death. The LLM-authored combat skills (`attack-zombies`,
+`attaquer_zombie_plus_proche`) still run later and finish the clear — reflex + deliberation compose.
 
 ### Re-run results (2026-06-14, after W fixed; process-isolated)
 

@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import type { CriticTicket, Dossier, ItemCheck, RunReport, SkillStats, Snapshot, Task, Verdict } from '../types/index';
+import type { CriticTicket, Dossier, ItemCheck, RunReport, SkillStats, Snapshot, Task, TaskSuggestion, Verdict } from '../types/index';
 import type { LlmClient, LlmToolDef, ModelTier } from '../llm/client';
 import { LlmScheduler } from '../llm/scheduler';
 import type { BudgetTracker } from '../llm/scheduler';
@@ -75,6 +75,20 @@ const VERDICT_TOOL: LlmToolDef = {
         critique: { type: 'string', description: 'le changement le plus instructif à faire (anglais)' },
         libraryAction: { type: 'string', enum: [...LIBRARY_ACTIONS] },
         praise: { type: 'string', description: 'optionnel, en français' },
+        blocked: {
+          type: 'boolean',
+          description: 'true UNIQUEMENT si le skill s’est exécuté proprement mais n’a fait AUCUN progrès car une RESSOURCE D’ENTRÉE requise manque à l’inventaire (ex: 0 graines pour semer) — ce n’est PAS un défaut de code, ne demande pas de révision. Fournis alors `followUp` (la tâche pour ACQUÉRIR la ressource).',
+        },
+        followUp: {
+          type: 'object',
+          description: 'optionnel: la tâche qui débloque celle-ci (ACQUÉRIR la ressource manquante, ex: "récolter du blé mûr pour obtenir des graines"). À renseigner quand blocked=true.',
+          properties: {
+            goal: { type: 'string' },
+            successCriteria: { type: 'string' },
+            check: { type: 'object', properties: { item: { type: 'string' }, count: { type: 'number' } } },
+          },
+          required: ['goal'],
+        },
       },
       required: ['success', 'critique', 'libraryAction'],
     },
@@ -125,6 +139,7 @@ export class CriticDesk {
             { role: 'user', content: user },
           ],
           tools: [VERDICT_TOOL],
+          toolChoice: { type: 'function', function: { name: 'verdict' } },
           tier: this.tier,
           caller: 'god:critic',
           refs: { rolloutId: ctx.report.rolloutId, runId: ctx.report.runId, skill: ctx.report.skill, skillVersion: ctx.report.version },
@@ -160,6 +175,7 @@ export class CriticDesk {
             { role: 'user', content: user },
           ],
           tools: [VERDICT_TOOL],
+          toolChoice: { type: 'function', function: { name: 'verdict' } },
           tier: this.tier,
           caller: 'god:critic',
         }),
@@ -220,6 +236,9 @@ export class CriticDesk {
     };
     if (typeof raw['score'] === 'number') verdict.score = raw['score'];
     if (typeof raw['praise'] === 'string') verdict.praise = raw['praise'];
+    if (raw['blocked'] === true) verdict.blocked = true;
+    const followUp = toFollowUp(raw['followUp']);
+    if (followUp) verdict.followUp = followUp;
     return verdict;
   }
 
@@ -243,12 +262,36 @@ export class CriticDesk {
       critique = `${critique} [succès voidé: l'objectif a été atteint par intervention divine, pas par le skill du villageois (overreach).]`;
     }
 
+    // R72 blocked-on-resource rail: a blocked run is never a success, and the skill is NOT penalised for a
+    // missing input (no quarantine, no forced revision) — the coordinator stops the rollout and the
+    // curriculum pivots to acquiring the resource. A blocked verdict must carry a `followUp` to act on.
+    if (verdict.blocked) {
+      success = false;
+      if (libraryAction === 'admit' || libraryAction === 'quarantine') libraryAction = 'none';
+    }
+
     return { ...verdict, success, libraryAction, critique };
   }
 }
 
 function toAction(v: unknown): LibraryAction {
   return typeof v === 'string' && (LIBRARY_ACTIONS as readonly string[]).includes(v) ? (v as LibraryAction) : 'keep-draft';
+}
+
+/** Parse a critic `followUp` (R72) into a TaskSuggestion — the acquire-task that unblocks a blocked task.
+ *  Tolerant: a missing/empty goal yields undefined (the coordinator simply enqueues nothing). */
+function toFollowUp(v: unknown): TaskSuggestion | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const o = v as Record<string, unknown>;
+  if (typeof o['goal'] !== 'string' || o['goal'].trim().length === 0) return undefined;
+  const fu: TaskSuggestion = { goal: o['goal'] };
+  if (typeof o['successCriteria'] === 'string') fu.successCriteria = o['successCriteria'];
+  const c = o['check'];
+  if (c && typeof c === 'object') {
+    const co = c as Record<string, unknown>;
+    if (typeof co['item'] === 'string' && typeof co['count'] === 'number') fu.check = { item: co['item'], count: co['count'] } as ItemCheck;
+  }
+  return fu;
 }
 
 function parseContentJson(content: string | null): Record<string, unknown> | undefined {

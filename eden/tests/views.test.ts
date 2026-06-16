@@ -11,6 +11,7 @@ import {
   CompetenceView,
   RelationsView,
   TradeLedgerView,
+  RolloutsView,
   ALL_VIEWS,
 } from '../src/views/index';
 import type { RunReport } from '../src/types/index';
@@ -106,6 +107,42 @@ test('TradeLedgerView folds trade.proposed/settled/failed into a per-trade ledge
   const t2 = ledger.find((t) => t.id === 't2')!;
   assert.equal(t2.status, 'failed');
   assert.equal(t2.reason, 'http 422');
+});
+
+// ── RolloutsView ──────────────────────────────────────────────────────────────
+test('RolloutsView folds a rolloutId-tagged stream into an admitted index entry', () => {
+  const v = new RolloutsView();
+  v.fold(ev('god.ticket', { source: 'rollout', skill: 'collect-logs', version: 1 }, { rolloutId: 'ro1', taskId: 'ta1', skill: 'collect-logs' }));
+  v.fold(ev('skill.run', runReport({ skill: 'collect-logs', villager: 'Firmin' }), { rolloutId: 'ro1', taskId: 'ta1', skill: 'collect-logs' }));
+  v.fold(ev('god.verdict', { ticketId: 't1', success: true, libraryAction: 'admit', critique: 'good' }, { rolloutId: 'ro1', taskId: 'ta1', skill: 'collect-logs', verdictId: 'v1' }));
+
+  const ro1 = v.value().find((r) => r.rolloutId === 'ro1')!;
+  assert.equal(ro1.status, 'admitted');
+  assert.equal(ro1.villager, 'Firmin');
+  assert.equal(ro1.skill, 'collect-logs');
+  assert.equal(ro1.taskId, 'ta1');
+  assert.equal(ro1.trials, 1);
+});
+
+test('RolloutsView derives abandoned (D-09) and exhausted (task-closed:failed) statuses', () => {
+  const v = new RolloutsView();
+  // Abandoned: a crash-recovery event closes the rollout.
+  v.fold(ev('skill.run', runReport({ skill: 'mine', villager: 'Alban' }), { rolloutId: 'ro2', taskId: 'ta2', skill: 'mine' }));
+  v.fold(ev('god.rollout-abandoned', { reason: 'crash-recovery', taskId: 'ta2' }, { rolloutId: 'ro2', taskId: 'ta2' }));
+  // Exhausted: a failing verdict, then the task closes 'failed' (retries ran out — no per-rollout terminal).
+  v.fold(ev('god.verdict', { ticketId: 't3', success: false, libraryAction: 'keep-draft', critique: 'again' }, { rolloutId: 'ro3', taskId: 'ta3', skill: 'farm', verdictId: 'v3' }));
+  v.fold(ev('god.task-closed', { taskId: 'ta3', goal: 'farm wheat', outcome: 'failed' }, { taskId: 'ta3' }));
+
+  const byId = Object.fromEntries(v.value().map((r) => [r.rolloutId, r]));
+  assert.equal(byId.ro2.status, 'abandoned');
+  assert.equal(byId.ro3.status, 'exhausted');
+  assert.equal(byId.ro3.trials, 1);
+});
+
+test('RolloutsView ignores events with no rolloutId (e.g. a subscription-fired run)', () => {
+  const v = new RolloutsView();
+  v.fold(ev('skill.run', runReport({ skill: 'idle-skill' }), {}));
+  assert.deepEqual(v.value(), []);
 });
 
 // ── rebuild-by-replay == live (the deliverable) ───────────────────────────────

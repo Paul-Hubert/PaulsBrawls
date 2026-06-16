@@ -7,7 +7,7 @@ import { parseConfig, loadConfig, DEFAULT_CONFIG } from '../src/config';
 function minimal(): Record<string, unknown> {
   return {
     minecraft: { host: '127.0.0.1', port: 25599, version: '1.21.1' },
-    villagers: [{ name: 'Firmin', role: 'farmer', home: [1, 2, 3], chest: [4, 5, 6] }],
+    villagers: [{ name: 'Firmin', role: 'farmer' }],
     god: { name: 'Dieu' },
   };
 }
@@ -69,8 +69,8 @@ test('rejects god.name colliding with a villager name (R12)', () => {
 test('rejects duplicate villager names (R12)', () => {
   const raw = minimal();
   raw['villagers'] = [
-    { name: 'Firmin', role: 'farmer', home: [1, 2, 3], chest: [4, 5, 6] },
-    { name: 'Firmin', role: 'miner', home: [7, 8, 9], chest: [1, 1, 1] },
+    { name: 'Firmin', role: 'farmer' },
+    { name: 'Firmin', role: 'miner' },
   ];
   assert.throws(() => parseConfig(raw), /Firmin/);
 });
@@ -91,18 +91,26 @@ test('warns if the avatar reuses v1 reserved username LLMBot', () => {
 
 test('the shipped eden.example.json validates with zero warnings', () => {
   const examplePath = fileURLToPath(new URL('../eden.example.json', import.meta.url));
-  const config = loadConfig(examplePath);
+  const warnings: string[] = [];
+  const config = loadConfig(examplePath, (w) => warnings.push(w));
+  assert.deepEqual(warnings, [], `expected zero warnings, got: ${JSON.stringify(warnings)}`);
   assert.equal(config.minecraft.version, '1.21.1');
   assert.equal(config.god.name, 'Dieu');
-  assert.equal(config.villagers[0]?.name, 'Firmin');
+  assert.equal(config.scenario, 'farming-hamlet');
+  assert.equal(config.provider, 'openai');
   assert.equal(config.admin.port, 8770);
+  // villagers is empty at loadConfig time — resolution happens in main.ts after providers + scenario load
+  assert.deepEqual(config.villagers, []);
 });
 
 test('golden: a fully-defaulted validated config object', () => {
   const { config } = parseConfig(minimal());
   assert.deepEqual(config, {
     minecraft: { host: '127.0.0.1', port: 25599, version: '1.21.1' },
-    villagers: [{ name: 'Firmin', role: 'farmer', home: [1, 2, 3], chest: [4, 5, 6] }],
+    scenario: undefined,
+    provider: undefined,
+    apiKeyEnv: undefined,
+    villagers: [{ name: 'Firmin', role: 'farmer' }],
     god: {
       name: 'Dieu',
       gamemode: 'creative',

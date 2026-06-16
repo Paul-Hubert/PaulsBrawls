@@ -131,6 +131,38 @@ test('M3-1 (§7): exemplar full code only when authoring; one-liners otherwise; 
   // The tool list and retrieved one-liners appear in both.
   assert.ok(fa.includes('write_skill') && fr.includes('write_skill'), 'tool list always present');
   assert.ok(fa.includes('collect-blocks') && fr.includes('collect-blocks'), 'retrieved one-liners always present');
+  // P1: the "compose, don't copy" doctrine + the ctx.skills.run call shape ride only on authoring wake-ups.
+  assert.match(fa, /Composer plutôt que copier/, 'authoring wake-up carries the composition doctrine');
+  assert.match(fa, /ctx\.skills\.run/, 'authoring wake-up shows the composition call shape');
+  assert.ok(!/Composer plutôt que copier/.test(fr), 'reactive wake-up omits the authoring composition doctrine');
+  // D2: the "verify the world effect before returning success" doctrine rides only on authoring wake-ups.
+  assert.match(fa, /VÉRIFIE avant de réussir/, 'authoring wake-up carries the verify-before-success doctrine');
+  assert.match(fa, /attribuer le gain à CETTE/, 'doctrine demands attributing a delta to THIS run');
+  assert.ok(!/VÉRIFIE avant de réussir/.test(fr), 'reactive wake-up omits the verify-before-success doctrine');
+});
+
+test('M3-1 (P2): the stock primitive palette rides on authoring packs, deduped vs exemplars + retrieved', () => {
+  const primitives = [
+    { name: 'go-to', signature: 'go-to({x,y,z}) → {arrived}', summary: 'aller à une position' }, // also an exemplar
+    { name: 'collect-blocks', signature: 'collect-blocks({x,y,z}) → {collected}', summary: 'récolter un tronc' }, // also retrieved
+    { name: 'craft-item', signature: 'craft-item({item}) → {crafted}', summary: 'fabriquer un objet' }, // unique
+  ];
+  const authoring = new ContextPackBuilder({ journal: new MemoryJournal() }).build(baseInput({ primitives, includeExemplarCode: true }));
+  const reactive = new ContextPackBuilder({ journal: new MemoryJournal() }).build(baseInput({ primitives, includeExemplarCode: false }));
+  const fa = authoring.messages.find((m) => m.role === 'system')!.content!;
+  const fr = reactive.messages.find((m) => m.role === 'system')!.content!;
+
+  // The palette renders on authoring, with a primitive not otherwise shown listed as a composable one-liner.
+  assert.match(fa, /Briques de base toujours disponibles/, 'authoring pack carries the primitive palette');
+  assert.ok(fa.includes('- craft-item — craft-item({item}) → {crafted}'), 'a primitive not otherwise shown is listed');
+
+  // Dedup: a primitive that is ALSO an exemplar (go-to, shown as full code) is not re-listed as a palette one-liner.
+  assert.ok(!fa.includes('- go-to — go-to({x,y,z}) → {arrived}'), 'an exemplar primitive is not duplicated in the palette');
+  // And one that is ALSO retrieved (collect-blocks) appears exactly once (from the retrieved list, not twice).
+  assert.equal(fa.split('- collect-blocks —').length - 1, 1, 'a retrieved primitive appears once, not duplicated by the palette');
+
+  // Authoring-only: reactive packs use the run_skill tool + retrieved one-liners, not the code-composition palette.
+  assert.ok(!/Briques de base toujours disponibles/.test(fr), 'reactive pack omits the primitive palette');
 });
 
 test('M3-1 (D-11 fit): exemplars + a 400-line draft + snapshot + critique fit strong (48k) with headroom for ≥1 prior revision', () => {

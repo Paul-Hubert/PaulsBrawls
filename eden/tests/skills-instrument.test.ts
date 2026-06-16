@@ -36,6 +36,14 @@ test('parse returns syntax errors inline, never throws (02 §Validation)', () =>
   assert.match(bad.ok ? '' : bad.error, /parse error/i);
 });
 
+test('compile exposes Vec3 + GoalNear as authored-scope globals (the universal mineflayer idiom)', async () => {
+  // `new Vec3(...)` is what an LLM writes; before this it ReferenceError'd (only ctx.Vec3 existed).
+  const v = await run('async function f(bot, a, ctx) { const p = new Vec3(1, 2, 3); return { x: p.x, y: p.y, z: p.z }; }');
+  assert.deepEqual(v, { x: 1, y: 2, z: 3 });
+  const g = await run('async function f(bot, a, ctx) { return new GoalNear(4, 5, 6, 1) != null; }');
+  assert.equal(g, true);
+});
+
 test('instrument injects a loop-budget call into every loop body', () => {
   const out = instrument('async function f(b, a, c) { while (a.go) { b.dig(); } }');
   assert.ok(out.ok);

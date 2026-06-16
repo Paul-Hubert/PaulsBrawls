@@ -42,8 +42,19 @@ function skillText(m: SkillManifest): string {
   return `${m.summary} ${m.description} ${m.tags.join(' ')}`.trim();
 }
 
+/** Largest number of (name@version) skill vectors kept; FIFO-evicted past this (bounds long-run memory). */
+const VECTOR_CACHE_CAP = 4096;
+
 /** Ranks the live library against a query, tier- and grant-filtered (02 §Retrieval). */
 export class SkillRetriever {
+  // Per-(name@version) embedding cache (R58). Library versions are append-only so a skill's vector is
+  // reusable; we ALSO key on the embedded text because the description-from-code pass can land AFTER a
+  // version's first retrieval (admit → live → describe), which mutates the text. Before this cache,
+  // search() embedded [query, ...EVERY live skill] through the in-process ONNX model on every call —
+  // O(library) synchronous inferences per deliberation, the multi-second event-loop stall (system.loop-lag)
+  // that worsened as the library grew. Now a search embeds only the query + skills whose text changed.
+  private readonly vectorCache = new Map<string, { text: string; vector: number[] }>();
+
   constructor(private readonly opts: SkillRetrieverOptions) {}
 
   /** Top-k relevant live skills for a query, filtered by tier (R25) and grants (owner #3). */
@@ -58,16 +69,30 @@ export class SkillRetriever {
     if (candidates.length === 0) return [];
 
     const texts = candidates.map((c) => skillText(c.manifest));
-    const vectors = await this.opts.embeddings.embed([query, ...texts]);
+    const keys = candidates.map((c) => `${c.version.name}@${c.version.version}`);
+
+    // Only the query + skills with a missing/stale cached vector need a fresh embed (R58).
+    const misses: number[] = [];
+    for (let i = 0; i < candidates.length; i++) {
+      const cached = this.vectorCache.get(keys[i]!);
+      if (!cached || cached.text !== texts[i]) misses.push(i);
+    }
+    const fresh = await this.opts.embeddings.embed([query, ...misses.map((i) => texts[i]!)]);
+    const queryVec = fresh ? fresh[0] : undefined;
+    if (fresh) {
+      for (let j = 0; j < misses.length; j++) {
+        const i = misses[j]!;
+        const v = fresh[j + 1];
+        if (v) this.vectorCache.set(keys[i]!, { text: texts[i]!, vector: v });
+      }
+      this.evictOldest();
+    }
 
     const scored: RankedSkill[] = candidates.map((c, i) => {
       const keyword = keywordScore(query, texts[i]!);
       let relevance = keyword;
-      if (vectors) {
-        const qv = vectors[0];
-        const sv = vectors[i + 1];
-        if (qv && sv) relevance = Math.max(cosine(qv, sv), keyword); // max(semantic, keyword) — R38 floor
-      }
+      const sv = this.vectorCache.get(keys[i]!)?.vector;
+      if (queryVec && sv) relevance = Math.max(cosine(queryVec, sv), keyword); // max(semantic, keyword) — R38 floor
       return {
         name: c.manifest.name,
         signature: c.manifest.signature,
@@ -79,5 +104,14 @@ export class SkillRetriever {
     });
     scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
     return scored.slice(0, k);
+  }
+
+  /** FIFO-evict cached vectors past the cap (Map keeps insertion order); superseded versions drift out. */
+  private evictOldest(): void {
+    while (this.vectorCache.size > VECTOR_CACHE_CAP) {
+      const oldest = this.vectorCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.vectorCache.delete(oldest);
+    }
   }
 }

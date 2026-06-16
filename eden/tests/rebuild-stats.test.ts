@@ -33,6 +33,9 @@ test('rebuild-stats replays a real on-disk journal; rebuild == live fold', () =>
     journal.append('villager:Firmin', 'conversation.ended', { id: 'c1', by: 'Firmin', reason: 'left', opinion: 5, headline: 'fast friend' }, { conversationId: 'c1' });
     journal.append('engine', 'trade.proposed', { id: 't1', from: 'Firmin', to: 'Alban', give: [{ item: 'coin', count: 1 }], want: [{ item: 'wheat', count: 2 }] }, { tradeId: 't1' });
     journal.append('engine', 'trade.settled', { id: 't1', from: 'Firmin', to: 'Alban', give: [{ item: 'coin', count: 1 }], want: [{ item: 'wheat', count: 2 }] }, { tradeId: 't1' });
+    // A rollout that converged (ticket → trial → success verdict) — RolloutsView folds this to `admitted`.
+    journal.append('god:critic', 'god.ticket', { source: 'rollout', skill: 'mine', version: 1 }, { rolloutId: 'ro1', taskId: 'ta1', skill: 'mine' });
+    journal.append('god:critic', 'god.verdict', { ticketId: 'k1', success: true, libraryAction: 'admit', critique: 'ok' }, { rolloutId: 'ro1', taskId: 'ta1', skill: 'mine', verdictId: 'v1' });
 
     // Live fold: fold each event as it arrives (what the running host does on the subscribe stream).
     const live: Record<string, unknown> = {};
@@ -49,11 +52,13 @@ test('rebuild-stats replays a real on-disk journal; rebuild == live fold', () =>
     assert.deepEqual(rebuilt.competence, live['CompetenceView']);
     assert.deepEqual(rebuilt.relations, live['RelationsView']);
     assert.deepEqual(rebuilt.tradeLedger, live['TradeLedgerView']);
+    assert.deepEqual(rebuilt.rollouts, live['RolloutsView']);
 
     // Spot-check a couple of folded facts so a silently-empty pass can't hide.
     assert.equal((rebuilt.skillStats as any).mine.stalls, 1);
     assert.equal((rebuilt.relations as any).Firmin.Alban.score, 5);
     assert.equal((rebuilt.tradeLedger as any[])[0].status, 'settled');
+    assert.equal((rebuilt.rollouts as any[])[0].status, 'admitted');
   } finally {
     journal.close();
     rmSync(dir, { recursive: true, force: true });
@@ -69,6 +74,7 @@ test('rebuild-stats on an empty journal yields empty views (no crash)', () => {
     assert.deepEqual(out.competence, {});
     assert.deepEqual(out.relations, {});
     assert.deepEqual(out.tradeLedger, []);
+    assert.deepEqual(out.rollouts, []);
   } finally {
     journal.close();
     rmSync(dir, { recursive: true, force: true });

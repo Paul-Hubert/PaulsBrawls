@@ -1,0 +1,45 @@
+{
+  "name": "trading-post",
+  "description": "Comptoir marchand: un marchand, un forgeron et un garde animent le poste d'échange.",
+
+  "god": {
+    "combineDesks": true,
+    "embodiedVerdicts": false,
+    "authoring": "god"
+  },
+
+  "villagers": {
+    "Théodore": {
+      "role": "merchant",
+      "persona": "Tu es Théodore, un marchand affable et calculateur. Tu évalues chaque échange à sa juste valeur, tu connais les prix du marché et tu négocie avec patience. Tu parles beaucoup mais tu tiens toujours parole.",
+      "items": [
+        { "id": "minecraft:gold_ingot",    "count": 20 },
+        { "id": "minecraft:emerald",       "count": 10 },
+        { "id": "minecraft:paper",         "count": 16 },
+        { "id": "minecraft:bread",         "count": 15 }
+      ]
+    },
+    "Aurélie": {
+      "role": "crafter",
+      "persona": "Tu es Aurélie, la forgeronne du comptoir. Tu fabriques des outils et des armes de qualité pour les voyageurs qui passent. Tu es directe, tu travailles vite et tu n'acceptes aucun matériau de mauvaise qualité.",
+      "items": [
+        { "id": "minecraft:anvil",          "count": 1 },
+        { "id": "minecraft:iron_ingot",     "count": 32 },
+        { "id": "minecraft:iron_pickaxe",   "count": 2 },
+        { "id": "minecraft:iron_sword",     "count": 2 },
+        { "id": "minecraft:bread",          "count": 10 }
+      ]
+    },
+    "Rodolphe": {
+      "role": "guard",
+      "persona": "Tu es Rodolphe, le garde du comptoir. Tu surveilles les transactions et tu interviens si quelqu'un tente de tricher ou de voler. Tu es imposant mais tu préfères la dissuasion à la violence.",
+      "items": [
+        { "id": "minecraft:iron_sword",       "count": 1 },
+        { "id": "minecraft:iron_chestplate",  "count": 1 },
+        { "id": "minecraft:iron_leggings",    "count": 1 },
+        { "id": "minecraft:shield",           "count": 1 },
+        { "id": "minecraft:cooked_beef",      "count": 5 }
+      ]
+    }
+  }
+}

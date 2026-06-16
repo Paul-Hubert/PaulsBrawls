@@ -18,16 +18,35 @@ export interface ProviderConfig {
   model: string;
   inputTokenBudget: number;
 }
-/** A villager's roster entry; `home`/`chest` coords are hints (self-healing at boot in M1). */
+/** One item stack to give a villager via RCON on connect. */
+export interface ItemStack {
+  /** Namespaced item id, e.g. "minecraft:iron_hoe". */
+  id: string;
+  count: number;
+}
+/** A villager's roster entry. */
 export interface VillagerConfig {
   name: string;
   role: string;
-  home: [number, number, number];
-  chest: [number, number, number];
+  /** §1 Identity sentence(s) injected into every deliberation. Defaults to "Tu es <name>." */
+  persona?: string;
+  /** Initial inventory applied via /give RCON commands after the bot connects. */
+  items?: ItemStack[];
 }
 /** The fully-validated Eden configuration — every section defaulted by {@link parseConfig}. */
 export interface EdenConfig {
   minecraft: { host: string; port: number; version: string };
+  /** Bare scenario name, e.g. "farming-hamlet". Resolved to villagers + god overrides by the
+   *  caller (main.ts) via loadScenario/applyScenario after loadConfig. Always present (undefined
+   *  when the user did not set the key). */
+  scenario: string | undefined;
+  /** Bare provider name, e.g. "openai". Resolved to llm.providers by the caller (main.ts) via
+   *  loadProviders/resolveProvider after loadConfig. Always present (undefined when not set). */
+  provider: string | undefined;
+  /** The env-var name from which to read the API key (e.g. "OPENAI_API_KEY"). Populated by
+   *  main.ts after resolving the provider preset; undefined until then or when apiKeyEnv is null
+   *  (local providers). */
+  apiKeyEnv: string | undefined;
   villagers: VillagerConfig[];
   god: {
     name: string;
@@ -40,6 +59,8 @@ export interface EdenConfig {
     };
     combineDesks: boolean;
     embodiedVerdicts: boolean;
+    /** Optional scenario-level mission statement injected into every desk's system prompt. */
+    godPrompt?: string;
   };
   behavior: { drives: boolean };
   llm: {
@@ -63,6 +84,9 @@ export interface EdenConfig {
 /** The defaulted skeleton (villagers come from the user). */
 export const DEFAULT_CONFIG: Omit<EdenConfig, 'villagers'> = {
   minecraft: { host: '127.0.0.1', port: 25599, version: SUPPORTED_MINECRAFT_VERSION },
+  scenario: undefined,
+  provider: undefined,
+  apiKeyEnv: undefined,
   god: {
     name: 'Dieu',
     gamemode: 'creative',
@@ -161,9 +185,13 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
   warnUnknown(
     '',
     raw,
-    ['minecraft', 'villagers', 'god', 'behavior', 'llm', 'skills', 'settlement', 'admin', 'journal'],
+    ['minecraft', 'scenario', 'provider', 'villagers', 'god', 'behavior', 'llm', 'skills', 'settlement', 'admin', 'journal'],
     warnings,
   );
+
+  // Top-level resolution keys (resolved by main.ts after loadConfig — pure strings here).
+  const scenario = typeof raw['scenario'] === 'string' ? raw['scenario'] : undefined;
+  const provider = typeof raw['provider'] === 'string' ? raw['provider'] : undefined;
 
   const d = DEFAULT_CONFIG;
 
@@ -181,20 +209,31 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
     );
   }
 
-  // villagers
-  const rawVillagers = Array.isArray(raw['villagers']) ? raw['villagers'] : [];
-  if (!Array.isArray(raw['villagers'])) {
+  // villagers — may come from raw JSON directly (legacy) or be populated later via scenario
+  const hasVillagers = Array.isArray(raw['villagers']);
+  const rawVillagers = hasVillagers ? (raw['villagers'] as unknown[]) : [];
+  if (!hasVillagers && !scenario) {
     warnings.push('config: no villagers array — defaulting to empty (R22)');
+  }
+  if (hasVillagers && scenario) {
+    warnings.push('config: both "scenario" and "villagers" set; "scenario" takes precedence (R22)');
   }
   const villagers: VillagerConfig[] = rawVillagers.map((v, i) => {
     const vo = isObj(v) ? v : {};
-    warnUnknown(`villagers[${i}]`, vo, ['name', 'role', 'home', 'chest'], warnings);
-    return {
+    warnUnknown(`villagers[${i}]`, vo, ['name', 'role', 'persona', 'items'], warnings);
+    const rawItems = Array.isArray(vo['items']) ? (vo['items'] as unknown[]) : undefined;
+    const entry: VillagerConfig = {
       name: str(vo, 'name', `villager${i}`),
       role: str(vo, 'role', 'villager'),
-      home: (Array.isArray(vo['home']) ? vo['home'] : [0, 64, 0]) as [number, number, number],
-      chest: (Array.isArray(vo['chest']) ? vo['chest'] : [0, 64, 0]) as [number, number, number],
     };
+    if (typeof vo['persona'] === 'string') entry.persona = vo['persona'];
+    if (rawItems) {
+      entry.items = rawItems
+        .filter(isObj)
+        .map((it) => ({ id: str(it, 'id', ''), count: num(it, 'count', 1) }))
+        .filter((it) => it.id !== '');
+    }
+    return entry;
   });
 
   // god
@@ -202,7 +241,7 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
   warnUnknown(
     'god',
     g,
-    ['name', 'gamemode', 'authoring', 'desks', 'budget', 'combineDesks', 'embodiedVerdicts'],
+    ['name', 'gamemode', 'authoring', 'desks', 'budget', 'combineDesks', 'embodiedVerdicts', 'godPrompt'],
     warnings,
   );
   const desks = isObj(g['desks']) ? g['desks'] : {};
@@ -219,7 +258,7 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
     return { dailyTokens: typeof v === 'number' ? v : null };
   };
   const authoring = str(g, 'authoring', d.god.authoring) === 'god' ? 'god' : 'villager';
-  const god = {
+  const god: EdenConfig['god'] = {
     name: str(g, 'name', d.god.name),
     gamemode: str(g, 'gamemode', d.god.gamemode),
     authoring: authoring as 'villager' | 'god',
@@ -235,6 +274,7 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
     combineDesks: bool(g, 'combineDesks', d.god.combineDesks),
     embodiedVerdicts: bool(g, 'embodiedVerdicts', d.god.embodiedVerdicts),
   };
+  if (typeof g['godPrompt'] === 'string') god.godPrompt = g['godPrompt'];
 
   // behavior
   const beh = isObj(raw['behavior']) ? raw['behavior'] : {};
@@ -244,9 +284,12 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
   // llm (alias-aware)
   const llmRaw = applyAliases('llm', isObj(raw['llm']) ? raw['llm'] : {}, warnings);
   warnUnknown('llm', llmRaw, ['providers', 'maxConcurrent', 'perVillagerCooldownSeconds'], warnings);
-  const providers = isObj(llmRaw['providers']) ? llmRaw['providers'] : {};
-  const provider = (key: 'strong' | 'fast'): ProviderConfig => {
-    const p = isObj(providers[key]) ? providers[key] : {};
+  if ('providers' in llmRaw && provider) {
+    warnings.push('config: llm.providers is ignored when "provider" key is set; remove llm.providers (R22)');
+  }
+  const llmProviders = isObj(llmRaw['providers']) ? llmRaw['providers'] : {};
+  const parseProviderTier = (key: 'strong' | 'fast'): ProviderConfig => {
+    const p = isObj(llmProviders[key]) ? llmProviders[key] : {};
     return {
       baseUrl: str(p, 'baseUrl', d.llm.providers[key].baseUrl),
       model: str(p, 'model', d.llm.providers[key].model),
@@ -254,7 +297,7 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
     };
   };
   const llm = {
-    providers: { strong: provider('strong'), fast: provider('fast') },
+    providers: { strong: parseProviderTier('strong'), fast: parseProviderTier('fast') },
     maxConcurrent: num(llmRaw, 'maxConcurrent', d.llm.maxConcurrent),
     perVillagerCooldownSeconds: num(llmRaw, 'perVillagerCooldownSeconds', d.llm.perVillagerCooldownSeconds),
   };
@@ -297,7 +340,7 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
     retentionDays: d.journal.retentionDays,
   };
 
-  const config: EdenConfig = { minecraft, villagers, god, behavior, llm, skills, settlement, admin, journal };
+  const config: EdenConfig = { minecraft, scenario, provider, apiKeyEnv: undefined, villagers, god, behavior, llm, skills, settlement, admin, journal };
 
   // ── D-11 reserve invariant (R47) — declared in M0-3, ACTIVATES now that the context-pack (M3)
   // consumes inputTokenBudget. A tier that runs a rollout role (the STRONG tier: authoring/revision)
@@ -318,19 +361,30 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
   }
 
   // ── Fatal validations (R11/R12 identity law) ─────────────────────────────
-  const names = villagers.map((v) => v.name);
-  const dup = names.find((n, i) => names.indexOf(n) !== i);
-  if (dup !== undefined) {
-    throw new Error(`config: duplicate villager name "${dup}" — usernames must be unique (R12)`);
-  }
-  if (names.includes(god.name)) {
-    throw new Error(`config: god.name "${god.name}" collides with a villager username (R12)`);
-  }
+  assertIdentity(villagers, god.name);
   if (god.name === V1_RESERVED_AVATAR) {
     warnings.push(`config: god.name "${V1_RESERVED_AVATAR}" is v1's reserved avatar — pick another to coexist`);
   }
 
   return { config, warnings };
+}
+
+/**
+ * Fatal R12 identity check: villager usernames must be unique and none may equal the avatar's name.
+ * Throws (never warns) — Minecraft kicks the second login of a shared username. Called by
+ * {@link parseConfig} AND again after a scenario roster REPLACES the villagers post-parse (the
+ * composition root, which applies the booted scenario): parseConfig only ever saw the empty pre-scenario
+ * array, so the scenario path would otherwise admit a "Dieu" villager or a duplicate name uncaught.
+ */
+export function assertIdentity(villagers: readonly { name: string }[], godName: string): void {
+  const names = villagers.map((v) => v.name);
+  const dup = names.find((n, i) => names.indexOf(n) !== i);
+  if (dup !== undefined) {
+    throw new Error(`config: duplicate villager name "${dup}" — usernames must be unique (R12)`);
+  }
+  if (names.includes(godName)) {
+    throw new Error(`config: god.name "${godName}" collides with a villager username (R12)`);
+  }
 }
 
 /** Read a config file (JSONC tolerated), validate, forward warnings to onWarn, return the config. */

@@ -66,6 +66,12 @@ export interface LlmMessage {
 export interface LlmRequest {
   messages: LlmMessage[];
   tools?: LlmToolDef[];
+  /**
+   * Override the OpenAI `tool_choice` field. When omitted, defaults to `'auto'`.
+   * Use `{ type: 'function', function: { name: '...' } }` to force a specific tool call (R52).
+   * Only sent when `tools` is non-empty.
+   */
+  toolChoice?: string | { type: 'function'; function: { name: string } };
   tier: ModelTier;
   /** Who is calling — becomes the journal `actor` and the `llm.call.caller` field (R41). */
   caller: string;
@@ -178,6 +184,22 @@ function isLocalBaseUrl(baseUrl: string): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0';
 }
 
+/** DeepSeek's hybrid models (deepseek-v4-*) default to thinking mode ON (api-docs.deepseek.com/guides/
+ *  thinking_mode), and thinking mode rejects a forced `tool_choice` with HTTP 400 "Thinking mode does not
+ *  support this tool_choice". Eden's whole desk design FORCES a single tool (R52/R68: critic→verdict,
+ *  curriculum→propose_task/decompose), so thinking mode is unusable here — and the reasoning tokens would
+ *  only burn the throughput budget (D-13). We turn it off for every DeepSeek call (R71). Host-sniffed for
+ *  the same reason auth is (isLocalBaseUrl): the behavior is a property of the endpoint, not a user toggle. */
+function isDeepSeekBaseUrl(baseUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname;
+  } catch {
+    return false;
+  }
+  return host === 'api.deepseek.com' || host.endsWith('.deepseek.com');
+}
+
 /** The OpenAI-compatible chat client. Provider-agnostic; one method, `chat`. */
 export class LlmClient {
   private readonly providers: ProviderRegistry;
@@ -210,7 +232,12 @@ export class LlmClient {
     const wireBody: Record<string, unknown> = { model: provider.model, messages: req.messages.map(toWire) };
     if (req.tools && req.tools.length > 0) {
       wireBody['tools'] = req.tools;
-      wireBody['tool_choice'] = 'auto';
+      wireBody['tool_choice'] = req.toolChoice ?? 'auto';
+    }
+    // R71: disable DeepSeek's default-on thinking mode — it 400s on Eden's forced tool_choice and only
+    // burns the throughput budget. Top-level field (what the OpenAI SDK's `extra_body` sends over the wire).
+    if (isDeepSeekBaseUrl(provider.baseUrl)) {
+      wireBody['thinking'] = { type: 'disabled' };
     }
     const started = this.now();
     const timeoutMs = req.timeoutMs ?? this.timeoutMs;

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { FakeBot } from './fakes/fake-bot';
 import { MemoryJournal } from './fakes/memory-journal';
 import { SkillLibrary, AllGranted, type DraftInput } from '../src/skills/library';
+import { seedStockSkills } from '../src/skills/exemplars/index';
 import {
   SkillEngine,
   TierGateError,
@@ -230,6 +231,29 @@ test('D-12(iii): a probationary skill is refused as a composition callee but run
   assert.equal(graduated.outcome.ok, true, 'graduated skill is now composable');
 });
 
+test('R57: clean ROOT runs through engine.run graduate a probation skill (recordProbationRun is wired)', async () => {
+  // Regression for the wiring gap: recordProbationRun existed but had no runtime caller, so admitted
+  // skills stayed active-probation forever → never composable → villagers churned re-authoring wrappers.
+  // This drives graduation through engine.run (the real path), NOT by calling recordProbationRun directly.
+  const h = harness();
+  seed(h.library, { name: 'helper', code: 'async function helper(bot, a, c) { return { ok: 1 }; }' }, 'active-probation');
+  seed(h.library, { name: 'user', code: "async function user(bot, a, c) { return c.skills.run('helper', {}); }" });
+
+  // A failed root run must NOT advance graduation (only clean runs count — D-12).
+  seed(h.library, { name: 'boom', code: 'async function boom(bot, a, c) { throw new Error("nope"); }' }, 'active-probation');
+  for (let i = 0; i < 5; i++) await h.engine.run('boom', {}, MORTAL);
+  assert.equal(h.library.activeVersion('boom')?.status, 'active-probation', 'failed runs never graduate');
+
+  // Three clean direct runs (probationRuns = 3) graduate helper → it becomes composable.
+  for (let i = 0; i < 3; i++) {
+    const r = await h.engine.run('helper', {}, MORTAL);
+    assert.equal(r.outcome.ok, true);
+  }
+  assert.equal(h.library.activeVersion('helper')?.status, 'active', 'graduated after 3 clean root runs');
+  const composed = await h.engine.run('user', {}, MORTAL);
+  assert.equal(composed.outcome.ok, true, 'a graduated skill is now composable');
+});
+
 // ── Preemption (D-05 + R9) ───────────────────────────────────────────────────
 test('R9: an interrupt preempts the running tree, reported as aborted:"preempted" (benign)', async () => {
   const h = harness();
@@ -261,4 +285,39 @@ test('M2-3: a success resets the tripwire counter (R36 — every suppressor has 
   await h.engine.run('flappy', { fail: false }, MORTAL); // success resets
   await h.engine.run('flappy', { fail: true }, MORTAL); // only 1 consecutive failure now
   assert.deepEqual(h.tripwired, [], 'the streak reset on success');
+});
+
+// ── D1: ctx.mcData = bot.registry (live-test finding 2026-06-16) ──────────────
+test('D1: ctx.mcData exposes the bot registry so a skill reads itemsByName[...].id (no undefined deref)', async () => {
+  const h = harness();
+  // The LLM writes the mineflayer-idiomatic `ctx.mcData.itemsByName[name]?.id`. Before the fix the ctx
+  // had no mcData handle, so this dereferenced `undefined` ("Cannot read properties of undefined").
+  seed(h.library, {
+    name: 'lookup',
+    code: "async function lookup(bot, a, c) { return { id: c.mcData.itemsByName['oak_log'] && c.mcData.itemsByName['oak_log'].id, blockId: c.mcData.blocksByName['stone'] && c.mcData.blocksByName['stone'].id }; }",
+  });
+  const report = await h.engine.run('lookup', {}, MORTAL);
+  assert.equal(report.outcome.ok, true, report.outcome.ok ? '' : report.outcome.error);
+  const value = report.outcome.ok ? (report.outcome.value as { id: unknown; blockId: unknown }) : { id: null, blockId: null };
+  assert.equal(typeof value.id, 'number', 'ctx.mcData.itemsByName resolved a real numeric id');
+  assert.equal(typeof value.blockId, 'number', 'ctx.mcData.blocksByName resolved a real numeric id');
+});
+
+test('D1: a stock registry lookup of an unknown item fails with a NAMED error, not a raw undefined deref', async () => {
+  // place-item resolves the held item via the inlined itemId() guard. An unknown name must surface the
+  // named "unknown item ..." message (S10) — never the cryptic "Cannot read properties of undefined".
+  const bot = new FakeBot({ username: 'Firmin' });
+  bot.setUnknownItems(['__nope__']); // model a real mineflayer registry miss
+  const h = harness({ bot });
+  seedStockSkills(h.library);
+  const report = await h.engine.run(
+    'place-item',
+    { item: '__nope__', x: 1, y: 64, z: 0 },
+    MORTAL,
+  );
+  assert.equal(report.outcome.ok, false);
+  const err = report.outcome.ok ? '' : report.outcome.error;
+  assert.match(err, /unknown item "__nope__"/, 'the error names the offending item');
+  assert.match(err, /itemsByName/, 'the error names the lookup path (D1)');
+  assert.doesNotMatch(err, /Cannot read properties of undefined/, 'no cryptic undefined deref');
 });

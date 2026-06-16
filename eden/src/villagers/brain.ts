@@ -65,6 +65,9 @@ export interface BrainOptions {
 }
 
 const DEFAULT_MAX_TURNS = 16;
+/** R60: search_skills calls allowed per deliberation before the tool is withdrawn and action is forced.
+ *  A hardcoded circuit breaker (S7), like the scheduler rate cap — discovery is cheap, looping on it is not. */
+const SEARCH_CALL_CAP = 3;
 
 /** Runs villager deliberations. One per host; stateless across deliberations (state lives in inputs). */
 export class Brain {
@@ -123,8 +126,15 @@ export class Brain {
     const reportsToGod: string[] = [];
     let done: { summary: string; mood?: string } | undefined;
 
+    // Search circuit breaker (R60): search_skills is read-only discovery. A reasoning model will otherwise
+    // burn the whole deliberation firing query after query and never act (observed: gpt-5 doing 4+ searches
+    // across turns at ~3200 reasoning tokens each, hitting the tool-turn ceiling with zero write/run). After
+    // SEARCH_CALL_CAP searches we WITHDRAW the tool for the rest of the wake-up and force a decision.
+    let searchCalls = 0;
+    let activeTools = toolDefs;
+
     for (let turn = 0; turn < this.maxToolTurns && !done; turn++) {
-      const result = await this.client.chat({ messages, tools: toolDefs, tier: input.tier, caller, refs });
+      const result = await this.client.chat({ messages, tools: activeTools, tier: input.tier, caller, refs });
       messages.push({
         role: 'assistant',
         content: result.content,
@@ -141,6 +151,7 @@ export class Brain {
       // the next provider call, even when `done` is one of several calls.
       let sawDone = false;
       for (const call of result.toolCalls) {
+        if (call.name === 'search_skills') searchCalls++;
         const outcome = await this.tools.dispatch(call, ctx);
         toolCalls++;
         this.journal.append(caller, 'brain.tool-call', { villager: input.villager, tool: call.name, ok: outcome.ok ?? true }, refs);
@@ -159,6 +170,17 @@ export class Brain {
       // Defensive R20 guard: ensure no tool call in this turn was left unanswered.
       completeDanglingPairs(messages);
       if (sawDone) break;
+      // R60 breaker: once the search budget is spent, withdraw search_skills and force action this wake-up.
+      if (searchCalls >= SEARCH_CALL_CAP && activeTools.some((t) => t.function.name === 'search_skills')) {
+        activeTools = activeTools.filter((t) => t.function.name !== 'search_skills');
+        messages.push({
+          role: 'user',
+          content:
+            'Assez de recherches — search_skills est désormais désactivé pour ce réveil. Les outils, les ' +
+            'exemples et les skills déjà vus suffisent. AGIS maintenant : écris/compose un skill (write_skill) ' +
+            'puis essaie-le (run_skill), ou termine (done). N’explore plus.',
+        });
+      }
     }
 
     if (!done) done = { summary: '(plafond de tours d’outils atteint)' };

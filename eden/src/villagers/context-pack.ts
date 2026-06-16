@@ -63,6 +63,10 @@ export interface ContextPackInput {
   memories: string[];
   // §7 Capabilities
   retrievedSkills: RankedSkill[];
+  /** P2: the always-available stock primitive palette (name — signature — summary), composable via
+   *  ctx.skills.run. Authoring packs render it (deduped vs retrieved + exemplars) so the base building
+   *  blocks are present even when goal-retrieval ranks none of them. Optional → omitted = no palette. */
+  primitives?: Array<{ name: string; signature: string; summary: string }>;
   exemplars: Array<{ name: string; code: string }>;
   /** Exemplar FULL code only when the wake-up plausibly involves authoring (04 §7). */
   includeExemplarCode: boolean;
@@ -221,12 +225,61 @@ export class ContextPackBuilder {
   private renderCapabilities(i: ContextPackInput): string {
     const lines: string[] = [];
     lines.push(`Outils: ${i.toolNames.join(', ')}`);
+    // R60: steer away from search-looping — discovery is 1–2 calls, then act. (A hard cap backstops this.)
+    lines.push(
+      'Méthode : search_skills sert à DÉCOUVRIR (1–2 fois suffisent), pas à explorer en boucle. ' +
+        'Ensuite AGIS — run_skill (ou write_skill puis run_skill pour une nouvelle compétence), puis done.',
+    );
     if (i.retrievedSkills.length > 0) {
-      lines.push('Skills pertinents:');
+      lines.push('Compétences réutilisables — exécute-les avec run_skill, ou compose-les dans ton code avec ctx.skills.run :');
       for (const s of i.retrievedSkills) lines.push(`- ${s.name} — ${s.signature} — ${s.summary}`);
     }
+    // P2 — the base primitive palette: the stock building blocks are ALWAYS available to compose, even when
+    // task retrieval (top-k on the goal) ranks none of them. Authoring-only (you compose them in code via
+    // ctx.skills.run); deduped against what is already shown (retrieved one-liners + exemplar full code) so a
+    // skill is never listed twice. Without it, a villager whose goal didn't surface go-to/craft-item/… would
+    // re-implement movement/crafting by hand — the same monolithic-skill failure mode P1 targets.
+    if (i.includeExemplarCode && i.primitives && i.primitives.length > 0) {
+      const shown = new Set([...i.retrievedSkills.map((s) => s.name), ...i.exemplars.map((e) => e.name)]);
+      const palette = i.primitives.filter((p) => !shown.has(p.name));
+      if (palette.length > 0) {
+        lines.push('Briques de base toujours disponibles (compose-les avec ctx.skills.run) :');
+        for (const p of palette) lines.push(`- ${p.name} — ${p.signature} — ${p.summary}`);
+      }
+    }
+    // P1 — composition doctrine, only on an AUTHORING wake-up (the one that writes code). The composition
+    // mechanism (ctx.skills.run) already exists and the exemplars use it, but nothing told the villager to
+    // PREFER it — so drafts came out monolithic until they blew the maxSkillLines cap. State it up front
+    // (docs/02 §power-ceiling specced exactly this — "compose go-to/craft-item, do not hand-roll"). The last
+    // line is load-bearing: a callee must be ALREADY in the library (readRunnable = active/active-probation),
+    // so composing a draft authored this same turn throws — telling the model avoids wasted tool turns.
+    if (i.includeExemplarCode) {
+      lines.push(
+        'Composer plutôt que copier : avant d’écrire de la logique, regarde les compétences réutilisables ' +
+          'ci-dessus et les exemples ci-dessous. Si l’une fait déjà une étape (se déplacer, miner, fabriquer, ' +
+          'labourer, semer, utiliser un coffre…), APPELLE-la depuis ton code au lieu de la réécrire :',
+      );
+      lines.push('  await ctx.skills.run(\'go-to\', { x, y, z, range: 2 });');
+      lines.push(
+        'N’écris à la main que le comportement réellement nouveau. Garde chaque skill court et mono-tâche : ' +
+          'un skill long qui enchaîne plusieurs étapes distinctes doit composer des sous-skills éprouvés. ' +
+          'Tu ne composes qu’une compétence DÉJÀ dans la bibliothèque, jamais un brouillon écrit à l’instant.',
+      );
+      // D2 (finding from the live journal): drafts returned { ok: true } that the world contradicted —
+      // a chest "deposit" that placed no chest, a "craft" that handed over pre-existing items. The critic
+      // catches these by world-delta (D-12), but each false success burns a full author→run→judge→revise
+      // cycle. State the doctrine at authoring time: confirm the world effect before claiming success.
+      lines.push(
+        'VÉRIFIE avant de réussir : ne renvoie { ok: true } qu’après avoir CONFIRMÉ dans le monde que l’effet ' +
+          'visé a bien eu lieu — relis l’état réel (p. ex. bot.blockAt(pos) pour vérifier qu’un bloc/coffre posé ' +
+          'existe et est du bon type ; compare un compte d’items AVANT vs APRÈS pour attribuer le gain à CETTE ' +
+          'exécution). Ne réussis jamais depuis une précondition déjà vraie (déposer des items que tu possédais ' +
+          'déjà) ni depuis un appel qui n’a fait que TENTER l’action. Si l’effet n’est pas confirmé, renvoie ' +
+          '{ ok: false, error: "<cause nommée>" }.',
+      );
+    }
     if (i.includeExemplarCode && i.exemplars.length > 0) {
-      lines.push('Exemples (code complet à imiter):');
+      lines.push('Exemples (code complet à imiter ; remarque les appels ctx.skills.run pour composer) :');
       for (const e of i.exemplars) lines.push(`// ${e.name}\n${e.code}`);
     }
     return lines.join('\n');

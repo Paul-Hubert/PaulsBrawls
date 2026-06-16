@@ -11,3 +11,5 @@ coverage/
 ecosystem.config.cjs
 .smoke/
 live-tests/.runs/
+providers.json
+api-keys.env

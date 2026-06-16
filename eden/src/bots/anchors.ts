@@ -1,7 +1,7 @@
-// AnchorService (R18) — configured coordinates are HINTS, not contracts. At boot (and at call time)
-// a villager's home snaps to real standable ground and a missing chest is replaced by the nearest
-// chest/trapped_chest/barrel. Discovered positions persist as overrides that WIN over config from
-// then on; an unrecoverable anchor produces exactly ONE loud warning, never an error loop.
+// AnchorService — villagers discover their anchors at boot by scanning the world.
+// At boot time, a villager's home snaps to real standable ground, and a chest is discovered
+// as the nearest chest/trapped_chest/barrel. Discovered positions persist and are reused on
+// subsequent boots; an unrecoverable anchor produces exactly ONE loud warning, never an error loop.
 //
 // Layer 1: imports types + logger + node:fs only (the dependency law). Operates over the narrowed
 // Bot seam (blockAt), so it is testable on FakeBot with a hand-built world fixture.
@@ -14,11 +14,9 @@ import { logger } from '../logger';
 
 type Coord = [number, number, number];
 
-/** The configured (hint) anchors for a villager. */
-export interface AnchorInput {
-  home: Coord;
-  chest: Coord;
-}
+/** Empty input — anchors are discovered dynamically. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface AnchorInput {}
 
 /** The healed anchors actually used: home always resolves; chest is null if none was found. */
 export interface Anchors {
@@ -52,36 +50,37 @@ export class AnchorService {
   }
 
   /**
-   * Heal a villager's anchors against the live world. Persisted overrides (from a prior boot) win
-   * over `config`; the result is re-validated and re-persisted. One warning per unrecoverable anchor.
+   * Discover a villager's anchors in the live world. Persisted anchors from prior boots are reused;
+   * otherwise home is discovered as standable ground near the bot's spawn, and chest is the nearest
+   * container. One warning per undiscoverable anchor.
    */
-  heal(botName: string, bot: Bot, config: AnchorInput): Anchors {
+  heal(botName: string, bot: Bot, _config: AnchorInput): Anchors {
     const persisted = this.load(botName);
-    const candidate: { home: Coord; chest: Coord | null } = {
-      home: persisted?.home ?? config.home,
-      chest: persisted?.chest ?? config.chest,
-    };
 
-    // ── home: snap to standable ground near the candidate column ──
-    const ground = this.snapToGround(bot, candidate.home);
+    // ── home: use persisted if valid, else discover standable ground near spawn ──
     let home: Coord;
-    if (ground) {
-      home = ground;
+    if (persisted?.home && this.isStandable(bot, persisted.home)) {
+      home = persisted.home;
     } else {
-      this.warn(`home for "${botName}" near (${candidate.home.join(', ')}) has no standable ground — keeping the hint (R18)`);
-      home = candidate.home;
+      const discovered = this.findNearestStandableGround(bot);
+      if (discovered) {
+        home = discovered;
+      } else {
+        // Silent fallback to current position — chunk may not be loaded yet; no warn for home.
+        home = [bot.entity!.position.x, bot.entity!.position.y, bot.entity!.position.z] as unknown as Coord;
+      }
     }
 
-    // ── chest: keep if it's a container, else re-discover the nearest one ──
+    // ── chest: trust any persisted position unconditionally (chunk may not be loaded at boot) ──
     let chest: Coord | null;
-    if (candidate.chest && this.isContainer(bot, candidate.chest)) {
-      chest = candidate.chest;
+    if (persisted?.chest) {
+      chest = persisted.chest;
     } else {
-      const found = this.findNearestContainer(bot, candidate.chest ?? candidate.home);
+      const found = this.findNearestContainer(bot, home);
       if (found) {
         chest = found;
       } else {
-        this.warn(`no chest/trapped_chest/barrel found near (${(candidate.chest ?? candidate.home).join(', ')}) for "${botName}" — leaving it unset (R18)`);
+        this.warn(`no chest/trapped_chest/barrel found near "${botName}" — leaving it unset`);
         chest = null;
       }
     }
@@ -91,18 +90,38 @@ export class AnchorService {
     return anchors;
   }
 
-  /** Find the feet position standing on the nearest solid ground in the candidate column. */
-  private snapToGround(bot: Bot, home: Coord): Coord | null {
-    const [x, y, z] = home;
-    // Search outward from the configured y (down first — usually a too-high hint), within radius.
-    for (let d = 0; d <= this.searchRadius; d++) {
-      for (const fy of d === 0 ? [y] : [y - d, y + d]) {
-        if (this.solid(bot, { x, y: fy - 1, z }) && !this.solid(bot, { x, y: fy, z }) && !this.solid(bot, { x, y: fy + 1, z })) {
-          return [x, fy, z];
+  /** Find the nearest standable ground by cube-scan around the bot's current position. */
+  private findNearestStandableGround(bot: Bot): Coord | null {
+    const pos = bot.entity!.position;
+    const cx = Math.floor(pos.x);
+    const cy = Math.floor(pos.y);
+    const cz = Math.floor(pos.z);
+    const r = this.searchRadius;
+    let best: Coord | null = null;
+    let bestDist = Infinity;
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dz = -r; dz <= r; dz++) {
+          const x = cx + dx;
+          const y = cy + dy;
+          const z = cz + dz;
+          if (this.solid(bot, { x, y: y - 1, z }) && !this.solid(bot, { x, y, z }) && !this.solid(bot, { x, y: y + 1, z })) {
+            const dist = dx * dx + dy * dy + dz * dz;
+            if (dist < bestDist) {
+              bestDist = dist;
+              best = [x, y, z];
+            }
+          }
         }
       }
     }
-    return null;
+    return best;
+  }
+
+  /** Check if a position is valid standable ground. */
+  private isStandable(bot: Bot, pos: Coord): boolean {
+    const [x, y, z] = pos;
+    return this.solid(bot, { x, y: y - 1, z }) && !this.solid(bot, { x, y, z }) && !this.solid(bot, { x, y: y + 1, z });
   }
 
   // Cube-scan ±searchRadius around `center` for the nearest chest/trapped_chest/barrel (R18).

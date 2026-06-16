@@ -12,15 +12,16 @@ import { pathToFileURL } from 'node:url';
 
 import { Journal } from '../journal/journal';
 import type { JournalReader } from '../views/index';
-import { SkillStatsView, CompetenceView, RelationsView, TradeLedgerView } from '../views/index';
+import { SkillStatsView, CompetenceView, RelationsView, TradeLedgerView, RolloutsView } from '../views/index';
 import { logger } from '../logger';
 
-/** The four rebuilt views' values — exactly the aggregates the admin / website render. */
+/** The five rebuilt views' values — exactly the aggregates the admin / website render. */
 export interface RebuiltStats {
   skillStats: ReturnType<SkillStatsView['value']>;
   competence: ReturnType<CompetenceView['value']>;
   relations: ReturnType<RelationsView['value']>;
   tradeLedger: ReturnType<TradeLedgerView['value']>;
+  rollouts: ReturnType<RolloutsView['value']>;
 }
 
 /**
@@ -32,15 +33,18 @@ export function rebuildStats(journal: JournalReader): RebuiltStats {
   const competence = new CompetenceView();
   const relations = new RelationsView();
   const tradeLedger = new TradeLedgerView();
+  const rollouts = new RolloutsView();
   skillStats.rebuildByReplay(journal);
   competence.rebuildByReplay(journal);
   relations.rebuildByReplay(journal);
   tradeLedger.rebuildByReplay(journal);
+  rollouts.rebuildByReplay(journal);
   return {
     skillStats: skillStats.value(),
     competence: competence.value(),
     relations: relations.value(),
     tradeLedger: tradeLedger.value(),
+    rollouts: rollouts.value(),
   };
 }
 
@@ -54,7 +58,7 @@ export function main(dataDir = '.eden-data'): void {
     const skills = Object.keys(stats.skillStats).length;
     const villagers = Object.keys(stats.competence).length;
     const relations = Object.values(stats.relations).reduce((n, m) => n + Object.keys(m).length, 0);
-    logger.info('admin', `rebuild-stats from ${dbPath}: ${skills} skill(s), ${villagers} villager(s), ${relations} relation edge(s), ${stats.tradeLedger.length} trade(s)`);
+    logger.info('admin', `rebuild-stats from ${dbPath}: ${skills} skill(s), ${villagers} villager(s), ${relations} relation edge(s), ${stats.tradeLedger.length} trade(s), ${stats.rollouts.length} rollout(s)`);
     logger.info('admin', JSON.stringify(stats, null, 2));
   } finally {
     journal.close();

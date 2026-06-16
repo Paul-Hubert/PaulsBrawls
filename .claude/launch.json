@@ -6,6 +6,13 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["-y", "http-server", "docs", "-p", "8088", "-c-1"],
       "port": 8088
+    },
+    {
+      "name": "eden-dashboard",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["eden/node_modules/tsx/dist/cli.mjs", "eden/.smoke/serve.ts"],
+      "port": 8791,
+      "autoPort": true
     }
   ]
 }

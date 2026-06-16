@@ -62,7 +62,12 @@ export function loadRoles(path: string = DEFAULT_ROLES_PATH): RolesConfig {
 /**
  * Seed a villager's role defaults (everyone + its role block) — FIRST boot only. Returns how many it
  * created. Idempotent: a villager that already holds any subscription is left untouched (no duplicates).
- * A role spec that duplicates an everyone spec (same event + handler kind) is skipped (no double-reflex).
+ *
+ * Per-event role OVERRIDE (D-15): a role block is the MORE SPECIFIC policy, so a role spec on event E
+ * REPLACES every `everyone` spec on E rather than piling on top of it. This is what lets a guard's
+ * `hurt → defend-self` (fight) win over everyone's `hurt → flee-to-safety` (flee) — the two would
+ * otherwise both seed and the guard would flee + fight at once. (Was: a same-event+same-kind role spec
+ * was SKIPPED in favour of everyone — the opposite of what a role override needs.)
  */
 export function seedRoleDefaults(
   store: SubscriptionStore,
@@ -71,10 +76,10 @@ export function seedRoleDefaults(
   roles: RolesConfig,
 ): number {
   if (store.list(villager).length > 0) return 0; // already seeded (or self-authored) — first boot only
-  const everyone = roles.everyone ?? [];
-  const roleBlock = (roles[role] ?? []).filter(
-    (r) => !everyone.some((e) => e.on === r.on && e.handler.kind === r.handler.kind),
-  );
+  const roleBlock = roles[role] ?? [];
+  const overriddenEvents = new Set(roleBlock.map((r) => r.on));
+  // Drop any everyone reflex whose event the role redefines — the role's reflex for that event wins.
+  const everyone = (roles.everyone ?? []).filter((e) => !overriddenEvents.has(e.on));
   let seeded = 0;
   for (const spec of [...everyone, ...roleBlock]) {
     store.add({

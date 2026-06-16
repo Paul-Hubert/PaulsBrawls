@@ -3,6 +3,518 @@
 One dated section per session: what was done, decisions taken, what's next,
 surprises. Newest first.
 
+## 2026-06-16 — R66: fix the /villagers restart duplicate-login kick storm
+- Symptom (from the live admin journal): a single bot (`Harry`) connect/kick-looped at ~1 Hz,
+  reaching `system.bot-connected` every cycle BEFORE the kick, reason logged `kicked: [object Object]`.
+- Root cause (two compounding bugs in [eden/src/bots/pool.ts](../eden/src/bots/pool.ts), set off by the
+  restart race): `restart()` ([village-launch.ts](../eden/src/village-launch.ts)) calls `pool.stop()`
+  (fire-and-forget `bot.quit()` — TCP FIN not yet processed) then immediately `pool.start()` (resets
+  `stopping=false`, re-spawns). The fresh login overlaps the old session → server evicts one with
+  `multiplayer.disconnect.duplicate_login` (the ONE-pool variant of R53). `onEnd`/`onSpawn`/`onDeath`
+  looked up the record by **member NAME** — now pointing at the *replacement* bot — so the superseded
+  instance's `kicked`/`end` clobbered its replacement's record and scheduled a phantom reconnect →
+  self-inflicted storm; `onSpawn` reset `reconnectAttempts=0` each brief spawn so the backoff never
+  climbed. The reason was destroyed because the 1.21 `kicked` payload is a chat-component OBJECT and
+  `String(obj)` → `[object Object]`.
+- Fix: every lifecycle listener closes over THIS bot instance; handlers are **identity-guarded**
+  (`rec.bot !== bot → return`) so a superseded instance can neither mutate its successor's record nor
+  reconnect. Added `formatEndReason`/`reasonText` (pulls `{text}`/`{value}`/`{translate}` out of chat
+  components, JSON fallback) so a reason is never lost (S10).
+- Tests: 2 new regressions in `tests/bots-pool-coverage.test.ts` (superseded kicked+end → no new bot,
+  live record untouched; object reason renders `duplicate_login`, never `[object Object]`).
+  `npm run check` green — **516/516**.
+- Diagnostic tells filed in R66: a connect-storm reaching `bot-connected` every cycle is a duplicate-login
+  eviction (post-spawn), NOT a login throttle (pre-spawn); `[object Object]` in a reason is always a
+  stringified chat component.
+- Next: **restart the real host** (`tsx src/main.ts eden.json`; pm2 is currently empty) to pick up the
+  fix — the storming host was already stopped on the interrupt.
+
+## 2026-06-16 — bread-economy skill pipeline + runtime library dedup
+- Done: collapsed the live runs' farming-skill sprawl into ONE canonical skill per action,
+  composed into find→act pairs, then a single loop — all as **stock skills** in
+  [eden/src/skills/exemplars/index.ts](../eden/src/skills/exemplars/index.ts) (seeded `active`,
+  so immediately composable; CI-validated against FakeBot; survive data-dir wipes):
+  - finds (return `{found,…}`, never throw — caller branches): **find-till-spot** (dirt near
+    water, bounded 9×9×2 hydration-box scan around a found water block — never the blind grid
+    flood find-block warns against), **find-harvestable-plant** (mature crop by block.metadata
+    age; no-metadata fakes/servers treated as grown), **find-crafting-table**.
+  - actions (one world effect): **harvest-plant** (refuses a non-crop block), **pickup-drops**
+    (walk onto item entities — gap E), **make-bread** (3 wheat → table-gated craft), **store-in-chest**
+    (nearest-chest fallback). The atomic till/sow stay the existing **till-block/sow-seed** (R55) —
+    reused, NOT re-minted (the whole dedup point).
+  - pairs: **till-spot-near-water** (find-till-spot→till-block), **harvest-nearby-crop**
+    (find→harvest→pickup). Loop: **tend-bread-farm** sequences every pair (harvest+replant OR
+    till+sow near water; bake when wheat≥threshold; stash loaves), per-cycle `sleep` keeps the
+    macrotask queue draining (gap W) and `ctx.signal` exits cleanly on preempt/stall.
+  - 11 new exemplar tests in skills-exemplars.test.ts; `npm run check` green (lint/tsc/depcruise
+    clean, **514/514**).
+  - **Runtime library deduped**: pruned `.eden-data/library/` from 173 → 27 dirs (146 LLM-churn
+    authored duplicates removed: 8 "dirt-near-water" finders, a dozen till-and-plant rows, the
+    place-chest-deposit-bread wrappers, debug/diag/inspect scratch skills, collect_nearby_oak_logs,
+    …). Full reversible backup at `.eden-data/library-backup-20260616-051327.tar.gz`. The 10 new
+    skills seed on next host boot. **Restart the host to reload the pruned library + seed them.**
+- Decisions (D#/R# if any): no new D/R minted. Portability lesson (candidate R): a stock/exemplar
+  skill must use `Math.hypot(...)` for distances, NOT `bot.entity.position.distanceTo(...)` — the
+  latter is a real-mineflayer Vec3 method ABSENT on FakeBot's plain `{x,y,z}` position, so it
+  throws only when a composition path reaches it (craft-item's table-distance branch had it; the
+  existing craft-item test never set a table block so never hit it — make-bread did). Fixed
+  craft-item to Math.hypot (identical on real mineflayer, FakeBot-safe; matches go-to/till-block).
+  kill-mob has the same latent `distanceTo` (untested in CI, works on real) — left as-is, noted.
+- Next: smoke the bread loop on the live server (`npm run live-test`) — the FakeBot craft seam
+  doesn't mint a named `bread`, so make-bread/store-in-chest end-to-end is only proven live.
+- Surprises: none — the dedup made the latent craft-item portability gap finally testable.
+
+## 2026-06-16 — steer villagers to COMPOSE skills, not write monolithic ones (P1/P2/P3/P5)
+- **Why:** the composition *mechanism* is complete (`ctx.skills.run`, depth cap 8, cycle detection, the
+  exemplars themselves compose — `craft-item`→`go-to`, `use-chest`→`go-to`, `deposit`→`use-chest`), but nothing
+  proactively told a villager to PREFER reuse. Drafts came out long/monolithic and only hit a nudge when they
+  blew the `maxSkillLines=400` hard cap (reactive, and most skills never reach it). docs/02 §power-ceiling
+  already *specced* an authoring-prompt rule ("compose go-to/craft-item, do not hand-roll") that was never built.
+- **Change (prompt/data + doctrine only — no engine change, no dependency-law risk):**
+  - **P1 — authoring doctrine** in [eden/src/villagers/context-pack.ts](../eden/src/villagers/context-pack.ts)
+    `renderCapabilities`: on an authoring wake-up (`includeExemplarCode`) it now prints a "Composer plutôt que
+    copier" block with the explicit `await ctx.skills.run('go-to', {…})` call shape, and reframes the retrieved
+    list header to "Compétences réutilisables — exécute-les avec run_skill, ou compose-les … avec ctx.skills.run".
+    The doctrine states the structural truth that a callee must already be in the library (active /
+    active-probation) — you cannot compose a draft authored the same turn — so the model doesn't waste tool turns.
+  - **P2 — the primitive palette** (same `renderCapabilities`, wired through [eden/src/main.ts](../eden/src/main.ts)):
+    every MORTAL non-exemplar stock skill is rendered as a `name — signature — summary` one-liner under "Briques
+    de base toujours disponibles (compose-les avec ctx.skills.run)" on authoring packs, deduped vs the exemplar
+    set (shown as full code) and the retrieved one-liners. Signatures come from `renderSignature` (D-04, generated
+    from schemas). This closes R61's blind spot: when goal-retrieval ranks none of `go-to`/`craft-item`/`use-chest`,
+    the villager still sees the base vocabulary instead of re-implementing it. `RolloutCoordinatorOptions` gains an
+    optional `primitives` (absent → no palette, so M3/M4 tests are unchanged); `assignAndRun` passes it.
+  - **P3 — critic teaches it** ([eden/src/god/prompts/critic.md](../eden/src/god/prompts/critic.md)): a new
+    "Prefer composition over re-implementation" rule — the instructive critique for hand-rolled behavior is
+    "replace lines X–Y with `ctx.skills.run('<skill>', …)`", and a long inlined skill is flagged for decomposition.
+  - **P5 — curriculum decomposes** ([eden/src/god/prompts/curriculum.md](../eden/src/god/prompts/curriculum.md)):
+    a "Decompose big goals into composable steps" rule + a strengthened `decompose` tool line — a goal that would
+    force one long multi-step skill is the signal to `decompose` into sub-tasks that each grow ONE composable skill.
+- **Why P5 over "let villagers split a skill mid-rollout":** the engine's composer resolves callees via
+  `readRunnable` (active/active-probation only), so a freshly-authored draft helper is not composable in the same
+  rollout. The architecture-sanctioned path to "split a big thing" is curriculum `decompose` across rollouts.
+- **Not touched (deliberate):** the D-12 probation-before-composition rail — a just-admitted skill isn't composable
+  for `probationRuns=3` runs. It's an owner decision (one of the three D-12 rails) and self-heals via
+  `recordProbationRun`; left as a known, documented tension, not relitigated.
+- **Tests (golden, S6):** `tests/villagers-context-pack.test.ts` (authoring carries the doctrine + call shape;
+  P2 palette renders + dedupes vs exemplars/retrieved; reactive omits both), `tests/god-critic.test.ts`
+  (`/compos/i` + `ctx.skills.run`), `tests/god-curriculum.test.ts` (`/decompose/` + `/compos/i`),
+  `tests/loop-integration.test.ts` (retrieved-skills header rename). `npm run check` green (lint + tsc +
+  dependency-cruiser clean, all node:test tests pass).
+- **D2 — verify the world effect before returning success (R64, authoring doctrine):** the live journal showed
+  drafts self-reporting `{ ok: true }` the world contradicted — a chest-"deposit" reported `placed:true` after
+  consuming 8 planks but placed no chest; another "succeeded" by depositing PRE-EXISTING bread, not bread it
+  crafted this run. God's critic catches these by world-delta (the D-12 check-veto rail, R34), but each false
+  success burns a full author→run→judge→revise cycle. Fix (prompt/data only, same altitude as the composition
+  doctrine above — the engine can't know task semantics, only the critic can): the authoring wake-up in
+  `renderCapabilities` (the `includeExemplarCode` block) now prints a "VÉRIFIE avant de réussir" rule — re-read
+  real world state (`bot.blockAt(pos)` to confirm a placed block/container; compare an item count BEFORE vs
+  AFTER to attribute the gain to THIS run), never succeed from a precondition that already held or a call that
+  only attempted the action, return `{ ok: false, error }` otherwise. The `write_skill` tool description carries
+  the same clause. `critic.md` already states the world-delta rule (lines 14-18) — left untouched. Pinned by the
+  new `M3-1 (§7)` assertions in `tests/villagers-context-pack.test.ts`.
+- **Next:** a funded live re-run — confirm authored drafts now call `ctx.skills.run` for known steps instead of
+  re-implementing movement/crafting, that mean authored-skill length drops, and that the false-success draft
+  RATE falls (fewer critic world-delta vetoes per admitted skill).
+
+## 2026-06-16 — skill ctx had no `mcData`; stock registry lookups unguarded (D1/R62)
+- **Symptom (from the live journal):** authored skills crashed on real mineflayer with `TypeError: Cannot read
+  properties of undefined (reading 'itemsByName')` / `(reading 'id')`.
+- **Root cause (D1, two coupled bugs):** (1) the injected `SkillContext` exposed **no `mcData`** handle, yet
+  the LLM writes the idiomatic `ctx.mcData.itemsByName[name].id` / `mcData.blocksByName[...]` — so it
+  dereferenced `undefined`; (2) the STOCK skills did `bot.registry.itemsByName[name].id` **unguarded**, so an
+  unknown item name threw the same cryptic `reading 'id'` instead of a named error. The "ctx-lockstep" class
+  the CLAUDE.md gotchas warn about (sibling of Z/C/E).
+- **Fix (minimal, S3 — no new module):**
+  - [eden/src/skills/engine.ts](../eden/src/skills/engine.ts): `makeCtx` now sets `mcData: bot.registry` (the
+    real `bot.registry` IS the prismarine-registry / minecraft-data instance); `SkillContext` gains a
+    doc-commented `mcData: ItemRegistry | undefined`.
+  - [eden/src/types/bot.ts](../eden/src/types/bot.ts): `ItemRegistry` gains optional `blocksByName` (a real
+    mineflayer field; one source of truth for the ctx type).
+  - [eden/src/skills/exemplars/index.ts](../eden/src/skills/exemplars/index.ts): a file-local inlined
+    `itemId(bot, name)` guard (`ITEM_ID_HELPER`) routes the five unguarded lookups (`use-chest` ×2,
+    `smelt-item` ×2, `place-item`, and `craft-item`) and throws `unknown item "<name>" — not in
+    bot.registry.itemsByName (D1)` (S10). Inlined into each isolated JS skill string (a TS helper isn't in
+    scope inside them), NOT exported.
+  - [eden/tests/fakes/fake-bot.ts](../eden/tests/fakes/fake-bot.ts): a `blocksByName` Proxy + a
+    `setUnknownItems()` seam so the named-error path is testable without a server.
+- **Decisions (R#):** R62 (give ctx an `mcData` handle + NAME every registry-lookup failure — the field skills
+  are told they can call must move in lockstep with the runtime ctx object).
+- **Tests:** `tests/skills-engine.test.ts` — `D1: ctx.mcData exposes the bot registry…` (resolves a real
+  numeric id), `D1: a stock registry lookup of an unknown item fails with a NAMED error…`. `npm run check`
+  green (499 tests; lint + tsc + dependency-cruiser clean).
+- **Next:** a funded live re-run — confirm authored skills no longer hit the `itemsByName`/`id` crash and that
+  an LLM-written `ctx.mcData...` resolves.
+- **D4 (same session) — stock container/crafting skills now self-apply the R1–R3 window discipline (R63):**
+  - **Symptom (journal):** every chest/furnace/table interaction wasted ~20–22 s and sometimes wedged with
+    `Error: Event windowOpen did not fire within timeout of 20000ms`.
+  - **Root cause:** the window-opening stock skills (`use-chest`, `smelt-item`, `craft-item`) did not all
+    close a stray `bot.currentWindow` first (R1 — a left-open window makes the next open hang/hijack), pause
+    auto-eat/armor (R3), and close in a `finally` on every exit (R4–R5).
+  - **Fix (S3/S5 — no new module):** a file-local inlined `CONTAINER_SAFE_HELPERS` snippet in
+    [eden/src/skills/exemplars/index.ts](../eden/src/skills/exemplars/index.ts) (sibling of D1's
+    `ITEM_ID_HELPER`) — `safeCloseStray` (close `currentWindow` + yield a macrotask so the close lands before
+    the open), and guarded `pauseMutators`/`resumeMutators` using the canonical
+    `bot.autoEat?.disableAuto()`/`enableAuto()` + `bot.armorManager?.pause?.()`/`resume?.()` API,
+    `&&`/`?.`-guarded so an absent plugin is a no-op, never a throw. Prepended into `use-chest`, `smelt-item`,
+    `craft-item`; called before each open and in the `finally`. Authored skills inherit the discipline because
+    they reach containers THROUGH these primitives (P2).
+  - **Tests:** `tests/skills-exemplars.test.ts` — `D4/R1: use-chest CLOSES a stray window before opening the
+    container`; `D4/R3: use-chest pause/resume is GUARDED — no throw when auto-eat/armor are absent`.
+    `npm run check` green (501 tests; lint + tsc + dependency-cruiser clean — see note re: 2 pre-existing R61
+    prompt-text failures, unrelated to D4).
+  - **Decisions (R#):** R63.
+- **D3 (same session) — curriculum now gives up on an unconvergeable task instead of re-proposing it forever (R65):**
+  - **Symptom (journal):** one hard, over-bundled, resource-gated task ("Place a chest by the 3×3 wheat plot and
+    store the first loaf of bread") was attempted **13 times across ~3–4 rollouts in 21 minutes, never admitted**
+    — ~16 min of LLM, ~115k completion tokens, ZERO progress. Half the failures were unmet PRECONDITIONS
+    (`planches insuffisantes`, `bois/planche manquants`, "no 3×3 irrigated farmland found") that rewriting skill
+    CODE can never satisfy.
+  - **Root cause:** the rollout loop runs `for (i = 0; i < task.maxRetries; i++)` (DEFAULT_MAX_RETRIES = 4); when
+    it exhausts retries WITHOUT converging, `assignAndRun` just stopped looping and **left the task open** — so the
+    next `runOnce` re-attempted the IDENTICAL task with a fresh maxRetries budget, indefinitely. The R33–R37
+    anti-pattern: an engine silently re-proposing the same wall, not a SIGNAL that changes the task.
+  - **Fix (the convergence breaker, smallest correct change — no new module, no new journal kind):**
+    - [eden/src/god/curriculum.ts](../eden/src/god/curriculum.ts): the curriculum (sole ledger writer — S2)
+      tracks a per-task `exhaustedRollouts` count; new `noteExhausted(task)` increments it and, at
+      `MAX_ROLLOUT_ATTEMPTS = 2` (a named constant by DEFAULT_MAX_RETRIES), CLOSES the task `failed` with a
+      blocked reason naming the task + attempt count (S10). `closeTask` gained an optional `reason?` arg.
+    - [eden/src/main.ts](../eden/src/main.ts) `RolloutCoordinator.assignAndRun`: on every `converged:false`
+      return it now calls `curriculum.noteExhausted(task)` (and closes the task's open directive `expired` +
+      clears divine-assist — previously LEAKED on the non-converged path, which could block the next task's
+      directive under the orchestrator anti-thrash rule).
+    - [eden/src/journal/kinds.ts](../eden/src/journal/kinds.ts): `god.task-closed` gained an optional
+      `reason?: string` (a one-field extension, NOT a new kind) so the give-up is observable.
+    - The task leaves `ledger.open` → lands in `ledger.failed` (a frontier signal steering the next proposal
+      AWAY) → the village moves on. Below the threshold the task stays open and retries unchanged; a converging
+      task still closes `completed` normally.
+  - **Future hook (NOT this change):** a blocked over-bundled task is a natural `decompose()` candidate — left to
+    the curriculum's existing decomposition entrypoint.
+  - **Tests:** `tests/god-curriculum.test.ts` — R65 breaker fires after K (named reason, stays closed, no
+    double-close), within-budget retry leaves it open, a converging task closes `completed` untouched.
+  - **Decisions (R#):** R65.
+
+## 2026-06-16 — pre-populate `retrievedSkills` in deliberations (R61): wire the retriever into both paths
+- **Why:** R60's deeper follow-up. The rollout (`assignAndRun`) + reactive (`WakeupFn`) context packs shipped
+  `retrievedSkills: []`, so a villager's only way to find the (~180-skill) library was the read-only
+  `search_skills` tool — which a reasoning model loops on (R60). The breaker stops the loop but the villager
+  still starts blind. Voyager-correct fix: relevant skills as `name — signature — summary` one-liners IN the
+  prompt (docs/02 §Retrieval, owner #8/#10).
+- **Change (pure wiring, [eden/src/main.ts](../eden/src/main.ts)):** (1) `RolloutCoordinatorOptions` gains an
+  OPTIONAL `retriever?: SkillRetriever` (absent → `[]`, so M3/M4/gate/loop tests are unchanged). (2)
+  `assignAndRun` retrieves the top-k (k=10) relevant *live* skills **ONCE per task** (query = `task.goal`)
+  BEFORE the revision loop, filters out exemplar-named skills (they ride as full code already), and passes them
+  as `retrievedSkills`. Retrieve once, never per-revision: the library barely changes within a rollout, a fresh
+  draft is `draft` status (not retrievable), and re-querying would bloat the never-trimmed density payload
+  (D-11). (3) the reactive `WakeupFn` retrieves top-k (k=8) for `triggers + hints` (fast tier,
+  `includeExemplarCode:false` → the one-liners are its main skill signal). (4) `retriever` passed at coordinator
+  construction.
+- **Decisions (R#):** R61 (pre-load relevant skills into the prompt; don't make the model discover the library
+  by searching). The R60 circuit breaker STAYS as the backstop — this reduces the NEED to search.
+- **Tests:** `tests/loop-integration.test.ts` — rollout path (seeded `active` skill surfaces as a one-liner +
+  exemplar-dedup), reactive path (trigger+hint query), no-retriever backward-compat. `npm run check` green
+  (497 tests, lint + tsc + dependency-cruiser clean).
+- **Next:** a funded live run — confirm transcripts (`.eden-data/llm/*.json`) show write_skill/run_skill within
+  the first 1–2 turns (search_skills rare/absent) and the §CAPACITÉS section listing relevant skills.
+
+## 2026-06-16 — villagers looped on search_skills forever (R60): circuit breaker + steering
+- **Symptom (from `.eden-data/llm/*.json`):** `harry` (farmer, strong tier = `gpt-5`) got "Craft a wooden
+  hoe" and fired `search_skills` every turn (find-block → craft-item+go-to → collect-blocks →
+  place-item+till-block …) at 2–3k reasoning tokens/turn, never reaching write/run, hitting the 16-turn
+  ceiling. Old healthy transcripts converged write→run→done — their directive literally said "Écris
+  (write_skill) …" and used a non-reasoning model; the natural-language directive + reasoning model removed
+  both guardrails.
+- **Root cause (R60):** `search_skills` (read-only discovery) had no per-deliberation budget, and the rollout
+  context pack ships `retrievedSkills: []` (main.ts:879/637) so the villager has nothing in-prompt and is
+  *forced* to discover the library by searching.
+- **Fix:** (1) brain **circuit breaker** ([eden/src/villagers/brain.ts](../eden/src/villagers/brain.ts)) —
+  after `SEARCH_CALL_CAP=3` searches, **withdraw** `search_skills` from the offered tools for the rest of the
+  wake-up + inject a one-time forcing message; (2) prompt **steering** in the capabilities section
+  ([eden/src/villagers/context-pack.ts](../eden/src/villagers/context-pack.ts)). Test drives a 4-turn
+  search-spam script and asserts the tool is gone from later requests + the deliberation reaches `done`.
+- **Decisions (R#):** R60 (every again-able affordance an autonomous loop has needs a release-valved ceiling
+  — sibling of R36 rate cap + the W loop-budget).
+- **Deeper follow-up (NOT done):** populate `retrievedSkills` with top-k skills for the directive (Voyager
+  design) so villagers don't *need* to search — cuts the looping at the source + improves reuse over the
+  ~180-skill churned library. Needs a retriever wired into the rollout path.
+- **Next:** restart host; watch transcripts for write/run within the first 1–2 turns.
+
+## 2026-06-16 — embeddings 401'd to keyword floor every run (R59): default to the local model
+- **Symptom:** `embeddings  WARN … 3 consecutive failures — degrading to the keyword floor (R38): HTTP 401`,
+  every run. Semantic retrieval silently off → fed the R57 duplicate-skill churn.
+- **Root cause (R59):** main.ts wired `EmbeddingsService` to the **fast CHAT provider** —
+  `providerBackend(fast.baseUrl, fast.model)` POSTed `gpt-5.4-mini` to `https://api.openai.com/v1/embeddings`
+  with **no `Authorization` header**. Three faults: no auth, chat model ≠ embedding model, and the documented
+  default (local in-process MiniLM) was only used when the chat provider had no baseUrl (never, on a remote
+  LLM).
+- **Fix (owner chose local embeddings):** `backend: localBackend()` unconditionally
+  ([eden/src/main.ts](../eden/src/main.ts)) — no key, no HTTP, no 401. Added the missing
+  **`@xenova/transformers`** dep (smoke-tested: 384-dim vectors, ~12 s first run incl. ~120 MB model
+  download, cached after). Fixed `providerBackend` to send a Bearer header + documented it as an explicit
+  opt-in (never the chat provider). With local embeddings now ON, **R58's vector cache is the load-bearing
+  loop-lag guard** (uncached, retrieval would do O(library) synchronous ONNX inferences per wake-up).
+- **Decisions (R#):** R59. Note: first retrieval after boot still embeds the whole live set once (cold
+  cache); worker-thread inference remains the long-term home (D-01 escape hatch). Consider pruning the
+  churned ~180-skill library before the next run so the cold-start embed is small.
+- **Next:** restart host; watch for the keyword-floor WARN to disappear and loop-lag after warm-up.
+
+## 2026-06-16 — probation never graduated (R57) + retriever re-embedded the whole library (R58)
+- **Symptom:** "after running a full skill with success, farmers immediately stop doing anything forever."
+  Diagnosed from the live `eden/.eden-data/eden.db` (last session, farming-hamlet 3-villager scenario).
+- **Root cause #1 (R57) — D-12 probation graduation had no runtime caller.** `SkillLibrary.recordProbationRun`
+  (the only path that decrements `probationRunsLeft` → graduates `active-probation → active`) was invoked
+  ONLY from its unit test, called directly — never from the loop. So every admitted skill stayed
+  `active-probation` forever, the engine's `ProbationError` refused it as a composition callee forever, and
+  Firmin/Margot churned re-authoring wrappers around the just-admitted skill until the tool-turn ceiling
+  (20 distinct skills drafted in one session; admitted skills got 4 clean direct root runs that should have
+  graduated them at 3). Fix: wire `recordProbationRun(name, ok)` at the engine's root-run completion
+  ([eden/src/skills/engine.ts](../eden/src/skills/engine.ts)), gated on the version that actually ran being
+  probationary (a draft trial never advances an older live-probation version).
+- **Root cause #2 (R58) — `SkillRetriever.search` re-embedded `[query, ...EVERY live skill]`** through the
+  in-process ONNX model on every deliberation (O(library) synchronous inferences). Compounded by R57's churn
+  bloating the library to ~180 skills, this is the `system.loop-lag max≈2166ms` (p99 35ms) stalls. Fix:
+  cache skill vectors by `name@version` (+text, for the late description pass), FIFO-bounded
+  ([eden/src/skills/retrieve.ts](../eden/src/skills/retrieve.ts)) — a search now embeds only the query +
+  changed skills.
+- **Decisions (R#):** R57 (a state machine with no runtime caller for its advancing transition is a
+  deadlock; pin via the real path, not a direct call), R58 (cache per-item embeddings by an immutable key;
+  never recompute in the hot path). Honest limit recorded: R57 graduation is run-counting, NOT critic
+  re-judgment — the "auto-ticket the first 3 production runs for re-review" of [03-god.md](03-god.md) is
+  still unbuilt; behavior matches the 02 state machine.
+- **Tests:** graduation via `engine.run` ×3 + failed-run-never-graduates (skills-engine.test.ts); retriever
+  cache hit + re-described re-embed (skills-retrieve.test.ts). `npm run check` green (493/493;
+  lint/typecheck/depcruise clean). Host must be RESTARTED to pick up the fix.
+- **Next:** live re-run of farming-hamlet to confirm skills graduate, compositions succeed, loop-lag
+  subsides; if lag persists, move embedding inference to a worker thread (D-01 escape hatch).
+- **Surprises:** the existing D-12 unit test was GREEN the whole time — it called `recordProbationRun`
+  directly, masking that nothing in the runtime did.
+
+## 2026-06-15 — stock confirmed-till/sow primitive (R55: the read-after-write race)
+
+- **Symptom:** in the live farming-hamlet, `till-and-plant` kept emitting `"Le labour n'a pas
+  fonctionné (bloc pas devenu farmland)"`. The farmers churned **16+ versions** + a dozen sibling
+  tilling skills without converging.
+- **Diagnosis (journal, P4):** a read-after-write race, not a tilling failure. `bot.activateBlock`
+  resolves when the use-item packet is SENT; the dirt→farmland flip only lands ~1+ tick later when the
+  server's block-update refreshes the local chunk. A controlled split confirmed it — versions reading
+  `blockAt()` synchronously (v10/v11) false-reported failure on blocks they had actually tilled (the
+  whole patch was already farmland; Margot's waiting v13/v14 succeeded). Secondary: candidate-finders
+  using `dy ∈ {0,-1}` also targeted buried dirt (no air above → genuinely untillable) and produced the
+  `"…mais dirt"` variants. CI never caught it: FakeBot had no `activateBlock` and flipped no blocks
+  (the Z/C/E "stock skill wrong on real mineflayer" class), and there was no stock till primitive — so
+  the loop re-derived the race every time.
+- **Done:** seeded two mortal stock primitives (single-block grain, like `mine-block`):
+  **`till-block`** and **`sow-seed`** ([eden/src/skills/exemplars/index.ts](../eden/src/skills/exemplars/index.ts))
+  — equip → (go-to if far) → `activateBlock` → **poll `blockAt` until the server confirms, or time
+  out** with an error naming the likely cause. Both enforce the two Minecraft rules villagers missed
+  (air directly above; target the surface, not a buried block) and are idempotent on already-tilled
+  ground. FakeBot now models `equip` + `activateBlock` with a **delayed** transition
+  (`setActivateDelayMs`) so the race is reproducible in CI; 5 new exemplar tests pin the wait, the
+  buried-block guard, and the sow path. `npm run check` green.
+- **Decisions (D#/R# if any):** **R55** filed (07 §World interaction). No new D#, no journal kind,
+  no `Bot`-seam change (skill bodies are runtime strings; only FakeBot grew, additively).
+- **Next:** restart the live host to pick up the seeded primitives; nudge the curriculum/godPrompt to
+  compose `till-block`/`sow-seed` so the farmers stop reinventing tilling. Re-run farming-hamlet.
+- **Surprises:** the failing skills had mostly *succeeded* server-side — the field was full of
+  farmland the journal logged as "n'a pas fonctionné." A counter would have called these futile; only
+  reading the world (RCON/journal ground truth) showed the tills landed.
+
+## 2026-06-15 — the autonomous loop driver (R54: the production PUMP was never wired)
+
+- **Live report:** `/villagers start farming-hamlet` connected all 4 bots (R53 fix held) but **nobody
+  moved and no LLM calls were made.** `/status`: `botsConnected:4, currentRuns:0, queueDepth:0,
+  budgetSpend:0, paused:false`. The journal had only `vitals` + Bertrand's `hurt`→`defend-self` reflex
+  (M5 reactivity alive) — **zero** `brain.wakeup`/`god.task-proposed`/`directive`/`god.verdict`/`llm.call`.
+- **Diagnosis (R54):** the M4-3 refinement loop was built, integration-tested, and live-tested — but
+  `RolloutCoordinator.runOnce()` was only ever called by `tests/` and the live-test `harness.ts`
+  (`god.addTask` → `coordinator.assignAndRun`). **The interactive boot path had no driver.** `wireGod`
+  *constructs* the coordinator and `main.ts` *exposes* it on the host handle, but nothing pumped it:
+  `/villagers start` (the launcher) connects bots + fires loadout, and NO admin route calls the
+  coordinator. So curriculum never proposed a task → no directive → no deliberation → idle village.
+  The GATE test and the harness had silently stood in for the production pump since M3.
+- **Fix — `VillageLoop` (main.ts, owner-chosen "autonomous, all villagers"):** one independent loop per
+  villager — wait for the body (`pool.bot(name)`), settle, then `runOnce({trigger:'idle', villager})`
+  forever. Lives at the composition root next to `RolloutCoordinator` (it consumes a layer-3-spanning
+  peer — the dependency law). Cross-villager concurrency is bounded DOWNSTREAM by the LLM scheduler
+  (`maxConcurrent`) + per-bot serialization in the engine (D-05), so N loops never overrun the throughput
+  ceiling (D-13/R49). Lifecycle tied to the launcher: `start()` on `/villagers start|restart`, `stop()` on
+  `/villagers stop` + host shutdown. **NOT** started on `autoSpawn` — the live-test harness drives the
+  coordinator itself, so it stays un-pumped there (live-tests + the 481-test gate unaffected).
+- **Surprise (W bit again):** the first cut spun a CPU core flat (166 CPU-s in the unit test). The
+  drive loop only `await`ed a back-off on a *no-proposal* turn; on success it re-looped via a microtask,
+  and because the test's fake `runOnce` resolved synchronously the loop became a microtask spin that
+  **starved every timer** — finding W (macrotask starvation), now re-bitten in the driver. Fix: **every**
+  turn ends with an unconditional awaited `sleep()` macrotask (normal `turnDelayMs` pacing on success, a
+  longer `idleBackoffMs` on no-proposal/error). In production `runOnce` always awaits real network I/O, but
+  a fully budget-degraded zero-LLM path could resolve sync — the unconditional yield is the guard.
+- **Tests:** `tests/village-loop.test.ts` (5) — per-connected-villager driving, disconnected skipped,
+  clean stop, idempotent start, thrown-rollout survival. Full `npm run check` green (481 pass, 0 fail).
+- **Next:** reboot the running host to pick this up (pm2 restart) — then `/villagers start farming-hamlet`
+  drives the loop. The formal smoke/parity sign-off (docs/17) is still the open step.
+
+## 2026-06-15 — `/villagers start` deferred-spawn fix (R53: one pool, no duplicate avatar)
+
+- Diagnosed a live report: `/villagers start farming-hamlet` returned "Eden unreachable …
+  `HTTP/1.1 header parser received no bytes`". Two findings:
+  - **The error itself was a restart race** (transient): the POST hit Eden ~3 s into a process
+    restart (journal `system.boot` 3 s before the command; no `scenario.start` row → the request
+    never reached the handler). Captured as a diagnostic-playbook bullet in 07 ("received no bytes"
+    ≠ "connection refused"). `/status` answered 200 throughout once the process was up.
+  - **A real bug it masked (R53):** the old `ScenarioManager` created a SECOND `BotPool` that ALSO
+    spawned the avatar, while the boot pool's `Dieu` was already connected → an endless duplicate-login
+    kick loop (~1×/s). And `wireGod` binds once at boot to `config.villagers` + the boot pool, so the
+    second pool's villagers were never God/reactivity-wired (inert).
+- **Fix (owner-chosen option C — one pool, deferred spawn):**
+  - `main.ts` builds the boot pool ONLY when there's a roster (`config.villagers.length > 0`), so a
+    bare boot connects nothing (the avatar never auto-logs-in). The scenario is loaded at boot
+    (`config.scenario` → `applyScenario` before `wireGod`), so God + reactivity bind to its roster.
+  - Spawn is DEFERRED: bots connect only on the in-game `/villagers start`, which starts the
+    already-wired boot pool via the new **`VillageLauncher`** (deletes the separate-pool
+    `ScenarioManager`). New boot opt-in **`autoSpawn`** for boot-then-act drivers (the live-test
+    harness sets it; the real entrypoint does not).
+  - `BotPool.start()` clears `stopping` so the reused pool survives stop→start (restart).
+- Tests: new `tests/village-launch.test.ts` (start/stop/restart, name-vs-scenario guard, once-per-start
+  setup, reconnect = no re-give); removed `scenario-manager.test.ts`. `npm run check` green
+  (lint/typecheck/depcruise clean, 476/476).
+- Decisions (D#/R# if any): **R53** (07). No new D#, no new journal kind (S1).
+- Next: user sets `"scenario": "farming-hamlet"` in eden.json + reboots, then `/villagers start
+  farming-hamlet` in-game (single `Dieu`, fully wired). Optional follow-up: a one-shot Java-side retry
+  on the transient boot-race `IOException`.
+- Surprises: the in-game scenario-start path had been spawning a second, un-wired pool all along — the
+  kick loop only made it visible.
+
+## 2026-06-15 — live smoke of the real admin API + dashboard (code review + farm-wheat)
+
+- **Task A — code review of the website→live-API changeset:**
+  - `journal.ts` order × limit logic — **correct**. DESC-scan + LIMIT selects the most-recent N; the
+    `scanDesc` flip ensures both `asc+limit` (reverse after scan) and `desc+limit` (leave in place)
+    work. `MemoryJournal` matches (tested independently in `admin.test.ts`).
+  - `server.ts` traversal guard — **correct**. `resolve()` + `full.startsWith(root + sep)` is the
+    authoritative defence; `decodeURIComponent` before `resolve()` doesn't open an escape vector
+    because `resolve()` normalises `..` segments and URL pathname normalisation removes `/../`. API
+    routes and `/journal/stream` upgrades take priority over the static fallback (switch-first ordering).
+  - `main.ts` accessors — **no blocking shape mismatches**. Already-fixed `vitals:null` bug is the
+    key sibling; `dossier`, `relations`, `subscriptions`, `stats`, `versions` all return safe empty
+    structures when unwired. `note: h.manifest.summary` in version history can be `undefined` for
+    non-admitted skills — low risk (screens render nothing rather than crashing).
+  - `api.js` — **no blocking issues**. `expandKinds` empty-array fast-path, `domainOf` bare-kind
+    table (`vitals`→world, `inbox.delivered`→social), and WebSocket reconnect/`setConnected` semantics
+    are all correct. The `KINDS.length` comparison for "all domains → no filter" is correct for the
+    current registry (low-risk edge case if the server gains unregistered kinds after the async
+    `/kinds` augmentation, but benign in practice).
+- **Task B — `npm run check`:** fixed two pre-existing failures + one lint error in `anchors.ts`
+  (the M5-wired branch had a stale `AnchorInput {}` empty-interface and `bot.entity` null-check
+  errors; also, anchor behaviour diverged from tests — persisted chest was being re-validated against
+  the live world when it should be trusted unconditionally, and the home-scan fallback was emitting an
+  extra warning). **444/444 green** after fixes.
+- **Task C — farm-wheat live smoke (real server + real LLM + real mineflayer):**
+  - **PASS** in 297 s on OpenAI `gpt-4o` / `gpt-4o-mini`. Firmin holds **14/3 wheat**; **5 ok runs**
+    of `harvest-wheat`; 0 `system.error`, 0 deaths.
+  - Timeline (key journal events): `god.task-proposed` → `brain.wakeup` → `skill.draft{harvest-wheat
+    v1}` at +13.5 s → two stalled runs (20 s stall cap) → `find-block ok` → v2 drafted at +107.7 s →
+    three ok harvests → `god.verdict{success:false}` at +173.2 s (real critique: "add pickup mechanism")
+    → v3 drafted → one ok harvest → verdicts 2/3/4 all `keep-draft` (see R52 below) → task exhausted
+    maxRetries=5; `converged:false` but objective satisfied.
+  - **Admin API live proof** (all via `http://127.0.0.1:8770/`): `GET /status` → `botsConnected:2,
+    totalBots:2, uptime:62s`; `GET /villagers` → Firmin with real `vitals{hp:20, pos:[1,199,1]}`, 6
+    subscriptions armed, `activityKind:llm.call`; `GET /skills` → 25 active skills (16 mortal + 9
+    divine); `GET /rollouts` → `harvest-wheat, villager:Firmin, status:open`; `GET /journal` → live
+    stream of `brain.tool-call → skill.run → vitals` events. **All API shapes matched; no 500s; no
+    console errors; `api.js` envelope-unwrapping verified end-to-end.**
+  - `skill.admit` not captured (noted `·` in test report) — blocked by R52 (see below). The skill
+    ran successfully; the critic's second call returned a `success:true, admit` judgment in markdown
+    bullets that `parseContentJson` can't parse, silently degrading to `keep-draft`.
+- **New pitfall — R52** (filed in [07](07-hard-won-lessons.md)): `tool_choice: 'auto'` lets gpt-4o
+  skip the `verdict` tool call and return markdown text; `parseContentJson` only rescues JSON code
+  blocks — a `success:true, admit` verdict was lost. Fix: add `toolChoice` option to `LlmRequest`,
+  set to `{ type: 'function', function: { name: 'verdict' } }` in `CriticDesk.judge`.
+- **Deepseek key expired** — the `DEEPSEEK_API_KEY` in `api-keys.env` returned HTTP 401; the smoke
+  succeeded with `--provider openai`. Update the key or switch default provider to `openai`.
+- Next: implement R52 fix (`toolChoice` in `LlmRequest` + critic uses it); re-run farm-wheat to
+  confirm `skill.admit` lands.
+
+## 2026-06-15 — website on the live admin API (API stabilized + tested)
+
+- Done: pointed `eden/website` at the real admin API (was `mock-api.js` fixtures). API hardened
+  **tests-first**, then the website client swapped in — screens untouched.
+  - **API additions (each pinned with tests):**
+    - **`order` on `GET /journal`** (`'asc'|'desc'`) — `JournalQuery.order` + `Journal.query` +
+      `MemoryJournal` + admin parse; the dashboard feeds request newest-first. Tests in
+      journal.test.ts (real) + admin.test.ts (HTTP).
+    - **Same-origin static serving** — `AdminServer` gained `webRoot`: GETs that match no API route
+      serve `website/*` (`/`→index.html), correct content-types, **path-traversal guard**, API routes
+      win. New `tests/admin-static.test.ts`. `main.ts` passes `webRoot` (default = real boot; new
+      `serveWeb` opt). No CORS — the host serves the dashboard (owner #9).
+  - **Rich accessor enrichment (main.ts wiring; admin server stays a dumb pass-through):** villager
+    summary now folds latest `vitals` (actor `bot:<name>`) + the real subscription list + `activityKind`/
+    `currentRun` + relations + dossier; skills list/detail carry signature/description/tags/`usedBy`
+    (CompetenceView)/version history with source (`library.history`/`versionCount`); verdicts flatten
+    `god.verdict` events; tasks map the ledger; `/status` carries the mission-control shape.
+  - **Website client** `website/api.js` (new) re-implements the exact `window.EdenAPI` surface over
+    fetch + a real `/journal/stream` WebSocket: unwraps envelopes, expands DOMAIN facets → concrete
+    kinds (the server filter is exact-match), kind→domain table for the bare kinds (`vitals`→world,
+    `inbox.delivered`→social). `index.html` loads it (`?mock=1` still loads the fixture client).
+  - Verified: `npm run check` green (lint/typecheck/depcruise, **442 tests**); live smoke (God wired,
+    bots off, `serveWeb`) — every route/envelope/POST-verb round-trips; in-browser the dashboard renders
+    real data (overview/villagers/detail/skills), the WS feed live-updates on pause/prompt, zero console
+    errors.
+- Decisions (D#/R# if any): no new D/R; NO new journal kind (S1). `eslint.config.js` gained a
+  `website/**/*.js` block (browser globals; the dashboard is glue, not part of the TS gate).
+- Next: smoke against a live Minecraft server so vitals/subscriptions/runs populate from real bots.
+- Surprises: the browser proof caught a bug the unit tests couldn't — screens call `v.vitals.hp`
+  unconditionally, so the honest `vitals:null` (bots off) blanked the villager screens; the accessor now
+  always returns a usable vitals object (real snapshot, else a nominal baseline).
+
+## 2026-06-15 — M5 reactivity wired into the live host (the guard hurt reflex)
+
+- Done: assembled the M5 reactivity system — built + unit-tested in M5-1/2/3 but **never wired in
+  `main.ts`** — so a SEEDED reflex now fires in the running host. Symptom it fixes: in the last live
+  `cooperative-mob-defense` run a guard (Alban) **died at +11.7 s** while his first combat `skill.run`
+  was at **+16.9 s** — he stood passive ~16 s while the LLM authored combat. Five pieces:
+  1. **Per-bot signal adapter** ([`bots/signals.ts`](../eden/src/bots/signals.ts)) — translates native
+     mineflayer events into the router's synthetic shapes on a DEDICATED bus: `hurt` is synthesized from
+     the `health` delta (damage) + nearest hostile (`byEntity`); `health`/`death` are forwarded. The bus
+     (not the bot) is what the router attaches to, so the bot's native `entityHurt(entity)` (every entity,
+     no damage) can't leak spurious damage-0 hurts (R51). Scope this pass: `hurt`/`health`/`death` only.
+  2. **Per-villager assembly** ([`villagers/reactivity.ts`](../eden/src/villagers/reactivity.ts)) — a
+     `VillagerReactivity` that, per villager, wires adapter → `EventRouter` → `SubscriptionRouter`
+     (engine/journal/live `vitals()`/wake-up), reconnect-safe (re-attach drops the stale router).
+  3. **`main.ts` wiring** — gated on a live bot pool: a SHARED `SubscriptionStore`, `seedRoleDefaults`
+     per villager at first boot, a fast-tier reactive wake-up (swallows its own LLM errors — never a host
+     `system.error`), `vitalsFor` read off the live bot, the 30 s `tick()`, detach on `stop()`. The pool
+     gained an `onBotSpawn` hook (fires on spawn AND reconnect) the host attaches reactivity through.
+  4. **Reflex stock skills** ([`skills/exemplars/index.ts`](../eden/src/skills/exemplars/index.ts)) —
+     `flee-to-safety`, `defend-self`, `go-home`, `harvest-field` (the names `roles.json` references; all
+     ran inert/MISSING before). All degrade gracefully (no anchor/hostile/field → clean RunReport).
+  5. **`engine.runningSkills(name)`** — tracks the in-flight root skill so `notWhileRunning` (and vitals
+     `currentRun`) read live truth.
+- **Live PROOF** (`npm run live-test cooperative-mob-defense`): **PASS** (98 s, all 4 checks). Timeline:
+  both guards `subscription.fired{on:hurt, outcome:skill, target:defend-self}` at **+9.2 s** (the instant
+  the hit landed, ZERO tokens) → `defend-self skill.run ok` at **+12.0 s** → the FIRST `brain.wakeup` only
+  at **+13.1 s**. The reflex defended BEFORE the LLM woke; **0 deaths** (was a death at +11.7 s), 0
+  `system.error`, ≥2 combat runners. Re-hits mid-fight were `subscription.suppressed{not-while-running}`.
+- Decisions (D#/R# if any): **D-15** (a role reflex OVERRIDES the everyone reflex on the same event —
+  `seedRoleDefaults` dedup is now per-`on`, not `on`+kind — so a guard's `hurt → defend-self` wins over
+  everyone's `hurt → flee-to-safety`; [04](04-villager-runtime.md)); **R50** (a reflex is only a reflex
+  once WIRED into the host — time-to-first-defensive-action < survival-time) and **R51** (derive
+  damage+attacker from the health delta; don't let the router hear native `entityHurt`) in
+  [07](07-hard-won-lessons.md). No new journal kind (the M5 kinds already exist). The live harness's
+  `journal-report.txt` timeline now keeps `subscription.fired`/`-suppressed`/`brain.wakeup` so the proof
+  is legible. Finding **G** logged in [19](19-live-test-suite.md).
+- Tests: 9 new FakeBot host-wiring tests ([`tests/villagers-host-reactivity.test.ts`](../eden/tests/villagers-host-reactivity.test.ts))
+  — adapter delta/attacker derivation, zero-token hurt→flee, guard D-15 override fires before any
+  wake-up, health-low → one coalesced wake-up, idempotent first-boot seeding, reconnect-safety,
+  `runningSkills`. `npm run check` green (lint/typecheck/depcruise, **419/419**).
+- Next: extend the pool's synthetic-signal emission (entity-spotted / item-received / block-broken /
+  run-finished / inbox / time) so the rest of the role-default reflexes (night-falls → go-home, farmer
+  new-day → harvest-field, guard entity-spotted → deliberate) can fire — a clean follow-up now the seam
+  exists. Consider a `behavior.reactivity` config gate if a peaceful scenario ever takes chip damage and
+  an unwanted flee fires.
+- Surprises: the EventRouter was already DESIGNED to consume a synthetic `entityHurt(self, info)` shape
+  (the unit test emits exactly that), so the only real architectural choice was where the translation
+  lives — a dedicated per-bot bus, not the raw bot. The first hit in the arena lands at +9.2 s (zombies
+  must path to the guards), so the whole reflex story plays out well inside the 360 s budget.
+
 ## 2026-06-14 — Live villager test suite (real server + real LLM)
 
 - Done: built [`eden/live-tests/`](../eden/live-tests/) — a reusable, parameterized live-scenario harness
@@ -912,6 +1424,84 @@ surprises. Newest first.
   design docs (11/12) disagree, the code (and 15/16) win, same as 15. No new R/D numbers.
 - Next: unchanged — M1 (bots: hardening corpus R1–R10, pool, anchors, vitals).
 - Surprises: none.
+
+## 2026-06-15 — website API gaps: RolloutsView + GET /rollouts + GET /journal?id=
+- Done: while drafting the future-website design brief, three admin-API gaps surfaced.
+  Resolved keeping the pure-consumer posture (reads fold the journal; add surface only
+  where existing routes can't express it):
+  - **`RolloutsView`** — a 5th derived view ([eden/src/views/index.ts](../eden/src/views/index.ts)),
+    added to `ALL_VIEWS` so the rebuild==live law + `eden rebuild-stats` cover it. Folds the
+    `refs.rolloutId`-tagged stream into a per-rollout index (`status: open|admitted|exhausted|
+    abandoned`, `trials`, villager/skill/taskId, started/endedAt). Wired in main.ts (views +
+    live fold + admin accessor); surfaced as **`GET /rollouts`**. Replay stays `GET /journal?ref=`.
+  - **`GET /journal?id=<ulid>`** — `JournalQuery.id` added (types + Journal + MemoryJournal +
+    admin parse) for the command bar's id-resolution; no `/resolve` route (names resolve
+    client-side; ulids via `?ref=`/`?id=`).
+  - **Budget history** judged NOT a gap — folds `llm.call` client-side; `/status` keeps live spend.
+  - Tests: RolloutsView unit tests (views.test.ts), real-journal rebuild==live (rebuild-stats.test.ts),
+    `GET /rollouts` + unwired-empty + `?id=` routes (admin-routes.test.ts). `npm run check` green
+    (lint/typecheck/depcruise clean, 410/410).
+- Decisions (D#/R# if any): no new D/R; NO new journal kind (S1 — reads + folds existing kinds).
+  Honest limit recorded in code + 05: retries-exhausted has no per-rollout terminal event, so
+  `exhausted` is derived from `god.task-closed{outcome:'failed'}` over the task's still-open rollouts.
+- Next: hand the design brief + resolved API to the website design phase.
+- Surprises: none.
+
+## 2026-06-16 — curriculum sees inventory + existing skills; mission outranks warm-up (R67)
+- Done: `scenarios/farm.json` gave the farmer an `iron_hoe` + seeds and a `godPrompt` for a bread loop,
+  but God kept proposing "explore for wood to craft a hoe." Root cause: the curriculum's proposal context
+  was blind. Fixed in [eden/src/god/curriculum.ts](../eden/src/god/curriculum.ts):
+  - **Inventory in the proposal.** `proposeTask` now takes the requesting villager's live `Snapshot`;
+    `renderProposalContext` renders `## INVENTAIRE ACTUEL` + an explicit no-re-acquire guard. The
+    `RolloutCoordinator.runOnce` threads `snapshotFor(villager)` in (main.ts).
+  - **Existing skills in the proposal.** Inject `SkillLibrary`; `## COMPÉTENCES EXISTANTES` lists live
+    MORTAL skills (divine filtered out) so God proposes COMPOSING what exists plus one new step.
+  - **Mission outranks warm-up.** New `hasMissionDirective` flag (set in main.ts when a scenario
+    `godPrompt` is present) flips the warm-up nudge from the generic "gather wood/food/tools" default to
+    "serve the mission with the current inventory + skills." (The default never lifted on its own: a
+    non-converging loop task closes `failed` per R65, so `completed` stayed 0 → permanent warm-up.)
+  - Prompt ([curriculum.md](../eden/src/god/prompts/curriculum.md)) aligned to the now-rendered context;
+    adds "read inventory before proposing acquisition," "mission outranks defaults," and a decompose
+    EXCEPTION: when the blocks already exist and the mission wants one looping skill, that composing
+    skill is a legitimate single goal — don't fragment it into busy-work.
+  - Tests: 3 new cases in `tests/god-curriculum.test.ts` (inventory awareness, mission-aware warm-up,
+    library coverage hides divine). `npm run check` green (lint/tsc/depcruise clean, 519/519).
+- Decisions (D#/R# if any): **R67** filed (curriculum must see inventory + existing skills; a scenario
+  mission outranks the warm-up default). No new D#, no new journal kind (S1).
+- Next: restart the live host to pick up the change; re-run the farm scenario and confirm God proposes the
+  bread-loop composing task instead of wood-gathering.
+- Surprises: the curriculum.md prompt already *claimed* "village stock" + "library coverage" were given —
+  S6 prompt/code drift that had gone unnoticed because no golden snapshot pinned the proposal-context render.
+
+## 2026-06-16 — villager memory wired into the brain (recall actually recalls) (R69)
+- Done: report — "villagers don't seem to be able to recall memory." The whole M6 `VillagerMemory` subsystem
+  was built/green but **orphaned**: connected to nothing the brain uses. Two cuts, one root cause (R69):
+  - **The `recall`/`remember` tools were dead.** The `ToolRegistry` is ONE shared instance across all
+    villagers (state lives in `ctx`), but its memory option was a single `memory?: VillagerMemory` that
+    `main.ts` never passed — so the tools always returned the `(mémoire non câblée)` stub. Changed it to a
+    per-villager RESOLVER `memoryFor?: (villager) => VillagerMemory | undefined` (the same shape as
+    `engine.resolveBot`/`snapshotFor`); `recall`/`remember` now look memory up by `ctx.villager`.
+    [eden/src/villagers/tools.ts](../eden/src/villagers/tools.ts).
+  - **§6 `MÉMOIRE PERTINENTE` was always empty.** Both `ContextPackInput` sites (the `RolloutCoordinator`
+    authoring loop + the reactive-wakeup path) hardcoded `memories: []`. They now pre-load §6 from
+    `memory.retrieve(goal/query, k)` — proactive recall, the prompt section that was always specced.
+    [eden/src/main.ts](../eden/src/main.ts).
+  - Wiring: `main.ts` builds the per-villager `memories` Map BEFORE the shared `ToolRegistry`, wires
+    `memoryFor = (name) => memories.get(name)` into both the registry and the `RolloutCoordinator`.
+  - Tests: the 3 existing memory-tool tests moved to the resolver shape + a new regression pins that the
+    shared registry never leaks one villager's memory to another. `npm run check` green (lint/tsc/depcruise
+    clean, **521/521**).
+- Decisions (D#/R# if any): **R69** filed (a shared, per-villager-stateless service must RESOLVE its
+  per-villager dependency, never hold one instance; a subsystem isn't "done" until a `main.ts` path reaches
+  it). No new D#, no new journal kind (S1).
+- Next: restart the live host to pick up the change. KNOWN REMAINING GAP — nothing yet *writes* villager
+  memory in production except the now-working `remember` tool: `social/Conversation` (the `hear`/leave
+  MemoryWriter path) is still not constructed in `main.ts`/`village-launch.ts`, so memory fills only as fast
+  as villagers self-note. Wiring the conversation service (bot-backed Conversant/ReachStrategy) is the next
+  society step if richer organic recall is wanted.
+- Surprises: the memory module's unit tests were all green the whole time — the bug was 100% in the
+  composition root (an option that existed on the type but never appeared at the `new ToolRegistry({…})` call
+  site). Green module tests ≠ wired.
 
 ## Template
 ## YYYY-MM-DD — <milestone/topic>

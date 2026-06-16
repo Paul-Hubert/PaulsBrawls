@@ -5,6 +5,8 @@
 //   • system.bot-disconnected journalled on 'end' and 'kicked' events
 //   • stop() cancels pending reconnect timer (R13)
 //   • stop() is idempotent — no throw on second call
+//   • R66: a superseded bot instance's kicked/end is ignored (no clobber, no phantom reconnect storm)
+//   • R66: a chat-component OBJECT kick reason renders legibly, not "[object Object]"
 
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
@@ -260,4 +262,74 @@ test('stop() is idempotent — calling it twice does not throw', (t) => {
   });
   assert.doesNotThrow(() => pool.stop(), 'first stop');
   assert.doesNotThrow(() => pool.stop(), 'second stop — idempotent');
+});
+
+// ── R66: the /villagers restart duplicate-login kick storm ────────────────────
+
+test('restart swap: a superseded instance kicked/end does NOT clobber its replacement or storm (R66)', async (t) => {
+  const bots: FakeBot[] = [];
+  const createBot = (o: SpawnRequest): FakeBot => {
+    const b = new FakeBot({ username: o.username });
+    bots.push(b);
+    queueMicrotask(() => b.emit('spawn'));
+    return b;
+  };
+  const journal = new MemoryJournal();
+  const pool = new BotPool({
+    createBot, journal,
+    host: '127.0.0.1', port: 25599,
+    villagers: [{ name: 'Firmin', role: 'farmer' }],
+    avatarName: 'Dieu',
+    dataDir: tmp(t), worldId: 'w',
+    vitalsIntervalMs: 10_000, staggerMs: 0,
+  });
+
+  await pool.start();
+  await delay(5);
+  const firminOld = pool.bot('Firmin') as FakeBot;
+  assert.ok(firminOld, 'old Firmin is the live bot after start');
+
+  // Restart: stop() quits the old instances, start() re-spawns FRESH ones. The old instances are now
+  // superseded but their lifecycle listeners persist until GC (exactly the live race).
+  pool.stop();
+  await pool.start();
+  await delay(5);
+  const firminNew = pool.bot('Firmin') as FakeBot;
+  assert.notEqual(firminNew, firminOld, 'a fresh Firmin instance is live after restart');
+
+  const createsBefore = bots.length;
+  // The server evicts the OLD session on the duplicate login → the superseded instance fires kicked+end.
+  firminOld.emit('kicked', { translate: 'multiplayer.disconnect.duplicate_login' });
+  firminOld.emit('end', 'disconnect.quitting');
+  await delay(1200); // > the 1 s reconnect floor — a phantom reconnect WOULD have created a bot by now
+
+  assert.equal(pool.bot('Firmin'), firminNew, 'the live bot is untouched by the superseded instance events');
+  assert.equal(bots.length, createsBefore, 'no phantom reconnect — the superseded events created no new bot');
+  pool.stop();
+});
+
+test('kicked with a chat-component OBJECT reason renders legibly, not [object Object] (R66/S10)', async (t) => {
+  const { createBot, bots } = allSpawnFactory();
+  const journal = new MemoryJournal();
+  const pool = new BotPool({
+    createBot, journal,
+    host: '127.0.0.1', port: 25599,
+    villagers: [{ name: 'Firmin', role: 'farmer' }],
+    avatarName: 'Dieu',
+    dataDir: tmp(t), worldId: 'w',
+    vitalsIntervalMs: 10_000, staggerMs: 0,
+  });
+  await pool.spawnAll();
+  await delay(5);
+
+  const firmin = bots.find((b) => b.username === 'Firmin')!;
+  firmin.emit('kicked', { translate: 'multiplayer.disconnect.duplicate_login' });
+  pool.stop(); // cancel the reconnect this schedules
+
+  const ev = journal
+    .query({ kinds: ['system.bot-disconnected'] })
+    .find((e) => (e.payload as { name: string }).name === 'Firmin');
+  const reason = (ev?.payload as { reason?: string }).reason ?? '';
+  assert.match(reason, /duplicate_login/, 'the translate key survives into the journal');
+  assert.doesNotMatch(reason, /\[object Object\]/, 'the chat-component object is not stringified to [object Object]');
 });

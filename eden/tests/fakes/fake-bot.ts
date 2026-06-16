@@ -68,6 +68,10 @@ export class FakeBot extends EventEmitter {
   // ── M5 world-time seam — mineflayer's `bot.time.timeOfDay` (0..24000); the night-falls/new-day
   //    emitter edges on it. Drive with setTime(...) then emit('time') in tests. ──
   readonly time = { timeOfDay: 1000 };
+  // ── M5 entities seam — mineflayer's `bot.entities` (id→entity). The reactivity signal adapter
+  //    (bots/signals.ts) derives a hurt's attacker from the nearest hostile here; combat skills scan it.
+  //    NOT on the narrowed Bot seam (read via cast); defaults empty, seed with setEntities() in tests. ──
+  entities: Record<string, { name?: string; position?: Vec3 } | undefined> = {};
 
   currentWindow: FakeWindow | null = null;
   readonly clicks: ClickRecord[] = [];
@@ -187,6 +191,10 @@ export class FakeBot extends EventEmitter {
   setTime(timeOfDay: number): void {
     this.time.timeOfDay = timeOfDay;
   }
+  /** Seed the entities table (the signal adapter's attacker derivation + combat skills read it) — M5. */
+  setEntities(map: Record<string, { name?: string; position?: Vec3 }>): void {
+    this.entities = { ...map };
+  }
 
   // ── M1: chest seam (deposit/withdraw helpers) ────────────────────────
   /** Stable name↔id registry (real mineflayer exposes `bot.registry.itemsByName`). */
@@ -202,10 +210,23 @@ export class FakeBot extends EventEmitter {
     }
     return id;
   }
+  // D1: names a test marks "unknown" — `bot.registry.itemsByName[name]` returns `undefined` for them,
+  // faithfully modelling a real mineflayer miss (which the always-resolve Proxy below otherwise can't).
+  private readonly unknownItems = new Set<string>();
+  /** Mark item names absent from the registry so a lookup of them resolves `undefined` (D1 guard test). */
+  setUnknownItems(names: string[]): void {
+    for (const n of names) this.unknownItems.add(n);
+  }
   readonly registry = {
     itemsByName: new Proxy({} as Record<string, { id: number } | undefined>, {
       get: (_t, name): { id: number } | undefined =>
-        typeof name === 'string' ? { id: this.idFor(name) } : undefined,
+        typeof name === 'string' && !this.unknownItems.has(name) ? { id: this.idFor(name) } : undefined,
+    }),
+    // D1: real mineflayer's `bot.registry` also exposes `blocksByName` (find-block's numeric matcher,
+    // and the ctx.mcData surface). Mirror the itemsByName Proxy so a skill reading either resolves.
+    blocksByName: new Proxy({} as Record<string, { id: number } | undefined>, {
+      get: (_t, name): { id: number } | undefined =>
+        typeof name === 'string' && !this.unknownItems.has(name) ? { id: this.idFor(name) } : undefined,
     }),
   };
 
@@ -357,12 +378,92 @@ export class FakeBot extends EventEmitter {
     const name = this.blocks.get(key(pos));
     return name ? { name, position: pos } : null;
   }
+  /** Nearest block matching `opts.matching` (a name predicate, or an id / id[] resolved via the registry)
+   *  within `maxDistance` of the bot — mirrors mineflayer's bot.findBlock so the `find-block` stock skill
+   *  is exercisable in CI. */
+  findBlock(opts: {
+    matching: ((b: FakeBlock) => boolean) | number | number[];
+    maxDistance?: number;
+    point?: Vec3;
+  }): FakeBlock | null {
+    const origin = opts.point ?? this.entity.position;
+    const max = opts.maxDistance ?? 16;
+    const matches = (b: FakeBlock): boolean => {
+      if (typeof opts.matching === 'function') return opts.matching(b);
+      const ids = Array.isArray(opts.matching) ? opts.matching : [opts.matching];
+      return ids.includes(this.idFor(b.name));
+    };
+    let best: FakeBlock | null = null;
+    let bestDist = Infinity;
+    for (const [k, name] of this.blocks) {
+      const [x, y, z] = k.split(',').map(Number) as [number, number, number];
+      const block: FakeBlock = { name, position: { x, y, z } };
+      if (!matches(block)) continue;
+      const dist = Math.hypot(x - origin.x, y - origin.y, z - origin.z);
+      if (dist <= max && dist < bestDist) {
+        best = block;
+        bestDist = dist;
+      }
+    }
+    return best;
+  }
   /** Build a grounded trunk plus optional disconnected floating logs (the R10 trap). */
   plantTree(base: Vec3, trunkHeight: number, floating: Vec3[] = []): void {
     for (let dy = 0; dy < trunkHeight; dy++) {
       this.setBlock({ x: base.x, y: base.y + dy, z: base.z }, 'oak_log');
     }
     for (const f of floating) this.setBlock(f, 'oak_log');
+  }
+
+  // ── R55: farming actions (till / sow) are SERVER-confirmed. bot.activateBlock resolves when the
+  //    use-item packet is SENT, but the block flip (dirt→farmland, farmland→crop) only lands a few
+  //    ticks later when the server's block-update returns. We model that round-trip DELAY so a skill
+  //    that reads bot.blockAt synchronously sees the STALE block (the read-after-write race that
+  //    false-reported "le labour n'a pas fonctionné" live), while one that polls/waits sees it flip. ──
+  private activateDelayMs = 30;
+  /** Tune the server-confirmation delay (a long delay still resolves before the till/sow 2 s poll). */
+  setActivateDelayMs(ms: number): void {
+    this.activateDelayMs = ms;
+  }
+  private static readonly CROP_OF: Record<string, string> = {
+    wheat_seeds: 'wheat',
+    carrot: 'carrots',
+    potato: 'potatoes',
+    beetroot_seeds: 'beetroots',
+    pumpkin_seeds: 'pumpkin_stem',
+    melon_seeds: 'melon_stem',
+  };
+  /** Set the held item (mineflayer's bot.equip; accepts an inventory item object or a numeric id). */
+  equip(item: { name: string } | number, _destination?: string): Promise<void> {
+    const name = typeof item === 'number' ? (this.idToName.get(item) ?? String(item)) : item.name;
+    this.heldItem = { name };
+    this.calls.push('equip:' + name);
+    return Promise.resolve();
+  }
+  /** Right-click a block with the held item. Models the hoe (till) and seed (sow) rules, flipping the
+   *  block only AFTER {@link activateDelayMs} (R55) — the synchronous return never mutates the world. */
+  activateBlock(block: FakeBlock): Promise<void> {
+    this.calls.push('activateBlock');
+    const held = this.heldItem?.name ?? '';
+    const pos = block.position;
+    const current = this.blockAt(pos);
+    const aboveName = this.blockAt({ x: pos.x, y: pos.y + 1, z: pos.z })?.name;
+    const aboveOpen = aboveName === undefined || aboveName === 'air';
+    let change: { pos: Vec3; name: string } | null = null;
+    if (/_hoe$/.test(held) && current && ['dirt', 'grass_block', 'dirt_path'].includes(current.name) && aboveOpen) {
+      change = { pos, name: 'farmland' };
+    } else if (current?.name === 'farmland' && FakeBot.CROP_OF[held] && aboveOpen) {
+      change = { pos: { x: pos.x, y: pos.y + 1, z: pos.z }, name: FakeBot.CROP_OF[held] };
+    }
+    if (change) {
+      const c = change;
+      const timer = setTimeout(() => {
+        this.setBlock(c.pos, c.name);
+        this.emit('blockUpdate', current, { name: c.name, position: c.pos });
+      }, this.activateDelayMs);
+      timer.unref();
+    }
+    return Promise.resolve();
   }
 }
 

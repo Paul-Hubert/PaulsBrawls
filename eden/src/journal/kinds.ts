@@ -59,6 +59,10 @@ export const JOURNAL_KINDS = [
   'subscription.removed',
   'subscription.fired',
   'subscription.suppressed',
+  // Scenario domain — in-game /villagers command loaded/stopped/reset a scenario roster.
+  'scenario.start',
+  'scenario.stop',
+  'scenario.restart',
 ] as const;
 
 /** The closed union of registered journal kinds. The writer's `append<K>` binds to this. */
@@ -152,7 +156,9 @@ export interface KindPayloads {
   'god.task-proposed': { taskId: string; goal: string; assignee?: string; trigger: string; parent?: string };
   // A task left the open ledger: completed/failed (a verdict closed it), or retired (clean_up_tasks
   // dropped a stale `failed` when a later task completed the same goal). refs.taskId/verdictId tie it back.
-  'god.task-closed': { taskId: string; goal: string; outcome: 'completed' | 'failed' | 'retired' };
+  // `reason` (optional) carries WHY for a non-verdict close — the convergence breaker (R65) names the task
+  // + the exhausted-rollout count when it gives up on an unconvergeable task (S10).
+  'god.task-closed': { taskId: string; goal: string; outcome: 'completed' | 'failed' | 'retired'; reason?: string };
   // The orchestrator opened a directive and delivered it to a villager's inbox (the SOLE writer of
   // directivesOpen). `superseded` lists directive ids this one displaced (anti-thrash, journaled).
   'god.directive': { directiveId: string; to: string; goal: string; priority: string; superseded?: string[] };
@@ -222,6 +228,10 @@ export interface KindPayloads {
   // suppressed by `notWhileRunning`. `reason` names which (cooldown/disabled/not-while-running) so the
   // legible reflex story stays complete — a suppressed event is information, not silence (R36 spirit).
   'subscription.suppressed': { id: string; villager: string; on: string; reason: string };
+  // Scenario domain — /villagers command loaded/stopped/reset a scenario.
+  'scenario.start': { name: string; cx: number; cz: number };
+  'scenario.stop': Record<string, never>;
+  'scenario.restart': { name: string; cx: number; cz: number };
 }
 
 /** The payload type for a given kind — indexes {@link KindPayloads}, so a missing kind won't compile. */
@@ -272,6 +282,9 @@ export const KIND_REGISTRY = {
   'subscription.removed': { doc: 'a subscription was removed (unsubscribe/admin) (M5)' },
   'subscription.fired': { doc: 'a subscription matched + routed: outcome skill (zero-token run) or deliberate (wake-up) — windowed high-volume kind (Retention) (M5)' },
   'subscription.suppressed': { doc: 'a matched subscription did NOT route: cooldown/disabled/not-while-running — suppression is information, not silence (R36) (M5)' },
+  'scenario.start': { doc: 'in-game /villagers start loaded a scenario and connected its bots (journaled before acting, 05)' },
+  'scenario.stop': { doc: 'in-game /villagers stop disconnected scenario bots (keeps state, journaled before acting, 05)' },
+  'scenario.restart': { doc: 'in-game /villagers restart cleared state + reconnected scenario bots (journaled before acting, 05)' },
 } satisfies Record<JournalKind, KindDoc>;
 
 const KNOWN: ReadonlySet<string> = new Set(JOURNAL_KINDS);

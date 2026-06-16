@@ -51,8 +51,45 @@ test('M3-4: the critic prompt (golden) encodes the rails — world delta, the ve
   assert.match(prompt, /R34/);
   assert.match(prompt, /R35/);
   assert.match(prompt, /verdict/);
+  // P3: the composition doctrine — the critic teaches reuse/decomposition over monolithic skills.
+  assert.match(prompt, /compos/i, 'critic prefers composition over re-implementation');
+  assert.match(prompt, /ctx\.skills\.run/, 'critic names the composition call in its instructive critique');
   for (const action of ['admit', 'keep-draft', 'quarantine', 'archive', 'none']) {
     assert.ok(prompt.includes(action), `prompt documents libraryAction "${action}"`);
+  }
+  // R72: the blocked-on-resource doctrine — a missing input is not a code defect; pivot via followUp.
+  assert.match(prompt, /blocked/i, 'critic documents the blocked-on-resource verdict');
+  assert.match(prompt, /followUp/i, 'critic documents the follow-up acquire-task');
+});
+
+test('R72 (blocked verdict): the critic parses blocked + followUp; the rail forces success:false', async () => {
+  const { verdict, llm } = await judgeWith(
+    verdictCall({
+      success: false, critique: 'no wheat_seeds in inventory — cannot sow', libraryAction: 'none', blocked: true,
+      followUp: { goal: 'Harvest mature wheat to obtain wheat_seeds', successCriteria: 'have ≥3 wheat_seeds', check: { item: 'wheat_seeds', count: 3 } },
+    }),
+    { task: task({ goal: 'till-and-sow' }), report: report({ skill: 'till-and-sow', outcome: { ok: true, value: { tilled: 0, sown: 0 } }, worldAfter: SNAP([{ name: 'iron_hoe', count: 1 }]) }) },
+  );
+  try {
+    assert.equal(verdict.blocked, true, 'blocked is parsed');
+    assert.equal(verdict.success, false, 'a blocked run is never a success (rail)');
+    assert.ok(verdict.followUp && 'goal' in verdict.followUp, 'the follow-up acquire-task is parsed');
+    assert.equal((verdict.followUp as { goal: string }).goal, 'Harvest mature wheat to obtain wheat_seeds');
+    assert.deepEqual((verdict.followUp as { check?: unknown }).check, { item: 'wheat_seeds', count: 3 }, 'the follow-up carries an objective check');
+  } finally {
+    await llm.close();
+  }
+});
+
+test('R72 (blocked never penalises the skill): a blocked verdict downgrades quarantine/admit to none', async () => {
+  const { verdict, llm } = await judgeWith(
+    verdictCall({ success: false, critique: 'no seeds', libraryAction: 'quarantine', blocked: true, followUp: { goal: 'get seeds' } }),
+    { task: task({ goal: 'till-and-sow' }) },
+  );
+  try {
+    assert.equal(verdict.libraryAction, 'none', 'a correct-but-blocked skill is not quarantined for a missing input');
+  } finally {
+    await llm.close();
   }
 });
 
@@ -134,6 +171,26 @@ test('M3-4 (voidDivineOverreach): a success achieved by divine intervention is v
     assert.equal(verdict.success, false, 'divine action can never inflate the ledger');
     assert.notEqual(verdict.libraryAction, 'admit');
     assert.match(verdict.critique, /divin|intervention|overreach/i);
+  } finally {
+    await llm.close();
+  }
+});
+
+test('R52: critic forces tool_choice to { type:function, function:{name:verdict} } — never "auto"', async () => {
+  const llm = await ScriptedLlm.start([verdictCall({ success: true, critique: 'ok', libraryAction: 'admit' })]);
+  const journal = new MemoryJournal();
+  const providers = new ProviderRegistry({
+    strong: { baseUrl: llm.url, model: 'strong', inputTokenBudget: 48000 },
+    fast: { baseUrl: llm.url, model: 'fast', inputTokenBudget: 16000 },
+  });
+  const client = new LlmClient({ providers, journal });
+  const scheduler = new LlmScheduler({ maxConcurrent: 3, perVillagerCooldownMs: 0 });
+  const critic = new CriticDesk({ client, scheduler, journal });
+  await critic.judge({ ticket, task: task(), report: report(), code: 'async function f(b,a,c){}' });
+  try {
+    const wired = llm.requests[0]?.body as Record<string, unknown>;
+    assert.deepEqual(wired['tool_choice'], { type: 'function', function: { name: 'verdict' } },
+      'critic must force the verdict tool (R52: "auto" lets gpt-4o return markdown bullets)');
   } finally {
     await llm.close();
   }

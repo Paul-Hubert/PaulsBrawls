@@ -51,8 +51,8 @@ export const cooperativeMobDefense: Scenario = {
   name: 'cooperative-mob-defense',
   description: 'Two armed guards each author + run a combat skill; together they clear 3 zombies and survive.',
   roster: [
-    { name: GUARDS[0], role: 'guard', home: [-2, 201, 0], chest: [5, 201, 0] },
-    { name: GUARDS[1], role: 'guard', home: [2, 201, 0], chest: [5, 201, 0] },
+    { name: GUARDS[0], role: 'guard' },
+    { name: GUARDS[1], role: 'guard' },
   ],
   arena: combatArena(),
   requiredBots: [...GUARDS],

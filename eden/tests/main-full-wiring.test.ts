@@ -51,8 +51,12 @@ test('full host boots with God wired but NO Minecraft; the complete admin surfac
 
   assert.ok(host.coordinator, 'God wired → the refinement coordinator is present');
 
-  // Every GET route answers.
-  assert.equal((await getJson(port, '/status')).body.bots, 0);
+  // Every GET route answers. /status carries the dashboard's mission-control shape.
+  const status0 = (await getJson(port, '/status')).body;
+  assert.equal(status0.botsConnected, 0);
+  assert.equal(status0.totalBots, 3, 'roster (2) + the avatar');
+  assert.equal(status0.paused, false);
+  assert.equal(typeof status0.queueDepth, 'number');
   assert.equal((await getJson(port, '/villagers')).body.villagers.length, 2);
   assert.equal((await getJson(port, '/villagers/Firmin')).body.role, 'farmer');
   assert.equal((await getJson(port, '/villagers/Nobody')).status, 404);
@@ -66,10 +70,10 @@ test('full host boots with God wired but NO Minecraft; the complete admin surfac
   // The control verbs are WIRED (God on) and gate the real scheduler.
   const pause = await postJson(port, '/pause');
   assert.equal(pause.status, 200);
-  assert.equal((await getJson(port, '/status')).body.queues.paused, true, 'pause gated the live LLM scheduler');
+  assert.equal((await getJson(port, '/status')).body.paused, true, 'pause gated the live LLM scheduler');
   const resume = await postJson(port, '/resume');
   assert.equal(resume.status, 200);
-  assert.equal((await getJson(port, '/status')).body.queues.paused, false);
+  assert.equal((await getJson(port, '/status')).body.paused, false);
 
   // prompt → inbox.delivered journaled BEFORE delivery (the website's talk box).
   const prompt = await postJson(port, '/villagers/Firmin/prompt', { text: 'va aux champs', from: 'paul' });

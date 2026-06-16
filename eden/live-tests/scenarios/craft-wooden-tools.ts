@@ -18,7 +18,7 @@ const CRAFT = /craft|pickaxe|pioche|plank|planche|stick|b[aâ]ton|fabriqu/i;
 export const craftWoodenTools: Scenario = {
   name: 'craft-wooden-tools',
   description: 'A crafter authors + runs a skill that harvests oak, makes planks→sticks, crafts a wooden_pickaxe on a table.',
-  roster: [{ name: BOT, role: 'crafter', home: [0, 199, 0], chest: [5, 199, 0] }],
+  roster: [{ name: BOT, role: 'crafter' }],
   arena: [
     ...litBox(),
     // Oak as 3-tall COLUMNS (a 3×3×3 trunk = 27 logs) so ONE collect-blocks call yields a full column
@@ -27,7 +27,9 @@ export const craftWoodenTools: Scenario = {
     'fill 1 199 1 3 201 3 minecraft:oak_log',
     'setblock 5 199 0 minecraft:crafting_table',
   ],
-  prepare: () => [`tp ${BOT} 0 199 0`, `clear ${BOT}`],
+  // Pin survival (force-gamemode=false → bot keeps its persisted gamemode): a creative bot mines oak with
+  // no drops, starving the craft chain. Same guard the defense scenario applies to its guards.
+  prepare: () => [`gamemode survival ${BOT}`, `tp ${BOT} 0 199 0`, `clear ${BOT}`],
   tasks: [
     {
       id: ulid(),

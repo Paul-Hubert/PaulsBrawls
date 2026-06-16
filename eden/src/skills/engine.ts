@@ -18,6 +18,7 @@ import type {
   AbortCause,
   Bot,
   CallFrame,
+  ItemRegistry,
   JsonSchema,
   RunnerRef,
   RunOutcome,
@@ -145,6 +146,8 @@ export class SkillEngine {
   private readonly tripwire: FailureTripwire;
   private readonly queues = new Map<string, BotRunQueue>();
   private readonly factories = new Map<string, SkillFactory>();
+  /** Per-runner stack of currently-executing ROOT skill names — backs `notWhileRunning` (04) + vitals. */
+  private readonly running = new Map<string, string[]>();
 
   constructor(opts: SkillEngineOptions) {
     this.library = opts.library;
@@ -188,6 +191,29 @@ export class SkillEngine {
       this.queues.set(botName, q);
     }
     return q;
+  }
+
+  /**
+   * The ROOT skills currently executing on this runner's bot — the live source for the reactivity
+   * `notWhileRunning` clause (so a guard mid-fight isn't re-triggered every hit, 04) and the vitals
+   * `currentRun` field. Only root runs are tracked (one tree per bot, D-05); composed callees aren't.
+   */
+  runningSkills(runnerName: string): string[] {
+    return [...(this.running.get(runnerName) ?? [])];
+  }
+
+  private pushRunning(runnerName: string, skill: string): void {
+    const stack = this.running.get(runnerName);
+    if (stack) stack.push(skill);
+    else this.running.set(runnerName, [skill]);
+  }
+
+  private popRunning(runnerName: string, skill: string): void {
+    const stack = this.running.get(runnerName);
+    if (!stack) return;
+    const i = stack.lastIndexOf(skill);
+    if (i >= 0) stack.splice(i, 1);
+    if (stack.length === 0) this.running.delete(runnerName);
   }
 
   private compileFor(resolved: ResolvedSkill): SkillFactory {
@@ -300,6 +326,10 @@ export class SkillEngine {
       depth,
       Vec3,
       goals,
+      // Blocker D1: real mineflayer's `bot.registry` IS the prismarine-registry / minecraft-data instance
+      // (it has `itemsByName`/`blocksByName`/…). The LLM writes the idiomatic `ctx.mcData.itemsByName[x].id`,
+      // so a ctx WITHOUT this handle dereferences `undefined` ("Cannot read properties of undefined").
+      mcData: bot.registry,
     });
 
     const composerRun = async (calleeName: string, calleeArgs: object, depth: number): Promise<unknown> => {
@@ -327,6 +357,7 @@ export class SkillEngine {
     };
 
     let outcome: RunOutcome;
+    this.pushRunning(runner.name, root.version.name); // live `notWhileRunning` + vitals source
     try {
       const fn = this.compileFor(root)(makeShim({ sleep }, budget));
       chain.push(root.version.name);
@@ -351,6 +382,7 @@ export class SkillEngine {
       detector.disarm();
       cleanupBuiltins();
       removeInterceptor?.();
+      this.popRunning(runner.name, root.version.name);
     }
 
     const worldAfter = captureSnapshot(bot);
@@ -378,6 +410,15 @@ export class SkillEngine {
       skillVersion: root.version.version,
     });
     if (this.tripwire.recordRun(root.version.name, outcome.ok)) this.onTripwire?.(root.version.name, report);
+    // D-12 graduation (R57): a clean ROOT production run of an admitted (active-probation) skill advances
+    // it toward `active`. Gated on the version that ACTUALLY ran being the probationary one, so a draft
+    // trial of a newer version never advances an older live-probation version, and `active` skills are
+    // untouched. Without this call recordProbationRun has no runtime caller — every admitted skill stays
+    // active-probation forever, so it is never composable (engine.ts §ProbationError) and villagers churn
+    // re-authoring wrappers around it until the tool-turn ceiling. NOTE: this counts clean runs but does
+    // NOT re-judge them with the critic (the "auto-ticket for re-review" of 03-god.md §Probation is still
+    // unbuilt) — graduation is run-counting, matching the 02 state machine + the engine pinning test.
+    if (root.version.status === 'active-probation') this.library.recordProbationRun(root.version.name, outcome.ok);
     return report;
   }
 }
@@ -404,6 +445,14 @@ export interface SkillContext {
     GoalNear: new (x: number, y: number, z: number, range: number) => unknown;
     GoalBlock?: new (x: number, y: number, z: number) => unknown;
   };
+  /**
+   * Blocker D1: the mineflayer registry (`bot.registry` — prismarine-registry / minecraft-data). The LLM
+   * writes the idiomatic `ctx.mcData.itemsByName[name].id` / `ctx.mcData.blocksByName[name].id`; without
+   * this handle the ctx exposes no `mcData` and the skill dereferences `undefined` ("Cannot read properties
+   * of undefined (reading 'itemsByName')"). It is the same `ItemRegistry` shape as `bot.registry` (so the
+   * FakeBot seam keeps the engine tests typechecking); may be `undefined` only on a not-yet-spawned bot.
+   */
+  mcData: ItemRegistry | undefined;
 }
 
 /** D-05: one skill tree per bot. Concurrent runs queue; an `interrupt` preempts the running tree. */

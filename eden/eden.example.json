@@ -1,5 +1,9 @@
 {
   // Eden config template. Copy to eden.json (gitignored) and edit.
+  // Required companion files (both gitignored):
+  //   providers.json  — copy providers.example.json, pick one named provider
+  //   scenarios/<name>.json  — use an existing scenario or write your own
+  //
   // Unknown keys WARN loudly (R22); a handful of common aliases are adopted.
   //
   // ── PORT REGISTRY (R24) ─────────────────────────────────────────────
@@ -10,10 +14,13 @@
   // ────────────────────────────────────────────────────────────────────
   "minecraft": { "host": "127.0.0.1", "port": 25599, "version": "1.21.1" },
 
-  "villagers": [
-    // coordinates are HINTS — self-healing at boot (home snaps to ground, chest re-discovered).
-    { "name": "Firmin", "role": "farmer", "home": [120, 64, -40], "chest": [122, 64, -40] }
-  ],
+  // "scenario" resolves to eden/scenarios/<name>.json: villagers + god overrides.
+  // Remove this key and add an inline "villagers" array to skip scenario loading.
+  "scenario": "farming-hamlet",
+
+  // "provider" resolves to a named entry in providers.json: strong + fast tier configs + API key env var.
+  // Remove this key and add an inline "llm.providers" block to skip provider loading.
+  "provider": "openai",
 
   "god": {
     "name": "Dieu",                 // avatar username — MUST differ from every villager and from v1's LLMBot
@@ -39,12 +46,8 @@
   "behavior": { "drives": false },  // optional rest/social drives that generate wake-ups
 
   "llm": {
-    "providers": {
-      "strong": { "baseUrl": "http://127.0.0.1:1234/v1", "model": "strong-model", "inputTokenBudget": 48000 },
-      "fast":   { "baseUrl": "http://127.0.0.1:1234/v1", "model": "fast-model",   "inputTokenBudget": 16000 }
-    },
-    // inputTokenBudget = per-call INPUT ceiling (D-11): current density payload never trimmed,
-    //   history trimmed oldest-first. Lower it for small-context models.
+    // llm.providers is now GONE — resolved from "provider" + providers.json.
+    // inputTokenBudget per-tier lives in providers.json (per preset). Lower it there for small-context models.
     "maxConcurrent": 3,
     "perVillagerCooldownSeconds": 15
   },

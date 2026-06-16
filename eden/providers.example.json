@@ -1,0 +1,17 @@
+{
+  "deepseek": {
+    "strong": { "baseUrl": "https://api.deepseek.com/v1", "model": "deepseek-reasoner", "inputTokenBudget": 48000 },
+    "fast":   { "baseUrl": "https://api.deepseek.com/v1", "model": "deepseek-chat",     "inputTokenBudget": 16000 },
+    "apiKeyEnv": "DEEPSEEK_API_KEY"
+  },
+  "openai": {
+    "strong": { "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o",      "inputTokenBudget": 48000 },
+    "fast":   { "baseUrl": "https://api.openai.com/v1", "model": "gpt-4o-mini", "inputTokenBudget": 16000 },
+    "apiKeyEnv": "OPENAI_API_KEY"
+  },
+  "local": {
+    "strong": { "baseUrl": "http://127.0.0.1:1234/v1", "model": "your-model-name", "inputTokenBudget": 32000 },
+    "fast":   { "baseUrl": "http://127.0.0.1:1234/v1", "model": "your-model-name", "inputTokenBudget": 16000 },
+    "apiKeyEnv": null
+  }
+}

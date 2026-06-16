@@ -37,6 +37,8 @@ function baseDeps(journal: MemoryJournal) {
     tasks: () => ({ open: [{ id: 'T1', goal: 'collect 3 oak logs' }], completed: [], failed: [] }),
     verdicts: () => [{ ticketId: 'k1', success: true, libraryAction: 'admit' }],
     directives: () => [{ id: 'D1', to: 'Firmin', goal: 'farm', priority: 'normal' }],
+    rollouts: () => [{ rolloutId: 'ro1', taskId: 'T1', villager: 'Firmin', skill: 'mine', status: 'admitted', trials: 2, startedAt: 1, endedAt: 9 }],
+    llmTranscript: (callId: string) => (callId === 'lc_known' ? { request: { model: 'm', messages: [] }, response: { ok: true } } : undefined),
   };
 }
 
@@ -96,6 +98,73 @@ test('GET /tasks, /verdicts, /directives return ledger views with refs', async (
   assert.equal(verdicts.body.verdicts[0].ticketId, 'k1');
   const directives = await getJson(`http://127.0.0.1:${port}/directives`);
   assert.equal(directives.body.directives[0].id, 'D1');
+});
+
+test('GET /rollouts returns the rollout index (the replay view entry point)', async (t) => {
+  const journal = new MemoryJournal();
+  const admin = new AdminServer(baseDeps(journal));
+  const { port } = await admin.start();
+  t.after(() => admin.stop());
+
+  const r = await getJson(`http://127.0.0.1:${port}/rollouts`);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.rollouts.length, 1);
+  assert.equal(r.body.rollouts[0].rolloutId, 'ro1');
+  assert.equal(r.body.rollouts[0].status, 'admitted');
+});
+
+test('GET /rollouts is empty (not 404) when the accessor is unwired', async (t) => {
+  const journal = new MemoryJournal();
+  const { rollouts: _omit, ...noRollouts } = baseDeps(journal);
+  const admin = new AdminServer(noRollouts);
+  const { port } = await admin.start();
+  t.after(() => admin.stop());
+
+  const r = await getJson(`http://127.0.0.1:${port}/rollouts`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.rollouts, []);
+});
+
+test('GET /llm/:callId returns the dumped transcript (200) or 404 for unknown/undumped/unwired', async (t) => {
+  const journal = new MemoryJournal();
+  const admin = new AdminServer(baseDeps(journal));
+  const { port } = await admin.start();
+  t.after(() => admin.stop());
+
+  const hit = await getJson(`http://127.0.0.1:${port}/llm/lc_known`);
+  assert.equal(hit.status, 200);
+  assert.equal(hit.body.request.model, 'm');
+  assert.equal(hit.body.response.ok, true);
+
+  // A known id with no dump on disk (accessor returns undefined) → 404, not a 200 with an empty body.
+  const miss = await getJson(`http://127.0.0.1:${port}/llm/lc_ghost`);
+  assert.equal(miss.status, 404);
+
+  // Unwired accessor (debug off / no data dir) → 404, never a crash.
+  const { llmTranscript: _omit, ...noTx } = baseDeps(journal);
+  const admin2 = new AdminServer(noTx);
+  const { port: p2 } = await admin2.start();
+  t.after(() => admin2.stop());
+  const unwired = await getJson(`http://127.0.0.1:${p2}/llm/lc_known`);
+  assert.equal(unwired.status, 404);
+});
+
+test('GET /journal?id= resolves the single event with that ulid (the command-bar path)', async (t) => {
+  const journal = new MemoryJournal();
+  journal.append('engine', 'system.error', { message: 'first' });
+  const id = journal.append('engine', 'system.error', { message: 'target' });
+  const admin = new AdminServer(baseDeps(journal));
+  const { port } = await admin.start();
+  t.after(() => admin.stop());
+
+  const hit = await getJson(`http://127.0.0.1:${port}/journal?id=${id}`);
+  assert.equal(hit.status, 200);
+  assert.equal(hit.body.events.length, 1);
+  assert.equal(hit.body.events[0].id, id);
+  assert.equal((hit.body.events[0].payload as any).message, 'target');
+
+  const miss = await getJson(`http://127.0.0.1:${port}/journal?id=nope`);
+  assert.deepEqual(miss.body.events, []);
 });
 
 test('POST /pause and /resume gate LLM scheduling and journal actor:admin BEFORE acting', async (t) => {

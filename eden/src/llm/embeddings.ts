@@ -99,12 +99,18 @@ export function keywordScore(query: string, text: string): number {
   return overlap / Math.sqrt(q.size * d.size);
 }
 
-/** A backend that POSTs to an OpenAI-compatible /v1/embeddings endpoint (LM Studio / Ollama / OpenAI). */
-export function providerBackend(baseUrl: string, model: string, fetchImpl: typeof fetch = fetch): EmbeddingBackend {
+/**
+ * A backend that POSTs to an OpenAI-compatible /v1/embeddings endpoint (LM Studio / Ollama / OpenAI).
+ * `apiKey` is REQUIRED for authenticated providers (OpenAI, DeepSeek) — without the Bearer header they
+ * 401 every call (R59); local servers (LM Studio / Ollama) ignore it. Pass a real *embedding* model id
+ * (e.g. `text-embedding-3-small`), never a chat model. Not wired by default — embeddings default to the
+ * in-process {@link localBackend}; this is the explicit opt-in for a remote embeddings endpoint.
+ */
+export function providerBackend(baseUrl: string, model: string, apiKey?: string, fetchImpl: typeof fetch = fetch): EmbeddingBackend {
   return async (texts: string[]): Promise<number[][]> => {
     const res = await fetchImpl(`${baseUrl}/embeddings`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
       body: JSON.stringify({ model, input: texts }),
     });
     if (!res.ok) throw new Error(`embeddings: HTTP ${res.status}`);

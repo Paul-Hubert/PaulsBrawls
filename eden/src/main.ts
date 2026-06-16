@@ -3,31 +3,38 @@
 // config -> journal -> lag monitor -> admin, and journals system.boot. Bots (M1), the
 // skill engine (M2), and God (M3+) are wired in here as their milestones land.
 
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 
-import { loadConfig, type EdenConfig } from './config';
+import { loadConfig, assertIdentity, type EdenConfig } from './config';
+import { loadEnvFile, loadProviders, resolveProvider } from './providers';
+import { loadScenario, applyScenario } from './scenario-loader';
 import { logger } from './logger';
 import { Journal, type JournalAppender } from './journal/journal';
 import { createLagMonitor, type LagMonitor } from './journal/lag-monitor';
 import { BotPool } from './bots/pool';
 import { AdminServer } from './admin/server';
-import { SkillLibrary, AllGranted } from './skills/library';
+import { VillageLauncher } from './village-launch';
+import { SkillLibrary, AllGranted, renderSignature } from './skills/library';
 import { SkillEngine } from './skills/engine';
 import { SkillRetriever } from './skills/retrieve';
 import { STOCK_SKILLS, seedStockSkills } from './skills/exemplars/index';
 import { LlmClient, ProviderRegistry } from './llm/client';
 import { LlmScheduler, BudgetTracker } from './llm/scheduler';
-import { EmbeddingsService, localBackend, providerBackend } from './llm/embeddings';
+import { EmbeddingsService, localBackend } from './llm/embeddings';
 import { ToolRegistry } from './villagers/tools';
 import { ContextPackBuilder, type ContextPackInput } from './villagers/context-pack';
 import { Brain } from './villagers/brain';
 import { VillagerInbox } from './villagers/inbox';
+import { SubscriptionStore, type FilterContext } from './villagers/subscriptions';
+import { loadRoles, seedRoleDefaults } from './villagers/role-defaults';
+import { VillagerReactivity } from './villagers/reactivity';
+import type { WakeupFn } from './villagers/events';
 import { GodService } from './god/god';
-import { Curriculum, type CurriculumTrigger } from './god/curriculum';
-import { Orchestrator, type DispatchTrigger } from './god/orchestrator';
-import { CriticDesk } from './god/critic';
+import { Curriculum, loadCurriculumPrompt, type CurriculumTrigger } from './god/curriculum';
+import { Orchestrator, loadOrchestratorPrompt, type DispatchTrigger } from './god/orchestrator';
+import { CriticDesk, loadCriticPrompt } from './god/critic';
 import { GodBody } from './god/body';
 import { VillagerMemory } from './villagers/memory';
 import { MemorySummarizer } from './villagers/memory-summarizer';
@@ -37,8 +44,9 @@ import {
   CompetenceView,
   RelationsView,
   TradeLedgerView,
+  RolloutsView,
 } from './views/index';
-import type { Bot, Inbox, InboxMessage, RunReport, Snapshot, Task } from './types/index';
+import type { Bot, Inbox, InboxMessage, RunReport, Snapshot, SkillStats, Task, TaskLedger } from './types/index';
 
 /** Options for {@link start}. */
 export interface EdenHostOptions {
@@ -49,6 +57,14 @@ export interface EdenHostOptions {
    * boot (the direct-run entrypoint) sets this true; the spawn is fired without blocking host startup.
    */
   spawnBots?: boolean;
+  /**
+   * Connect the bots AT BOOT instead of waiting for the in-game `/villagers start` (R53, option C).
+   * Default FALSE — a real interactive boot DEFERS the spawn so the avatar never auto-logs-in and can't
+   * collide with itself; the in-game command triggers the staggered login. Programmatic drivers that
+   * boot-then-act (the live-test harness) set this true so the roster connects without an admin POST.
+   * No-op when there's no pool (bare boot / `spawnBots` false).
+   */
+  autoSpawn?: boolean;
   /**
    * Wire God's desks + the refinement loop (M4-3) and run boot rollout-recovery (step 7). Default =
    * `spawnBots` (God needs a live world + a real LLM provider to act; CI/tests drive the coordinator
@@ -61,6 +77,13 @@ export interface EdenHostOptions {
    * NEVER install it (a global handler would swallow test-runner failures). See {@link installProcessGuards}.
    */
   installProcessGuards?: boolean;
+  /**
+   * Serve the static dashboard ([eden/website](../website)) from the admin server, same-origin with the
+   * API (owner #9: the host serves the dashboard, no CORS). Default = `spawnBots` (a real boot serves it;
+   * unit tests that call `start()` keep the plain 404-on-unknown-route behavior). A smoke can set it true
+   * with bots off to inspect the UI without a Minecraft server.
+   */
+  serveWeb?: boolean;
 }
 
 /** The handle to a running host: the bound admin port, the loaded config, the journal, and `stop`. */
@@ -86,7 +109,35 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
 
   // 1. Load + validate config; collect warnings (config.ts can't print — the law).
   const warnings: string[] = [];
-  const config = loadConfig(configPath, (w) => warnings.push(w));
+  let config = loadConfig(configPath, (w) => warnings.push(w));
+
+  // 1a. Resolve the named provider → patch llm.providers + apiKeyEnv (new-style config).
+  //     Falls back to the default empty-string providers when "provider" is absent (eval/test mode).
+  if (config.provider) {
+    // Load eden/api-keys.env into process.env BEFORE any key is read (existing env wins). Without this
+    // the production host never read the file the live-test harness does, so a configured provider whose
+    // key var was unset silently fell back to OPENAI_API_KEY (R56).
+    loadEnvFile(resolve(configPath, '..', 'api-keys.env'));
+    const providersPath = resolve(configPath, '..', 'providers.json');
+    const presets = loadProviders(providersPath);
+    const preset = resolveProvider(presets, config.provider);
+    config = {
+      ...config,
+      llm: { ...config.llm, providers: { strong: preset.strong, fast: preset.fast } },
+      apiKeyEnv: preset.apiKeyEnv ?? undefined,
+    };
+  }
+
+  // 1b. Resolve the named scenario → populate villagers + god overrides (new-style config).
+  //     Falls back to the villagers array parsed directly from eden.json (legacy/test mode).
+  if (config.scenario) {
+    const scenarioPath = resolve(configPath, '..', 'scenarios', `${config.scenario}.json`);
+    config = applyScenario(config, loadScenario(scenarioPath));
+    // R12: the scenario just replaced the roster parseConfig validated (it saw the empty pre-scenario
+    // array). Re-check identity so a scenario villager named "Dieu" / a duplicate refuses to boot here,
+    // rather than silently colliding and being kicked at login.
+    assertIdentity(config.villagers, config.god.name);
+  }
 
   // 2. Open the journal (sole writer). Replay nothing — current state lives in its tables.
   mkdirSync(dataDir, { recursive: true });
@@ -116,16 +167,29 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
     competence: new CompetenceView(),
     relations: new RelationsView(),
     tradeLedger: new TradeLedgerView(),
+    rollouts: new RolloutsView(),
   };
   journal.subscribe((e) => {
     views.skillStats.fold(e);
     views.competence.fold(e);
     views.relations.fold(e);
     views.tradeLedger.fold(e);
+    views.rollouts.fold(e);
   });
 
-  // The bot pool (M1) — built only when asked; the actual spawn is kicked AFTER the host is up.
-  const pool = opts.spawnBots
+  // M5 reactivity attaches per-villager when each bot spawns (and re-attaches on reconnect). It's built
+  // by wireGod (it needs the engine + brain), so the pool's spawn hook — created BEFORE wireGod runs —
+  // reads it through this late-bound ref, set before pool.start() is ever kicked (the staggered login is
+  // the LAST thing start() does, well after the ref is populated).
+  const reactivityRef: { current?: VillagerReactivity } = {};
+  // Late-bound so the pool's spawn hook (built below) can reach the launcher (built after the pool).
+  const launcherRef: { current?: VillageLauncher } = {};
+
+  // The bot pool (M1) — the SINGLE pool (villagers + avatar) God is wired to. Built only when there's a
+  // roster to embody: a bare boot (no scenario, no villagers) builds NO pool, so the avatar never
+  // auto-logs-in (R12/R53 — option C). The spawn itself is DEFERRED to the in-game `/villagers start`
+  // (the launcher), never kicked at boot.
+  const pool = opts.spawnBots && config.villagers.length > 0
     ? new BotPool({
         journal,
         host: config.minecraft.host,
@@ -136,12 +200,26 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
         dataDir,
         worldId: `${config.minecraft.host}:${config.minecraft.port}`,
         vitalsIntervalMs: config.journal.vitalsIntervalSeconds * 1000,
+        // Per (re)spawn: re-attach reactivity (reconnect-safe) AND fire the launcher's positioning/loadout
+        // (once per start). The avatar attaches reactivity too; the launcher filters it out of setup.
+        onBotSpawn: (name, bot) => {
+          reactivityRef.current?.attach(name, bot);
+          launcherRef.current?.onSpawn(name, bot);
+        },
       })
     : undefined;
 
   // God's desks + the refinement loop (M4-3). Wired only for a real run (needs a live world + provider).
   const enableGod = opts.enableGod ?? opts.spawnBots ?? false;
   const wiring = enableGod ? wireGod({ config, journal, dataDir, pool }) : undefined;
+  const reactivity = wiring?.reactivity;
+  reactivityRef.current = reactivity; // hand the live reactivity to the (already-built) pool spawn hook
+
+  // M5: pump the coarse 30 s clock (tick-30s) across every attached router. Unref'd so it never holds the
+  // loop open; a no-op when reactivity is unwired (CI / no live bots). The emitter-side hysteresis clocks
+  // (health-low/night) are signal-driven; only the polling tick-30s subscriptions need this pump.
+  const reactivityTick = reactivity ? setInterval(() => reactivity.tick(), 30_000) : undefined;
+  reactivityTick?.unref();
 
   // 7. D-09 rollout recovery (boot-abandon). GodService.recoverRollouts(): every open task whose
   //    currentRolloutId is still set has its rollout journaled god.rollout-abandoned + re-enqueued with
@@ -152,25 +230,78 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
     if (recovered > 0) logger.info('god', `boot recovery: re-enqueued ${recovered} abandoned rollout(s) (D-09)`);
   }
 
+  // VillageLauncher — the in-game /villagers start|stop|restart control (POST /scenario/*). It drives the
+  // SAME boot pool God is wired to (option C: scenario loaded at boot), so there is no second pool and no
+  // duplicate avatar (R53). Lives at the src/ root (pure consumer). Journal-before-act is the admin route's
+  // responsibility (05). Handed to the pool's spawn hook via launcherRef (built above).
+  const launcher = new VillageLauncher({
+    pool,
+    villagers: config.villagers,
+    avatarName: config.god.name,
+    scenarioName: config.scenario,
+    dataDir,
+    journal,
+  });
+  launcherRef.current = launcher;
+
+  // The autonomous refinement-loop driver (the production PUMP). wireGod builds the RolloutCoordinator but
+  // nothing in the interactive boot path ever called it — the live-test harness + the M3 GATE test were the
+  // only drivers, so a real `/villagers start` connected the bots and then sat idle (no curriculum task →
+  // no directive → no deliberation → zero LLM calls). VillageLoop runs one loop per villager that proposes +
+  // runs tasks at the curriculum's own pace, bounded downstream by the LLM scheduler (maxConcurrent) and
+  // per-bot serialization in the engine (D-05). It is tied to the launcher lifecycle below — NOT to
+  // `autoSpawn` (the live-test harness drives the coordinator itself, so it must stay un-pumped there).
+  const villageLoop = wiring && pool
+    ? new VillageLoop({
+        coordinator: wiring.coordinator,
+        villagers: config.villagers.map((v) => v.name),
+        isConnected: (name) => pool.bot(name) !== undefined,
+      })
+    : undefined;
+
   // 8. Admin server (the COMPLETE consumer surface, 05): read API + WS stream + the mutating POST verbs.
   //    All data accessors read derived views / live God state / the library (admin holds no concrete
   //    subsystem — narrow accessor functions only). When God is off (CI/host-readiness) the GET routes
   //    return derived-from-journal or empty, and the control verbs report 503 (unwired) — the spine still
   //    boots and answers. Every mutating verb journals actor:'admin'|player:<name> BEFORE acting (05).
   const startedAt = Date.now();
+  // Same-origin static dashboard (owner #9). Default = real boot; a smoke can force it on with bots off.
+  const serveWeb = opts.serveWeb ?? opts.spawnBots ?? false;
+  const webRoot = serveWeb ? fileURLToPath(new URL('../website/', import.meta.url)) : undefined;
+
+  // Normalize a folded SkillStats into the dashboard's stat shape (it reads `avg_ms`, never the inner mean).
+  const dashStats = (s: SkillStats | undefined): Record<string, number> =>
+    s
+      ? { runs: s.runs, successes: s.successes, failures: s.failures, stalls: s.stalls, avg_ms: Math.round(s.avgMs) }
+      : { runs: 0, successes: 0, failures: 0, stalls: 0, avg_ms: 0 };
+  // Villagers who have a recorded run of a skill (CompetenceView fold) — the dashboard's `usedBy`.
+  const usedBy = (skill: string): string[] =>
+    Object.entries(views.competence.value())
+      .filter(([, m]) => (m[skill]?.runs ?? 0) > 0)
+      .map(([villager]) => villager);
+
   const admin = new AdminServer({
     port: config.admin.port,
     journal,
     startedAt,
+    webRoot,
     getStatus: () => ({
-      bots: pool?.connectedCount() ?? 0,
-      runs: 0,
-      queues: { llm: wiring?.scheduler.pending() ?? 0, paused: wiring?.scheduler.isPaused() ?? false },
+      // The dashboard's mission-control shape. Budget is token-only internally (no dollar ledger), so the
+      // spend panel reads zero until a real cost view exists — an honest API gap, not a fabricated number.
+      uptime: Math.floor((Date.now() - startedAt) / 1000),
+      botsConnected: pool?.connectedCount() ?? 0,
+      totalBots: config.villagers.length + 1, // villagers + the avatar (Dieu) — what connectedCount reaches
+      currentRuns: 0,
+      queueDepth: wiring?.scheduler.pending() ?? 0,
+      paused: wiring?.scheduler.isPaused() ?? false,
+      budgetSpend: 0,
+      budgetCap: 0,
+      budgetHistory: [],
     }),
-    villagers: () => config.villagers.map((v) => villagerSummary(v.name, v.role, wiring)),
+    villagers: () => config.villagers.map((v) => villagerSummary(v.name, v.role, wiring, journal)),
     villager: (name) =>
       config.villagers.some((v) => v.name === name)
-        ? villagerSummary(name, config.villagers.find((v) => v.name === name)!.role, wiring)
+        ? villagerSummary(name, config.villagers.find((v) => v.name === name)!.role, wiring, journal)
         : undefined,
     skills: () =>
       (wiring?.library.liveSkills() ?? []).map((s) => ({
@@ -179,27 +310,81 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
         status: s.version.status,
         tier: s.manifest.tier,
         tags: s.manifest.tags,
-        stats: views.skillStats.value()[s.manifest.name] ?? null,
+        signature: s.manifest.signature,
+        description: s.manifest.description,
+        stats: dashStats(views.skillStats.value()[s.manifest.name]),
+        history: [], // success-rate sparkline is synthetic in the mock; honestly empty here
+        versionsCount: wiring?.library.versionCount(s.manifest.name) ?? 1,
+        usedBy: usedBy(s.manifest.name),
       })),
     skill: (name, o) => {
       const resolved = wiring?.library.read(name, o.version);
       if (!resolved) return undefined;
+      const versions = (wiring?.library.history(name) ?? []).map((h) => ({
+        version: h.version.version,
+        status: h.version.status,
+        note: h.manifest.summary,
+        runs: 0, // per-version run counts are not folded; stats below are the skill-wide rollup
+        score: '—',
+        admittedBy: h.version.provenance?.rolloutId ?? null,
+        ...(o.code ? { code: h.code } : {}),
+      }));
       const base: Record<string, unknown> = {
         name: resolved.manifest.name,
         version: resolved.version.version,
         status: resolved.version.status,
+        tier: resolved.manifest.tier,
         signature: resolved.manifest.signature,
         description: resolved.manifest.description,
         tags: resolved.manifest.tags,
-        stats: views.skillStats.value()[name] ?? null,
+        stats: dashStats(views.skillStats.value()[name]),
+        history: [],
+        usedBy: usedBy(name),
+        versions,
       };
+      // Quarantine details from the latest skill.quarantine record (reason/at/by) — when this version is held.
+      if (resolved.version.status === 'quarantined') {
+        const qev = journal.query({ kinds: ['skill.quarantine'], ref: name, limit: 1, order: 'desc' })[0];
+        if (qev) base['quarantine'] = { reason: (qev.payload as { reason?: string }).reason ?? '', at: qev.at, by: qev.actor };
+      }
       if (o.version !== undefined) base['requestedVersion'] = o.version;
       if (o.code) base['code'] = resolved.code;
       return base;
     },
-    tasks: () => wiring?.god.state.ledger ?? { open: [], completed: [], failed: [] },
-    verdicts: () => journal.query({ kinds: ['god.verdict'], limit: 200 }),
-    directives: () => wiring?.god.state.directivesOpen ?? [],
+    tasks: () => mapLedgerForDashboard(wiring?.god.state.ledger),
+    // Flatten god.verdict events (payload = ticket judgment; refs carry skill/version/rollout) into the
+    // verdict-row shape the dashboard renders. Newest-first for the live verdict stream.
+    verdicts: () =>
+      journal.query({ kinds: ['god.verdict'], limit: 200, order: 'desc' }).map((e) => {
+        const p = e.payload as { success?: boolean; score?: number; libraryAction?: string; critique?: string };
+        return {
+          id: e.id,
+          skill: e.refs.skill ?? '?',
+          version: e.refs.skillVersion ?? '',
+          success: !!p.success,
+          score: typeof p.score === 'number' ? p.score : 0,
+          action: p.libraryAction ?? 'none',
+          critique: p.critique ?? '',
+          at: e.at,
+          rolloutId: e.refs.rolloutId ?? null,
+        };
+      }),
+    directives: () =>
+      (wiring?.god.state.directivesOpen ?? []).map((d) => ({
+        id: d.id,
+        to: Array.isArray(d.to) ? d.to.join(', ') : d.to,
+        goal: d.goal,
+        reason: d.reason,
+        priority: d.priority,
+        expiry: d.expiresAt ? new Date(d.expiresAt).toISOString().slice(11, 16) : '—',
+        standing: !!d.standing,
+      })),
+    // The rollout index is a derived view (folds the journal), so it works whether or not God is wired —
+    // empty until a rollout's events land. The replay itself stays GET /journal?ref=<rolloutId> (05).
+    rollouts: () => views.rollouts.value(),
+    // GET /llm/:callId — the full transcript an llm.call dumped to disk (debugPrompts only). Filesystem
+    // knowledge lives HERE, not in the admin (S5); the guard rejects anything but a plain id (no traversal).
+    llmTranscript: (callId) => readLlmTranscript(dataDir, callId),
     onPause: wiring ? () => wiring.scheduler.pause() : undefined,
     onResume: wiring ? () => wiring.scheduler.resume() : undefined,
     onQuarantine: wiring
@@ -215,14 +400,37 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
           return true;
         }
       : undefined,
+    // Start the village, THEN pump the loop (only on a successful connect). Stop pumps DOWN first so no
+    // fresh proposal races the disconnect; restart cycles both. The loop's per-villager connect-poll waits
+    // out the staggered login, so starting it the instant launcher.start() returns is safe.
+    onScenarioStart: async (name, cx, cz) => {
+      const r = await launcher.start(name, cx, cz);
+      if (r.ok) villageLoop?.start();
+      return r;
+    },
+    onScenarioStop: async () => {
+      villageLoop?.stop();
+      return launcher.stop();
+    },
+    onScenarioRestart: async (name, cx, cz) => {
+      villageLoop?.stop();
+      const r = await launcher.restart(name, cx, cz);
+      if (r.ok) villageLoop?.start();
+      return r;
+    },
   });
   const { port } = await admin.start();
 
   journal.append('engine', 'system.boot', { config: redactSecrets(config) as object });
   logger.info('engine', `Eden host up — admin on http://127.0.0.1:${port}`);
 
-  // Kick the staggered login (R13/I1) without blocking host readiness — it takes ~40 s for 11 bots.
-  if (pool) void pool.start();
+  // DEFERRED SPAWN (option C, R53): by default bots are NOT connected at boot. The avatar + villagers log
+  // in only on the in-game `/villagers start <scenario>` (→ launcher.start), so the avatar never
+  // auto-connects and can never collide with itself. A bare boot has no pool at all. `autoSpawn` opts back
+  // into a boot-time staggered login (R13/I1) for programmatic drivers (the live-test harness) that boot
+  // then act without an admin POST. It starts the pool BARE (the launcher stays unarmed → onSpawn no-ops),
+  // so the driver owns all positioning/loadout via its own RCON arena — no stray /spreadplayers + /give.
+  if (pool && opts.autoSpawn) void pool.start();
 
   return {
     adminPort: port,
@@ -232,6 +440,10 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
     god: wiring?.god,
     async stop() {
       removeProcessGuards?.();
+      villageLoop?.stop();
+      if (reactivityTick) clearInterval(reactivityTick);
+      reactivity?.detach();
+      await launcher.stop();
       pool?.stop();
       lag.stop();
       await admin.stop();
@@ -259,6 +471,10 @@ interface GodWiring {
   inboxes: Map<string, Inbox>;
   /** One VillagerMemory per villager (the society layer; admin reads relations/inbox depth from it). */
   memories: Map<string, VillagerMemory>;
+  /** The SHARED reactivity store (sole writer of subscription state, S2) — admin reads sub counts from it. */
+  store: SubscriptionStore;
+  /** Per-villager reactivity (EventRouter + SubscriptionRouter). Present only with a live bot pool (M5). */
+  reactivity?: VillagerReactivity;
 }
 
 /**
@@ -273,11 +489,30 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
     strong: { baseUrl: config.llm.providers.strong.baseUrl, model: config.llm.providers.strong.model, inputTokenBudget: config.llm.providers.strong.inputTokenBudget },
     fast: { baseUrl: config.llm.providers.fast.baseUrl, model: config.llm.providers.fast.model, inputTokenBudget: config.llm.providers.fast.inputTokenBudget },
   });
-  const client = new LlmClient({ providers, journal, dataDir, debugPrompts: config.journal.debugPrompts });
+  // Fail loud, not silent (R56): when a provider declares its key var, that var MUST hold a key. The
+  // client's `?? process.env.OPENAI_API_KEY` default exists for OpenAI/live-tests, but letting it catch a
+  // missing DEEPSEEK_API_KEY here would send the wrong provider's key and 401 on a key the user never
+  // configured. A null apiKeyEnv (local providers) needs no key — the client sends no auth header.
+  let apiKey: string | undefined;
+  if (config.apiKeyEnv) {
+    apiKey = process.env[config.apiKeyEnv];
+    if (!apiKey) {
+      throw new Error(
+        `llm: provider "${config.provider ?? '(unnamed)'}" requires ${config.apiKeyEnv}, but it is not set — ` +
+          `put it in eden/api-keys.env or export it. The host does NOT fall back to OPENAI_API_KEY (R56).`,
+      );
+    }
+  }
+  const client = new LlmClient({ providers, journal, dataDir, debugPrompts: config.journal.debugPrompts, apiKey });
   const scheduler = new LlmScheduler({ maxConcurrent: config.llm.maxConcurrent, perVillagerCooldownMs: config.llm.perVillagerCooldownSeconds * 1000 });
   const budget = new BudgetTracker(config.god.budget.perDesk);
   const embeddings = new EmbeddingsService({
-    backend: config.llm.providers.fast.baseUrl ? providerBackend(config.llm.providers.fast.baseUrl, config.llm.providers.fast.model) : localBackend(),
+    // Local in-process multilingual MiniLM — the documented default (R38/R58). No key, no HTTP, so no 401.
+    // R59: do NOT derive the embeddings backend from a CHAT provider. The previous wiring POSTed the fast
+    // *chat* model (e.g. gpt-5.4-mini) to `${fast.baseUrl}/embeddings` with NO Authorization header, which
+    // 401'd every run and silently degraded retrieval to the keyword floor. A provider embeddings endpoint
+    // is a separate, explicit config (its own embedding model + key) — never the chat provider by default.
+    backend: localBackend(),
     onWarn: (m) => logger.warn('embeddings', m),
   });
 
@@ -297,28 +532,11 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
     autoQuarantineAfter: config.skills.autoQuarantineAfter,
   });
   const retriever = new SkillRetriever({ library, embeddings, grants });
-  const tools = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: config.skills.maxSkillLines });
-  const builder = new ContextPackBuilder({ journal });
-  const brain = new Brain({ builder, tools, scheduler, client, journal });
 
-  const inboxes = new Map<string, Inbox>(config.villagers.map((v) => [v.name, new VillagerInbox(v.name, journal)]));
-  const god = new GodService({ journal, library, inboxes });
-  // Curriculum is the SOLE WRITER of the ledger (S2). Strong tier for proposals (novelty), fast for QA.
-  const curriculum = new Curriculum({ state: god.state, journal, client, scheduler, embeddings, tier: config.god.desks.curriculum.model, fastTier: 'fast', budget, degradeOnBreach: config.god.budget.degradeOnBreach });
-  // Re-wire God to delegate ledger writes to Curriculum (S2). The option is private; assign it once here.
-  (god as unknown as { ledger: Curriculum }).ledger = curriculum;
-  const orchestrator = new Orchestrator({ state: god.state, journal, client, scheduler, inboxes, tier: config.god.desks.orchestrator.model, budget, degradeOnBreach: config.god.budget.degradeOnBreach });
-  const critic = new CriticDesk({ client, scheduler, journal, tier: config.god.desks.critic.model, budget, degradeOnBreach: config.god.budget.degradeOnBreach, batchMax: 3 });
-
-  // The body (theatrics, never a dependency) — built so divine stage-setting has a runner (M3-5).
-  void new GodBody({ engine, journal, avatarName: config.god.name, embodiedVerdicts: config.god.embodiedVerdicts });
-
-  // ── Society (M6): one VillagerMemory per villager (the SOLE WRITER of that villager's memory, S2),
-  //    a fast-tier MemorySummarizer (run on eviction, off the hot path), and a SettlementClient for trade
-  //    (POSTs typed offers to settlement.url; coin→paulsbrawls:coin). Conversation/trade SERVICES are
-  //    constructed per-interaction with bot-backed sinks (Conversant/ReachStrategy) at run time — those
-  //    need a live bot, so they're created lazily in the (real-boot) flow, not here. The memories +
-  //    settlement client are stable singletons the admin + future loop read. ──
+  // ── Society (M6): one VillagerMemory per villager (the SOLE WRITER of that villager's memory, S2) + a
+  //    fast-tier MemorySummarizer (run on eviction, off the hot path). Built BEFORE the ToolRegistry so the
+  //    shared registry can resolve the acting villager's memory per `ctx.villager` (the recall/remember
+  //    tools) — a single instance would serve one villager's memory to all. ──
   const worldId = `${config.minecraft.host}:${config.minecraft.port}`;
   const summarizer = new MemorySummarizer(client); // always fast-tier internally (D-13)
   const memories = new Map<string, VillagerMemory>(
@@ -327,8 +545,35 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
       new VillagerMemory({ villager: v.name, dataDir, journal, worldId, embeddings, summarizer }),
     ]),
   );
-  // The settlement client is wired from config (R29: needs :8767, free of the dev server). Held for the
-  // trade tools the real loop composes; constructed here so a boot fails fast if the url is malformed.
+  const memoryFor = (name: string): VillagerMemory | undefined => memories.get(name);
+
+  const tools = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: config.skills.maxSkillLines, memoryFor });
+  const builder = new ContextPackBuilder({ journal });
+  const brain = new Brain({ builder, tools, scheduler, client, journal });
+
+  const inboxes = new Map<string, Inbox>(config.villagers.map((v) => [v.name, new VillagerInbox(v.name, journal)]));
+  const god = new GodService({ journal, library, inboxes });
+  // When a scenario supplies a godPrompt, append it to every desk's base system prompt so God knows the
+  // mission, what to teach, and any standing constraints — without touching the .md files (S6).
+  const gp = config.god.godPrompt;
+  const curriculumPrompt = gp ? `${loadCurriculumPrompt()}\n\n## Scenario instructions\n${gp}` : undefined;
+  const orchestratorPrompt = gp ? `${loadOrchestratorPrompt()}\n\n## Scenario instructions\n${gp}` : undefined;
+  const criticPrompt = gp ? `${loadCriticPrompt()}\n\n## Scenario instructions\n${gp}` : undefined;
+  // Curriculum is the SOLE WRITER of the ledger (S2). Strong tier for proposals (novelty), fast for QA.
+  const curriculum = new Curriculum({ state: god.state, journal, client, scheduler, embeddings, library, hasMissionDirective: gp !== undefined, tier: config.god.desks.curriculum.model, fastTier: 'fast', budget, degradeOnBreach: config.god.budget.degradeOnBreach, ...(curriculumPrompt ? { systemPrompt: curriculumPrompt } : {}) });
+  // Re-wire God to delegate ledger writes to Curriculum (S2). The option is private; assign it once here.
+  (god as unknown as { ledger: Curriculum }).ledger = curriculum;
+  const orchestrator = new Orchestrator({ state: god.state, journal, client, scheduler, inboxes, tier: config.god.desks.orchestrator.model, budget, degradeOnBreach: config.god.budget.degradeOnBreach, ...(orchestratorPrompt ? { systemPrompt: orchestratorPrompt } : {}) });
+  const critic = new CriticDesk({ client, scheduler, journal, tier: config.god.desks.critic.model, budget, degradeOnBreach: config.god.budget.degradeOnBreach, batchMax: 3, ...(criticPrompt ? { systemPrompt: criticPrompt } : {}) });
+
+  // The body (theatrics, never a dependency) — built so divine stage-setting has a runner (M3-5).
+  void new GodBody({ engine, journal, avatarName: config.god.name, embodiedVerdicts: config.god.embodiedVerdicts });
+
+  // The SettlementClient for trade (POSTs typed offers to settlement.url; coin→paulsbrawls:coin). Conversation/
+  //    trade SERVICES are constructed per-interaction with bot-backed sinks (Conversant/ReachStrategy) at run
+  //    time — those need a live bot, so they're created lazily in the (real-boot) flow, not here. Wired from
+  //    config (R29: needs :8767, free of the dev server); constructed here so a boot fails fast if the url is
+  //    malformed. The per-villager memories above are stable singletons the admin + the refinement loop read.
   void new SettlementClient({ url: config.settlement.url, journal });
 
   const roster = new Map<string, RosterEntry>(config.villagers.map((v) => [v.name, { name: v.name, role: v.role, persona: `Tu es ${v.name}, ${v.role} du village. Tu parles français.` }]));
@@ -336,6 +581,14 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   // code, so the model sees the dialect every authoring turn. Villagers are mortal: NEVER leak divine
   // skill code (tier-filtered out of every villager prompt, 02 §Tiers).
   const exemplars = STOCK_SKILLS.filter((s) => s.exemplar && s.tier !== 'divine').map((s) => ({ name: s.name, code: s.code }));
+  // P2: the always-available primitive palette — every MORTAL stock building block as a name—signature—summary
+  // one-liner, composable via ctx.skills.run. NON-exemplar (exemplars already ride as full code) and never
+  // divine (tier-filtered out of villager prompts, 02 §Tiers). Signatures are rendered from the schemas (D-04,
+  // can't lie). The builder renders this on AUTHORING packs only, deduped vs retrieved + exemplars, so the base
+  // vocabulary is present even when goal-retrieval surfaces none of it (R61's blind spot).
+  const primitives = STOCK_SKILLS
+    .filter((s) => s.tier === 'mortal' && !s.exemplar)
+    .map((s) => ({ name: s.name, signature: renderSignature(s.name, s.params, s.returns), summary: s.summary }));
   // P2c: a best-effort live snapshot from the bot seam (D-14). The narrowed Bot exposes position/health/
   // food/inventory SYNCHRONOUSLY; biome/time/nearbyBlocks/etc. are NOT on the seam, so they stay
   // DEFAULT-ish. This only feeds the §SITUATION prompt section — the run-time `bot.findBlock`/`blockAt`
@@ -355,25 +608,182 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
         };
       }
     : undefined;
-  const coordinator = new RolloutCoordinator({ god, curriculum, orchestrator, critic, brain, library, inboxes, roster, exemplars, ...(snapshotFor ? { snapshotFor } : {}) });
-  return { god, curriculum, orchestrator, coordinator, library, scheduler, inboxes, memories };
+  const coordinator = new RolloutCoordinator({ god, curriculum, orchestrator, critic, brain, library, inboxes, roster, exemplars, primitives, retriever, memoryFor, strongInputTokenBudget: config.llm.providers.strong.inputTokenBudget, ...(snapshotFor ? { snapshotFor } : {}) });
+
+  // ── M5 reactivity — assemble per-villager EventRouter + SubscriptionRouter so a SEEDED reflex (e.g. a
+  //    guard's hurt→defend-self) fires within a tick of the signal, ZERO tokens, BEFORE the LLM could
+  //    author a combat skill. The store is the SHARED sole writer of subscription state (S2); role
+  //    defaults seed each villager at FIRST boot (idempotent). Only with a live pool — a CI/no-bots boot
+  //    has nothing to attach to, so the store stays empty and no router is built. ──
+  const store = new SubscriptionStore({ dataDir, journal });
+  let reactivity: VillagerReactivity | undefined;
+  if (pool) {
+    const roles = loadRoles();
+    let seeded = 0;
+    for (const v of config.villagers) seeded += seedRoleDefaults(store, v.name, v.role, roles);
+    if (seeded > 0) {
+      logger.info('villagers', `M5: seeded ${seeded} role-default reflex(es) across ${config.villagers.length} villager(s) (first boot)`);
+    }
+
+    // A reactive deliberate wake-up: build a context pack from the coalesced request (R36) and run the
+    // brain on its lane. Self-contained — it SWALLOWS its own LLM errors (logger, never a host
+    // system.error): a best-effort reaction failing must not fail a run (the zero-token skill reflexes are
+    // the load-bearing path). Reactive wake-ups ride the FAST tier (D-13: the strong tier's budget is for
+    // novelty, not reflexes). It does NOT drain the inbox (the rollout coordinator owns directive draining).
+    const wakeup: WakeupFn = async (req) => {
+      const entry = roster.get(req.villager);
+      try {
+        // R61: pre-load the top-k relevant existing skills. This path is FAST-tier with
+        // includeExemplarCode:false, so the retrieved `name — signature — summary` one-liners are its MAIN
+        // skill signal (no exemplar code is injected here → no dedup needed). Query = the trigger(s) + hint(s)
+        // that woke the villager. search() never throws (embeddings degrade to the keyword floor, R38).
+        const query = `${req.triggers.join(' ')} ${req.hints.join(' ')}`.trim();
+        const retrievedSkills = await retriever.search(query, { tier: 'mortal', villager: req.villager, k: 8 });
+        // Proactive recall (04 §Memory): surface the top-k past entries relevant to what woke the villager,
+        // so a reflex deliberation reasons from memory too. retrieve() never throws (embeddings degrade, R38).
+        const recalled = (await memories.get(req.villager)?.retrieve(query, 5)) ?? [];
+        const input: ContextPackInput = {
+          villager: req.villager,
+          runner: { name: req.villager, role: entry?.role ?? 'villager', tier: 'mortal' },
+          persona: entry?.persona ?? `Tu es ${req.villager}.`,
+          role: entry?.role ?? 'villager',
+          triggers: req.triggers,
+          hint: req.hints.join(' / '),
+          snapshot: snapshotFor ? snapshotFor(req.villager) : DEFAULT_SNAPSHOT,
+          runningSkill: engine.runningSkills(req.villager)[0] ?? null,
+          directive: null,
+          openTask: null,
+          recentEvents: [],
+          memories: recalled.map((h) => `(${h.kind}) ${h.text}`),
+          retrievedSkills,
+          exemplars: [],
+          includeExemplarCode: false,
+          toolNames: brain.toolNames(),
+          inbox: [],
+          tier: 'fast',
+          inputTokenBudget: config.llm.providers.fast.inputTokenBudget,
+        };
+        await brain.deliberate(input, { lane: req.lane, kind: 'reactive' });
+      } catch (e) {
+        logger.warn('villagers', `reactive wake-up for ${req.villager} failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    };
+
+    // Live world facts the FilterEvaluator reads (P5: data in). Read off the live bot (not the
+    // approximate §SITUATION snapshot) so within/health/food/timeOfDay/notWhileRunning clauses are exact.
+    const vitalsFor = (villager: string): FilterContext => {
+      const bot = pool.bot(villager);
+      const pos = bot?.entity?.position;
+      return {
+        selfPos: pos ? [pos.x, pos.y, pos.z] : [0, 64, 0],
+        timeOfDay: bot?.time?.timeOfDay ?? 1200,
+        health: bot?.health ?? 20,
+        food: bot?.food ?? 20,
+        runningSkills: engine.runningSkills(villager),
+      };
+    };
+
+    reactivity = new VillagerReactivity({
+      villagers: config.villagers.map((v) => ({ name: v.name, role: v.role })),
+      store,
+      engine,
+      journal,
+      wakeup,
+      vitalsFor,
+    });
+  }
+
+  return { god, curriculum, orchestrator, coordinator, library, scheduler, inboxes, memories, store, ...(reactivity ? { reactivity } : {}) };
 }
 
-/** Build the admin's villager summary (identity + vitals + subscriptions + inbox depth + current run +
- *  dossier summary) from the live wiring (05). When God is off, the static identity is still returned. */
-function villagerSummary(name: string, role: string, wiring: GodWiring | undefined): Record<string, unknown> {
+/** Build the admin's villager summary (identity + persona + vitals + subscriptions + inbox depth + current
+ *  run + dossier) from the live wiring + journal folds (05) — the rich shape the dashboard renders. When
+ *  God is off / no bots, vitals/subscriptions/relations are empty but the static identity still returns. */
+/**
+ * Read one LLM call transcript dumped by the client (`<dataDir>/llm/<callId>.json`, debugPrompts only).
+ * The callId comes from the URL, so the charset guard (ULID/rid-ish: alnum + `_-`) is the traversal
+ * defence — never interpolate a raw path segment. `undefined` for an off/unknown/unreadable transcript;
+ * the admin maps that to a 404.
+ */
+function readLlmTranscript(dataDir: string, callId: string): unknown | undefined {
+  if (!/^[A-Za-z0-9_-]+$/.test(callId)) return undefined;
+  const file = join(dataDir, 'llm', `${callId}.json`);
+  if (!existsSync(file)) return undefined;
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return undefined; // a corrupt/half-written dump is a 404, never a host crash
+  }
+}
+
+function villagerSummary(name: string, role: string, wiring: GodWiring | undefined, journal: Journal): Record<string, unknown> {
   const inbox = wiring?.inboxes.get(name);
   const memory = wiring?.memories.get(name);
   const dossier = wiring?.god.state.dossiers.get(name);
+  const depth = inbox && 'depth' in inbox ? (inbox as { depth(): number }).depth() : 0;
+
+  // Latest vitals snapshot (actor `bot:<name>`, kind `vitals`): pos/hp/food/held/currentRun. The pool emits
+  // these only while a bot is connected, so they are null before any login (e.g. a smoke with bots off).
+  const vEv = journal.query({ actor: `bot:${name}`, kinds: ['vitals'], limit: 1, order: 'desc' })[0];
+  const vp = vEv?.payload as
+    | { health?: number; food?: number; position?: [number, number, number]; held?: string | null; currentRun?: string | null }
+    | undefined;
+  // The dashboard renders vitals bars unconditionally, so ALWAYS return a non-null object: the real values
+  // from the latest snapshot, else a nominal baseline (no snapshot yet — e.g. before a bot has connected).
+  const vitals = vp
+    ? { hp: vp.health ?? 0, hpMax: 20, food: vp.food ?? 0, foodMax: 20, pos: vp.position ?? [0, 0, 0], held: vp.held ?? '—' }
+    : { hp: 20, hpMax: 20, food: 20, foodMax: 20, pos: [0, 0, 0] as [number, number, number], held: '—' };
+
+  // Current activity = the latest journalled event BY this villager; the running skill comes from vitals.
+  const lastEv = journal.query({ actor: `villager:${name}`, limit: 1, order: 'desc' })[0];
+  const activityKind = lastEv?.kind ?? vEv?.kind ?? 'vitals';
+
+  // Subscriptions as the dashboard renders them: "when X → do Y" + firing state (P5: filters as data).
+  const subs = (wiring?.store.list(name) ?? []).map((s) => ({
+    when: s.filter ? `${s.on} (filtered)` : s.on,
+    then: s.handler.kind === 'skill' ? s.handler.name : `deliberate: ${s.handler.hint}`,
+    fired: 0, // per-subscription firing counts are not folded; `state` carries armed/cooldown/suppressed
+    state: !s.enabled ? 'suppressed' : wiring?.store.inCooldown(s.id) ? 'cooldown' : 'armed',
+  }));
+
+  // Per-tag competence → success rate (0..1) the dashboard's bars expect (Dossier stores {runs,successes}).
+  const competence: Record<string, number> = {};
+  if (dossier) for (const [tag, c] of Object.entries(dossier.competence)) competence[tag] = c.runs ? c.successes / c.runs : 0;
+
   return {
     name,
     role,
-    vitals: null, // live vitals fold from the `vitals` journal stream when the pool runs (smoke-time)
-    inboxDepth: inbox && 'depth' in inbox ? (inbox as { depth(): number }).depth() : 0,
-    subscriptions: 0, // the SubscriptionStore is per-villager; surfaced when reactivity is wired (smoke)
-    currentRun: null,
-    relations: memory?.relations() ?? [],
-    dossier: dossier ? { competence: dossier.competence, notes: dossier.notes } : null,
+    persona: `Tu es ${name}, ${role} du village. Tu parles français.`,
+    vitals,
+    inbox: depth, // the dashboard reads `inbox` (a number)…
+    inboxDepth: depth, // …and the admin contract reads `inboxDepth`
+    subscriptions: subs,
+    activityKind,
+    currentRun: vp?.currentRun ?? null,
+    relations: (memory?.relations() ?? []).map((r) => ({ name: r.other, score: r.score })),
+    dossier: { competence, note: dossier ? dossier.notes.join(' · ') : '' },
+  };
+}
+
+/** Map the curriculum's {@link TaskLedger} into the dashboard's task-card columns. The website reads
+ *  title/to/reason/priority/expiry/rolloutId; a {@link Task} has no priority/expiry, so those degrade to
+ *  sensible defaults (the curriculum is the sole ledger writer — these are presentational only). */
+function mapLedgerForDashboard(ledger: TaskLedger | undefined): { open: unknown[]; completed: unknown[]; failed: unknown[] } {
+  const card = (t: Task, result?: string): Record<string, unknown> => ({
+    id: t.id,
+    title: t.goal,
+    to: t.assignee ?? 'any',
+    reason: t.successCriteria || t.context || '',
+    priority: 'med',
+    expiry: '—',
+    rolloutId: t.currentRolloutId ?? null,
+    ...(result ? { result } : {}),
+  });
+  if (!ledger) return { open: [], completed: [], failed: [] };
+  return {
+    open: ledger.open.map((t) => card(t)),
+    completed: ledger.completed.map((r) => card(r.task, 'completed')),
+    failed: ledger.failed.map((r) => card(r.task, 'failed')),
   };
 }
 
@@ -398,8 +808,26 @@ export interface RolloutCoordinatorOptions {
    *  authoring deliberation so the model learns the dialect by example. Mortal exemplars only (no divine
    *  code in a villager prompt). Defaults to none (M3/M4 tests that don't need exemplars). */
   exemplars?: Array<{ name: string; code: string }>;
+  /** P2: the always-available stock primitive palette (name — signature — summary), composable via
+   *  ctx.skills.run. Rendered on authoring packs (deduped vs exemplars + retrieved) so the base building
+   *  blocks are present even when goal-retrieval ranks none of them. Defaults to none (M3/M4 tests). */
+  primitives?: Array<{ name: string; signature: string; summary: string }>;
+  /** R61: the live skill retriever. Pre-loads the top-k relevant EXISTING skills into the deliberation's
+   *  §CAPACITÉS as `name — signature — summary` one-liners (Voyager, owner #8/#10), so the villager acts on
+   *  the library instead of discovering it by spamming the read-only `search_skills` tool (the R60 incident).
+   *  OPTIONAL — M3/M4/gate/loop tests construct the coordinator without one and simply get `[]` (no change). */
+  retriever?: SkillRetriever;
   /** Resolve the villager's current world snapshot (the BotPool provides it live; tests stub it). */
   snapshotFor?: (villager: string) => Snapshot;
+  /** Resolve the acting villager's memory so the rollout can pre-load §6 MÉMOIRE PERTINENTE — the top-k
+   *  relevant past entries for the task goal (proactive recall, 04 §Memory). OPTIONAL — tests without a
+   *  memory simply get `[]` (no §6 injection, same as before). */
+  memoryFor?: (villager: string) => VillagerMemory | undefined;
+  /** The STRONG tier's inputTokenBudget, resolved from providers.json via config. The authoring/revision
+   *  rollout runs on the strong tier (D-13); its context-pack ceiling MUST match the configured strong
+   *  model, not a hardcoded constant — a small-context preset (e.g. the `local` 32k) would otherwise
+   *  overflow the reserve invariant that config.ts validates. Defaults to 48000 for tests. */
+  strongInputTokenBudget?: number;
   now?: () => number;
 }
 
@@ -409,6 +837,10 @@ export interface RolloutResult {
   taskId: string;
   rolloutId: string;
   revisions: number;
+  /** R72 — the rollout stopped because the task is blocked on a missing input resource (not converged,
+   *  not exhausted): the critic flagged `blocked`, so the task was closed and a follow-up acquire-task
+   *  enqueued instead of grinding revisions on a correct skill. */
+  blocked?: boolean;
 }
 
 const DEFAULT_SNAPSHOT: Snapshot = {
@@ -440,9 +872,24 @@ export class RolloutCoordinator {
     this.now = opts.now ?? Date.now;
   }
 
-  /** Propose one task (curriculum), then assign + run it to convergence. Returns undefined if no task. */
+  /** Propose one task (curriculum), then assign + run it to convergence. Returns undefined if no task.
+   *  The requesting villager's live snapshot is threaded into the proposal so the curriculum sees what is
+   *  already in hand (it must NOT propose acquiring an item the villager already holds). */
   async runOnce(opts: { trigger: CurriculumTrigger; villager?: string }): Promise<RolloutResult | undefined> {
-    const task = await this.o.curriculum.proposeTask(opts);
+    // R70: drain the backlog before proposing. If this villager already has an OPEN, non-running task,
+    // RE-RUN that same id rather than proposing yet another near-duplicate that shadows it forever. This is
+    // what makes the R65 convergence breaker work in the autonomous loop: a task is re-attempted under its
+    // own id, so `noteExhausted` accrues its second exhausted rollout and an unconvergeable task is given
+    // up (closed `failed`) instead of the open list filling with duplicate unconvergeable goals.
+    if (opts.villager) {
+      const resumable = this.o.curriculum.nextOpenTaskFor(opts.villager);
+      if (resumable) {
+        if (resumable.assignee === undefined) resumable.assignee = opts.villager; // claim it (race-free vs other villagers' loops)
+        return this.assignAndRun(resumable, { trigger: opts.trigger });
+      }
+    }
+    const snapshot = opts.villager && this.o.snapshotFor ? this.o.snapshotFor(opts.villager) : undefined;
+    const task = await this.o.curriculum.proposeTask(snapshot ? { ...opts, snapshot } : opts);
     if (!task) return undefined;
     return this.assignAndRun(task, { trigger: opts.trigger });
   }
@@ -461,6 +908,26 @@ export class RolloutCoordinator {
     const entry = this.o.roster.get(villager) ?? { name: villager, role: 'villager', persona: `Tu es ${villager}.` };
     const rollout = this.o.god.openRollout(task.id);
     const toolNames = this.toolNamesFromInbox();
+
+    // R61: retrieve the top-k relevant EXISTING skills ONCE per task, BEFORE the revision loop. The directive
+    // the orchestrator just dispatched carries the task's goal, so `task.goal` IS the concrete actionable
+    // query (directiveMsg?.goal ?? task.goal). Retrieve once: the library barely changes within a rollout and
+    // a freshly-authored draft is `draft` status → not retrievable anyway; re-querying per revision would
+    // also bloat the never-trimmed density payload (the density invariant forbids it). Exemplars ride as full
+    // code already (includeExemplarCode:true below) — filter them out so they aren't duplicated as one-liners.
+    const exemplarNames = new Set((this.o.exemplars ?? []).map((e) => e.name));
+    const retrieved = this.o.retriever
+      ? (await this.o.retriever.search(task.goal, { tier: 'mortal', villager, k: 10 })).filter(
+          (s) => !exemplarNames.has(s.name),
+        )
+      : [];
+
+    // Proactive recall (04 §Memory): pre-load §6 MÉMOIRE PERTINENTE with the top-k past entries relevant to
+    // the task goal, ONCE per task (same rationale as the skills above — the goal is the query; §6 rides in
+    // the capped frame, never the never-trimmed density payload). Empty (no memory wired / nothing relevant)
+    // → §6 renders "(aucun souvenir pertinent)" as before. retrieve() never throws (embeddings degrade, R38).
+    const memory = this.o.memoryFor?.(villager);
+    const memories = memory ? (await memory.retrieve(task.goal, 6)).map((h) => `(${h.kind}) ${h.text}`) : [];
 
     let lastCritique: string | undefined;
     let lastRunReport: RunReport | undefined;
@@ -482,13 +949,13 @@ export class RolloutCoordinator {
         snapshot, runningSkill: null,
         directive: { goal: directiveMsg?.goal ?? task.goal, reason: directiveMsg?.reason ?? task.successCriteria },
         openTask: { goal: task.goal },
-        recentEvents: [], memories: [], retrievedSkills: [], exemplars: this.o.exemplars ?? [], includeExemplarCode: true,
+        recentEvents: [], memories, retrievedSkills: retrieved, primitives: this.o.primitives ?? [], exemplars: this.o.exemplars ?? [], includeExemplarCode: true,
         toolNames, inbox,
         density: draftVersion !== undefined && draftName !== undefined
           ? { draft: { name: draftName, version: draftVersion, code: draftCode! }, runReport: lastRunReport, critique: lastCritique }
           : undefined,
         history: [],
-        tier: 'strong', inputTokenBudget: 48000,
+        tier: 'strong', inputTokenBudget: this.o.strongInputTokenBudget ?? 48000,
       };
 
       const delib = await this.o.brain.deliberate(input, { rolloutId: rollout.id });
@@ -514,12 +981,39 @@ export class RolloutCoordinator {
         return { converged: true, taskId: task.id, rolloutId: rollout.id, revisions };
       }
 
+      // R72: the critic flagged the task BLOCKED on a missing input resource. The skill is correct — no
+      // code revision can conjure the resource — so stop the rollout NOW (don't grind the remaining
+      // retries), close the task, and enqueue the critic's follow-up acquire-task so the curriculum pivots
+      // to obtaining the resource instead of re-attempting the wall. (The D3/seed-depletion grind.)
+      if (verdict.blocked) {
+        this.o.orchestrator.closeDirectivesForTask(task.id, 'expired');
+        this.o.orchestrator.clearDivineAssist(task.id);
+        rollout.open = false;
+        this.o.curriculum.closeTask(task, route.verdictId, false, `blocked-on-resource: ${verdict.critique.slice(0, 200)}`);
+        const fu = verdict.followUp;
+        if (fu && !('to' in fu)) this.o.curriculum.addFollowUp(fu, task.assignee);
+        return { converged: false, blocked: true, taskId: task.id, rolloutId: rollout.id, revisions };
+      }
+
       lastCritique = verdict.critique;
       lastRunReport = delib.lastRunReport;
       draftName = delib.draft.name;
       draftVersion = delib.draft.version;
       draftCode = this.o.library.read(delib.draft.name, delib.draft.version)?.code;
     }
+    // R65 convergence breaker: this rollout exhausted its maxRetries without converging. Tell the
+    // curriculum (the sole ledger writer — S2): it counts exhausted rollouts and, after K of them, closes
+    // the task `failed` (a blocked-task signal) so the SAME unconvergeable task isn't re-proposed forever
+    // (the D3 incident). Below K the task stays open and the next runOnce retries it as before.
+    this.o.orchestrator.closeDirectivesForTask(task.id, 'expired');
+    this.o.orchestrator.clearDivineAssist(task.id);
+    rollout.open = false; // the rollout is over (exhausted); routeVerdict does the same on the success path
+    // R70: carry the last critique so the failed-frontier remembers the obstacle. If the breaker does NOT
+    // give up yet (below K), the task stays open — clear its rollout pointer so the next runOnce RESUMES
+    // this same id (and the breaker reaches its second exhausted rollout and fires). If it DID give up,
+    // noteExhausted→closeTask already removed the task and cleared the pointer.
+    const gaveUp = this.o.curriculum.noteExhausted(task, lastCritique);
+    if (!gaveUp) delete task.currentRolloutId;
     return { converged: false, taskId: task.id, rolloutId: rollout.id, revisions };
   }
 
@@ -528,6 +1022,126 @@ export class RolloutCoordinator {
     // capabilities section. Re-deriving them from the registry keeps one source of truth.
     return this.o.brain.toolNames();
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The autonomous driver — the production PUMP for the refinement loop. RolloutCoordinator knows how to run
+// ONE task to convergence; before this, nothing in the interactive boot path called it (the live-test
+// harness and the M3 GATE test were the only drivers), so a real `/villagers start` connected the bots and
+// then sat idle. VillageLoop runs one independent loop per villager — wait for the body to connect, settle,
+// then propose+run a task forever at the curriculum's own pace. It lives at the composition root next to
+// RolloutCoordinator because it consumes it (a layer-3 actor may never import a peer — the dependency law).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Construction deps for {@link VillageLoop} (wired in main.ts). */
+export interface VillageLoopOptions {
+  coordinator: RolloutCoordinator;
+  /** Villager names to drive. The avatar (Dieu) is NOT driven by curriculum tasks — it is the divine runner. */
+  villagers: string[];
+  /** True iff the villager's body is currently connected (`pool.bot(name) !== undefined`). */
+  isConnected: (name: string) => boolean;
+  /** Poll interval while waiting for a villager to connect. Default 2000 ms (tests pass a few ms). */
+  connectPollMs?: number;
+  /** Settle delay after a villager first connects, before its first proposal (chunk + inventory sync). Default 3000 ms. */
+  settleMs?: number;
+  /** Gap after a normal (task-producing) turn before proposing the next. Default 1000 ms. ALSO the guaranteed
+   *  macrotask yield each turn — never set to 0 with a synchronous coordinator (event-loop starvation, W). */
+  turnDelayMs?: number;
+  /** Back-off after a no-proposal turn or a driver error, so a dead provider can't hot-spin. Default 5000 ms. */
+  idleBackoffMs?: number;
+}
+
+/**
+ * One refinement loop per villager. Concurrency across villagers is bounded DOWNSTREAM — the LLM scheduler
+ * caps `maxConcurrent` and the skill engine serializes one skill tree per bot (D-05) — so N parallel loops
+ * never overrun the throughput ceiling (D-13/R49). Lifecycle is tied to the launcher: `start()` on
+ * `/villagers start|restart`, `stop()` on `/villagers stop` and host shutdown. NOT started on `autoSpawn`
+ * (the live-test harness drives the coordinator itself).
+ */
+export class VillageLoop {
+  private readonly o: VillageLoopOptions;
+  private readonly connectPollMs: number;
+  private readonly settleMs: number;
+  private readonly turnDelayMs: number;
+  private readonly idleBackoffMs: number;
+  private running = false;
+  /** Bumped on every start/stop. A per-villager loop runs only while its captured epoch is still current, so
+   *  a loop awaiting a multi-minute rollout when stop() lands exits at its next boundary (no double-drive). */
+  private epoch = 0;
+
+  constructor(opts: VillageLoopOptions) {
+    this.o = opts;
+    this.connectPollMs = opts.connectPollMs ?? 2000;
+    this.settleMs = opts.settleMs ?? 3000;
+    this.turnDelayMs = opts.turnDelayMs ?? 1000;
+    this.idleBackoffMs = opts.idleBackoffMs ?? 5000;
+  }
+
+  /** Idempotent: a second start while running is a no-op. Spawns one detached loop per villager. */
+  start(): void {
+    if (this.running) return;
+    this.running = true;
+    const epoch = ++this.epoch;
+    logger.info('village-loop', `autonomous refinement loop started for ${this.o.villagers.length} villager(s)`);
+    for (const name of this.o.villagers) void this.drive(name, epoch);
+  }
+
+  /** Stop every loop. Does NOT await in-flight rollouts — the admin/stop response must return promptly, and
+   *  the pool disconnect that follows makes any in-flight skill run fail fast. */
+  stop(): void {
+    if (!this.running) return;
+    this.running = false;
+    this.epoch++; // a loop still awaiting a rollout sees the epoch move and exits at its next boundary
+    logger.info('village-loop', 'autonomous refinement loop stopped');
+  }
+
+  isRunning(): boolean {
+    return this.running;
+  }
+
+  private alive(epoch: number): boolean {
+    return this.running && epoch === this.epoch;
+  }
+
+  /** Drive one villager: wait for its body, settle once, then propose+run on repeat. Self-contained — a
+   *  thrown proposal/rollout is logged and backed off, never allowed to kill the loop (the village runs on). */
+  private async drive(name: string, epoch: number): Promise<void> {
+    let settled = false;
+    while (this.alive(epoch)) {
+      if (!this.o.isConnected(name)) {
+        settled = false; // a disconnect re-arms the post-connect settle
+        await sleep(this.connectPollMs);
+        continue;
+      }
+      if (!settled) {
+        await sleep(this.settleMs); // let chunks + inventory sync before the first proposal (mirrors the harness)
+        settled = true;
+        continue; // re-check liveness + connectedness at the top before spending a strong-tier proposal
+      }
+      // Every turn ends with an AWAITED macrotask sleep — normal pacing on success, a longer back-off on a
+      // no-proposal turn or a thrown rollout. This is load-bearing: if runOnce ever resolves WITHOUT awaiting
+      // a real macrotask (a fully-degraded zero-LLM curriculum/orchestrator path), an unconditional sleep
+      // here is the only thing that keeps the loop from microtask-spinning and starving every timer (W).
+      let backoff = this.turnDelayMs;
+      try {
+        const result = await this.o.coordinator.runOnce({ trigger: 'idle', villager: name });
+        if (!result) backoff = this.idleBackoffMs; // curriculum proposed nothing
+      } catch (e) {
+        logger.warn('village-loop', `driver for ${name} errored — ${e instanceof Error ? e.message : String(e)}`);
+        backoff = this.idleBackoffMs;
+      }
+      await sleep(backoff);
+    }
+  }
+}
+
+/** Unref'd sleep — never holds the event loop open, so host.stop() can let the process exit with a pending
+ *  back-off timer outstanding. While the host is up the admin server + lag monitor keep the loop alive, so
+ *  unref'd timers still fire on schedule. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms).unref();
+  });
 }
 
 /** Mask anything secret-shaped before the config snapshot enters the journal. */

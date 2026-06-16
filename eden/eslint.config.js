@@ -37,4 +37,30 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'off',
     },
   },
+  {
+    // The dashboard ([website/](website/)) is hand-written browser glue (plain-JS IIFEs over the DOM +
+    // the admin API), NOT part of the TypeScript gate. Lint it with browser globals so a real bug (a typo,
+    // an undeclared variable in api.js) is still caught, but relax the rules that browser-module style
+    // legitimately trips (console for debugging, empty catch/`this` aliasing, cross-file window singletons).
+    files: ['website/**/*.js'],
+    languageOptions: {
+      globals: {
+        window: 'readonly', document: 'readonly', location: 'readonly', navigator: 'readonly',
+        fetch: 'readonly', WebSocket: 'readonly', Promise: 'readonly', JSON: 'readonly',
+        Math: 'readonly', Date: 'readonly', console: 'readonly', Object: 'readonly', Array: 'readonly', String: 'readonly',
+        setTimeout: 'readonly', clearTimeout: 'readonly', setInterval: 'readonly', clearInterval: 'readonly',
+        encodeURIComponent: 'readonly', decodeURIComponent: 'readonly',
+        Event: 'readonly', CustomEvent: 'readonly', URL: 'readonly', URLSearchParams: 'readonly',
+        requestAnimationFrame: 'readonly', cancelAnimationFrame: 'readonly', getComputedStyle: 'readonly',
+        // cross-file singletons the website modules attach to window:
+        EdenAPI: 'writable', UI: 'writable', Screens: 'writable', Eden: 'writable',
+      },
+    },
+    rules: {
+      'no-console': 'off',
+      'no-empty': 'off',
+      '@typescript-eslint/no-this-alias': 'off',
+      '@typescript-eslint/no-unused-vars': 'off',
+    },
+  },
 );

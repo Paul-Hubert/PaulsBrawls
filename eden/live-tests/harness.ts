@@ -17,7 +17,7 @@ import { logger } from '../src/logger';
 import type { EdenConfig, VillagerConfig } from '../src/config';
 import type { JournalEvent, Task } from '../src/types/index';
 import { RconClient, type RconSend } from './rcon';
-import { baseConfig, readServerProps, writeConfig, type ServerProps } from './config';
+import { baseConfig, readServerProps, writeConfig, DEFAULT_PROVIDER, type ServerProps } from './config';
 import { kindHistogram } from './checks';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -114,10 +114,16 @@ async function waitForBots(host: EdenHost, names: string[], timeoutMs: number): 
 async function runTask(host: EdenHost, task: Task, timeoutMs: number, log: (m: string) => void): Promise<TaskOutcome> {
   host.god!.addTask(task);
   log(`task injected: id=${task.id} assignee=${task.assignee ?? '(none)'} check=${JSON.stringify(task.check ?? null)} goal="${task.goal.slice(0, 80)}…"`);
+  // The deadline is a CANCELLABLE timer (not bare sleep): when assignAndRun wins the race the timer is
+  // cleared in `finally`, so a converged task doesn't keep a multi-minute timer alive on the event loop
+  // (harmless under process-isolation where the child exits, but runScenario is exported for in-process use).
+  let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     const raced = await Promise.race([
       host.coordinator!.assignAndRun(task, { trigger: 'admin' }).then((r) => ({ kind: 'result' as const, r })),
-      sleep(timeoutMs).then(() => ({ kind: 'deadline' as const })),
+      new Promise<{ kind: 'deadline' }>((resolve) => {
+        deadline = setTimeout(() => resolve({ kind: 'deadline' }), timeoutMs);
+      }),
     ]);
     if (raced.kind === 'deadline') {
       log(`task ${task.id}: deadline (${timeoutMs / 1000}s) reached before assignAndRun returned`);
@@ -129,6 +135,8 @@ async function runTask(host: EdenHost, task: Task, timeoutMs: number, log: (m: s
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
     log(`task ${task.id}: assignAndRun THREW — ${message}`);
     return { taskId: task.id, assignee: task.assignee, timedOut: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    if (deadline) clearTimeout(deadline);
   }
 }
 
@@ -149,6 +157,9 @@ function journalReport(host: EdenHost): string {
   const keep = new Set([
     'system.boot', 'system.bot-connected', 'system.error', 'world.death',
     'god.task-proposed', 'god.directive', 'inbox.delivered',
+    // M5 reactivity — so a run's timeline shows a reflex firing (subscription.fired{skill}) within a tick
+    // of its signal, ahead of the brain wake-up it pre-empts (the cooperative-mob-defense proof).
+    'subscription.fired', 'subscription.suppressed', 'brain.wakeup',
     'skill.draft', 'skill.run', 'god.ticket', 'god.verdict', 'skill.admit', 'brain.done',
   ]);
   for (const e of all.filter((x) => keep.has(x.kind))) {
@@ -165,6 +176,9 @@ function summarize(e: JournalEvent): unknown {
     case 'god.verdict': return { success: p['success'], action: p['libraryAction'], critique: p['critique'] };
     case 'world.death': return { name: p['name'], cause: p['cause'] };
     case 'brain.done': return { villager: p['villager'], toolCalls: p['toolCalls'], summary: p['summary'] };
+    case 'brain.wakeup': return { villager: p['villager'], triggers: p['triggers'] };
+    case 'subscription.fired': return { villager: p['villager'], on: p['on'], outcome: p['outcome'], target: p['target'] };
+    case 'subscription.suppressed': return { villager: p['villager'], on: p['on'], reason: p['reason'] };
     default: return p;
   }
 }
@@ -184,16 +198,17 @@ function writeEvidence(runDir: string, host: EdenHost, report: ScenarioReport): 
  * (a thrown error is itself reported as FAIL). The dev server is assumed already running; only the Eden
  * host is created and torn down here.
  */
-export async function runScenario(scenario: Scenario, opts: { runDir?: string } = {}): Promise<ScenarioReport> {
+export async function runScenario(scenario: Scenario, opts: { runDir?: string; provider?: string } = {}): Promise<ScenarioReport> {
   const t0 = Date.now();
   const runDir = opts.runDir ?? makeRunDir(scenario.name);
   const log = (m: string): void => logger.info('live-test', `[${scenario.name}] ${m}`);
 
+  const providerName = opts.provider ?? DEFAULT_PROVIDER;
   const props: ServerProps = readServerProps();
-  const config = (scenario.configure ?? ((c) => c))(baseConfig(props, scenario.roster));
+  const config = (scenario.configure ?? ((c) => c))(baseConfig(props, scenario.roster, providerName));
   const configPath = writeConfig(runDir, config);
   const dataDir = join(runDir, '.eden-data');
-  log(`run dir ${runDir} — mc 127.0.0.1:${props.mcPort}, rcon :${props.rconPort}, admin :${config.admin.port}`);
+  log(`run dir ${runDir} — mc 127.0.0.1:${props.mcPort}, rcon :${props.rconPort}, admin :${config.admin.port}, provider:${providerName}`);
 
   const rconClient = new RconClient({ host: props.rconHost, port: props.rconPort, password: props.rconPassword });
   const rcon: RconSend = (cmd) => rconClient.send(cmd);
@@ -205,8 +220,10 @@ export async function runScenario(scenario: Scenario, opts: { runDir?: string } 
     log(`applying arena (${scenario.arena.length} RCON commands) …`);
     await rconClient.sendAll(scenario.arena);
 
-    log('booting Eden host (spawnBots + enableGod + installProcessGuards) …');
-    host = await start(configPath, { dataDir, spawnBots: true, enableGod: true, installProcessGuards: true });
+    log('booting Eden host (spawnBots + autoSpawn + enableGod + installProcessGuards) …');
+    // autoSpawn: the harness boots-then-acts (waits for bots, then drives tasks), so it connects the roster
+    // at boot rather than via the in-game `/villagers start` (R53). Positioning is the scenario's arena.
+    host = await start(configPath, { dataDir, spawnBots: true, autoSpawn: true, enableGod: true, installProcessGuards: true });
     if (!host.god || !host.coordinator) throw new Error('host booted without god/coordinator — enableGod failed');
 
     const required = scenario.requiredBots ?? assignees(scenario.tasks);

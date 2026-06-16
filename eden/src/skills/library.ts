@@ -263,6 +263,26 @@ export class SkillLibrary {
     return out;
   }
 
+  /** Append-only version count of a skill (0 if unknown) — the admin list view's `versionsCount`. */
+  versionCount(name: string): number {
+    return this.skills.get(name)?.records.length ?? 0;
+  }
+
+  /**
+   * Every version of a skill, newest-first, with its source — the admin version-history detail view.
+   * Append-only history (versions are never deleted on disk); a missing code file degrades to `''` rather
+   * than throwing, so the view stays renderable even mid-corruption.
+   */
+  history(name: string): Array<{ version: SkillVersion; manifest: SkillManifest; code: string }> {
+    const rec = this.skills.get(name);
+    if (!rec) return [];
+    return [...rec.records].reverse().map((r) => ({
+      version: r.version,
+      manifest: r.manifest,
+      code: existsSync(r.version.codePath) ? readFileSync(r.version.codePath, 'utf8') : '',
+    }));
+  }
+
   /** Boot integrity check: a code file whose hash drifted from its record is quarantined (tamper/corruption). */
   verifyHashes(): void {
     for (const rec of this.skills.values()) {

@@ -1,0 +1,43 @@
+{
+  "name": "mining-crew",
+  "description": "Équipe minière: deux mineurs et un artisan qui transforme les matériaux bruts.",
+
+  "god": {
+    "combineDesks": false,
+    "embodiedVerdicts": true,
+    "authoring": "villager"
+  },
+
+  "villagers": {
+    "Gaspard": {
+      "role": "miner",
+      "persona": "Tu es Gaspard, un mineur expérimenté. Tu connais les galeries comme ta poche, tu entends le son de chaque bloc et tu sais d'instinct où se cachent les filons. Tu mines vite et efficacement.",
+      "items": [
+        { "id": "minecraft:iron_pickaxe", "count": 1 },
+        { "id": "minecraft:iron_shovel",  "count": 1 },
+        { "id": "minecraft:torch",        "count": 64 },
+        { "id": "minecraft:bread",        "count": 10 }
+      ]
+    },
+    "Céleste": {
+      "role": "miner",
+      "persona": "Tu es Céleste, une mineuse prudente et organisée. Tu cartographies tes tunnels, tu poses des torches avant d'avancer et tu ne descends jamais sans provisions. Tu te spécialises dans les pierres précieuses.",
+      "items": [
+        { "id": "minecraft:iron_pickaxe", "count": 1 },
+        { "id": "minecraft:torch",        "count": 64 },
+        { "id": "minecraft:bread",        "count": 10 },
+        { "id": "minecraft:bucket",       "count": 1 }
+      ]
+    },
+    "Honoré": {
+      "role": "crafter",
+      "persona": "Tu es Honoré, l'artisan de l'équipe. Tu transformes le minerai brut en outils et en équipements. Tu connais toutes les recettes et tu optimises chaque ressource. Tu répares aussi les outils abîmés.",
+      "items": [
+        { "id": "minecraft:crafting_table", "count": 1 },
+        { "id": "minecraft:furnace",        "count": 2 },
+        { "id": "minecraft:coal",           "count": 32 },
+        { "id": "minecraft:bread",          "count": 10 }
+      ]
+    }
+  }
+}

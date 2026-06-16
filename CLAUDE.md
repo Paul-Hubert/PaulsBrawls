@@ -4,224 +4,376 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Fabric mod for Minecraft 1.21.1 (Java 21). Three loosely-coupled gameplay features bundled into one mod (`paulsbrawls`):
+A Fabric mod for Minecraft 1.21.1 (Java 21), `paulsbrawls`, bundling three loosely-coupled gameplay
+features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 
 - **Gibber** — server-wide money system (a custom `coin` item) with admin gift commands and a periodic salary scheduler.
 - **Capture the Flag** — auto-drops any banner named "Flag" when its holder takes damage, disables elytra while a Flag is carried, and makes flag-holders glow.
-- **AI God** — LangChain4j-driven `Dieu` who hears prayers (`/pray`), trades, punishes, and rewards. **Has a physical body** since the God-Body integration: drives a Mineflayer bot (the avatar) over a Node HTTP bridge. Most player-facing strings are French.
-- **AI Village** — ten LM-powered villager bots with their own perception, memory, jobs, bot↔bot conversations, barter, and **self-written reflex code**. Brains live Node-side in [minecraft-mcp-server/src/village/](minecraft-mcp-server/src/village/) (`npm run village`, a SEPARATE process from the God's unified one); the mod's contribution is the atomic trade-settlement listener + `/village` command. Design + status: [VILLAGE_PLAN.md](VILLAGE_PLAN.md).
+- **AI God** — a LangChain4j-driven `Dieu` who hears prayers (`/pray`), trades, punishes, and rewards. **Has a physical body**: drives a Mineflayer bot (the avatar) over a Node HTTP bridge. Most player-facing strings are French.
+- **AI Village (Eden)** — ten LM-powered villager bots + one God acting through a single shared, God-judged library of typed, composable skills. The brain is **Eden**, a from-scratch rewrite in [eden/](eden/) (one Node process). The mod's only contribution is server-authority: the atomic trade-settlement listener, `coin`, op-on-join, and the `/village` command.
 
-There is also a vendored Node sub-project under [minecraft-mcp-server/](minecraft-mcp-server/) — a fork of yuniko-software's Mineflayer MCP server. The mod talks to it via a **unified** Node entrypoint (`src/unified/main.ts`) that runs ONE Mineflayer bot and serves both surfaces on one HTTP port:
-- the bridge HTTP control endpoints (`/appear /chat /look /gesture /vanish /health`) — puppet the avatar
-- the MCP-over-SSE endpoints (`/mcp/sse` + `/mcp/messages?sessionId=…`) — expose Mineflayer-driven tools (mine/place/move/craft/combat/collect/…) to the LLM
+> ### Three runtimes — what is active vs legacy (read this first)
+>
+> | Runtime | Path | Process | Status |
+> |---|---|---|---|
+> | **The Fabric mod** | [src/](src/) | `./gradlew …` (JVM) | **Active, permanent.** Gibber, CTF, AI God, `:8767` settlement, op-on-join. |
+> | **Eden** — the AI Village brain | [eden/](eden/) | `tsx eden/src/main.ts` (one Node process) | **Active.** The current village brain (God + 10 villagers). Avatar `Dieu`, admin port `8770`. |
+> | **Unified bridge + MCP** | [minecraft-mcp-server/src/unified/](minecraft-mcp-server/src/unified/) | `npm run unified` | **Active.** Drives the **Java AI-God's** avatar (`LLMBot`) and exposes Mineflayer tools to that God. A *different* surface from the village. |
+> | **v1 village brain** | [minecraft-mcp-server/src/village/](minecraft-mcp-server/src/village/) | `npm run village` | **LEGACY / deprecated.** Superseded by Eden. Non-destructive: still runnable, nothing deleted. See [minecraft-mcp-server/DEPRECATED.md](minecraft-mcp-server/DEPRECATED.md). |
+>
+> There are **two distinct "Gods"**: the Java `/pray` God (LangChain4j, drives `LLMBot` via the unified
+> bridge) and Eden's village God (`Dieu`, the critic/curriculum/orchestrator brain). They are separate
+> entities and must never share a Minecraft username (R12). Eden replaces only the *v1 village*, not the
+> mod and not the Java AI-God.
 
-The bot auto-loads five Mineflayer plugins post-spawn (`pvp`, `auto-eat`, `armor-manager`, `collectblock`, `tool`) — see §"MCP toolkit + Mineflayer plugins" below for the split between LLM-callable tools and autonomous behaviours.
+## Build / run / test commands
 
-The standalone `src/main.ts` (MCP stdio) and `src/bridge/main.ts` (bridge HTTP only) entrypoints are kept as a rollback path. **Do not run the unified entrypoint alongside either standalone one with the same `--username`** — Minecraft will kick the second login.
-
-## Build / run commands
+### The Fabric mod (JVM)
 
 ```powershell
 ./gradlew build                # compile + remap; auto-copies the jar to mods folders (see below)
-./gradlew runServer            # launch dev dedicated server
+./gradlew runServer            # launch dev dedicated server (cwd run/, dev port — read run/server.properties, R28)
 ./gradlew runClient            # launch dev client
 ./gradlew genSources           # generate Minecraft sources for IDE navigation
 ./gradlew clean
 ```
 
-The Node side (only needed if you want God to have a body and/or MCP tools):
+`build` is finalized by two `Copy` tasks (`copyToMods`, `copyToClientMods`) in [build.gradle:117](build.gradle:117).
+They copy the remapped jar into the paths set by `mods_folder` / `client_mods_folder` in
+[gradle.properties](gradle.properties). Those point at Paul's local Minecraft installs — on a different
+machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
+skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
+
+The Java side has no tests. `ci.yml` runs `./gradlew test` + `jacocoTestReport` but no test sources exist —
+those steps are effectively no-ops/will fail on a clean checkout.
+
+### Eden — the AI Village brain (Node)
+
+```powershell
+cd eden
+npm install
+cp eden.example.json eden.json   # eden.json is gitignored; holds NO api key (env-only)
+npx tsx src/main.ts eden.json    # boot the host: spawns bots + installs process guards (a real run)
+```
+
+```powershell
+npm run check          # CI gate: lint + tsc --noEmit + dependency-cruiser (0 violations) + ~400 node:test tests
+npm test               # node:test via tsx, on the fakes only — NEVER touches Minecraft
+npm run test:coverage  # node built-in coverage (~94% line / ~83% branch)
+npm run eval           # mock-LLM scenario harness vs a real server (CI-style, deterministic)
+npm run live-test      # real server + real LLM scenario suite (NOT in CI — needs a server + OPENAI_API_KEY)
+npm run rebuild-stats  # rebuild derived views from the journal by replay (must equal the live fold)
+```
+
+- Test runner is **`node:test` via tsx**, NOT ava (v1 used ava; Eden starts clean). Node `>=22` (machine runs 24).
+- CI is [.github/workflows/eden-ci.yml](.github/workflows/eden-ci.yml), scoped to `eden/**`, separate from the mod's `ci.yml`.
+- A direct boot (`tsx src/main.ts`) sets `spawnBots:true` + `installProcessGuards:true`; `start()` called from tests defaults both **false**, so CI never connects to a server. The host is supervised under **pm2** (Windows, crash-only respawn — D-08); `ecosystem.config.cjs` lives beside `eden.json` (both gitignored).
+- The LLM key is read from `process.env.OPENAI_API_KEY` and sent only to the remote (https) provider — never written to a config file or the journal.
+
+### The unified bridge (drives the Java AI-God's avatar + MCP tools)
 
 ```powershell
 cd minecraft-mcp-server
 npm install
-# Unified entrypoint — ONE bot, bridge HTTP + MCP SSE on one port:
+# ONE bot, bridge HTTP + MCP-over-SSE on one port:
 npm run unified -- --host <mc-host> --port <mc-port> --username LLMBot --bridge-port 8765
-# Legacy bridge-only entrypoint (kept for rollback):
-npm run bridge  -- --host <mc-host> --port <mc-port> --username LLMBot --bridge-port 8765
-# AI village — ten villager bots, separate process, own usernames (copy village.example.json → village.json first):
-npm run village -- --host <mc-host> --port <mc-port> --roster village.json --admin-port 8766
+# Legacy rollback entrypoints (do NOT run two with the same --username — MC kicks the second login):
+npm run bridge  -- ... # bridge HTTP only
+npm run dev / start    # MCP stdio only
+# LEGACY village brain (deprecated — superseded by Eden):
+npm run village -- --roster village.json --admin-port 8766
 ```
 
-Node-side tests exist (`npm test`, ava — includes the village suites); the Java side still has none. The `ci.yml` workflow runs `./gradlew test` and `jacocoTestReport`, but no test sources exist — those steps are effectively no-ops/will fail on a clean checkout.
+The AI-God feature requires `OPENAI_API_KEY` (optionally `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`), *or* LM
+Studio / Ollama running locally and selected with `/llm provider <name>`. The system prompt is loaded at
+runtime from [prompt.txt](prompt.txt) in the working directory (not bundled into the jar). LangChain4j
+settings persist to `llm_config.properties`; God-Body bridge settings to `bridge_config.properties`.
 
-`build` is finalized by two `Copy` tasks (`copyToMods`, `copyToClientMods`) defined in [build.gradle:117](build.gradle:117). They copy the remapped jar into the paths set by `mods_folder` and `client_mods_folder` in [gradle.properties](gradle.properties). These properties point at Paul's local Minecraft installs — if you build on a different machine, either set them to your own mods folder or revert them to the placeholder `path/to/your/mods` so the copy is skipped.
+> **The JVM runs in `PaulsBrawlsVanilla\`** (the production server dir) — that is where the runtime configs
+> (`llm_config.properties`, `bridge_config.properties`, …) and logs live, NOT `pauls-brawls/run/`. The
+> `./gradlew runServer` dev server runs in `run/` instead. **Two servers, two cwds.**
 
-The AI God feature requires `OPENAI_API_KEY` (optionally `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`) in the environment, *or* one of LM Studio / Ollama running locally and selected with `/llm provider <name>`. The system prompt is loaded at runtime from [prompt.txt](prompt.txt) in the working directory (not bundled into the jar). LangChain4j provider settings persist to `llm_config.properties`; God-Body bridge settings persist to `bridge_config.properties`.
+---
 
-## Architecture
+## Architecture — the Fabric mod (`src/`)
 
 ### Entry points
 
 Wired in [fabric.mod.json](src/main/resources/fabric.mod.json):
 
-- [ServerEntryPoint.java](src/main/java/com/paul/brawl/ServerEntryPoint.java) (`DedicatedServerModInitializer`) registers everything: Gibber commands, RevenueManager, SalaryScheduler, the `coin` item, FlagManager, ChatBot, and the God-Body machinery (`GodActionQueue`, `GodScheduler`, op-on-join for the bot avatar).
-- [ClientEntryPoint.java](src/client/java/com/paul/brawl/ClientEntryPoint.java) (`ClientModInitializer`) registers `Screenshotter` (which owns the `/prove` and `/build` client commands) and re-registers `Money` so the item is also known client-side.
+- [ServerEntryPoint.java](src/main/java/com/paul/brawl/ServerEntryPoint.java) (`DedicatedServerModInitializer`) registers everything: Gibber commands, RevenueManager, SalaryScheduler, the `coin` item, FlagManager, ChatBot, the God-Body machinery (`GodActionQueue`, `GodScheduler`, op-on-join for the avatar), and the village trade-settlement listener.
+- [ClientEntryPoint.java](src/client/java/com/paul/brawl/ClientEntryPoint.java) (`ClientModInitializer`) registers `Screenshotter` (which owns `/prove` and `/build`) and re-registers `Money`.
 
-Source set split is configured via `loom.splitEnvironmentSourceSets()` — client-only code lives under `src/client/`, shared/server code under `src/main/`.
+Source-set split is `loom.splitEnvironmentSourceSets()` — client-only code under `src/client/`, shared/server under `src/main/`.
 
 ### Gibber money flow
 
-Designed so offline players still "earn" salary and receive their coins on next login:
+Designed so offline players still "earn" salary and receive coins on next login:
 
-1. The "total revenue" everyone is *entitled* to is a single global int stored in [PlayerPersistentState](src/main/java/com/paul/brawl/PlayerPersistentState.java) under key `total_revenue`.
+1. A single global int `total_revenue` (everyone is *entitled* to it) lives in [PlayerPersistentState](src/main/java/com/paul/brawl/PlayerPersistentState.java).
 2. Each player's *paid-out* revenue is stored per-UUID in the same persistent state.
-3. `SalaryScheduler` ticks every `salary_period` seconds (default 10) and increments `total_revenue` by `salary_per_day`. It does NOT iterate players directly — it calls `RevenueManager.UpdateRevenueAll`.
-4. `RevenueManager.updateRevenue(uuid)` computes `totalRevenue - currentRevenue` and gives that many `coin` items to the player, then writes back the new `currentRevenue`. The same path runs on `ServerPlayConnectionEvents.JOIN`, so offline players get their backlog at login.
+3. `SalaryScheduler` ticks every `salary_period` seconds (default 10), incrementing `total_revenue` by `salary_per_day` — via `RevenueManager.UpdateRevenueAll`, not by iterating players.
+4. `RevenueManager.updateRevenue(uuid)` computes `totalRevenue - currentRevenue`, gives that many `coin` items, writes back. Same path runs on `ServerPlayConnectionEvents.JOIN`, so offline players get their backlog at login.
 
-`PlayerPersistentState` uses Minecraft's `PersistentState` API (saved per-world in the overworld's persistent state manager). NBT keys: `gibbers_state` → `player_data` (UUID→int) and `global_data` (string→int).
+`PlayerPersistentState` uses Minecraft's `PersistentState` API. NBT keys: `gibbers_state` → `player_data` (UUID→int), `global_data` (string→int).
 
 ### AI God — LLM client (LangChain4j)
 
-The complete request pipeline lives in [ChatBot.java](src/main/java/com/paul/brawl/ChatBot.java). The OpenAI Responses API has been replaced with **LangChain4j** (Chat Completions); the spine of the difference is **client-side memory** instead of server-side `previousResponseId` chaining. Every turn rebuilds the full message list from the player's [`ChatMemory`](https://docs.langchain4j.dev/) and resends it. The blocking `ChatModel.chat` is wrapped in `CompletableFuture.supplyAsync` on a dedicated worker pool ([LLMConfig.sharedExecutor](src/main/java/com/paul/brawl/LLMConfig.java)) so callers keep the old `.thenAccept` async shape.
+The full request pipeline lives in [ChatBot.java](src/main/java/com/paul/brawl/ChatBot.java). It uses
+**LangChain4j** (Chat Completions) with **client-side memory** instead of the OpenAI Responses API's
+`previousResponseId` chaining. Every turn rebuilds the full message list from the player's
+`TokenWindowChatMemory` (capped at `MAX_MEMORY_TOKENS = 16_000`, budgeted by `OpenAiTokenCountEstimator("gpt-4o")`)
+and resends it. The blocking `ChatModel.chat` is wrapped in `CompletableFuture.supplyAsync` on a dedicated
+worker pool ([LLMConfig.sharedExecutor](src/main/java/com/paul/brawl/LLMConfig.java)).
 
-Per turn, [`ChatBot.buildMessageList`](src/main/java/com/paul/brawl/ChatBot.java) prepends three `SystemMessage`s: hardcoded persona + override, a JSON snapshot from `PlayerDataCollector`, the global chat log from `ChatMessageHistory`, and nearby blocks from `ChatBotActions.getBlockInfo` (those three are collected on the main thread via a bounded `GodActionQueue` hop — `buildMessageList` itself runs on an llm-worker thread). Then it appends the player's `TokenWindowChatMemory` (capped at `MAX_MEMORY_TOKENS = 16_000`, budgeted by `OpenAiTokenCountEstimator("gpt-4o")`).
+Per turn, `buildMessageList` prepends three `SystemMessage`s (persona+override, a `PlayerDataCollector` JSON
+snapshot, the global chat log, and nearby blocks via `ChatBotActions.getBlockInfo` — collected on the main
+thread through a bounded `GodActionQueue` hop), then appends the player's memory.
 
-Tools are Jackson-annotated POJOs in [ChatBotFunctions.java](src/main/java/com/paul/brawl/ChatBotFunctions.java) — `Reward`, `Trade`, `Punishment`, `ChangeWeather`, `SpawnCreature`, `Appear`, `Vanish`, `Wait`, `BuildPlan`, `ListTools` — plus [QueryTerrain.java](src/main/java/com/paul/brawl/QueryTerrain.java) (ASCII relief map; center clamped to ±128 blocks of the player, unloaded chunks render as `?`). `Appear` and `Vanish` are gated on `GodSessionManager.isActive(player)` so a bodiless prayer can't steal the shared avatar or clobber the owner's idle watchdog. They are turned into LangChain4j `ToolSpecification`s by [JsonSchemaAdapter](src/main/java/com/paul/brawl/JsonSchemaAdapter.java), which derives the schema from `@JsonClassDescription` / `@JsonPropertyDescription`. Mark a field with [`@OptionalField`](src/main/java/com/paul/brawl/OptionalField.java) to keep it off the `required` list (used by `Appear`'s defaulted fields).
+Tools are Jackson-annotated POJOs in [ChatBotFunctions.java](src/main/java/com/paul/brawl/ChatBotFunctions.java) —
+`Reward`, `Trade`, `Punishment`, `ChangeWeather`, `SpawnCreature`, `Appear`, `Vanish`, `Wait`, `BuildPlan`,
+`ListTools` — plus [QueryTerrain.java](src/main/java/com/paul/brawl/QueryTerrain.java) (ASCII relief map).
+`Appear`/`Vanish` are gated on `GodSessionManager.isActive(player)`. [JsonSchemaAdapter](src/main/java/com/paul/brawl/JsonSchemaAdapter.java)
+turns them into LangChain4j `ToolSpecification`s from `@JsonClassDescription`/`@JsonPropertyDescription`;
+mark a field [`@OptionalField`](src/main/java/com/paul/brawl/OptionalField.java) to keep it off `required`.
 
-After a response, `checkForFunctions` dispatches each tool by name. World-mutating tools (`Reward`, `Trade`, `Punishment`, `ChangeWeather`, `SpawnCreature`) are wrapped in `GodActionQueue.submit(...).join()` at the dispatch site so they execute on the main server thread — see §"Thread safety" below. `Wait` is a special case: when present in a batch, the next `sendFunctionOutputs` call is deferred via `GodScheduler` instead of fired immediately, so God can linger without burning a thread.
+World-mutating tools dispatch through `GodActionQueue.submit(...).join()` (main thread). `Wait` defers the
+next `sendFunctionOutputs` via `GodScheduler`. `BuildPlan` needs an origin (`/construction` →
+`Raycaster.setLastPos`); sub-builds run as isolated [BuildSubAgent](src/main/java/com/paul/brawl/BuildSubAgent.java)
+instances that emit textual `PlaceBlock`/`PlaceLine`/`PlaceBlocks` (regex-scanned).
 
-Image inputs: the client `/prove` and `/build` commands trigger `Screenshotter` to capture the framebuffer, resize to 854×480, and ship it via the custom `ImagePayload` C2S packet. The server-side `ImageReceiver` calls `ChatBot.sendImageChatRequest`, which attaches the JPEG as a base64 `ImageContent` on a `UserMessage`. The user text gets prefixed with `Prompts.proofPrompt` or `Prompts.buildPrompt` depending on whether it contains `Prove :` or `Build :` — those prefix constants are empty by default and meant to be filled in.
-
-The `BuildPlan` tool needs an origin. Admins set it by running `/construction`, which calls `Raycaster.setLastPos` to store the block the admin is currently looking at, keyed by UUID. Sub-builds run as isolated [BuildSubAgent](src/main/java/com/paul/brawl/BuildSubAgent.java) instances, each with its own `ChatMemory` and pivot. Sub-agents emit textual `PlaceBlock` / `PlaceLine` / `PlaceBlocks` calls (regex-scanned in `ChatBotFunctions`) rather than tool calls; the scanner has zero coupling to the LLM client.
-
-### MCP toolkit + Mineflayer plugins
-
-Two layers sit on top of mineflayer in the vendored sub-project.
-
-**Plugins loaded in [bot-connection.ts](minecraft-mcp-server/src/bot-connection.ts)**:
-
-| Plugin | Loaded | Role | Surfaced as |
-|---|---|---|---|
-| `mineflayer-pathfinder` | pre-spawn (`botOptions.plugins`) | A* navigation, `Movements` cost model | Backs `move-to-position`, `place-block` reach, etc. The ONLY plugin that goes in the construction-time slot |
-| `mineflayer-pvp` | post-spawn | Combat tick loop (attack-to-kill, range/swing timing) | `attack-entity`, `stop-combat` MCP tools in [combat-tools.ts](minecraft-mcp-server/src/tools/combat-tools.ts) |
-| `mineflayer-collectblock` | post-spawn | Find→path→equip→mine→pick-up bundle | `collect-block` MCP tool in [collection-tools.ts](minecraft-mcp-server/src/tools/collection-tools.ts) |
-| `mineflayer-tool` | post-spawn | Auto-pick best tool for a block | Invisible — used internally by collectblock, was used by `dig-block` (currently TEMP-disabled) |
-| `mineflayer-auto-eat` | post-spawn | Autonomous eat when `hunger<15` or `health<14` | No tool. `setOpts({...})` + `enableAuto()` called once at spawn. `returnToLastItem: true` and the explicit `bannedFood` list are load-bearing |
-| `mineflayer-armor-manager` | post-spawn | Autonomous best-armor equip on `playerCollect` | No tool |
-
-Plugin loading is wrapped in a single try/catch — one failed `bot.loadPlugin(...)` logs a warning but doesn't take the bot offline.
-
-**MCP tool surface** — currently **25** tools (26 if `dig-block` is restored). Full ground truth: [MCP_TOOLS_VERIFICATION.md](MCP_TOOLS_VERIFICATION.md) §0; the executable check is `node verify-mcp-tools.mjs` from the repo root, which spawns the stdio MCP server, runs `tools/list`, and validates the name set + schema spot-checks against `CANONICAL_TOOLS` in [verify-mcp-tools.mjs](verify-mcp-tools.mjs:17). New tool modules go under [src/tools/](minecraft-mcp-server/src/tools/), use `factory.registerTool(...)` only (never `server.tool()` directly), and **must be registered in BOTH** [main.ts](minecraft-mcp-server/src/main.ts) AND [unified/main.ts](minecraft-mcp-server/src/unified/main.ts) — pauls-brawls runs unified exclusively, missing the unified registration means silent omission in production.
-
-These MCP tools auto-flow into the God's tool list via `MCPGateway.INSTANCE.tools()` in [ChatBotFunctions.java:277](src/main/java/com/paul/brawl/ChatBotFunctions.java:277) — adding a tool in the Node side requires **zero Java changes**. Kebab-case MCP names dispatch through `MCPGateway.handlesTool(name)` in [ChatBotFunctions.java:383](src/main/java/com/paul/brawl/ChatBotFunctions.java:383); PascalCase Java POJO names dispatch through their own switch, so there's no collision risk.
-
-`dig-block` is currently TEMP-disabled at user request (registration commented out, two ava tests `test.skip`'d — NOT a code defect). `move-in-direction` was permanently removed — it was blind WASD without obstacle awareness, strictly worse than `move-to-position`. See the Gotchas section for the restoration path.
+Image inputs: client `/prove`/`/build` capture the framebuffer (resize 854×480), ship via the `ImagePayload`
+C2S packet; `ImageReceiver` → `ChatBot.sendImageChatRequest` attaches the JPEG as a base64 `ImageContent`.
 
 ### AI God — God-Body integration
 
 Plan: [GOD_BOT_INTEGRATION_PLAN.md](GOD_BOT_INTEGRATION_PLAN.md). Verification: [VERIFICATION.md](VERIFICATION.md).
 
-Division of labour:
-
 | Concern | Lives where |
 |---|---|
-| `/tp` (appear/vanish), public chat, body gestures | Mineflayer bot, driven via HTTP bridge → `bot.chat`/`swingArm`/`lookAt` |
-| Damage/loot/weather/build effects, `SpawnCreature` | Server-side in `ChatBotActions`, routed through `GodActionQueue` (main thread) |
-| When/where to appear, pacing | Model's `Appear` / `Wait` / `Vanish` tool calls. `/pray` no longer auto-appears |
-| One-encounter-at-a-time semantics | `GodSessionManager` (single-owner busy lock) |
-| Avatar invulnerability | `ChatBotActions.buffAvatar/restoreAvatar` flip the `Invulnerable` NBT on the bot; applied on `Appear`, undone on every exit path |
+| `/tp` (appear/vanish), public chat, gestures | Mineflayer bot, via HTTP bridge → `bot.chat`/`swingArm`/`lookAt` |
+| Damage/loot/weather/build, `SpawnCreature` | Server-side `ChatBotActions`, through `GodActionQueue` (main thread) |
+| When/where to appear, pacing | The model's `Appear`/`Wait`/`Vanish` tool calls |
+| One-encounter-at-a-time | `GodSessionManager` (single-owner busy lock) |
+| Avatar invulnerability | `ChatBotActions.buffAvatar/restoreAvatar` flip the `Invulnerable` NBT on `Appear` / every exit |
 
-Files added for this:
+Java side: [BridgeConfig](src/main/java/com/paul/brawl/BridgeConfig.java) (bridge URL, `botUsername`=`LLMBot`,
+clamps, idle watchdog, griefing toggle; persists to `bridge_config.properties`), [BotBridgeClient](src/main/java/com/paul/brawl/BotBridgeClient.java)
+(async, best-effort — never throws into the prayer flow), [GodBody](src/main/java/com/paul/brawl/GodBody.java)
+(semantic layer; `appear()` computes `playerPos + horizLookDir*distance + (0,height,0)` from yaw only),
+[GodActionQueue](src/main/java/com/paul/brawl/GodActionQueue.java) (`ConcurrentLinkedQueue` drained on
+`END_SERVER_TICK`, `MAX_PER_TICK=8`), [GodScheduler](src/main/java/com/paul/brawl/GodScheduler.java),
+[GodSessionManager](src/main/java/com/paul/brawl/GodSessionManager.java) (busy lock + idle watchdog).
 
-- [BridgeConfig.java](src/main/java/com/paul/brawl/BridgeConfig.java) — singleton; bridge URL, `botUsername` (default `LLMBot`), Appear/Wait/SpawnCount clamps, idle watchdog timeout, griefing toggle. Persists to `bridge_config.properties`. Surfaced via `/llm bridge …`.
-- [BotBridgeClient.java](src/main/java/com/paul/brawl/BotBridgeClient.java) — async `java.net.http.HttpClient` wrapping the six bridge endpoints. **Best-effort**: errors log + return; never throw into the prayer flow.
-- [GodBody.java](src/main/java/com/paul/brawl/GodBody.java) — semantic layer. `appear()` computes `playerPos + horizLookDir*distance + (0,height,0)` from yaw only (so pitch doesn't move the avatar vertically); `say`/`lookAt`/`gesture`/`vanish` are thin pass-throughs.
-- [GodActionQueue.java](src/main/java/com/paul/brawl/GodActionQueue.java) — `ConcurrentLinkedQueue` drained on `END_SERVER_TICK`. `MAX_PER_TICK = 8` bounds per-tick work. Every off-thread world mutation goes through here.
-- [GodScheduler.java](src/main/java/com/paul/brawl/GodScheduler.java) — daemon `ScheduledExecutorService` for `Wait` deferrals; shut down on `SERVER_STOPPING`.
-- [GodSessionManager.java](src/main/java/com/paul/brawl/GodSessionManager.java) — `AtomicReference<UUID>` busy lock + `markManifested` flag + idle watchdog that fires `ChatBotActions.dismissAvatarOnWatchdog` after `BridgeConfig.idleTimeoutSeconds`. **Load-bearing invariant:** `idleTimeoutSeconds > waitMaxSeconds` so a deliberate `Wait(30)` doesn't trip the watchdog.
+Bridge contract (HTTP, localhost): `GET /health`, `POST /appear {x,y,z,facing?}` (→ `/tp`), `POST /chat {message}`
+(strips leading `/`), `POST /look`, `POST /gesture {type}`, `POST /vanish`.
 
-The bridge contract (HTTP, localhost only):
+**Termination:** `ChatBot.setupGeneralCallback` computes `willContinue` once; `Vanish` fires only when
+`!willContinue && needsGodTools && GodSessionManager.isActive(player)`. The depth cap (`MAX_FUNCTION_CALL_DEPTH=100`),
+the API-error branch, and `/pray stop` / `/godbody off` all call `ChatBot.endPrayerSession(player)` →
+`restoreAvatar` + `GodBody.vanish()` + `GodSessionManager.endSession`. **Load-bearing invariant:**
+`idleTimeoutSeconds > waitMaxSeconds` (else a deliberate `Wait(30)` trips the watchdog).
 
-| Endpoint | Body | Bot action |
+### MCP toolkit + Mineflayer plugins (`minecraft-mcp-server/`)
+
+The unified entrypoint ([src/unified/main.ts](minecraft-mcp-server/src/unified/main.ts)) runs ONE Mineflayer
+bot serving both the bridge HTTP routes and the MCP-over-SSE routes on `--bridge-port` (default 8765). The bot
+auto-loads five plugins post-spawn:
+
+| Plugin | Role | Surfaced as |
 |---|---|---|
-| `GET /health` | – | `{ connected, username, position }` |
-| `POST /appear` | `{ x, y, z, facing? }` | `bot.chat("/tp <botName> x y z facing entity <player>")` |
-| `POST /chat` | `{ message }` | `bot.chat(message)` — strips leading `/` to prevent the model running commands |
-| `POST /look` | `{ x, y, z }` | `bot.lookAt(new Vec3(...))` |
-| `POST /gesture` | `{ type }` | `swing` / `jump` / `sneak` / `nod` / `summon` |
-| `POST /vanish` | `{ x?, y?, z? }` | `bot.chat("/tp <botName> <parking>")` |
+| `mineflayer-pathfinder` | A* nav (pre-spawn) | backs `move-to-position`, `place-block` reach |
+| `mineflayer-pvp` | combat tick loop | `attack-entity`, `stop-combat` |
+| `mineflayer-collectblock` | find→path→mine→pickup | `collect-block` |
+| `mineflayer-tool` | auto-pick best tool | internal (used by collectblock; was used by TEMP-disabled `dig-block`) |
+| `mineflayer-auto-eat` | autonomous eat | no tool; `AUTO_EAT_OPTS` is load-bearing |
+| `mineflayer-armor-manager` | autonomous best-armor equip | no tool |
 
-The preferred entrypoint is `minecraft-mcp-server/src/unified/main.ts` (`npm run unified`). It owns ONE `BotConnection` and serves both the bridge HTTP routes and the MCP-over-SSE routes on one `--bridge-port`. The legacy `src/bridge/main.ts` (`npm run bridge`, HTTP only) and `src/main.ts` (`npm run dev`/`start`, MCP stdio only) entrypoints stay in tree as a rollback path. **Never run two entrypoints together with the same `--username`** — Minecraft kicks the second login. That dual-bot setup is exactly what `MCPGateway` no longer creates.
-
-#### Termination, precisely
-
-`ChatBot.setupGeneralCallback` computes `willContinue` once: true if there were tool calls, or (for the build bot) textual placements. Vanish only fires when `!willContinue && needsGodTools && GodSessionManager.isActive(player)`. The depth-cap (`MAX_FUNCTION_CALL_DEPTH = 100`) in `sendFunctionOutputs`, the API-error branch in `logApiError`, and the `/pray stop` / `/godbody off` paths all call the same `ChatBot.endPrayerSession(player)` so the avatar is always cleaned up — `restoreAvatar` (clears `Invulnerable`) + `GodBody.vanish()` + `GodSessionManager.endSession`. A `Wait` deferral whose session-bound conversation lost its session before the timer fires is skipped entirely in `sendFunctionOutputs` — no LLM call is burned, the memory is wiped (the assistant turn's tool_calls would otherwise sit unanswered).
-
-### AI Village
-
-Full design + decision log: [VILLAGE_PLAN.md](VILLAGE_PLAN.md). Everything brain-side lives in the vendored sub-project under [src/village/](minecraft-mcp-server/src/village/); the Java mod only does what requires server authority.
-
-Three-layer cognition (the reason ten bots don't mean ten LLM calls per event):
-
-1. **Reflexes** — bot-AUTHORED JavaScript handlers (`bot.on('hurt', …)`) run in an in-process sandbox: acorn AST pass injects loop budgets and bans dangerous identifiers, `tsc` type-checks every draft against the published `API_DTS` in [villager-api.ts](minecraft-mcp-server/src/village/villager-api.ts) BEFORE it runs, three runtime errors auto-disable a skill and queue feedback into the bot's next deliberation. Stock seeds per role in [stock-skills.ts](minecraft-mcp-server/src/village/stock-skills.ts) go through the exact same pipeline (and are pinned by tests — break the pipeline and `npm test` fails).
-2. **Routines** — long-lived job scripts (farm-loop, wood-loop, craft-batch, mine-loop, guard-patrol) run by [routines.ts](minecraft-mcp-server/src/village/routines.ts); one per bot, cancellable, `sleep()` refunds the loop budget.
-3. **Deliberation** — [agent-runtime.ts](minecraft-mcp-server/src/village/agent-runtime.ts) + a provider-agnostic fetch client ([llm-client.ts](minecraft-mcp-server/src/village/llm-client.ts), OpenAI/LM Studio/Ollama all speak `/v1/chat/completions`; optional `fastModel` tier serves conversation/player wake-ups + summarization). Woken only via [scheduler.ts](minecraft-mcp-server/src/village/scheduler.ts): global concurrency cap (default 3), priority `player > combat > conversation > error > job > plan > heartbeat`, per-(bot,kind) coalescing, aging, per-bot cooldown.
-
-On top of the three layers sits the **daily rhythm** ([day-planner.ts](minecraft-mcp-server/src/village/day-planner.ts), M11–M12): one `plan` deliberation per bot per Minecraft day at dawn (`set_day_plan` tool, role-fallback schedule if the LLM never answers — gated by `dayPlanning` in village.json), a zero-LLM slot executor on the 2.5 s scan tick (starts/stops routines, walks bots home/to visits, re-asserts the current slot after interruptions), rest/social drives that decay per tick and fire `tired`/`lonely` reflex events with hysteresis, a lightweight mood string (side-output of the `done` tool, injected into prompts), and a free proximity greet gate (`spontaneousChat`) that spends one deliberation when lonely/friendly/visiting villagers cross paths. Voyager-style growth (M13): skill code enters prompts relevance-gated (`SkillLibrary.relevantSkills`, token overlap), routines compose via `bot.invokeSkill(name)` (depth cap 2, shared budget), `start_job` takes a declarative `goalItem`/`goalCount` whose verdict (`OBJECTIF ATTEINT/MANQUÉ`) lands in the job-done wake-up and the heartbeat's `PROGRESSION (curriculum)` block. Conversations wrap up structured: `leave_conversation{opinion, note, headline}` moves the relation and seeds the headline as a high-importance memory for both parties (M12).
-
-Conversations ([conversation.ts](minecraft-mcp-server/src/village/conversation.ts)) route bot↔bot speech **in-process** (inboxes), mirror to game chat rate-limited and only with a player in earshot, hard turn cap, per-turn deadline; eavesdropping villagers get free memory entries. Trading ([trade.ts](minecraft-mcp-server/src/village/trade.ts)) negotiates with **typed offer objects** inside a conversation and settles via POST to the mod's [VillageHttpListener](src/main/java/com/paul/brawl/VillageHttpListener.java) (`127.0.0.1:8767/trade/execute`), which re-validates and swaps inventories atomically on the main thread via `server.submit` — `coin` resolves to `paulsbrawls:coin`, so Gibber is the village currency for free.
-
-Memory ([memory.ts](minecraft-mcp-server/src/village/memory.ts) + [memory-index.ts](minecraft-mcp-server/src/village/memory-index.ts)): a 200-entry window per bot; evicted batches land in a persisted per-bot **archive** (cap 2 000) AND get folded into the rolling life summary (one LLM call that — since M10 — also returns `MOTS-CLÉS:` tag enrichment, `SAILLANT:` importance bumps, and up to two `LEÇON:` insight memories). Every entry carries normalized keyword tags + a 0–10 `importance` (heuristic by kind at write time); an in-RAM inverted index backs the `recall` tool and `GET /village/bot/<name>/memory?q=…`. The ranked path is `BotMemory.retrieve` (M10): `0.5·relevance + 0.25·recency(2 h half-life) + 0.25·importance`, where relevance = max(semantic cosine, keyword overlap). Semantic vectors come from [embeddings.ts](minecraft-mcp-server/src/village/embeddings.ts) — in-process transformers.js, default `Xenova/paraphrase-multilingual-MiniLM-L12-v2` (multilingual on purpose: the bots speak French and English-only MiniLM can't separate French topics), lazily batch-embedded off the hot path into per-bot base64 sidecars (`.village-data/bots/<name>.vectors.json`), with `/v1/embeddings` provider mode and `off` in `village.json`; three consecutive failures disable embeddings for the run and retrieval degrades to keywords. The unsummarized-batch counter is persisted, so a crash before summarization loses nothing.
-
-Roster + LLM settings live in `village.json` (gitignored-by-convention; copy [village.example.json](minecraft-mcp-server/village.example.json)); per-bot state (skills, memories + keyword-tagged archive, relations) + the trade ledger persist as JSON under `.village-data/`. Admin: `GET /village/status`, `/village/bot/<name>`, `/village/bot/<name>/memory?q=<keywords>`, `/village/ledger`, `POST /village/pause|resume` on the Node admin port (default 8766) — or `/village …` in-game.
-
-**June 12 2026 reliability pass** (root causes verified against the installed mineflayer/pathfinder/collectblock sources): `craftItem` closes any stray container window first (an open chest window hijacks every `clickWindow` — mineflayer routes clicks to `bot.currentWindow` regardless of intent → instant fake success, zero items crafted), pauses auto-eat for the click sequence, and waits for packet-level `set_slot`/`window_items` quiescence before trusting the inventory diff. `abortActiveTasks` is async and ordered: clear collectblock targets → pvp stop → `pathfinder.stop()` THEN `setGoal(null)` (lone `stop()` arms a latent flag that self-cancels the NEXT goal) → close stray window → macrotask settle; `routines.stop()` uses it too. Pathfinder is bounded per bot at spawn (`thinkTimeout` 2 s, `tickTimeout` 10 ms, `searchRadius` 64 — the upstream default is UNBOUNDED) and `goTo` walks far/unloaded goals in ≤40-block hops; keepalive `checkTimeoutInterval` is 90 s. `collectBlocks` targets trunk logs only (column-connected-to-ground), one block per `collect()` call with skip-on-failure. The scheduler memoizes identical `error` wake-ups (normalize → exponential suppression → escalate to `plan` after 3; `clearFailures` on routine success) and `BotMemory.refuteBlockedBeliefs` demotes stored "X is impossible" conclusions when a later success contradicts them. New VillagerAPI surface: `roster()`/`hasRole()` (stock skills no longer wait on roles that don't exist) and `give(bot, item, count)` — direct bot→bot transfer through the existing `/trade/execute` endpoint with an empty return side (zero Java changes), walk-up-and-toss fallback when the listener is down.
-
-**Roster coordinates are hints, not contracts** (June 2026 brittleness fix). The roster's `home`/`chest` are validated once per boot ([anchors.ts](minecraft-mcp-server/src/village/anchors.ts)): home y snaps onto real standable ground, a missing chest is replaced by the nearest chest/trapped_chest/barrel found near the configured point, and unrecoverable anchors produce ONE loud warn + high-importance memory instead of an error loop. `deposit`/`withdraw` do the same resolution at call time; discovered positions persist as overrides in `.village-data/bots/<name>.json` (`anchors` key) and win over the roster from then on — delete that key to re-adopt roster values. The LLM can re-anchor explicitly via the `set_chest`/`set_home` tools. Related guardrails: slot walks back off exponentially and give up per slot after 5 failures (day-planner), one wake-up per routine failure (RoutineRunner owns it; bot-host no longer doubles it), action timeouts call `abortActiveTasks` (pathfinder/pvp/collectblock) so the next action doesn't fight a zombie task, bots run `viewDistance: 'short'` because `'tiny'` made 32-block searches mostly scan unloaded chunks, and `loadVillageConfig` warns on unknown keys (adopting `max_completion_tokens`/`max_tokens` as `maxTokens`) and on `heartbeatSeconds < 30`.
+The MCP surface is **25 tools** (26 if `dig-block` is restored — currently TEMP-disabled at user request).
+Ground truth: [MCP_TOOLS_VERIFICATION.md](MCP_TOOLS_VERIFICATION.md) §0; the executable check is
+`node verify-mcp-tools.mjs`. New tool modules go under [src/tools/](minecraft-mcp-server/src/tools/), use
+`factory.registerTool(...)`, and **must be registered in BOTH** `main.ts` AND `unified/main.ts`. MCP tools
+auto-flow into the God's tool list via `MCPGateway.INSTANCE.tools()` — adding a Node tool requires **zero
+Java changes**. `MCPGateway` connects to the unified process via `HttpMcpTransport` (no subprocess spawn);
+run **`/mcp reload`** to force a fresh `listTools()`.
 
 ### Commands (Brigadier)
 
-Server (require permission level 2 unless noted):
+Server (permission level 2 unless noted):
 
-- `/gib <amount>` — bump global revenue, immediately pays all online players.
-- `/gib_salary <amount>`, `/gib_salary_period <seconds>` — configure the scheduler. Period change restarts the scheduler.
-- `/pray <text>` — open to everyone (perm 0); send a message to God. Claims the single avatar via `GodSessionManager.claim`; if another player owns the body, the prayer is answered **bodiless**.
-- `/pray stop` — open to everyone; end your own active session (vanish + release lock).
-- `/accept` — open to everyone; accept the pending trade for this player.
-- `/prompt [text]` — read or replace the custom prompt overlay (in-memory only, not persisted; the hardcoded prompt is reloaded from `prompt.txt`).
-- `/block <x> <y> <z>` — debug stone placement at offset from the last raycast position.
-- `/construction` — set the admin's current look target as the placement origin; also clears `buildBot`'s `ChatMemory` for this admin.
-- `/llm …` — provider/model/host/port/apikey/timeout/reload, plus `/llm bridge …` for bridge config (enabled/url/bot/griefing/waitmax/spawnmax/idle). `timeout` is the HTTP request timeout in seconds (5–1800, default 180; reasoning models like gpt-5 routinely exceed langchain4j's built-in 60 s).
-- `/godbody on|off` — admin kill-switch. `off` clears `GodActionQueue`, force-ends any live session, disables the bridge. `on` re-enables.
-- `/village` — village admin: bare = config + listener state; `status` queries the Node village process; `pause`/`resume` gate its LLM scheduling (reflexes/routines keep running); `on`/`off` toggle the trade-settlement listener. Config persists to `village_config.properties`.
+- `/gib <amount>` — bump global revenue, pay all online players. `/gib_salary <amount>`, `/gib_salary_period <seconds>` configure the scheduler.
+- `/pray <text>` (perm 0) — message God; claims the avatar via `GodSessionManager.claim` (bodiless if the body is owned elsewhere). `/pray stop` (perm 0) ends your session. `/accept` (perm 0) accepts a pending trade.
+- `/prompt [text]`, `/block <x> <y> <z>`, `/construction` — prompt overlay, debug placement, set build origin.
+- `/llm …` — provider/model/host/port/apikey/timeout/reload + `/llm bridge …`. `timeout` (5–1800 s, default 180) gates every LLM HTTP call (reasoning models exceed langchain4j's 60 s default).
+- `/godbody on|off` — admin kill-switch. `/mcp reload` — refresh the MCP tool catalogue.
+- `/village` — village admin: bare = config + listener state; `status`/`pause`/`resume` query the **v1 Node** village process; `on`/`off` toggle the `:8767` trade-settlement listener (which Eden *also* uses).
 
-Client (registered in `Screenshotter`):
+Client (in `Screenshotter`): `/prove <text>`, `/build <text>` — screenshot + ship with a text prefix.
 
-- `/prove <text>`, `/build <text>` — screenshot + ship to server with text prefix (`Prove :` / `Build :`). Server-side, `/prove` claims the avatar session exactly like `/pray` (bodiless with a chat notice if another player holds it).
+### Thread safety, memory, mixins
 
-### Conversation memory — caveats
+- `response.thenAccept(...)` runs on the LLM worker pool, **not** the main thread. Everything touching world state goes through `GodActionQueue.submit(...).join()` (`ChatBotFunctions.runOnMain`) — the `.join()` blocks ~one tick; **never call it on the main thread** (deadlock).
+- `TokenWindowChatMemory` is not thread-safe — every `add`/`messages()` is `synchronized(memory)`. Tool-call / tool-result pairs must stay adjacent or the next request 400s.
+- Both `paulsbrawls.mixins.json` and `paulsbrawls.client.mixins.json` reference `ExampleMixin` stubs — no real mixin logic yet.
 
-[`ChatBot.memories`](src/main/java/com/paul/brawl/ChatBot.java) is `ConcurrentHashMap<UUID, ChatMemory>` using `TokenWindowChatMemory.withMaxTokens(16_000, …)` — token-budgeted (not message-count-budgeted) because one image or MCP tool result can outweigh dozens of chat lines; the estimator is `OpenAiTokenCountEstimator("gpt-4o")` (o200k_base, approximate for local providers, which is fine for budgeting). The window trims old messages (LC4j keeps tool-call/tool-result pairs together when evicting) but keeps the system + dynamic-context block rebuilt fresh each call (those are NOT stored in memory; `buildMessageList` prepends them). `TokenWindowChatMemory` is not thread-safe — every `add`/`messages()` is wrapped in `synchronized(memory)`. Images are added inline to a `UserMessage` and DO ride along on retries, but the memory window will eventually evict them. Tool-call / tool-result pairs must remain adjacent in memory or the next request 400s — `sendFunctionOutputs` always immediately follows the assistant turn that contained the calls; the depth-cap path wipes memory rather than corrupt it. A `Wait` deferral holds the tool results back for up to `waitMaxSeconds`, so a new prayer landing in that window cancels + flushes the pending results into memory first (`ChatBot.flushPendingDeferral`) instead of inserting a `UserMessage` between the tool_call and its results.
+---
 
-Per-conversation session semantics: each user entry point records whether the conversation started while owning the avatar (`ChatBot.sessionBound`). The "session ended mid-flight → drop response + wipe memory" guard in `setupGeneralCallback` only fires for session-bound conversations — a deliberately bodiless prayer (avatar busy elsewhere) is answered normally, it just can't `Appear`. `/prove` claims the session the same way `/pray` does.
+## Architecture — Eden, the AI Village brain (`eden/`)
 
-`ChatMessageHistory` (different concept — server-wide chat/command/game-message log) is in-memory only, capped at 40 entries, shared across all players.
+> Eden is the from-scratch rewrite of the AI Village. **The spec is [docs/](docs/), not this file.** Agents
+> working *inside* `eden/` should read [eden/CLAUDE.md](eden/CLAUDE.md) and the docs reading order in
+> [docs/README.md](docs/README.md). This section is the orientation; the docs are normative.
 
-### Thread safety — main-thread queue
+### The organizing idea
 
-`response.thenAccept(...)` runs on the LLM worker pool, **not** the main server thread. Mutating world/entity state from there is a latent crash bug. Everything that touches world state goes through `GodActionQueue.submit(...).join()` at the dispatch site (`ChatBotFunctions.runOnMain`). The `.join()` blocks the LLM callback thread for ~one tick (~50 ms) — never call this on the main thread (deadlock against the drain). Bridge HTTP calls are async and never touch world state, so they don't need the queue.
+**One God closes every loop.** A single LLM entity judges skill runs (critic), sets the curriculum, and
+orchestrates the villagers — through the avatar body it has. Skills are typed, composable JS functions in
+**one God-owned library**, written against the full mineflayer API, admitted only after a verified successful
+run. This attacks v1's four caps: per-villager skill silos, a closed 27-verb API, no success judge, and a
+feedback loop shredded by anti-spam scheduling.
 
-### Mixins
+The thirteen owner decisions (never relitigate) and the seven resolved hard mechanisms (D-07…D-13) are in
+[docs/README.md](docs/README.md) + [docs/13-open-questions.md](docs/13-open-questions.md). The ten-minute
+orientation is [docs/10-architecture-summary.md](docs/10-architecture-summary.md). Status:
+**feature-complete M0–M7 + a live test suite**, CI-green; smoke/parity sign-off against a live server is the
+remaining open step ([docs/17-parity-signoff.md](docs/17-parity-signoff.md)).
 
-Both `paulsbrawls.mixins.json` and `paulsbrawls.client.mixins.json` exist and reference single `ExampleMixin` stubs — currently no real mixin logic. Add new mixins under the matching package and register them in those JSON files.
+### Process topology & the dependency law
+
+- **One Node process** (D-01): bots, God brain, avatar, skill engine, journal, admin server. The refinement loop is too chatty for cross-process hops. Worker threads are the escape hatch.
+- **SQLite is the spine** (D-03): `better-sqlite3`, WAL. Journal + library index + stats + ledger + directives + subscriptions in one DB. Skill *code* stays as plain `.js` files; per-bot memory stays JSON.
+- **Crash-only** — state persists when it changes; `kill -9` loses at most in-flight LLM calls.
+- **`main.ts` is the ONLY composition root** ([eden/src/main.ts](eden/src/main.ts)): it imports everything and wires it with plain constructor args (no DI container, no singletons).
+
+The **dependency law** is CI-enforced by dependency-cruiser ([eden/.dependency-cruiser.cjs](eden/.dependency-cruiser.cjs)) —
+imports run **strictly downward**, an upward import fails the build:
+
+```
+  types/ (0)  →  {journal/, config.ts, bots/, render/, views/} (1)  →  {skills/, llm/} (2)  →  {god/, villagers/, social/} (3)
+                                                                              admin/, cli/ are pure CONSUMERS (only main.ts imports them)
+```
+
+- `types/` imports nothing local (layer 0 — interfaces + enums).
+- **Layer-3 actors never import each other.** `god/` reaches a villager only via an injected `Inbox` ([types/inbox.ts](eden/src/types/inbox.ts)); `social/`↔villager goes through [types/social.ts](eden/src/types/social.ts). The renderer + derived views sit at layer 1 ([render/](eden/src/render/), [views/](eden/src/views/)) so both `god/` and `villagers/` can use them without importing a peer.
+- The `RolloutCoordinator` (the real refinement loop) touches both `god/` and `villagers/`, so it lives at the composition root (`main.ts`), not in a layer-3 module.
+
+### Skill system ([docs/02](docs/02-skill-system.md), code in [eden/src/skills/](eden/src/skills/))
+
+- **Shape:** every skill is `async (bot, args, ctx)` with a manifest carrying JSON-Schema `params`/`returns`, a one-line English summary, tags, and a tier. Skills return structured data (the critic reads it).
+- **D-04 — no static typecheck.** Validation is a **syntax parse only** — no sandbox, no banned-identifier scan, no import scanning. JSON-Schema runtime validation gives readable boundary errors + prompt signatures that can't lie. The full mineflayer API makes static checking meaningless.
+- **One global, God-owned library** with **append-only versioning** (`v4` supersedes `v3`; files stay on disk forever). Status machine `draft → active-probation → active`, with three rails against a wrong verdict (D-12): one-directional `check`-veto, **probation-before-composition** (admitted skills aren't a composition dependency until `probationRuns=3` clean runs), and self-healing quarantine. A dumb 5-consecutive-failure tripwire (`autoQuarantineAfter`) backstops a long critic queue.
+- **Validation = watchfulness, not gates** (P3): the ONE kept AST pass is the acorn **loop-budget injection** (the answer to `while(true)`), plus a **macrotask-starvation canary** (a synchronous guard inside the loop body — finding **W**: an `await` of an immediately-resolved promise resets the loop budget every iteration AND starves all timer watchdogs). Runtime supervision: per-call wall-clock cap (`runDefaultTimeoutMs` 120 s, 2 h ceiling), a **stall detector** (a pulse is a discrete progress *event* — position/inventory/window/dig/place + pathfinder liveness + `ctx.log`/`sleep`; `stallSeconds=20`, D-10/R46), and the hardened v1 abort protocol on every exit. **Crashes escalate to the LLM loop**, never suppressed. `process.exit`/`reallyExit`/`abort`/`kill` are neutered by a **scope shim** (a provided binding, not a denylist — D-08/R45).
+- **Composition:** `ctx.skills.run(name, args)` — args validated against the callee's schema; depth cap `maxCallDepth=8` with cycle detection; one shared budget/signal/report per call tree.
+- **D-05 — serialized execution per bot:** one skill tree at a time. Mineflayer can't multiplex one body.
+- **Tiers — mortal vs divine** (owner #13): an **engine-enforced** boundary (NOT part of the mutable `GrantPolicy`). Villagers are never op'd; the avatar `Dieu` is the only divine runner. Mortal never calls divine; divine skills are invisible in villager retrieval; when the avatar runs a *mortal* skill, a chat interceptor drops `/`-prefixed messages (R25).
+- **Retrieval & prompting** (Voyager-style, owner #8/#10): ~6 exemplar skills always in prompts as **full code**; everything else as `signature — summary` one-liners via multilingual-embedding retrieval with keyword fallback; full code only via the `read_skill` tool. `write_skill` is one upsert tool, hard-capping `maxSkillLines=400`. Descriptions are LLM-generated *from the final code* at admission.
+- **Full mineflayer** (owner #11): skill code gets the actual bot object, no wrapper. `STOCK_SKILLS` ([skills/exemplars/index.ts](eden/src/skills/exemplars/index.ts)) seed Voyager primitives (go-to / mine-block / collect-blocks / craft-item / kill-mob / …) at `active`.
+
+### God ([docs/03](docs/03-god.md), code in [eden/src/god/](eden/src/god/))
+
+- **Three desks, one persona:** critic / curriculum / orchestrator, independently promptable and model-tierable (critic + curriculum on `strong`, orchestrator on `fast`), with a `combineDesks` cheap mode. **D-06: desks share one state, never one context window.**
+- **Critic** (owner #1): judges `RunReport`s — full code, world before/after, call tree, abort cause — returns a structured `Verdict` (success flag + constructive critique + library action).
+- **Curriculum** (owner #6): "what next for the *village*," one task at the edge of ability. The **sole writer of the ledger** (S2). Keeps Voyager's QA-cache, decomposition, warm-up gating, `maxRetries`.
+- **Orchestrator** (owner #4): emits **directives — data, not code** (goal + reason + priority + expiry) with anti-thrash rules. Direct in-world intervention via divine skills is allowed but doctrine-bound: **interventions teach, never do a villager's task** — the critic voids a task completed by divine action.
+- **The body:** avatar `Dieu` is bot #11 in the same pool, the only divine runner. **God acts through journaled skill runs like everyone else** — `appear-near`, `vanish`, `gesture`, `smite`, `summon-creature` are stock divine skills (P4). A disconnected avatar degrades nothing functional (every directive/critique reaches its villager through the inbox anyway).
+- **The refinement loop** (`RolloutCoordinator` in `main.ts`): task → directive → villager plans (reuse or `write_skill`) → trial run → verdict → critique-driven revision. The **density invariant** (D-11): the revision prompt carries full draft code + verbatim error + rendered world state + critique in ONE message; the current payload is **never trimmed** (prior revisions trim oldest-first; `write_skill` source-caps size so the payload always fits the per-tier budget — strong 48k / fast 16k).
+- **Cost** (D-13/R49): **throughput-limited** — at `maxConcurrent:3` the ~3000 calls/day ceiling binds, not the wallet. Per-desk daily token caps default null (safety valve + `degradeOnBreach`). Real levers: the strong/fast tier split + zero-token `subscription → skill` reactivity.
+
+### Villager runtime ([docs/04](docs/04-villager-runtime.md), code in [eden/src/villagers/](eden/src/villagers/))
+
+- **Events:** raw mineflayer signals normalize into a small closed typed set; edge-style events (`health-low`, `night-falls`) carry **hysteresis in the emitter** so subscribers never debounce.
+- **Subscriptions — filters as data** (P5): declarative AND-composed clauses (proximity/entity kind/name/time-of-day/`notWhileRunning`), no predicate code. Two outcomes: **`skill`** (free, zero tokens — v1's "reflex" rebuilt as a binding to a proven skill) or **`deliberate`** (LLM escalation). Role defaults are config data in [eden/roles.json](eden/roles.json).
+- **The brain:** one deliberation = one LLM conversation (context pack → tool calls → `done`). **Direct micro-action tools do not exist** — all world effects go through `run_skill` (P2), so the library stays the single vocabulary of action and every effect is a journaled, criticizable run.
+- **Context pack:** deterministic assembly in 8 ordered sections, each with a token ceiling; section sizes journal with the wake-up so prompt bloat is measurable.
+- **Memory** ([villagers/memory.ts](eden/src/villagers/memory.ts)): window ~200 → archive 2000 + summarization (keyword/importance/lesson enrichment); ranked retrieval `0.5·relevance + 0.25·recency(2 h) + 0.25·importance` with multilingual embeddings + keyword fallback. **World-stamp (R32):** every data dir is stamped `${host}:${port}`; on mismatch (world regen) Eden **quarantines** stale beliefs behind an admin `wipe|migrate` decision instead of reasoning from a dead world.
+- **Scheduling** ([llm/scheduler.ts](eden/src/llm/scheduler.ts)): global concurrency cap, priority lanes, per-villager cooldown, coalescing — with God preemption, **rollout immunity** (revision turns bypass all suppression — the density invariant), and the "identical error → exponential suppression" memo **deleted** (repeated failure becomes ledger/dossier signal that makes God change the task, not an engine silently swallowing wake-ups).
+- **Society** ([eden/src/social/](eden/src/social/)): bot↔bot conversations (mirror-gated to game chat) + typed-offer trade. Trade settles via `SettlementClient` POST to the Java `:8767` listener (`coin → paulsbrawls:coin`, so Gibber is the village currency for free).
+
+### Observability ([docs/05](docs/05-observability.md), code in [eden/src/journal/](eden/src/journal/), [eden/src/admin/](eden/src/admin/))
+
+- **The journal is the source of truth** (P4 — *if it didn't journal, it didn't happen*). Append-only SQLite; every event carries `actor` + a `refs` causality column. **Adding a kind = one registry row** in [journal/kinds.ts](eden/src/journal/kinds.ts) (the S1 `JournalKind` union; `types/JournalEvent.kind` is `string` so `types/` imports nothing).
+- **Backpressure: instrument and wait** (D-07): synchronous WAL writes (`synchronous=NORMAL`), made safe by **never journaling the hot stream — pulses are in-memory counters** (R44). The v1 event-loop lag monitor is ported as the backpressure canary ([journal/lag-monitor.ts](eden/src/journal/lag-monitor.ts), `system.loop-lag` on `max ≥ 1000 ms`). `vitalsIntervalSeconds=10`.
+- **Derived state, not duplicate state** ([eden/src/views/](eden/src/views/)): skill stats, dossier competence, relations, the trade ledger, the rollout index — all folds over journal events, rebuildable by replay (`npm run rebuild-stats` must equal the live fold). Writers append facts; readers fold.
+- **Admin API now, website later** (owner #9): localhost HTTP + a WebSocket journal stream on **port 8770**. The future website must be a **pure consumer** of these routes; a needed feature is an API gap to fix here, not website code. Mutating verbs (`prompt`, `pause`, `quarantine`) journal `actor` BEFORE acting. LLM prompt bodies stay OUT of the journal; `debugPrompts:true` writes per-call transcript files (`.eden-data/llm/*.json`) referenced from the `llm.call` event.
+
+### Config, ports, identity
+
+- **Config:** [eden/eden.example.json](eden/eden.example.json) → `eden.json` (gitignored). Holds NO key (env-only). Sections: `minecraft`, `villagers` (roster — `home`/`chest` are **hints**, self-healing anchors snap them to real ground, R18), `god` (name/desks/budget/`combineDesks`/`embodiedVerdicts`), `llm` (strong/fast providers, `maxConcurrent`, cooldown), `skills`, `settlement.url` (`:8767`), `admin.port` (8770), `journal`.
+- **Data dir** `.eden-data/` (gitignored): `eden.db` (journal), `library/<skill>/v*.js` (authored code), `bots/<name>.json` (memory/anchors/subscriptions), `llm/*.json` (transcripts).
+- **Port map** (R24 — a registry, never folklore): **8770** Eden admin (its only held port) · 8765/8766 v1 (reserved while coexisting) · **8767 Java settlement (shared, stateless per request — Eden POSTs to it; `./gradlew runServer` steals it, R29)** · 25565 `PaulsBrawlsVanilla` (RCON 25575, production/eval) · 25599 dev server. **Read `run/server.properties`, never assume the port (R28).**
+- **Identity** (R12): Eden's avatar is **`Dieu`** — never v1's `LLMBot`/`GodBot`; villagers use French roster names; the eval harness namespaces every username `EvalBot*`. Minecraft kicks the second login of a name, so every login across all coexisting systems must be pairwise distinct.
+
+### Live test suite ([docs/19](docs/19-live-test-suite.md), [docs/20](docs/20-live-test-process.md), code in [eden/live-tests/](eden/live-tests/))
+
+A **real server + real LLM + real mineflayer** regression net — distinct from the mock-LLM CI eval in
+[eden/eval/](eden/eval/). NOT in `npm run check` (needs a server + paid key, non-deterministic); only the
+harness *logic* is CI-checked (typed/lint-clean + `tests/live-tests-catalogue.test.ts` validates structure).
+
+- `npm run live-test [name]` — process-isolated (each scenario in a killable child; the parent hard-kills a wedge from its own healthy event loop). Evidence under `live-tests/.runs/<scenario>-<ts>/` (gitignored): `eden.db`, `llm/*.json`, `journal-report.txt`, `result.json`.
+- **Three scenarios** (lowest real-mineflayer risk first): `farm-wheat` (crop break + drop pickup — the end-to-end prover, reaches `skill.admit`), `craft-wooden-tools` (`recipesFor`/`craft` + crafting-table windows), `cooperative-mob-defense` (`pvp.attack` + armor + multi-villager scheduling).
+- **The process** (docs/20) is a hardening engine: run → diagnose (read the journal + RCON ground truth) → fix the one spot → re-run → file the finding (a new pitfall becomes the next `R#`, S8). Diagnostic playbook: simultaneous bot disconnects + a frozen journal = **event-loop wedge, not a network bug**; `skill.run ok=false "bot.X is not a function"` = a real-mineflayer API mismatch the fakes didn't model. The first session filed W/C/D1/D2/E.
+
+### Hard-won lessons = acceptance criteria
+
+v1's debugging scars are encoded as requirements **R1–R61** in [docs/07-hard-won-lessons.md](docs/07-hard-won-lessons.md)
+(each maps to a real session; R44–R49 from the OQ co-design, R50–R61 from live farming-hamlet sessions). They are pinned by tests, not prose. Clusters:
+**crafting** (R1–R3: close stray windows first / window hijack, trust inventory diffs only after packet
+quiescence, pause auto-eat/armor-manager around multi-click sequences); **abort** (R4–R5: a *sequence* —
+collectblock → pvp → pathfinder `stop()` THEN `setGoal(null)` → close window → macrotask settle); **movement**
+(R6–R10/R26: bound the pathfinder at spawn — upstream default is UNBOUNDED — hop far goals in ≤40-block legs,
+`viewDistance:'short'`, trunk-logs-only collection); **identity/protocol** (R11–R14); **LLM plumbing**
+(R19–R22); **cognition economics** (R33–R37: completion ≠ progress but quiet ≠ futile → you need a *judge*,
+not a counter; one incident = one wake-up); **operations** (R28–R32/R38–R43).
+
+### Keeping it simple ([docs/08](docs/08-extension-recipes.md))
+
+The dependency law plus **ten simplicity rules S1–S10** — the load-bearing ones: additions are **registry
+rows, never branches** (S1); **one writer per state** (S2); no abstraction before the second consumer (S3,
+`GrantPolicy` the one exception); a banned-machinery list — no DI containers, plugin loaders, event-sourcing
+for live state, ORMs (S5); prompts in dedicated files with golden snapshot tests (S6); **behavior + docs
+change in the same commit** (S8); **special cases feed the judge** — code captures the signal, God's critic
+applies the policy (S9); errors carry evidence (S10). docs/08 has mechanical extension recipes (exact files
+touched) for every common addition — stepping outside a recipe's file list means the change is fighting the
+architecture.
+
+---
 
 ## Gotchas
 
-- Village bot usernames in `village.json` must NOT equal `BridgeConfig.botUsername` (the op-on-join hook is the God's privilege; villagers need no op) and must not collide with the unified entrypoint's `--username` — duplicate logins get kicked. Run `npm run village` as its OWN process next to `npm run unified`, never merged.
-- The village's three ports: 8765 unified (bridge+MCP), 8766 village admin API (Node), 8767 trade settlement (Java mod listener). All localhost-only, no auth.
-- Ten test files `tests/village-*.test.ts` pin the village core (incl. embeddings, rhythm, Voyager composition, LLM tiering); the stock skills in `stock-skills.ts` are validated by the REAL typecheck+sandbox pipeline in `npm test` — if you change `API_DTS` in `villager-api.ts`, keep the runtime object in `buildScriptGlobals` in lockstep or the typechecker will bless code that explodes at runtime.
-- The CI workflow uploads to GitHub Releases on push to `main`/`master` — see [.github/workflows/ci.yml](.github/workflows/ci.yml). The `test` job still calls `./gradlew test` and `jacocoTestReport` even though no tests exist and the Jacoco plugin isn't applied — both will fail until tests are added or those steps are removed.
-- LangChain4j has no equivalent of the OpenAI `previousResponseId` chain. Every call resends the full message list from `ChatMemory`. If you ever see "tool_call without tool_result" 400s from the model, it means an assistant turn made it into memory without its matching `ToolExecutionResultMessage` — check the depth-cap and error branches in `ChatBot.sendFunctionOutputs`.
-- The God-Body avatar needs op for `/tp`. Op-on-join is automatic if the bot's username matches `BridgeConfig.botUsername` — but only if it's a **real dedicated Fabric/Paper server**. Open-to-LAN singleplayer randomizes ports per session and can't op a bot reliably.
-- The Mineflayer side is pinned to Minecraft 1.21.1 in `minecraft-mcp-server/src/bot-connection.ts` (`SUPPORTED_MINECRAFT_VERSION`). All three (server, mod, bot) must agree on the protocol version.
-- `BridgeConfig.idleTimeoutSeconds > BridgeConfig.waitMaxSeconds` is a load-bearing invariant. `LLMCommand` enforces it on the setter side; if you ever set it directly, keep the invariant or a deliberate `Wait(30)` will trip the watchdog.
-- A large pile of LangChain4j + Jackson + OkHttp + Okio + Kotlin transitive deps is bundled via `include` (jar-in-jar) — see [build.gradle](build.gradle). The OkHttp / Okio / kotlin-stdlib pile exists specifically because `langchain4j-mcp`'s `HttpMcpTransport` is OkHttp-based (the LLM HTTP client itself is JDK-native `java.net.http`). Without those `include` lines, the first `/pray` that builds tools NCDFEs on `okhttp3/Interceptor` inside `HttpMcpTransport$Builder.build`. When bumping `langchain4j-mcp`, re-derive the version pins with `./gradlew dependencyInsight --dependency okhttp` and update the `include` block to match — loom's `include` does NOT pull these transitives automatically.
-- `minecraft-mcp-server/` is a vendored Node sub-project. pauls-brawls consumes it via `src/unified/main.ts` (`npm run unified`), which runs ONE Mineflayer bot serving both the bridge HTTP and MCP-over-SSE on `--bridge-port`. The legacy entrypoints (`src/main.ts` MCP-stdio-only, `src/bridge/main.ts` bridge-only) are still runnable for rollback — running any two of the three simultaneously with the same `--username` will kick one of them.
-- `MCPGateway` no longer spawns a Node subprocess. It connects to the unified node process via `HttpMcpTransport` pointed at `MCPConfig.sseUrl` (default `http://127.0.0.1:8765/mcp/sse`). If you see stale `node_binary` / `mcp_server_script` / `mc_username` keys in `mcp_config.properties`, the first boot after upgrading logs a migration warning and rewrites the file with just `enabled` / `sse_url` / `timeout_seconds`.
-- `MCPGateway.ensureStarted` is best-effort: if the SSE handshake fails (404 because the legacy bridge-only entrypoint is running instead of unified, ECONNREFUSED if no node process at all, etc.), the exception is caught and godBot proceeds with its Java tool set only. You'll see `MCP gateway start FAILED ... godBot will run without Mineflayer tools` in the log and the bot will answer prayers but can't call mine/move/place/craft. So a missing/broken unified process is silent in normal play — check that log line on first `/pray` after server start to confirm the unified process is actually wired up. The bridge-only `npm run bridge` entrypoint serves `/health` + the puppeting endpoints but returns 404 on `/mcp/sse`; `npm run unified` is the only entrypoint that mounts both.
-- `LLMConfig.timeoutSeconds` (default 180 s, set via `/llm timeout <s>`, persisted as `timeout_seconds` in `llm_config.properties`) gates every LLM HTTP call via `OpenAiChatModel.builder().timeout(...)`. Bumped above langchain4j's built-in 60 s default because OpenAI reasoning models (gpt-5) routinely exceed 60 s on long chats with full tool definitions. If you see `dev.langchain4j.exception.TimeoutException` mid-prayer, the model genuinely took longer than this — increase the timeout (`/llm timeout 300`), don't bandaid in retries. Connection-reset retriable warnings (`A retriable exception occurred ... java.io.IOException: Connection reset`) are a different beast: those are TCP RSTs from stale-keepalive pool reuse in the JDK HttpClient, not timeouts, and langchain4j's built-in `RetryUtils` handles them automatically.
-- `dig-block` is currently TEMP-disabled (registration commented out in [block-tools.ts](minecraft-mcp-server/src/tools/block-tools.ts); two ava tests are `test.skip`'d with `// eslint-disable-next-line ava/no-skip-test`). The `mineflayer-tool` plugin stays loaded so `collect-block` keeps its auto-equip path. **To restore:** grep for `TEMP DISABLED` / `TEMP SKIPPED` markers — five spots covering the registration, the two tests, `CANONICAL_TOOLS` in [verify-mcp-tools.mjs](verify-mcp-tools.mjs), and the counts/banner in [MCP_TOOLS_VERIFICATION.md](MCP_TOOLS_VERIFICATION.md). When active, `dig-block` silently calls `bot.tool.equipForBlock(block, {})` before `bot.dig` — the held item afterwards is whatever the plugin picked (e.g. iron pickaxe), NOT what was in hand before. If you need a specific item in-hand post-dig, re-equip after the call. (mineflayer-auto-eat's `returnToLastItem: true` doesn't help — it only restores the item the *eat* swapped from, not the dig.)
-- `move-in-direction` was **permanently removed** (not temp). It was a blind WASD pulse (`bot.setControlState('forward', true)` for N ms) with zero obstacle awareness — strictly worse than `move-to-position` for any non-trivial movement. Don't re-add it; if you need short-burst movement, compose `move-to-position` with a small `range` + `timeoutMs`.
-- Mineflayer plugins compiled from TypeScript (`mineflayer-pvp`, `mineflayer-collectblock`, `mineflayer-tool`) ship CJS with `Object.defineProperty(exports, "__esModule", { value: true })` set and a named `exports.plugin` — but no `exports.default`. Under `npm run unified` (tsx in production mode), `import pkg from 'x'; const { plugin } = pkg;` works because tsx synthesises the default. Under `npm test` (tsx-under-ava), the same import lands `undefined` because ava-tsx strictly honours `__esModule` and refuses to synthesise. **Always use named imports for these three** (`import { plugin as pvp } from 'mineflayer-pvp'`) — there's a long comment explaining this in [bot-connection.ts](minecraft-mcp-server/src/bot-connection.ts). Pure-CJS plugins without the `__esModule` flag (`mineflayer-pathfinder`, `mineflayer-armor-manager`) work either way; ESM-native plugins (`mineflayer-auto-eat`, `"type": "module"`) require named imports natively.
-- `MCPGateway.INSTANCE.tools()` caches the spec list from the last successful `listTools()`. Connect failures auto-retry with a 30 s backoff (`RECONNECT_BACKOFF_MS`); a tool-dispatch failure tears the client down and zeroes the backoff so the next call reconnects immediately. The cached catalogue is preserved across disconnects so in-flight assistant turns stay consistent. Adding/removing MCP tools on the Node side therefore does NOT propagate while the connection is healthy — run **`/mcp reload`** (admin) to force a tear-down + fresh `listTools()`, no Java restart needed. The `MCP gateway up — N tool(s) discovered: [...]` log line tells you what the cache actually saw — compare against `node verify-mcp-tools.mjs` if N looks wrong.
-- `Mineflayer detected that you are using a deprecated event (physicTick)! Please use this event (physicsTick) instead.` is printed on every bot spawn — it's emitted from inside one of the loaded Mineflayer plugins (likely pvp or auto-eat's tick hook still listening to the old event name). Harmless upstream noise, not a wiring bug. Don't chase it; it'll disappear when those plugins rename their listeners.
+### Eden
+
+- **Work only under `eden/` and `docs/`** when implementing Eden — never touch `minecraft-mcp-server/` or `src/` (v1/Java) from an Eden task. The dependency law is CI-enforced; an upward import fails `npm run check`.
+- **Test runner is `node:test` via tsx, not ava.** `monitorEventLoopDelay` must be **armed before** a sync block or it records ~0 ns (cost a debugging detour in the D-07 lag test).
+- **`console.*` is banned outside [eden/src/logger.ts](eden/src/logger.ts)** (R23); every error names its subject + args (S10). `tsconfig` is strict with `verbatimModuleSyntax` → use `import type` for type-only imports.
+- **Named imports for the mineflayer plugin trio** (`mineflayer-pvp`/`collectblock`/`tool`, R15) — they ship CJS with `__esModule` but no `default`; ava-tsx refuses to synthesize a default. (Same applies in v1's `minecraft-mcp-server`.)
+- **A skill run can wedge the whole host** (finding W) — the macrotask-starvation canary catches a microtask-spinning loop; `installProcessGuards` catches an *async* throw from mineflayer's physics tick. Both are opt-in (a real boot sets them; tests must not, or a global handler would swallow the test runner's failures).
+- **If you change the skill `ctx` surface, keep the runtime object in lockstep** with what skills are told they can call — a stock/exemplar skill validated against FakeBot but wrong on real mineflayer is exactly the Z/C/E class of live-test finding.
+
+### The Fabric mod / AI God
+
+- **The God-Body avatar needs op for `/tp`.** Op-on-join is automatic if the username matches `BridgeConfig.botUsername` — but only on a **real dedicated server** (Open-to-LAN singleplayer randomizes ports and can't op reliably).
+- **`MCPGateway.ensureStarted` is best-effort.** If the SSE handshake fails (404 because the legacy bridge-only entrypoint is running instead of unified; ECONNREFUSED if no Node process), the exception is caught and godBot runs with its Java tool set only — silent in normal play. Check the `MCP gateway up — N tool(s) discovered` / `MCP gateway start FAILED` log line on first `/pray`.
+- **`MCPGateway.INSTANCE.tools()` caches** the last successful `listTools()`. Adding/removing Node tools does NOT propagate while healthy — run `/mcp reload`.
+- **The 1.21.1 pin is everywhere** — server, mod, and bot must agree (`SUPPORTED_MINECRAFT_VERSION` in `bot-connection.ts`).
+- **`dig-block` is TEMP-disabled** at user request (registration commented out, two ava tests `test.skip`'d — NOT a defect). Restore path: grep `TEMP DISABLED`/`TEMP SKIPPED` (five spots) + `CANONICAL_TOOLS` in `verify-mcp-tools.mjs`. `move-in-direction` was **permanently removed** (blind WASD, no obstacle awareness) — don't re-add it.
+- **`Mineflayer detected … deprecated event (physicTick)`** on every spawn is harmless upstream noise from a loaded plugin — don't chase it.
+- **The bundled LangChain4j + OkHttp/Okio/Kotlin pile** is jar-in-jar'd via `include` in [build.gradle](build.gradle) specifically because `langchain4j-mcp`'s `HttpMcpTransport` is OkHttp-based. Without those lines the first `/pray` NCDFEs on `okhttp3/Interceptor`. When bumping `langchain4j-mcp`, re-derive the pins with `./gradlew dependencyInsight --dependency okhttp`.
+
+### Coexistence & decommission
+
+- **v1 and Eden may run side-by-side** until parity sign-off (the soak). They must **never share a bot username** (R12) and must bind distinct ports (Eden 8770; v1 8765/8766; shared 8767). The cut-over + non-destructive decommission checklist is [docs/17-parity-signoff.md §5](docs/17-parity-signoff.md). What Eden does NOT replace: the Java mod (settlement, Gibber, CTF, AI-God), op-on-join, and the unified bridge/MCP that drives the Java AI-God's avatar.
+- **CI uploads to GitHub Releases on push to `main`/`master`** ([.github/workflows/ci.yml](.github/workflows/ci.yml)). The mod's `test` job still calls `./gradlew test` + `jacocoTestReport` though no tests exist and Jacoco isn't applied — both fail until tests are added or the steps are removed. The Eden CI ([eden-ci.yml](.github/workflows/eden-ci.yml)) is the one that actually gates Eden work.
+
+## Reference docs
+
+| Topic | Doc |
+|---|---|
+| Eden — full design spec (reading order, 13 owner decisions) | [docs/README.md](docs/README.md) |
+| Eden — 10-minute orientation (every choice, chosen + rejected) | [docs/10-architecture-summary.md](docs/10-architecture-summary.md) |
+| Eden — build plan (M0–M7 DAG, tests, risk register) | [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) |
+| Eden — session-by-session build log | [docs/PROGRESS.md](docs/PROGRESS.md) |
+| Eden — agent orientation (work inside `eden/`) | [eden/CLAUDE.md](eden/CLAUDE.md) |
+| Eden — parity sign-off + v1 decommission | [docs/17-parity-signoff.md](docs/17-parity-signoff.md) |
+| AI God — body integration plan / verification | [GOD_BOT_INTEGRATION_PLAN.md](GOD_BOT_INTEGRATION_PLAN.md), [VERIFICATION.md](VERIFICATION.md) |
+| MCP tools — ground truth | [MCP_TOOLS_VERIFICATION.md](MCP_TOOLS_VERIFICATION.md) |
+| v1 village (legacy) — design + decision log | [VILLAGE_PLAN.md](VILLAGE_PLAN.md), [minecraft-mcp-server/DEPRECATED.md](minecraft-mcp-server/DEPRECATED.md) |

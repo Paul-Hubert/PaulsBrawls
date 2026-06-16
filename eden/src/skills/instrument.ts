@@ -8,11 +8,23 @@
 //      (globalThis.process, the Function ctor) remain reachable BY DESIGN; the only security
 //      boundary is the tier gate (R25), not this.
 //
-// Layer 2 (skills/): imports only types/journal-free deps + acorn. The engine (engine.ts) compiles
-// once per version and calls the factory per run with a fresh shim.
+// Layer 2 (skills/): imports acorn + the journal-free vec3/pathfinder value-constructors it re-exposes as
+// authored globals (legal external deps — depcruise forbids UPWARD local imports only). The engine
+// (engine.ts) compiles once per version and calls the factory per run with a fresh shim.
 
 import * as acorn from 'acorn';
 import { simple as walkSimple } from 'acorn-walk';
+import { Vec3 } from 'vec3';
+import pathfinderPkg from 'mineflayer-pathfinder';
+
+// Convenience value-constructors exposed to authored skills as GLOBALS — distinct from the D-08 safety
+// shim below. LLMs reach for the universal mineflayer idioms `new Vec3(x,y,z)` / `new GoalNear(x,y,z,r)`,
+// and a bare `ReferenceError: Vec3 is not defined` costs a whole revision (seen live: craft-wooden-tools
+// v3). These are the SAME module instances the engine puts on `ctx` (vec3 + mineflayer-pathfinder are
+// singletons), so `new Vec3()` and `new ctx.Vec3()` are identical and the FakeBot `.x/.y/.z` seam is
+// untouched. Pure value ctors (no capability, no I/O) — they do NOT widen the boundary (still the tier
+// gate, R25). R15: pathfinder is flagless-CJS, default-import then destructure.
+const { goals } = pathfinderPkg;
 
 /** A skill called a forbidden host-killer (process.exit/reallyExit/abort/kill) — D-08. */
 export class SkillForbiddenError extends Error {
@@ -166,6 +178,10 @@ export interface Shim {
   sleep: (ms: number) => Promise<void>;
   __loopBudget: () => void;
   __aw: <T>(p: T) => T;
+  /** Authored-scope global value-constructors (see the import-site note): the same module instances on
+   *  `ctx`, so `new Vec3()` ≡ `new ctx.Vec3()` and `new GoalNear()` ≡ `new ctx.goals.GoalNear()`. */
+  Vec3: new (x: number, y: number, z: number) => { x: number; y: number; z: number };
+  GoalNear: new (x: number, y: number, z: number, range: number) => unknown;
 }
 
 /** A compiled skill: call with (bot, args, ctx) to run it. */
@@ -188,7 +204,7 @@ export function compile(code: string): CompileResult {
     // D-08: provided-scope globals ARE the shim — `new Function` is the design, not a footgun here.
     const factory = new Function(
       '__shim',
-      `"use strict";\nconst { process, require, sleep, __loopBudget, __aw } = __shim;\nreturn (${inst.source});`,
+      `"use strict";\nconst { process, require, sleep, __loopBudget, __aw, Vec3, GoalNear } = __shim;\nreturn (${inst.source});`,
     ) as SkillFactory;
     return { ok: true, factory };
   } catch (e) {
@@ -263,5 +279,7 @@ export function makeShim(runtime: SkillRuntime, shared?: LoopBudget): Shim {
     sleep: runtime.sleep,
     __loopBudget: budget.__loopBudget,
     __aw: budget.__aw,
+    Vec3: Vec3 as unknown as Shim['Vec3'],
+    GoalNear: goals.GoalNear as unknown as Shim['GoalNear'],
   };
 }

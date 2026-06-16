@@ -61,6 +61,10 @@ test('M0..M6 register their kinds (one row per kind; each milestone adds only it
       'subscription.removed',
       'subscription.fired',
       'subscription.suppressed',
+      // Scenario domain (M7+ / /villagers command).
+      'scenario.start',
+      'scenario.stop',
+      'scenario.restart',
     ],
   );
 });

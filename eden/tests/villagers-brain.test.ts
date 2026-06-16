@@ -104,6 +104,32 @@ test('M3-3: journals brain.wakeup → brain.tool-call(s) → brain.done, all und
   }
 });
 
+test('R60: search_skills is withdrawn after the cap and the brain is forced to act (no infinite search)', async () => {
+  // A reasoning model that fires search_skills every turn must not burn the whole deliberation on it.
+  const h = await harness([
+    { toolCalls: [{ name: 'search_skills', arguments: { query: 'find-block' } }] },
+    { toolCalls: [{ name: 'search_skills', arguments: { query: 'craft-item' } }] },
+    { toolCalls: [{ name: 'search_skills', arguments: { query: 'go-to' } }] }, // 3rd → breaker fires after this turn
+    { toolCalls: [{ name: 'done', arguments: { summary: 'ok' } }] },
+  ]);
+  try {
+    const result = await h.brain.deliberate(input(), { rolloutId: 'roll-1' });
+    assert.equal(result.done?.summary, 'ok', 'the deliberation reached done, not the turn ceiling');
+    assert.ok(
+      result.messages.some((m) => m.role === 'user' && /Assez de recherches/.test(m.content ?? '')),
+      'a one-time forcing nudge was injected once the search budget was spent',
+    );
+    const chatReqs = h.llm.requests.filter((r) => String(r.url).includes('chat'));
+    const toolsOf = (i: number): string[] => (chatReqs[i]?.body?.tools ?? []).map((t: { function: { name: string } }) => t.function.name);
+    assert.ok(toolsOf(0).includes('search_skills'), 'search_skills is offered at the start');
+    const last = toolsOf(chatReqs.length - 1);
+    assert.ok(!last.includes('search_skills'), 'search_skills was withdrawn from the turn after the cap');
+    assert.ok(last.includes('run_skill') && last.includes('write_skill'), 'the action tools remain available');
+  } finally {
+    await h.llm.close();
+  }
+});
+
 test('M3-3 (R20): every assistant tool-call turn is followed by adjacent tool results — no dangling', async () => {
   // The model emits TWO tool calls in ONE turn, one of which is `done`. Both MUST be answered before
   // the loop ends — leaving `run_skill` unanswered while breaking on `done` would 400 the next provider call.

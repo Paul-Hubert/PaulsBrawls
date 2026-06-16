@@ -25,6 +25,12 @@
   ],
 
   "guard": [
+    // Took damage → FIGHT, don't flee (D-15). This OVERRIDES everyone's hurt→flee-to-safety for guards
+    // (a role spec on an event replaces the everyone spec on that event). Zero-token: defend-self finds
+    // the nearest hostile and attacks it the instant the hit lands — the sub-second reflex a guard needs
+    // so it doesn't stand passive while the LLM authors a combat skill. notWhileRunning keeps a guard
+    // mid-fight from restarting on every hit; the short cooldown is a backstop against a hit burst.
+    { "on": "hurt", "filter": { "notWhileRunning": ["defend-self"] }, "handler": { "kind": "skill", "name": "defend-self", "args": {} }, "cooldownMs": 1000 },
     // A hostile entered perception → deliberate at high priority (decide: fight, warn, retreat).
     { "on": "entity-spotted", "filter": { "entityKind": "hostile", "within": 16 }, "handler": { "kind": "deliberate", "hint": "un ennemi est repéré — décide d'attaquer, d'alerter ou de te replier", "priority": "interrupt" }, "cooldownMs": 5000 }
   ],

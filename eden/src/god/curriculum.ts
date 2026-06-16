@@ -24,16 +24,24 @@ import { dirname, join } from 'node:path';
 
 import { monotonicFactory } from 'ulid';
 
-import type { ItemCheck, Task, TaskRecord } from '../types/index';
+import type { ItemCheck, Snapshot, Task, TaskRecord, TaskSuggestion } from '../types/index';
 import type { IJournal } from '../journal/journal';
 import type { LlmClient, LlmToolDef, ModelTier } from '../llm/client';
 import { LlmScheduler } from '../llm/scheduler';
 import { EmbeddingsService, cosine, keywordScore } from '../llm/embeddings';
+import { SkillLibrary } from '../skills/library';
 import type { GodState } from './god';
 import type { BudgetTracker } from '../llm/scheduler';
 
 const ulid = monotonicFactory();
 const DEFAULT_MAX_RETRIES = 4; // Voyager's number (03 §Curriculum)
+// R65 convergence breaker: a rollout that EXHAUSTS its maxRetries without converging is one failed
+// attempt at the task; after this many exhausted rollouts the curriculum STOPS re-attempting the
+// identical task and closes it `failed` (a blocked-task signal), so the loop moves on instead of grinding
+// the same wall forever (the D3 incident: 13 attempts / 21 min / 0 progress). Small on purpose — an
+// over-bundled or precondition-gated task that code-revision can't satisfy is detected fast (R33–R37:
+// repeated failure must become a signal that changes the task, not silent grinding).
+const MAX_ROLLOUT_ATTEMPTS = 2;
 const WARMUP_COMPLETED = 8; // ledger.completed below this ⇒ warm-up phase (config table, 03)
 const QA_DEDUP_THRESHOLD = 0.92; // near-identical "how to" questions share one cached answer
 
@@ -53,6 +61,15 @@ export interface CurriculumOptions {
   scheduler: LlmScheduler;
   /** Embedding-dedupes the QA cache (R38 keyword floor when off/degraded). */
   embeddings: EmbeddingsService;
+  /** The shared skill library — renders "existing reusable skills" into the proposal context so God
+   *  proposes COMPOSING what the village already has (not re-acquiring it). Optional: omitted in unit
+   *  harnesses (coverage section simply absent). god/ → skills/ is a downward import (dependency law). */
+  library?: SkillLibrary;
+  /** True when a scenario `godPrompt` mission is appended to this desk's system prompt (set in main.ts).
+   *  Flips the warm-up nudge: instead of the generic "gather wood/food/tools" survival default, warm-up
+   *  serves the mission with the villager's CURRENT inventory + skills (so a scenario that says "the hoe
+   *  is provided" doesn't get a wood-gathering task proposed at it forever). */
+  hasMissionDirective?: boolean;
   systemPrompt?: string;
   /** Proposal/decompose run on the STRONG tier (frontier selection compounds — D-13). */
   tier?: ModelTier;
@@ -130,6 +147,8 @@ export class Curriculum {
   private readonly client: LlmClient;
   private readonly scheduler: LlmScheduler;
   private readonly embeddings: EmbeddingsService;
+  private readonly library?: SkillLibrary;
+  private readonly hasMission: boolean;
   private readonly systemPrompt: string;
   private readonly tier: ModelTier;
   private readonly fastTier: ModelTier;
@@ -137,6 +156,10 @@ export class Curriculum {
   private readonly degradeOnBreach: boolean;
   private readonly now: () => number;
   private readonly qa: QaEntry[] = [];
+  /** R65 convergence breaker: per-task count of EXHAUSTED rollouts (a rollout that ran its full
+   *  maxRetries without converging). Curriculum-owned (sole ledger writer — S2); the entry is dropped
+   *  when the task closes. Used only to decide WHEN to give up re-attempting an unconvergeable task. */
+  private readonly exhaustedRollouts = new Map<string, number>();
 
   constructor(opts: CurriculumOptions) {
     this.state = opts.state;
@@ -144,6 +167,8 @@ export class Curriculum {
     this.client = opts.client;
     this.scheduler = opts.scheduler;
     this.embeddings = opts.embeddings;
+    this.library = opts.library;
+    this.hasMission = opts.hasMissionDirective ?? false;
     this.systemPrompt = opts.systemPrompt ?? loadCurriculumPrompt();
     this.tier = opts.tier ?? 'strong';
     this.fastTier = opts.fastTier ?? 'fast';
@@ -160,13 +185,13 @@ export class Curriculum {
    * D-13 degrade (M4-4): when the curriculum desk is over budget, repeat the LAST task's type instead
    * of spending a fresh strong-tier proposal — keeps the loop fed without burning the wallet (R49).
    */
-  async proposeTask(opts: { trigger: CurriculumTrigger; villager?: string }): Promise<Task | undefined> {
+  async proposeTask(opts: { trigger: CurriculumTrigger; villager?: string; snapshot?: Snapshot }): Promise<Task | undefined> {
     if (this.degraded()) {
       const repeated = this.repeatLastTaskType(opts);
       if (repeated) return repeated; // degraded path: no LLM call
     }
 
-    const user = this.renderProposalContext(opts.villager);
+    const user = this.renderProposalContext(opts);
     const result = await this.scheduler.enqueue({
       villager: 'god:curriculum',
       lane: 'god',
@@ -178,6 +203,13 @@ export class Curriculum {
             { role: 'user', content: user },
           ],
           tools: [PROPOSE_TOOL],
+          // R68: FORCE the single tool (as the critic does, R52). With `tool_choice:'auto'` gpt-4o
+          // intermittently narrates the propose_task JSON inside a ```json``` block in the text content
+          // instead of emitting a real tool call (finish_reason='stop', toolCalls empty) → proposeTask
+          // returns undefined → the VillageLoop idles 5 s and retries the IDENTICAL context, getting the
+          // same narration. Live (2026-06-16): 54% of strong-tier curriculum calls were wasted this way.
+          // The desk has exactly ONE job and ONE tool — there is never a legitimate text-only turn.
+          toolChoice: { type: 'function', function: { name: 'propose_task' } },
           tier: this.tier,
           caller: 'god:curriculum',
         }),
@@ -245,6 +277,9 @@ export class Curriculum {
             { role: 'user', content: `Décompose ce grand but en sous-tâches ordonnées et réalisables: « ${goal} ». Appelle l’outil decompose.` },
           ],
           tools: [DECOMPOSE_TOOL],
+          // R68: force the single tool (same reasoning as proposeTask above — a decompose turn must emit a
+          // real tool call, never narrate the subtasks JSON as text).
+          toolChoice: { type: 'function', function: { name: 'decompose' } },
           tier: this.tier,
           caller: 'god:curriculum',
         }),
@@ -276,21 +311,98 @@ export class Curriculum {
   }
 
   /**
+   * R72 — enqueue the critic's follow-up ACQUIRE-task that unblocks a blocked task (e.g. a blocked
+   * sow-task's "harvest mature wheat to obtain wheat_seeds"). The sole ledger writer (S2) creates it.
+   * Anti-loop: a blocked→acquire chain can circle back (sow→harvest→sow), so a follow-up whose goal is
+   * already OPEN or was RECENTLY FAILED is dropped — the pivot never spawns a duplicate or an endless
+   * chain of the same goal. Returns the created task, or undefined when there is no goal or it deduped.
+   */
+  addFollowUp(suggestion: TaskSuggestion, assignee?: string): Task | undefined {
+    const goal = suggestion.goal?.trim();
+    if (!goal) return undefined;
+    const n = normGoal(goal);
+    if (this.state.ledger.open.some((t) => normGoal(t.goal) === n)) return undefined;
+    if (this.state.ledger.failed.slice(-12).some((r) => normGoal(r.task.goal) === n)) return undefined;
+    const task = this.makeTask({
+      goal,
+      successCriteria: suggestion.successCriteria ?? '',
+      check: suggestion.check,
+      assignee: suggestion.assignee ?? assignee,
+      context: '',
+    });
+    this.admit(task, 'critic-follow-up');
+    return task;
+  }
+
+  /**
    * Close a task — the SOLE ledger-write path for a verdict-closed task (S2). Moves it out of `open`
    * and the task map, lands it in completed/failed, and journals god.task-closed. (GodService delegates
-   * its M3 closeTask here in M4-3.)
+   * its M3 closeTask here in M4-3.) `reason` (optional) carries WHY for a non-verdict close — the
+   * convergence breaker (noteExhausted) passes the give-up reason naming the task + attempt count (S10).
    */
-  closeTask(task: Task, verdictId: string | undefined, ok: boolean): void {
+  closeTask(task: Task, verdictId: string | undefined, ok: boolean, reason?: string): void {
     delete task.currentRolloutId;
     this.state.tasks.delete(task.id);
+    this.exhaustedRollouts.delete(task.id); // R65: counter dies with the task
     this.state.ledger.open = this.state.ledger.open.filter((t) => t.id !== task.id);
     const record: TaskRecord = { task, closedAt: this.now(), verdictId };
+    if (reason !== undefined) record.reason = reason; // persist WHY for the failed-frontier memory (R70)
     (ok ? this.state.ledger.completed : this.state.ledger.failed).push(record);
+    const payload: { taskId: string; goal: string; outcome: 'completed' | 'failed' | 'retired'; reason?: string } = {
+      taskId: task.id,
+      goal: task.goal,
+      outcome: ok ? 'completed' : 'failed',
+    };
+    if (reason !== undefined) payload.reason = reason;
     this.journal.append(
       'god:curriculum',
       'god.task-closed',
-      { taskId: task.id, goal: task.goal, outcome: ok ? 'completed' : 'failed' },
+      payload,
       verdictId !== undefined ? { taskId: task.id, verdictId } : { taskId: task.id },
+    );
+  }
+
+  /**
+   * R65 convergence breaker — the SOLE writer's record of a non-converging rollout (S2). Called by the
+   * RolloutCoordinator when a rollout returns `converged:false` after exhausting its maxRetries. Counts
+   * the task's exhausted rollouts; once it reaches {@link MAX_ROLLOUT_ATTEMPTS}, the task is CLOSED `failed`
+   * with a blocked-task reason (so the curriculum stops re-proposing/re-attempting the identical
+   * unconvergeable task and the village moves on). Below the threshold the task stays OPEN to retry — the
+   * legitimate path is unchanged. Returns true iff the breaker fired (the task was given up). A task that
+   * is not open (already closed by a success verdict) is a no-op.
+   *
+   * Per R33–R37: repeated failure becomes a ledger/dossier SIGNAL that changes the task — not an engine
+   * that silently re-proposes the same wall forever. (Future hook: a blocked over-bundled task is a natural
+   * `decompose()` candidate — left to the curriculum's existing decomposition entrypoint, not done here.)
+   */
+  noteExhausted(task: Task, lastCritique?: string): boolean {
+    if (!this.state.tasks.has(task.id)) return false; // already closed (e.g. a converged success)
+    const attempts = (this.exhaustedRollouts.get(task.id) ?? 0) + 1;
+    if (attempts < MAX_ROLLOUT_ATTEMPTS) {
+      this.exhaustedRollouts.set(task.id, attempts);
+      return false; // still within budget — leave it open to retry (unchanged path)
+    }
+    // R70: carry the last critique into the close reason so the failed-frontier remembers the OBSTACLE, not
+    // just the goal — the curriculum's only cross-deliberation memory is the ledger, so a future proposal
+    // can see why « goal » failed and decompose it / pick something else instead of re-proposing the wall.
+    const why = lastCritique && lastCritique.length > 0 ? ` — dernier obstacle: ${truncate(lastCritique, 240)}` : '';
+    const reason = `blocked: « ${task.goal} » not converged after ${attempts} exhausted rollout(s) (R65 breaker — stop grinding, move on)${why}`;
+    this.closeTask(task, undefined, false, reason);
+    return true;
+  }
+
+  /**
+   * R70 — the oldest OPEN task assigned to `villager` (or unassigned) with no live rollout: the resumable
+   * backlog item the autonomous loop re-runs BEFORE proposing a fresh task. Without this the VillageLoop
+   * always proposes a NEW task id every idle turn, so no task is ever re-attempted — the R65 breaker (keyed
+   * per task id) never accrues its second exhausted rollout, nothing closes `failed`, and the open list
+   * fills with near-duplicate unconvergeable goals (the live "bake bread ×9" grind). Resuming the same id
+   * lets the breaker fire as designed. `ledger.open` is push-ordered, so the first match is the oldest (FIFO
+   * drain). Read-only — assignment/claim is the caller's (S2: the desk only WRITES the ledger here).
+   */
+  nextOpenTaskFor(villager: string): Task | undefined {
+    return this.state.ledger.open.find(
+      (t) => t.currentRolloutId === undefined && (t.assignee === villager || t.assignee === undefined),
     );
   }
 
@@ -345,17 +457,39 @@ export class Curriculum {
     this.journal.append('god:curriculum', 'god.task-proposed', payload, { taskId: task.id });
   }
 
-  /** Build the proposal context: ledger frontier, coverage, phase. Specific enough to be checkable. */
-  private renderProposalContext(villager?: string): string {
+  /** Build the proposal context: phase, the requesting villager's live inventory, the existing reusable
+   *  skills, the ledger frontier, and the dossier. Inventory + skills are decision-critical: without them
+   *  God proposes acquiring prerequisites the villager already holds (the "find wood for a hoe it already
+   *  has" failure) and can't see what to COMPOSE. Specific enough to be checkable. */
+  private renderProposalContext(opts: { villager?: string; snapshot?: Snapshot }): string {
+    const { villager, snapshot } = opts;
     const led = this.state.ledger;
     const phase = led.completed.length < WARMUP_COMPLETED ? 'WARM-UP (early/survival-basic phase)' : 'ÉTABLI';
     const parts: string[] = [];
     parts.push(`## PHASE\n${phase} — ${led.completed.length} tâches réussies à ce jour.`);
     if (phase.startsWith('WARM-UP')) {
-      parts.push('Le village est fragile: propose une tâche de SURVIE basique (bois, nourriture, outils simples). N’ouvre pas le late-game.');
+      // When a scenario mission is set, the generic "gather wood/food/tools" survival default actively
+      // fights it (and never lifts, since a non-converging task closes `failed`, not `completed`). Serve
+      // the mission with what the villager ALREADY has instead of defaulting to resource acquisition.
+      parts.push(this.hasMission
+        ? 'Début de partie: garde la PREMIÈRE tâche petite et réalisable AVEC L’INVENTAIRE ET LES COMPÉTENCES ACTUELS, au service de la mission (voir les instructions de scénario). N’envoie PAS le villageois acquérir un objet/outil qu’il possède déjà — vérifie l’inventaire ci-dessous. N’improvise pas une tâche de survie générique qui contredit la mission.'
+        : 'Le village est fragile: propose une tâche de SURVIE basique (bois, nourriture, outils simples). N’ouvre pas le late-game.');
     }
+    if (villager) {
+      const inv = snapshot
+        ? snapshot.inventory.length
+          ? snapshot.inventory.map((i) => `${i.name} ×${i.count}`).join(', ')
+          : '(vide)'
+        : '(inconnu — pas de snapshot)';
+      parts.push(`## INVENTAIRE ACTUEL (${villager})\n${inv}\nNE propose PAS d’acquérir un objet déjà présent ci-dessus (ex: ne pas chercher du bois pour fabriquer une houe déjà en main).`);
+    }
+    const skills = this.renderLibraryCoverage();
+    if (skills) parts.push(skills);
     parts.push(`## FRONTIÈRE — RÉUSSIES (${led.completed.length})\n${led.completed.slice(-12).map((r) => `✓ ${r.task.goal}`).join('\n') || '(aucune)'}`);
-    parts.push(`## FRONTIÈRE — ÉCHOUÉES (${led.failed.length})\n${led.failed.slice(-12).map((r) => `✗ ${r.task.goal}`).join('\n') || '(aucune)'}`);
+    // R70: render the failed goals WITH their blocked reason (the last obstacle) — this is the curriculum's
+    // memory of past deliberations. Do NOT re-propose a goal listed here without changing the approach.
+    const failedLines = led.failed.slice(-8).map((r) => `✗ ${r.task.goal}${r.reason ? `\n   ↳ ${truncate(r.reason, 240)}` : ''}`).join('\n');
+    parts.push(`## FRONTIÈRE — ÉCHOUÉES (${led.failed.length})\n${failedLines || '(aucune)'}\nNE re-propose PAS un but déjà échoué ci-dessus à l’identique: décompose-le (outil non dispo ici → propose un sous-pas plus simple) ou choisis autre chose.`);
     parts.push(`## TÂCHES OUVERTES (${led.open.length})\n${led.open.map((t) => `• ${t.goal}${t.assignee ? ` → ${t.assignee}` : ''}`).join('\n') || '(aucune)'}`);
     if (villager) {
       const d = this.state.dossiers.get(villager);
@@ -363,6 +497,17 @@ export class Curriculum {
     }
     parts.push('Propose UNE tâche au bord de la capacité actuelle. Appelle l’outil `propose_task`.');
     return parts.join('\n\n');
+  }
+
+  /** The village's existing reusable skills (mortal tier only — divine skills aren't villager work) as
+   *  `name — summary` one-liners, so God proposes a task that COMPOSES them plus one new step rather than
+   *  re-deriving capabilities it already has. Empty string when no library is wired or none are live. */
+  private renderLibraryCoverage(): string {
+    if (!this.library) return '';
+    const live = this.library.liveSkills().filter((s) => s.manifest.tier !== 'divine');
+    if (live.length === 0) return '';
+    const lines = live.slice(0, 40).map((s) => `• ${s.manifest.name} — ${s.manifest.summary}`).join('\n');
+    return `## COMPÉTENCES EXISTANTES (réutilisables, ${live.length})\n${lines}\nUne bonne tâche COMPOSE celles-ci plus UN seul nouveau pas.`;
   }
 
   /** Find a cached QA entry whose question matches (semantic cosine ≥ threshold, else keyword floor). */
@@ -414,6 +559,16 @@ export class Curriculum {
     this.admit(task, opts.trigger);
     return task;
   }
+}
+
+/** Bound a critique/reason rendered into a prompt so the failed-frontier memory stays cheap (R70). */
+function truncate(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
+}
+
+/** Normalise a goal string for the follow-up anti-loop dedup (R72) — case/whitespace-insensitive. */
+function normGoal(goal: string): string {
+  return goal.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function toCheck(v: unknown): ItemCheck | undefined {

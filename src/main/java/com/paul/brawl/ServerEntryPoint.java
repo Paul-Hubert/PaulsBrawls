@@ -38,6 +38,9 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 		// AI village (see VILLAGE_PLAN.md): trade settlement + admin command.
 		VillageCommand.register();
 
+		// Eden village — scenario control (/villagers start|stop|restart).
+		VillagersCommand.register();
+
 		// Track the live server so off-thread callers (idle watchdog) can
 		// reach the bot without holding a player reference.
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
@@ -52,17 +55,21 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 			VillageHttpListener.stop();
 		});
 
-		// Op the bot on join so it can run /tp. The check matches the
-		// username at JOIN time so a bot that reconnects keeps its op.
+		// Op bots on join so they can run /tp, /spreadplayers, /give, etc.
+		// Covers: the God-body avatar (LLMBot), Eden's avatar (Dieu), and any
+		// active scenario villager bots (populated by /villagers start|restart).
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
 			var player = handler.getPlayer();
 			if (player == null) return;
 			String name = player.getName().getString();
-			if (!name.equals(BridgeConfig.INSTANCE.botUsername)) return;
+			boolean shouldOp = name.equals(BridgeConfig.INSTANCE.botUsername)
+				|| name.equals(VillageConfig.INSTANCE.edenAvatarName)
+				|| VillagersCommand.activeScenarioBots.contains(name);
+			if (!shouldOp) return;
 			GameProfile profile = player.getGameProfile();
 			if (!server.getPlayerManager().isOperator(profile)) {
 				server.getPlayerManager().addToOperators(profile);
-				LOGGER.info("Opped god-body bot '{}' on join.", name);
+				LOGGER.info("Opped bot '{}' on join.", name);
 			}
 		});
 	}

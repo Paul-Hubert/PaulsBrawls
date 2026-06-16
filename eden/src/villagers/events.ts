@@ -17,7 +17,7 @@
 //
 // villagers/ may import skills/llm/render/journal/config/types (all downward); never god/ or social/.
 
-import type { Bot } from '../types/bot';
+import type { Bot, EmitterLike } from '../types/bot';
 import type { EdenEvent, Envelope, Priority, RunnerRef, Subscription } from '../types/index';
 import type { IJournal } from '../journal/journal';
 import type { Lane } from '../llm/scheduler';
@@ -36,6 +36,14 @@ export type EventSink = (env: Envelope) => void;
 export interface EventRouterOptions {
   villager: string;
   bot: Bot;
+  /**
+   * Where the router ATTACHES its emitter rows. Defaults to {@link bot} (the unit tests emit signals on
+   * the bot directly). A real boot passes the per-bot signal adapter's bus (bots/signals.ts), because
+   * mineflayer's native `entityHurt(entity)` has the wrong shape and would leak spurious damage-0 hurts;
+   * the bus carries the SYNTHETIC normalized signals while the router still reads live STATE off `bot`
+   * (health/time for the hysteresis edges).
+   */
+  signals?: EmitterLike;
   /** Where normalized Envelopes go (the SubscriptionRouter in M5-3; a collector in tests). */
   sink: EventSink;
   /** Journal is accepted for symmetry with the rest of villagers/; the router itself journals nothing
@@ -71,6 +79,8 @@ interface EmitterRow {
 export class EventRouter {
   private readonly villager: string;
   private readonly bot: Bot;
+  /** What attach/detach bind the emitter rows to — the adapter bus on a real boot, else the bot itself. */
+  private readonly signals: EmitterLike;
   private readonly sink: EventSink;
   private readonly healthLow: number;
   private readonly now: () => number;
@@ -85,27 +95,28 @@ export class EventRouter {
   constructor(opts: EventRouterOptions) {
     this.villager = opts.villager;
     this.bot = opts.bot;
+    this.signals = opts.signals ?? opts.bot;
     this.sink = opts.sink;
     this.healthLow = opts.healthLowThreshold ?? DEFAULT_HEALTH_LOW;
     this.now = opts.now ?? Date.now;
     this.registry = this.buildRegistry();
   }
 
-  /** Wire every emitter row onto the bot. Idempotent-unsafe: call once; pair with {@link detach}. */
+  /** Wire every emitter row onto the signal source. Idempotent-unsafe: call once; pair with {@link detach}. */
   attach(): void {
     for (const row of this.registry) {
       const listener = (...args: unknown[]): void => {
         const event = row.map(...args);
         if (event) this.emit(event);
       };
-      this.bot.on(row.raw, listener);
+      this.signals.on(row.raw, listener);
       this.bound.push([row.raw, listener]);
     }
   }
 
   /** Remove every listener this router added (no leaks across reconnect/rebind). */
   detach(): void {
-    for (const [raw, listener] of this.bound) this.bot.removeListener(raw, listener);
+    for (const [raw, listener] of this.bound) this.signals.removeListener(raw, listener);
     this.bound.length = 0;
   }
 

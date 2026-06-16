@@ -75,6 +75,23 @@ test('full query is chronological; a limit returns the most recent N in order', 
   assert.deepEqual(tail.map((e) => (e.payload as { message: string }).message), ['e3', 'e4']);
 });
 
+test('order desc returns newest-first; with a limit, the N newest in desc order; asc is the default', (t) => {
+  const j = tmpJournal(t);
+  for (let i = 0; i < 5; i++) j.append('engine', 'system.error', { message: `e${i}` });
+  const msg = (e: { payload: object }): string => (e.payload as { message: string }).message;
+
+  const desc = j.query({ order: 'desc' });
+  assert.deepEqual(desc.map(msg), ['e4', 'e3', 'e2', 'e1', 'e0']);
+
+  const tailDesc = j.query({ order: 'desc', limit: 2 });
+  assert.deepEqual(tailDesc.map(msg), ['e4', 'e3'], 'the 2 newest, newest-first');
+
+  const tailAsc = j.query({ order: 'asc', limit: 2 });
+  assert.deepEqual(tailAsc.map(msg), ['e3', 'e4'], 'the 2 newest, oldest-first');
+
+  assert.deepEqual(j.query().map(msg), ['e0', 'e1', 'e2', 'e3', 'e4'], 'default order is chronological');
+});
+
 test('subscribe fans out appended events; unsubscribe stops it', (t) => {
   const j = tmpJournal(t);
   const seen: string[] = [];

@@ -1,7 +1,7 @@
 // Admin server — a PURE CONSUMER (08): imports anything, nothing imports it, deletable. The full v0
 // surface (05 §Admin API): GET /status /villagers[/:name] /skills[/:name]?version=&code= /tasks
-// /verdicts /directives /journal /kinds + a WS /journal/stream live fan-out; POST /pause /resume
-// /skills/:name/quarantine /villagers/:name/prompt. Every mutating verb journals what it did
+// /verdicts /directives /rollouts /journal[?id=…] /kinds + a WS /journal/stream live fan-out; POST
+// /pause /resume /skills/:name/quarantine /villagers/:name/prompt. Every mutating verb journals what it did
 // (actor:'admin' | player:<name>) BEFORE acting, so the dashboard's own pokes show in the history it
 // renders. The future website is a pure consumer of exactly these routes — snapshot via REST, live via
 // the WS, interaction via the POST verbs.
@@ -11,6 +11,8 @@
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { resolve, extname, sep } from 'node:path';
 import { WebSocketServer } from 'ws';
 
 import type { JournalQuery } from '../types/index';
@@ -37,6 +39,12 @@ export interface AdminServerOptions {
   /** Live status snapshot from main.ts (bots, runs, queue depths, budget). */
   getStatus?: () => Record<string, unknown>;
   startedAt?: number;
+  /**
+   * Optional static web root (the dashboard). When set, any GET that matches no API route is served from
+   * this directory (`/` → `index.html`), same-origin with the API so the website needs no CORS (owner #9:
+   * the host serves the dashboard). A path-traversal guard keeps reads inside the root. API routes win.
+   */
+  webRoot?: string;
 
   // ── GET data accessors (derived views / live state — admin only reads) ──
   villagers?: () => unknown[];
@@ -46,6 +54,15 @@ export interface AdminServerOptions {
   tasks?: () => unknown;
   verdicts?: () => unknown[];
   directives?: () => unknown[];
+  /** The rollout index (RolloutsView) — the navigation entry point for the rollout-replay view. */
+  rollouts?: () => unknown[];
+  /**
+   * The full prompt/response transcript of one `llm.call`, keyed by its `refs.llmCallId`. These live on
+   * disk (`.eden-data/llm/<callId>.json`) and are written ONLY when `journal.debugPrompts` is on — the
+   * journal event itself carries metrics only (05). `undefined` → 404 (debug off, unknown id, or read
+   * error). main.ts wires the file read + a traversal guard; the admin stays filesystem-agnostic (S5).
+   */
+  llmTranscript?: (callId: string) => unknown | undefined;
 
   // ── Mutating verbs (each journals actor:'admin'|player:<name> BEFORE acting) ──
   /** Gate LLM scheduling (skills/subscriptions keep running). */
@@ -56,6 +73,14 @@ export interface AdminServerOptions {
   onQuarantine?: (name: string, reason: string) => boolean;
   /** Inject a `tell` into a villager's inbox; return false if no such villager. */
   onPrompt?: (name: string, msg: { text: string; from?: string }) => boolean;
+
+  // ── Scenario control (the /villagers in-game command) ──────────────────────
+  /** Load a scenario and connect its bots. cx/cz = player position for spreadplayers. */
+  onScenarioStart?: (name: string, cx: number, cz: number) => Promise<{ ok: boolean; message: string; botNames?: string[] }>;
+  /** Disconnect scenario bots (keeps state on disk). */
+  onScenarioStop?: () => Promise<{ ok: boolean; message: string }>;
+  /** Wipe bot state then reconnect scenario bots with a fresh loadout. */
+  onScenarioRestart?: (name: string, cx: number, cz: number) => Promise<{ ok: boolean; message: string; botNames?: string[] }>;
 }
 
 /** The complete admin surface (05). Pure consumer — deleting it must break nothing. */
@@ -153,6 +178,8 @@ export class AdminServer {
         return send(res, 200, { verdicts: this.o.verdicts?.() ?? [] });
       case '/directives':
         return send(res, 200, { directives: this.o.directives?.() ?? [] });
+      case '/rollouts':
+        return send(res, 200, { rollouts: this.o.rollouts?.() ?? [] });
     }
     // Parameterized GETs.
     const villager = matchParam(path, '/villagers/');
@@ -170,12 +197,42 @@ export class AdminServer {
       const found = this.o.skill?.(skill, opts);
       return found ? send(res, 200, found) : send(res, 404, { error: `no skill ${skill}` });
     }
+    // The transcript of one llm.call (refs.llmCallId) — only present when debugPrompts dumped it (05).
+    const llmCall = matchParam(path, '/llm/');
+    if (llmCall !== undefined) {
+      const transcript = this.o.llmTranscript?.(llmCall);
+      return transcript !== undefined
+        ? send(res, 200, transcript)
+        : send(res, 404, { error: `no transcript ${llmCall}` });
+    }
+    // No API route matched — serve the dashboard from the static web root, if one is wired (same-origin).
+    if (this.o.webRoot !== undefined) return this.serveStatic(res, this.o.webRoot, path);
     return send(res, 404, { error: `no route ${path}` });
+  }
+
+  /** Serve a file from the static web root (the dashboard). `/` → index.html; reads are guarded against
+   *  path traversal (the resolved path must stay inside the root). Unknown files 404 (consistent JSON). */
+  private serveStatic(res: ServerResponse, webRoot: string, pathname: string): void {
+    const root = resolve(webRoot);
+    let rel: string;
+    try {
+      rel = decodeURIComponent(pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, ''));
+    } catch {
+      return send(res, 400, { error: 'bad path' });
+    }
+    const full = resolve(root, rel);
+    if (full !== root && !full.startsWith(root + sep)) return send(res, 403, { error: 'forbidden' });
+    if (!existsSync(full) || !statSync(full).isFile()) return send(res, 404, { error: `no file ${pathname}` });
+    res.writeHead(200, { 'content-type': contentType(full), 'cache-control': 'no-cache' });
+    res.end(readFileSync(full));
   }
 
   private async routePost(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
     if (path === '/pause') return this.doToggle(res, 'pause', this.o.onPause);
     if (path === '/resume') return this.doToggle(res, 'resume', this.o.onResume);
+    if (path === '/scenario/stop') return this.doScenarioStop(res);
+    if (path === '/scenario/start') return this.doScenarioOp(req, res, 'start');
+    if (path === '/scenario/restart') return this.doScenarioOp(req, res, 'restart');
 
     const quarantine = matchParam(path, '/skills/', '/quarantine');
     if (quarantine !== undefined) {
@@ -206,6 +263,31 @@ export class AdminServer {
     }
 
     return send(res, 404, { error: `no route ${path}` });
+  }
+
+  private async doScenarioOp(req: IncomingMessage, res: ServerResponse, action: 'start' | 'restart'): Promise<void> {
+    const cb = action === 'start' ? this.o.onScenarioStart : this.o.onScenarioRestart;
+    if (!cb) return send(res, 503, { error: `scenario ${action} not wired` });
+    const body = await readBody(req);
+    const name = typeof body['name'] === 'string' ? body['name'] : '';
+    const cx = typeof body['x'] === 'number' ? body['x'] : 0;
+    const cz = typeof body['z'] === 'number' ? body['z'] : 0;
+    if (!name) return send(res, 400, { error: 'name is required' });
+    // Journal BEFORE acting (05/S2) — the admin poke shows in the history it renders.
+    if (action === 'start') {
+      this.journal.append('admin', 'scenario.start', { name, cx, cz }, {});
+    } else {
+      this.journal.append('admin', 'scenario.restart', { name, cx, cz }, {});
+    }
+    const result = await cb(name, cx, cz);
+    send(res, result.ok ? 200 : 404, result);
+  }
+
+  private async doScenarioStop(res: ServerResponse): Promise<void> {
+    if (!this.o.onScenarioStop) return send(res, 503, { error: 'scenario stop not wired' });
+    this.journal.append('admin', 'scenario.stop', {} as Record<string, never>, {});
+    const result = await this.o.onScenarioStop();
+    send(res, result.ok ? 200 : 500, result);
   }
 
   private doToggle(res: ServerResponse, action: 'pause' | 'resume', handler: (() => void) | undefined): void {
@@ -262,6 +344,8 @@ function parseJournalQuery(url: URL): JournalQuery {
   if (kinds) q.kinds = kinds;
   const actor = url.searchParams.get('actor');
   if (actor) q.actor = actor;
+  const id = url.searchParams.get('id');
+  if (id) q.id = id;
   const ref = url.searchParams.get('ref');
   if (ref) q.ref = ref;
   const since = url.searchParams.get('since');
@@ -270,5 +354,21 @@ function parseJournalQuery(url: URL): JournalQuery {
   if (until) q.until = Number(until);
   const limit = url.searchParams.get('limit');
   if (limit) q.limit = Number(limit);
+  const order = url.searchParams.get('order');
+  if (order === 'desc' || order === 'asc') q.order = order;
   return q;
+}
+
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+};
+function contentType(file: string): string {
+  return MIME[extname(file).toLowerCase()] ?? 'application/octet-stream';
 }

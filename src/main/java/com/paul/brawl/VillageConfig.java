@@ -33,15 +33,23 @@ public class VillageConfig {
     /** Admin API of the Node village process (npm run village). */
     public String nodeAdminUrl = "http://127.0.0.1:8766";
 
+    /** Eden avatar name — must be opped on join like LLMBot (R12). */
+    public String edenAvatarName = "Dieu";
+
+    /** Eden admin API base URL (port 8770 — R24). */
+    public String edenAdminUrl = "http://127.0.0.1:8770";
+
     private VillageConfig() {
         load();
     }
 
     public synchronized void save() {
         Properties p = new Properties();
-        p.setProperty("enabled",      Boolean.toString(enabled));
-        p.setProperty("listenerPort", Integer.toString(listenerPort));
-        p.setProperty("nodeAdminUrl", nodeAdminUrl);
+        p.setProperty("enabled",        Boolean.toString(enabled));
+        p.setProperty("listenerPort",   Integer.toString(listenerPort));
+        p.setProperty("nodeAdminUrl",   nodeAdminUrl);
+        p.setProperty("edenAvatarName", edenAvatarName);
+        p.setProperty("edenAdminUrl",   edenAdminUrl);
         try (var out = Files.newOutputStream(CONFIG_PATH)) {
             p.store(out, "AI village configuration");
         } catch (IOException e) {
@@ -58,15 +66,19 @@ public class VillageConfig {
             LOGGER.warn("Failed to load village config: {}", e.getMessage());
             return;
         }
-        enabled      = parseBool(p.getProperty("enabled"), enabled);
-        listenerPort = parseInt(p.getProperty("listenerPort"), listenerPort);
-        nodeAdminUrl = p.getProperty("nodeAdminUrl", nodeAdminUrl);
+        enabled        = parseBool(p.getProperty("enabled"), enabled);
+        listenerPort   = parseInt(p.getProperty("listenerPort"), listenerPort);
+        nodeAdminUrl   = p.getProperty("nodeAdminUrl",   nodeAdminUrl);
+        edenAvatarName = p.getProperty("edenAvatarName", edenAvatarName);
+        edenAdminUrl   = p.getProperty("edenAdminUrl",   edenAdminUrl);
     }
 
     public String describe() {
         return "VillageConfig{enabled=" + enabled
             + ", listenerPort=" + listenerPort
             + ", nodeAdminUrl=" + nodeAdminUrl
+            + ", edenAvatarName=" + edenAvatarName
+            + ", edenAdminUrl=" + edenAdminUrl
             + "}";
     }
 

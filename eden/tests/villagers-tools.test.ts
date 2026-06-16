@@ -171,7 +171,7 @@ test('M6: remember/recall degrade gracefully when no memory store is wired (neve
 test('M6: remember/recall drive the real VillagerMemory when wired', async () => {
   const { library, engine, retriever, journal, dir } = harness();
   const memory = new VillagerMemory({ villager: 'Firmin', dataDir: dir, journal, worldId: 'w1' });
-  const wired = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: 400, memory });
+  const wired = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: 400, memoryFor: (v) => (v === 'Firmin' ? memory : undefined) });
   // remember → it lands in the store as a `thought`
   const r = await wired.dispatch(call('remember', { text: 'la pierre se mine avec une pioche', tags: ['pierre'] }), CTX());
   assert.match(r.content, /noté/i);
@@ -179,6 +179,27 @@ test('M6: remember/recall drive the real VillagerMemory when wired', async () =>
   // recall → it retrieves the relevant memory
   const out = await wired.dispatch(call('recall', { query: 'pierre pioche' }), CTX());
   assert.match(out.content, /pioche/);
+});
+
+test('M6 (regression): the SHARED registry resolves memory per ctx.villager — never leaks across villagers', async () => {
+  // The ToolRegistry is ONE instance shared by all villagers (deliberation state lives in ctx), so memory
+  // must be resolved per ctx.villager. The pre-fix bug wired a single VillagerMemory (or none at all) into
+  // the shared registry, so recall/remember served one villager's store to everyone — or the "(non câblé)"
+  // stub to all. This pins the per-villager resolver: Firmin's remember is invisible to Hortense.
+  const { library, engine, retriever, journal, dir } = harness();
+  const memories = new Map<string, VillagerMemory>([
+    ['Firmin', new VillagerMemory({ villager: 'Firmin', dataDir: dir, journal, worldId: 'w1' })],
+    ['Hortense', new VillagerMemory({ villager: 'Hortense', dataDir: dir, journal, worldId: 'w1' })],
+  ]);
+  const wired = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: 400, memoryFor: (v) => memories.get(v) });
+  await wired.dispatch(call('remember', { text: 'le coffre est près du puits' }), CTX({ villager: 'Firmin' }));
+  // Firmin recalls his own memory…
+  const firmin = await wired.dispatch(call('recall', { query: 'coffre puits' }), CTX({ villager: 'Firmin' }));
+  assert.match(firmin.content, /coffre/);
+  // …Hortense (same shared registry) does NOT see it — her store is independent and empty.
+  const hortense = await wired.dispatch(call('recall', { query: 'coffre puits' }), CTX({ villager: 'Hortense' }));
+  assert.match(hortense.content, /aucun/i);
+  assert.equal(memories.get('Hortense')!.all().length, 0, 'Firmin\'s remember never touched Hortense\'s store');
 });
 
 test('M5-2: subscribe/unsubscribe/list_subscriptions degrade gracefully when no store is wired', async () => {
@@ -241,7 +262,7 @@ test('M3-2 (guard): run_skill with an empty name is a usage error, not a run', a
 test('M3-2 (guard): remember requires text; recall requires query (wired store)', async () => {
   const { library, engine, retriever, journal, dir } = harness();
   const memory = new VillagerMemory({ villager: 'Firmin', dataDir: dir, journal, worldId: 'w1' });
-  const wired = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: 400, memory });
+  const wired = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: 400, memoryFor: (v) => (v === 'Firmin' ? memory : undefined) });
   const noText = await wired.dispatch(call('remember', { text: '   ' }), CTX());
   assert.equal(noText.ok, false);
   assert.match(noText.content, /text/i);
@@ -254,7 +275,7 @@ test('M3-2 (guard): remember requires text; recall requires query (wired store)'
 test('M3-2 (guard): recall against a wired-but-empty store reports no memories (not an error)', async () => {
   const { library, engine, retriever, journal, dir } = harness();
   const memory = new VillagerMemory({ villager: 'Firmin', dataDir: dir, journal, worldId: 'w1' });
-  const wired = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: 400, memory });
+  const wired = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: 400, memoryFor: (v) => (v === 'Firmin' ? memory : undefined) });
   const out = await wired.dispatch(call('recall', { query: 'quoi que ce soit' }), CTX());
   assert.notEqual(out.ok, false, 'an empty result is not a usage error');
   assert.match(out.content, /aucun/i);

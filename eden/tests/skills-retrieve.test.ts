@@ -98,6 +98,48 @@ test('M2-4: caps results at top-k (default 8)', async () => {
   assert.equal((await r.search('couper bois', { tier: 'mortal', k: 3 })).length, 3);
 });
 
+test('R58: per-skill vectors are cached — a second search re-embeds only the query, not the library', async () => {
+  const lib = freshLibrary();
+  for (let i = 0; i < 10; i++) seed(lib, `skill-${i}`, `tâche ${i} couper bois`);
+  const embedded: string[][] = [];
+  const backend: EmbeddingBackend = (texts) => {
+    embedded.push(texts);
+    return Promise.resolve(texts.map(() => [1, 0, 0]));
+  };
+  const r = new SkillRetriever({ library: lib, embeddings: new EmbeddingsService({ backend }), grants: new AllGranted() });
+
+  await r.search('couper bois', { tier: 'mortal' });
+  assert.equal(embedded[0]?.length, 11, 'first search embeds the query + all 10 skills');
+
+  await r.search('autre requête', { tier: 'mortal' });
+  assert.equal(embedded[1]?.length, 1, 'second search embeds ONLY the query — skill vectors are reused');
+
+  // A NEW skill (new name@version) is the only thing embedded on the next search, alongside the query.
+  seed(lib, 'skill-new', 'planter des graines');
+  await r.search('encore', { tier: 'mortal' });
+  assert.equal(embedded[2]?.length, 2, 'third search embeds the query + the one new skill');
+});
+
+test('R58: a re-described version (text changed at admission) is re-embedded, stale vector dropped', async () => {
+  const lib = freshLibrary();
+  seed(lib, 'probie', 'résumé initial', 'mortal', 'active-probation');
+  const version = lib.activeVersion('probie')!.version;
+  const embedded: string[][] = [];
+  const backend: EmbeddingBackend = (texts) => {
+    embedded.push(texts);
+    return Promise.resolve(texts.map(() => [1, 0, 0]));
+  };
+  const r = new SkillRetriever({ library: lib, embeddings: new EmbeddingsService({ backend }), grants: new AllGranted() });
+
+  await r.search('q', { tier: 'mortal' });
+  assert.equal(embedded[0]?.length, 2, 'query + the one skill');
+
+  // The description-from-code pass mutates the manifest text AFTER first retrieval (admit → live → describe).
+  lib.applyDescription('probie', version, { description: 'description riche dérivée du code' });
+  await r.search('q', { tier: 'mortal' });
+  assert.equal(embedded[1]?.length, 2, 'changed text forces a re-embed (query + the skill), not a stale reuse');
+});
+
 test('M2-4: returns the prompt-facing one-liner fields (name — signature — summary)', async () => {
   const lib = freshLibrary();
   seed(lib, 'collect-wood', 'couper du bois');

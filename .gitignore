@@ -101,8 +101,9 @@ nb-configuration.xml
 
 run/world/
 run/logs/
-run/usercache.json/
+run/usercache.json
 run/ops.json
+run/config/worldedit/worldedit.properties
 
 ##############################
 ## Secrets — never track (holds a live LLM provider API key)

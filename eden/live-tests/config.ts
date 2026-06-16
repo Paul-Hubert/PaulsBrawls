@@ -1,14 +1,17 @@
 // Config assembly for the live-scenario harness. The base Eden config is derived from the SAME proven
-// settings the smoke used (OpenAI strong gpt-4o / fast gpt-4o-mini, debugPrompts on), with the Minecraft
-// host/port and RCON creds read from `run/server.properties` (R28 — never hardcode the port/password) so
-// the harness follows whatever the dev server is actually bound to. The NO-API-KEY rule (the smoke paid
-// for it): the key lives ONLY in process.env.OPENAI_API_KEY; it is never written into the config file.
+// settings the smoke used, with the Minecraft host/port and RCON creds read from `run/server.properties`
+// (R28 — never hardcode the port/password). The LLM provider is selected by name from
+// `live-tests/providers.json` (gitignored; copy from providers.example.json). The API key is loaded from
+// `api-keys.env` (gitignored; copy from api-keys.example.env) and normalised into OPENAI_API_KEY — the
+// only env var LlmClient reads. Keys never appear in the config file or the journal.
 
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { EdenConfig, VillagerConfig } from '../src/config';
+import type { EdenConfig, VillagerConfig, ProviderConfig } from '../src/config';
+
+export const DEFAULT_PROVIDER = 'deepseek';
 
 /** RCON + Minecraft connection facts read from run/server.properties. */
 export interface ServerProps {
@@ -19,9 +22,75 @@ export interface ServerProps {
   rconPassword: string;
 }
 
+/** One entry in providers.json — the strong/fast model configs for a named LLM provider. */
+export interface LiveProviderEntry {
+  strong: ProviderConfig;
+  fast: ProviderConfig;
+  /** The env var that holds the API key for this provider (null = local, no auth). */
+  apiKeyEnv: string | null;
+}
+
+export type LiveProviders = Record<string, LiveProviderEntry>;
+
+function liveTestsDir(): string {
+  return dirname(fileURLToPath(import.meta.url));
+}
+
+/**
+ * Load live-tests/providers.json (gitignored). If it doesn't exist, error with a clear hint pointing
+ * to providers.example.json.
+ */
+export function loadProviders(): LiveProviders {
+  const path = join(liveTestsDir(), '..', 'providers.json');
+  if (!existsSync(path)) {
+    throw new Error(
+      `eden/providers.json not found — copy eden/providers.example.json to providers.json and fill in your model settings`,
+    );
+  }
+  return JSON.parse(readFileSync(path, 'utf8')) as LiveProviders;
+}
+
+/**
+ * Load eden/api-keys.env and merge into process.env. Existing env vars win (so CI can export keys
+ * directly and override the file). Safe to call multiple times — once a key is set it stays set.
+ */
+export function loadApiKeys(): void {
+  const path = join(liveTestsDir(), '..', 'api-keys.env');
+  if (!existsSync(path)) return;
+  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq < 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const val = trimmed.slice(eq + 1).trim();
+    if (key && !(key in process.env)) process.env[key] = val;
+  }
+}
+
+/**
+ * Look up a provider entry and normalise its key into process.env.OPENAI_API_KEY (the only variable
+ * LlmClient reads as default bearer). Call AFTER loadApiKeys(). Returns the entry so the caller can
+ * validate the key was actually found. Throws if the provider name is unknown.
+ */
+export function setupProviderEnv(providerName: string): LiveProviderEntry {
+  const all = loadProviders();
+  const entry = all[providerName];
+  if (!entry) {
+    throw new Error(
+      `unknown provider "${providerName}" — known: ${Object.keys(all).join(', ')}. Edit live-tests/providers.json to add it`,
+    );
+  }
+  if (entry.apiKeyEnv && entry.apiKeyEnv !== 'OPENAI_API_KEY') {
+    const key = process.env[entry.apiKeyEnv];
+    if (key && !process.env['OPENAI_API_KEY']) process.env['OPENAI_API_KEY'] = key;
+  }
+  return entry;
+}
+
 /** Repo root = two levels up from this file (eden/live-tests/ -> eden/ -> repo root). */
 function repoRoot(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  return join(liveTestsDir(), '..', '..');
 }
 
 /** Parse the handful of keys we need out of run/server.properties (a flat `key=value` file). */
@@ -49,13 +118,22 @@ export function readServerProps(): ServerProps {
 }
 
 /**
- * The base config — the proven smoke settings, parameterized by the live server's port. Providers point
- * at OpenAI (the models that worked: strong gpt-4o, fast gpt-4o-mini); auth is env-only. Each scenario
- * supplies its roster and may further mutate via `configure`.
+ * The base config parameterised by the live server's port and a named LLM provider. The provider
+ * defaults to `deepseek`; each scenario may further mutate via its `configure` callback.
  */
-export function baseConfig(props: ServerProps, roster: VillagerConfig[]): EdenConfig {
+export function baseConfig(props: ServerProps, roster: VillagerConfig[], providerName: string = DEFAULT_PROVIDER): EdenConfig {
+  const all = loadProviders();
+  const entry = all[providerName];
+  if (!entry) {
+    throw new Error(
+      `unknown provider "${providerName}" — known: ${Object.keys(all).join(', ')}`,
+    );
+  }
   return {
     minecraft: { host: '127.0.0.1', port: props.mcPort, version: '1.21.1' },
+    scenario: undefined,
+    provider: undefined,
+    apiKeyEnv: entry.apiKeyEnv ?? undefined,
     villagers: roster,
     god: {
       name: 'Dieu',
@@ -71,10 +149,7 @@ export function baseConfig(props: ServerProps, roster: VillagerConfig[]): EdenCo
     },
     behavior: { drives: false },
     llm: {
-      providers: {
-        strong: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', inputTokenBudget: 48000 },
-        fast: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', inputTokenBudget: 16000 },
-      },
+      providers: { strong: entry.strong, fast: entry.fast },
       maxConcurrent: 3,
       perVillagerCooldownSeconds: 15,
     },

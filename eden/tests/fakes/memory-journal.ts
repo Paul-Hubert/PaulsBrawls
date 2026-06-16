@@ -30,12 +30,15 @@ export class MemoryJournal implements IJournal {
     let out = this.events.filter((e) => {
       if (q.kinds && q.kinds.length > 0 && !q.kinds.includes(e.kind)) return false;
       if (q.actor !== undefined && e.actor !== q.actor) return false;
+      if (q.id !== undefined && e.id !== q.id) return false;
       if (q.since !== undefined && e.at < q.since) return false;
       if (q.until !== undefined && e.at > q.until) return false;
       if (q.ref !== undefined && !Object.values(e.refs).includes(q.ref)) return false;
       return true;
     });
+    // `events` is insertion order (chronological). A limit selects the most-recent N (the tail).
     if (typeof q.limit === 'number' && q.limit > 0) out = out.slice(-Math.floor(q.limit));
+    if (q.order === 'desc') out = out.slice().reverse();
     return out.map((e) => ({ ...e }));
   }
 

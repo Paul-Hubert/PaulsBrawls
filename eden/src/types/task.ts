@@ -26,6 +26,10 @@ export interface TaskRecord {
   task: Task;
   closedAt: number;
   verdictId?: string;
+  /** Why it closed this way — set for a non-verdict close (the R65 breaker's blocked reason, carrying the
+   *  last critique). Folded into the curriculum's failed-frontier so a future proposal sees WHY a goal
+   *  failed, not just that it did (the curriculum's only memory of past deliberations is the ledger). */
+  reason?: string;
 }
 
 /** The curriculum's view of all tasks: completed, failed, and still-open. */
@@ -49,6 +53,9 @@ export interface TaskSuggestion {
   successCriteria?: string;
   assignee?: string;
   parent?: string;
+  /** Optional objective check for the follow-up — e.g. a blocked sow-task's acquire-task carries
+   *  `{item:'wheat_seeds', count:1}` so the critic judges the pivot objectively (R72). */
+  check?: ItemCheck;
 }
 
 /** A standing or one-shot order God sends a villager via its inbox. */
@@ -82,6 +89,11 @@ export interface Verdict {
   libraryAction: 'admit' | 'keep-draft' | 'quarantine' | 'archive' | 'none';
   followUp?: DirectiveSuggestion | TaskSuggestion;
   praise?: string;
+  /** R72 — the skill ran cleanly but made NO progress SOLELY because a required input resource is absent
+   *  (and can't be obtained within one run). NOT a code defect: revising is futile. The rollout stops
+   *  revising, closes the task as blocked, and (via `followUp`) the curriculum pivots to ACQUIRING the
+   *  resource. Implies success:false; the skill is not penalised (libraryAction:'none'). */
+  blocked?: boolean;
 }
 
 /** One attempt at a task: the draft→run→verdict→revise cycle, possibly spanning several drafts. */

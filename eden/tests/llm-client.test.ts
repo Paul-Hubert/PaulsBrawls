@@ -188,6 +188,54 @@ test('auth: a REMOTE provider carries Authorization: Bearer; a LOCAL one does NO
   assert.equal(seen[2], null, 'no key configured → no Authorization header even for a remote provider');
 });
 
+test('R52: toolChoice is forwarded as tool_choice in the wire body; omitting it defaults to "auto"', async () => {
+  const journal = new MemoryJournal();
+  const okBody = {
+    choices: [{ index: 0, message: { role: 'assistant', content: null, tool_calls: [{ id: 'c0', type: 'function', function: { name: 'judge', arguments: '{}' } }] }, finish_reason: 'tool_calls' }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  };
+  const seen: unknown[] = [];
+  const capFetch: typeof fetch = (_url, init) => {
+    seen.push(JSON.parse(init?.body as string)['tool_choice']);
+    return Promise.resolve(new Response(JSON.stringify(okBody), { status: 200, headers: { 'content-type': 'application/json' } }));
+  };
+  const tool: import('../src/llm/client').LlmToolDef = { type: 'function', function: { name: 'judge', description: 'j', parameters: {} } };
+  const client = new LlmClient({ providers: providers('http://127.0.0.1:1/v1'), journal, fetchImpl: capFetch });
+
+  // Explicit object tool_choice is forwarded verbatim.
+  await client.chat(ask({ tools: [tool], toolChoice: { type: 'function', function: { name: 'judge' } } }));
+  assert.deepEqual(seen[0], { type: 'function', function: { name: 'judge' } }, 'object toolChoice forwarded verbatim (R52)');
+
+  // String override forwarded verbatim.
+  await client.chat(ask({ tools: [tool], toolChoice: 'required' }));
+  assert.equal(seen[1], 'required', 'string toolChoice forwarded verbatim');
+
+  // Omitted → defaults to "auto".
+  await client.chat(ask({ tools: [tool] }));
+  assert.equal(seen[2], 'auto', 'omitting toolChoice defaults to "auto"');
+});
+
+test('R71: DeepSeek endpoints send thinking:{type:"disabled"}; other providers send no thinking field', async () => {
+  const journal = new MemoryJournal();
+  const okBody = {
+    choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  };
+  const seen: unknown[] = [];
+  const capFetch: typeof fetch = (_url, init) => {
+    seen.push(JSON.parse(init?.body as string)['thinking']);
+    return Promise.resolve(new Response(JSON.stringify(okBody), { status: 200, headers: { 'content-type': 'application/json' } }));
+  };
+
+  // DeepSeek host → thinking disabled (its hybrid models default thinking ON and 400 on a forced tool_choice).
+  await new LlmClient({ providers: providers('https://api.deepseek.com/v1'), journal, fetchImpl: capFetch, apiKey: 'sk' }).chat(ask());
+  assert.deepEqual(seen[0], { type: 'disabled' }, 'a DeepSeek endpoint disables thinking mode (R71)');
+
+  // A non-DeepSeek remote (OpenAI) must not carry the field — it would 400 on an unknown parameter.
+  await new LlmClient({ providers: providers('https://api.openai.com/v1'), journal, fetchImpl: capFetch, apiKey: 'sk' }).chat(ask());
+  assert.equal(seen[1], undefined, 'a non-DeepSeek provider sends no thinking field');
+});
+
 test('R21: HTTP 500 is an error, not a silent retry-forever', async () => {
   const journal = new MemoryJournal();
   let calls = 0;

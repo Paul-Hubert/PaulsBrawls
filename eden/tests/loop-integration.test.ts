@@ -23,7 +23,7 @@ import { EmbeddingsService } from '../src/llm/embeddings';
 import { LlmClient, ProviderRegistry } from '../src/llm/client';
 import { LlmScheduler } from '../src/llm/scheduler';
 import { ToolRegistry } from '../src/villagers/tools';
-import { ContextPackBuilder } from '../src/villagers/context-pack';
+import { ContextPackBuilder, type ContextPackInput } from '../src/villagers/context-pack';
 import { Brain } from '../src/villagers/brain';
 import { VillagerInbox } from '../src/villagers/inbox';
 import { GodService } from '../src/god/god';
@@ -31,7 +31,7 @@ import { CriticDesk } from '../src/god/critic';
 import { Curriculum } from '../src/god/curriculum';
 import { Orchestrator } from '../src/god/orchestrator';
 import { RolloutCoordinator } from '../src/main';
-import type { Bot } from '../src/types/index';
+import type { Bot, Snapshot, Task } from '../src/types/index';
 
 // A villager that fixes the skill on the FIRST try (one deliberation, one run, done).
 const GOOD = 'async function collect(bot, args, ctx) { bot.give("oak_log", 3); return { collected: 3 }; }';
@@ -51,12 +51,20 @@ interface Wiring {
   orchestrator: Orchestrator;
   god: GodService;
   library: SkillLibrary;
+  retriever: SkillRetriever;
   journal: MemoryJournal;
   llm: ScriptedLlm;
   close: () => Promise<void>;
 }
 
-async function wire(villagers: string[], turns: ScriptedTurn[]): Promise<Wiring> {
+/** R61: opt the coordinator into the skill retriever + exemplar set. Off by default so the M4-3 tests
+ *  above keep their `retrievedSkills: []` baseline (the backward-compat path). */
+interface WireOpts {
+  withRetriever?: boolean;
+  exemplars?: Array<{ name: string; code: string }>;
+}
+
+async function wire(villagers: string[], turns: ScriptedTurn[], wopts: WireOpts = {}): Promise<Wiring> {
   const dir = mkdtempSync(join(tmpdir(), 'eden-loop-'));
   const journal = new MemoryJournal();
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
@@ -85,8 +93,35 @@ async function wire(villagers: string[], turns: ScriptedTurn[]): Promise<Wiring>
   const critic = new CriticDesk({ client, scheduler, journal });
 
   const roster = new Map(villagers.map((v) => [v, { name: v, role: 'farmer', persona: `Tu es ${v}.` }]));
-  const coordinator = new RolloutCoordinator({ god, curriculum, orchestrator, critic, brain, library, inboxes, roster });
-  return { coordinator, curriculum, orchestrator, god, library, journal, llm, close: () => llm.close() };
+  const coordinator = new RolloutCoordinator({
+    god, curriculum, orchestrator, critic, brain, library, inboxes, roster,
+    ...(wopts.withRetriever ? { retriever } : {}),
+    ...(wopts.exemplars ? { exemplars: wopts.exemplars } : {}),
+  });
+  return { coordinator, curriculum, orchestrator, god, library, retriever, journal, llm, close: () => llm.close() };
+}
+
+/** All system-message contents the brain sent — the villager context-pack frame carries `## CAPACITÉS`. */
+function capabilitiesPrompts(llm: ScriptedLlm): string[] {
+  return llm.requests
+    .flatMap((r) => ((r.body?.messages ?? []) as Array<{ role: string; content?: string }>))
+    .filter((m) => m.role === 'system' && typeof m.content === 'string')
+    .map((m) => m.content as string)
+    .filter((c) => c.includes('## CAPACITÉS'));
+}
+
+/** Seed a relevant `active` skill the retriever can surface (keyword floor in tests — overlap the query). */
+function seedActiveSkill(library: SkillLibrary, name: string, summary: string, tags: string[]): void {
+  library.seedStock(
+    {
+      name, summary, tags,
+      params: { type: 'object', properties: {} },
+      returns: { type: 'object', properties: {} },
+      code: `async function ${name.replace(/-/g, '_')}(bot, args, ctx) { return {}; }`,
+      author: { kind: 'stock' },
+    },
+    'active',
+  );
 }
 
 test('★ M4-3: a proposed task flows curriculum → orchestrator → inbox → brain → rollout → critic → admit', async () => {
@@ -179,5 +214,202 @@ test('★ M4-3 (D-09 re-enqueue in the REAL path): an abandoned task is re-assig
     assert.equal(w.god.state.ledger.completed.length, 1, 'the recovered task completed');
   } finally {
     await w.close();
+  }
+});
+
+test('★ R70: a non-converging task is RESUMED across runOnce (not re-proposed) and the R65 breaker fires', async () => {
+  // The brain gives up every revision (a bare `done` — no draft, so each rollout exhausts maxRetries
+  // without converging). Before R70 the autonomous loop proposed a NEW task id every idle turn, so the
+  // breaker (keyed per id) never reached its 2nd exhausted rollout and the open list filled with
+  // duplicates (the live "bake bread ×9" grind). Now: the 1st runOnce proposes; the 2nd RESUMES the same
+  // id (no second proposal), the breaker fires, and the task closes `failed` so the village moves on.
+  // Turn budget: propose(1) + [dispatch(1) + maxRetries×bare-done(4)] per rollout × 2 = 11 turns.
+  const w = await wire(['Firmin'], [
+    { toolCalls: [{ name: 'propose_task', arguments: { goal: 'bake bread', successCriteria: 'have 1 bread', assignee: 'Firmin' } }] },
+    { toolCalls: [{ name: 'directive', arguments: { to: 'Firmin', goal: 'bake bread', reason: 'work', priority: 'normal', taskRef: '$task' } }] },
+    doneTurn('je ne sais pas'), doneTurn('je ne sais pas'), doneTurn('je ne sais pas'), doneTurn('je ne sais pas'),
+    { toolCalls: [{ name: 'directive', arguments: { to: 'Firmin', goal: 'bake bread', reason: 'retry', priority: 'normal', taskRef: '$task' } }] },
+    doneTurn('je ne sais pas'), doneTurn('je ne sais pas'), doneTurn('je ne sais pas'), doneTurn('je ne sais pas'),
+  ]);
+  try {
+    const r1 = await w.coordinator.runOnce({ trigger: 'idle', villager: 'Firmin' });
+    assert.equal(r1?.converged, false, 'first rollout exhausted without converging');
+    assert.equal(w.god.state.ledger.open.length, 1, 'the task stays open after one exhausted rollout');
+    assert.equal(w.god.state.ledger.open[0]!.currentRolloutId, undefined, 'its rollout pointer is cleared → resumable next turn');
+
+    const r2 = await w.coordinator.runOnce({ trigger: 'idle', villager: 'Firmin' });
+    assert.equal(r2?.converged, false, 'second rollout also exhausted');
+    assert.equal(r2!.taskId, r1!.taskId, 'the SAME task id was resumed, not a fresh proposal');
+
+    assert.equal(w.journal.query({ kinds: ['god.task-proposed'] }).length, 1, 'exactly one proposal — the 2nd turn RESUMED, no duplicate');
+    assert.equal(w.god.state.ledger.failed.length, 1, 'the R65 breaker closed the task failed through the autonomous loop');
+    assert.equal(w.god.state.ledger.open.length, 0, 'the village moves on (no grind on an unconvergeable wall)');
+    const closed = w.journal.query({ kinds: ['god.task-closed'] });
+    assert.equal(closed.length, 1);
+    assert.equal((closed[0]!.payload as { outcome: string }).outcome, 'failed');
+  } finally {
+    await w.close();
+  }
+});
+
+test('★ R70 (claim): runOnce RESUMES a pre-existing unassigned open task (claiming it) instead of proposing', async () => {
+  // An open task with NO assignee (e.g. an admin-injected or decomposed sub-task) must be picked up and
+  // claimed by the driving villager — not shadowed by a fresh proposal. Proves the resume-before-propose
+  // branch AND the unassigned-claim line in runOnce, through to convergence on the real path.
+  const w = await wire(['Firmin'], [
+    { toolCalls: [{ name: 'directive', arguments: { to: 'Firmin', goal: 'collect 3 oak logs', reason: 'le grenier est vide', priority: 'normal', taskRef: '$task' } }] },
+    ...convergeTurns('collect-oak-logs'),
+  ]);
+  try {
+    const t: Task = { id: 'seed-open', goal: 'collect 3 oak logs', successCriteria: 'have 3 oak_log', context: '', maxRetries: 4 };
+    w.curriculum.addTask(t); // unassigned, open, no live rollout
+
+    const out = await w.coordinator.runOnce({ trigger: 'idle', villager: 'Firmin' });
+    assert.equal(out?.converged, true, 'the resumed task converged through the real assignment path');
+    assert.equal(out!.taskId, 'seed-open', 'the SEEDED task id was run — not a freshly proposed one');
+    assert.equal(t.assignee, 'Firmin', 'the unassigned open task was claimed by the driving villager');
+    // The only god.task-proposed is the seed's own addTask (trigger 'admin') — runOnce added no idle proposal.
+    const proposed = w.journal.query({ kinds: ['god.task-proposed'] });
+    assert.equal(proposed.length, 1, 'no NEW proposal — runOnce resumed the open task');
+    assert.equal((proposed[0]!.payload as { trigger: string }).trigger, 'admin', 'the one proposal is the seed (addTask), not a curriculum idle proposal');
+    assert.equal(w.god.state.ledger.completed.length, 1, 'the resumed task closed completed');
+  } finally {
+    await w.close();
+  }
+});
+
+test('★ R72: a BLOCKED verdict stops the rollout fast, closes the task, and enqueues the acquire follow-up', async () => {
+  // Harry has no seeds: till-and-sow is correct but a permanent no-op. The critic returns blocked + a
+  // follow-up ("harvest mature wheat to obtain wheat_seeds"). The rollout must NOT grind its 4 retries
+  // revising correct code — it stops after the first verdict, closes the task blocked, and the curriculum
+  // pivots to the acquire-task. Turns: propose(1) + dispatch(1) + write/run/done(3) + blocked verdict(1).
+  const w = await wire(['Harry'], [
+    { toolCalls: [{ name: 'propose_task', arguments: { goal: 'till-and-sow', successCriteria: 'sow wheat', assignee: 'Harry' } }] },
+    { toolCalls: [{ name: 'directive', arguments: { to: 'Harry', goal: 'till-and-sow', reason: 'farm', priority: 'normal', taskRef: '$task' } }] },
+    writeTurn('till-and-sow', GOOD), runTurn('till-and-sow'), doneTurn('rien à semer — 0 graines'),
+    { toolCalls: [{ name: 'verdict', arguments: { success: false, critique: 'no wheat_seeds in inventory — cannot sow', libraryAction: 'none', blocked: true, followUp: { goal: 'Harvest mature wheat to obtain wheat_seeds', successCriteria: 'have ≥3 wheat_seeds', check: { item: 'wheat_seeds', count: 3 } } } }] },
+  ]);
+  try {
+    const out = await w.coordinator.runOnce({ trigger: 'idle', villager: 'Harry' });
+    assert.equal(out?.converged, false, 'a blocked task does not converge');
+    assert.equal(out?.blocked, true, 'the rollout reports blocked');
+    assert.equal(out?.revisions, 1, 'FAIL FAST — stopped after the first verdict, did NOT grind all 4 retries');
+
+    // The blocked task closed failed with a blocked-on-resource reason (the village moves on).
+    const closed = w.journal.query({ kinds: ['god.task-closed'] });
+    assert.equal(closed.length, 1);
+    const cp = closed[0]!.payload as { outcome: string; reason?: string };
+    assert.equal(cp.outcome, 'failed');
+    assert.match(cp.reason ?? '', /blocked-on-resource/, 'the reason marks it blocked on a resource');
+    assert.equal(w.god.state.ledger.open.some((t) => t.goal === 'till-and-sow'), false, 'the blocked task is no longer open');
+
+    // The curriculum pivoted: the acquire follow-up is now an open task (trigger critic-follow-up).
+    const acquire = w.god.state.ledger.open.find((t) => t.goal === 'Harvest mature wheat to obtain wheat_seeds');
+    assert.ok(acquire, 'the acquire follow-up was enqueued');
+    assert.deepEqual(acquire!.check, { item: 'wheat_seeds', count: 3 }, 'with the critic-supplied objective check');
+    const proposed = w.journal.query({ kinds: ['god.task-proposed'] });
+    assert.equal((proposed.at(-1)!.payload as { trigger: string; goal: string }).trigger, 'critic-follow-up', 'the follow-up is journaled as a critic follow-up');
+  } finally {
+    await w.close();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ★ R61 — the retriever is wired into both deliberation paths, so a villager acts on relevant EXISTING
+// skills (Voyager, owner #8/#10) instead of discovering the library by spamming `search_skills` (R60).
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('★ R61 (rollout path): retrieved skills are pre-loaded into the deliberation; exemplars are not duplicated', async () => {
+  const w = await wire(
+    ['Firmin'],
+    [
+      { toolCalls: [{ name: 'propose_task', arguments: { goal: 'collect 3 oak logs', successCriteria: 'have 3 oak_log', check: { item: 'oak_log', count: 3 }, assignee: 'Firmin' } }] },
+      { toolCalls: [{ name: 'directive', arguments: { to: 'Firmin', goal: 'collect 3 oak logs', reason: 'le grenier est vide', priority: 'normal', taskRef: '$task' } }] },
+      ...convergeTurns('collect-oak-logs'),
+    ],
+    { withRetriever: true, exemplars: [{ name: 'collect-blocks', code: 'async function collect_blocks(bot, args, ctx) { return {}; }' }] },
+  );
+  // A relevant non-exemplar skill (must surface as a one-liner) + an exemplar-NAMED relevant skill (injected
+  // as full code already → must NOT be duplicated into the retrieved one-liner list).
+  seedActiveSkill(w.library, 'gather-oak', 'collect oak logs from nearby trees', ['collect', 'oak', 'logs']);
+  seedActiveSkill(w.library, 'collect-blocks', 'collect oak logs in bulk', ['collect', 'oak', 'logs']);
+  try {
+    const outcome = await w.coordinator.runOnce({ trigger: 'idle', villager: 'Firmin' });
+    assert.equal(outcome?.converged, true, 'the rollout converged through the real assignment path');
+
+    const cap = capabilitiesPrompts(w.llm)[0];
+    assert.ok(cap, 'a villager deliberation prompt was assembled');
+    assert.match(cap, /exécute-les avec run_skill/, 'the capabilities section lists retrieved skills (reusable-skills header)');
+    assert.match(cap, /- gather-oak —/, 'the relevant skill is pre-loaded as a one-liner');
+    assert.doesNotMatch(cap, /- collect-blocks —/, 'an exemplar-named skill is NOT duplicated as a one-liner');
+    assert.match(cap, /\/\/ collect-blocks/, 'the exemplar is still injected as full code');
+  } finally {
+    await w.close();
+  }
+});
+
+test('★ R61 (backward-compat): a coordinator built WITHOUT a retriever pre-loads nothing', async () => {
+  const w = await wire(['Firmin'], [
+    { toolCalls: [{ name: 'propose_task', arguments: { goal: 'collect 3 oak logs', successCriteria: 'have 3 oak_log', check: { item: 'oak_log', count: 3 }, assignee: 'Firmin' } }] },
+    { toolCalls: [{ name: 'directive', arguments: { to: 'Firmin', goal: 'collect 3 oak logs', reason: 'work', priority: 'normal', taskRef: '$task' } }] },
+    ...convergeTurns('collect-oak-logs'),
+  ]); // no WireOpts → the optional retriever is absent (the M3/M4 baseline)
+  // Even a perfectly relevant live skill is NOT surfaced when the retriever is absent.
+  seedActiveSkill(w.library, 'gather-oak', 'collect oak logs from nearby trees', ['collect', 'oak', 'logs']);
+  try {
+    const outcome = await w.coordinator.runOnce({ trigger: 'idle', villager: 'Firmin' });
+    assert.equal(outcome?.converged, true);
+    const cap = capabilitiesPrompts(w.llm)[0];
+    assert.ok(cap, 'a villager deliberation prompt was assembled');
+    assert.doesNotMatch(cap, /exécute-les avec run_skill/, 'no retriever → retrievedSkills stays empty (no reusable-skills header)');
+  } finally {
+    await w.close();
+  }
+});
+
+test('★ R61 (reactive path): a reactive wake-up pre-loads retrieved skills for the trigger', async () => {
+  // Mirrors main.ts's reactive WakeupFn (fast tier, includeExemplarCode:false): the retrieved one-liners
+  // are the wake-up's MAIN skill signal. Query = the trigger(s) + hint(s) that woke the villager.
+  const dir = mkdtempSync(join(tmpdir(), 'eden-react-'));
+  const journal = new MemoryJournal();
+  const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
+  seedActiveSkill(library, 'defend-self', 'fight back against a hostile attacker', ['hurt', 'zombie', 'defend']);
+  const bot = new FakeBot({ username: 'Garde' }) as unknown as Bot;
+  const engine = new SkillEngine({
+    library, journal, grants: new AllGranted(), resolveBot: () => bot,
+    runDefaultTimeoutMs: 120_000, stallSeconds: 20, maxCallDepth: 8, autoQuarantineAfter: 5,
+  });
+  const retriever = new SkillRetriever({ library, embeddings: new EmbeddingsService({}), grants: new AllGranted() });
+  const tools = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: 400 });
+  const builder = new ContextPackBuilder({ journal });
+  const llm = await ScriptedLlm.start([doneTurn('rien à faire')]);
+  const providers = new ProviderRegistry({ strong: { baseUrl: llm.url, model: 'strong', inputTokenBudget: 48000 }, fast: { baseUrl: llm.url, model: 'fast', inputTokenBudget: 16000 } });
+  const client = new LlmClient({ providers, journal });
+  const scheduler = new LlmScheduler({ maxConcurrent: 3, perVillagerCooldownMs: 0 });
+  const brain = new Brain({ builder, tools, scheduler, client, journal });
+  const SNAP: Snapshot = { biome: 'plains', time: 1200, position: [0, 64, 0], health: 20, hunger: 20, equipment: [], inventory: [], nearbyEntities: [], nearbyBlocks: [], knownChests: [] };
+  try {
+    const triggers = ['hurt'];
+    const hints = ['un zombie attaque'];
+    const retrievedSkills = await retriever.search(`${triggers.join(' ')} ${hints.join(' ')}`.trim(), { tier: 'mortal', villager: 'Garde', k: 8 });
+    assert.ok(retrievedSkills.some((s) => s.name === 'defend-self'), 'the retriever surfaced the relevant skill for the trigger');
+
+    const input: ContextPackInput = {
+      villager: 'Garde', runner: { name: 'Garde', role: 'guard', tier: 'mortal' },
+      persona: 'Tu es Garde.', role: 'guard',
+      triggers, hint: hints.join(' / '),
+      snapshot: SNAP, runningSkill: null, directive: null, openTask: null,
+      recentEvents: [], memories: [], retrievedSkills, exemplars: [], includeExemplarCode: false,
+      toolNames: brain.toolNames(), inbox: [],
+      tier: 'fast', inputTokenBudget: 16000,
+    };
+    await brain.deliberate(input, { lane: 'combat', kind: 'reactive' });
+
+    const cap = capabilitiesPrompts(llm)[0];
+    assert.ok(cap, 'a reactive deliberation prompt was assembled');
+    assert.match(cap, /exécute-les avec run_skill/, 'the reactive pack lists retrieved skills (reusable-skills header)');
+    assert.match(cap, /- defend-self —/, 'the relevant skill for the trigger is pre-loaded');
+  } finally {
+    await llm.close();
   }
 });

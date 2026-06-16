@@ -55,11 +55,24 @@ export interface ChainStatus {
 }
 
 export function chainStatus(host: EdenHost, rolloutId: string): ChainStatus {
-  const drafts = eventsForRollout(host, rolloutId, ['skill.draft']);
   const runs = eventsForRollout(host, rolloutId, ['skill.run']);
   const verdicts = eventsForRollout(host, rolloutId, ['god.verdict']);
+  // `skill.draft` is NOT rollout-scoped: library.upsertDraft is a low-layer mutation that doesn't know
+  // the rolloutId, so a draft refs only {skill, skillVersion} (run/ticket/verdict/admit all carry
+  // rolloutId because God/the coordinator emit them). So a ref-query by rolloutId can never match a
+  // draft. Tie a draft to THIS rollout by the (skill, version) the rollout actually RAN — runs ARE
+  // rollout-scoped and carry skill/skillVersion in refs — then read that draft's author. The host is
+  // fresh per scenario, so a global skill.draft scan can't bleed across rollouts.
+  const ranVersions = new Set(runs.map((e) => `${e.refs.skill}@${e.refs.skillVersion}`));
+  const draftByVillager = host.journal
+    .query({ kinds: ['skill.draft'] })
+    .some(
+      (e) =>
+        payload<{ author: Author }>(e).author.kind === 'villager' &&
+        ranVersions.has(`${e.refs.skill}@${e.refs.skillVersion}`),
+    );
   return {
-    draftByVillager: drafts.some((e) => payload<{ author: Author }>(e).author.kind === 'villager'),
+    draftByVillager,
     runOk: runs.some((e) => payload<RunReport>(e).outcome.ok),
     ticket: eventsForRollout(host, rolloutId, ['god.ticket']).length > 0,
     verdict: verdicts.length > 0,

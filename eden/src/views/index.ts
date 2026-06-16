@@ -200,5 +200,88 @@ export class TradeLedgerView extends DerivedView<TradeLedgerEntry[]> {
   }
 }
 
-/** The four concrete views — the rebuild-stats CLI + the rebuild==live test iterate this set. */
-export const ALL_VIEWS = [SkillStatsView, CompetenceView, RelationsView, TradeLedgerView] as const;
+// ── RolloutsView (the rollout index — from the rolloutId-tagged event stream) ─
+/** One rollout as the index sees it: which task/villager/skill, how it ended, how many trials it took. */
+export interface RolloutEntry {
+  rolloutId: string;
+  taskId?: string;
+  villager?: string;
+  /** The skill drafted/judged in this rollout (latest seen). */
+  skill?: string;
+  /**
+   * Terminal state derived from the journal:
+   * - `admitted`   — a `god.verdict` with `success:true` closed it,
+   * - `abandoned`  — a `god.rollout-abandoned` (D-09 crash recovery) closed it,
+   * - `exhausted`  — its task closed `failed` (retries ran out; no per-rollout terminal event exists),
+   * - `open`       — none of the above seen yet.
+   */
+  status: 'open' | 'admitted' | 'exhausted' | 'abandoned';
+  /** Judged trials in this rollout (one `god.verdict` per trial). */
+  trials: number;
+  startedAt: number;
+  endedAt: number;
+}
+
+/**
+ * The rollout index, folded from every `refs.rolloutId`-tagged event (P4 — no rollout table exists; the
+ * journal IS the rollout). It is the navigation entry point for the website's rollout-replay view (the
+ * replay itself is the existing `GET /journal?ref=<rolloutId>` query). `exhausted` is derived from
+ * `god.task-closed{outcome:'failed'}` because retries-exhausted has no per-rollout terminal event (the
+ * coordinator just stops looping) — so a failed task's still-open rollouts are marked here, not at source.
+ */
+export class RolloutsView extends DerivedView<RolloutEntry[]> {
+  private readonly byId = new Map<string, RolloutEntry>();
+
+  fold(event: JournalEvent): void {
+    // god.task-closed carries no rolloutId; it terminates a task's still-open rollouts as `exhausted`.
+    if (event.kind === 'god.task-closed') {
+      const p = event.payload as { taskId: string; outcome: string };
+      if (p.outcome !== 'failed') return; // completed → already `admitted` by the success verdict; retired → ignore
+      for (const e of this.byId.values()) {
+        if (e.taskId === p.taskId && e.status === 'open') {
+          e.status = 'exhausted';
+          e.endedAt = Math.max(e.endedAt, event.at);
+        }
+      }
+      return;
+    }
+
+    const rid = event.refs.rolloutId;
+    if (rid === undefined) return; // not a rollout event (e.g. a subscription-fired skill run)
+
+    const e: RolloutEntry = this.byId.get(rid) ?? { rolloutId: rid, status: 'open', trials: 0, startedAt: event.at, endedAt: event.at };
+    e.startedAt = Math.min(e.startedAt, event.at);
+    e.endedAt = Math.max(e.endedAt, event.at);
+    if (event.refs.taskId !== undefined) e.taskId = event.refs.taskId;
+    if (event.refs.skill !== undefined) e.skill = event.refs.skill;
+    // skill.run's RunReport carries the canonical villager + skill; other rollout events may not.
+    if (event.kind === 'skill.run') {
+      const r = event.payload as RunReport;
+      e.villager = r.villager;
+      e.skill = r.skill;
+    } else {
+      const villager = (event.payload as { villager?: unknown }).villager;
+      if (typeof villager === 'string') e.villager = villager;
+    }
+    if (event.kind === 'god.verdict') {
+      e.trials += 1;
+      if ((event.payload as { success?: boolean }).success && e.status === 'open') e.status = 'admitted';
+    } else if (event.kind === 'god.rollout-abandoned' && e.status === 'open') {
+      e.status = 'abandoned';
+    }
+    this.byId.set(rid, e);
+  }
+
+  value(): RolloutEntry[] {
+    return [...this.byId.values()]
+      .map((e) => ({ ...e }))
+      .sort((a, b) => a.startedAt - b.startedAt || (a.rolloutId < b.rolloutId ? -1 : a.rolloutId > b.rolloutId ? 1 : 0));
+  }
+
+  protected reset(): void {
+    this.byId.clear();
+  }
+}
+
+/** The five concrete views — the rebuild-stats CLI + the rebuild==live test iterate this set. */
+export const ALL_VIEWS = [SkillStatsView, CompetenceView, RelationsView, TradeLedgerView, RolloutsView] as const;

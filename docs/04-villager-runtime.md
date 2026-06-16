@@ -105,6 +105,28 @@ Role defaults seed each villager at first boot (guard: hostile-spotted →
 everyone: hurt → skill `flee-to-safety`, player-chat within 8 → deliberate, inbox →
 deliberate). Defaults are config data (`roles.json`), not code.
 
+### Decision D-15: a role reflex OVERRIDES the everyone reflex on the same event
+
+`everyone` says "hurt → flee-to-safety," but a **guard** must FIGHT when hit, not
+flee — and the zero-token reflex path is exactly where that decision must live
+(deferring to an LLM costs ~16 s, longer than a guard survives under fire; see
+[R50](07-hard-won-lessons.md#reactivity)). So `seedRoleDefaults` treats a role
+block as the **more specific policy**: a role spec on event *E* REPLACES every
+`everyone` spec on *E* rather than stacking on top of it. The guard's
+`hurt → defend-self` (a stock skill that finds the nearest hostile and composes
+`kill-mob`, robust to a missing `$event.byEntity`) thus wins over the everyone flee,
+and a guard never both flees and fights the same hit.
+
+Two alternatives were rejected: making the guard reflex `kind:'deliberate'` (a
+different handler kind, so the old same-kind dedup wouldn't drop it) reintroduces
+the LLM latency the reflex exists to avoid; and keeping the old "skip the role spec
+that duplicates an everyone spec" dedup is simply backwards for an override (it kept
+the *general* rule and discarded the *specific* one). Per-event override is the
+least-surprising semantics and needs no new mechanism — just the right dedup key
+(`on`, not `on`+`handler.kind`). Re-entry is still bounded the normal way: the guard
+reflex carries `notWhileRunning: ['defend-self']` (so a hit mid-fight doesn't restart
+it) plus a short `cooldownMs` backstop.
+
 ## The brain
 
 One deliberation = one LLM conversation: context pack → assistant turns with tool
