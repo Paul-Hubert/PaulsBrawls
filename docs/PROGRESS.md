@@ -3,6 +3,304 @@
 One dated section per session: what was done, decisions taken, what's next,
 surprises. Newest first.
 
+## 2026-07-04 — Build: real-mineflayer CI **B1 + B2 landed** (docs/26)
+- **B1 — CI server lifecycle** (`eden/live-tests/server/`: [properties-overlay.ts](../eden/live-tests/server/properties-overlay.ts),
+  [reaper.ts](../eden/live-tests/server/reaper.ts), [readiness.ts](../eden/live-tests/server/readiness.ts),
+  [lifecycle.ts](../eden/live-tests/server/lifecycle.ts), [lifecycle-smoke.ts](../eden/live-tests/server/lifecycle-smoke.ts)),
+  commit `4871b79`. The D-17 overlay (stamped backup of the *working-tree* file, full rewrite,
+  `minecraft\:flat` colon-escaped, fixed seed 6072026, peaceful), port-ownership reaper (PID dedupe,
+  structural 25565 refusal, never the daemon), RCON connect-with-backoff + `:8767` mod probe +
+  gamerule-readback + flat-block probe ready-gate, port-owner teardown + restore. `run/mods/` pinned.
+  `npm run lifecycle-smoke`; `skill-test` is a stub onto it until B4. 13 per-push unit tests
+  (overlay writer + reaper logic).
+- **B1 DoD evidence — all three drills GREEN on the real box**: double-run (ready in 23 s / 18 s,
+  `CiSmokeRunner` visible to RCON `list` both runs, dev `server.properties` byte-identical after);
+  poisoned-state (orphan JVM owning 25599+25575+8767 + leftover `.ci-backup` → healed, reaped by one
+  deduped PID kill, clean boot); properties restored + no backup left after every run. Evidence dirs:
+  `eden/live-tests/.runs/lifecycle-smoke-*-2026-07-04T07-3*`.
+- **R82 filed** (docs/07, same commit): spawn the gradle wrapper by ABSOLUTE path —
+  `cmd /c gradlew.bat` with a correct cwd still fails when Windows' `NoDefaultCurrentDirectoryInExePath`
+  hardening is set (it is, on this box); without the ready-gate's gradle-exit fast-fail this presents
+  as a 10-minute RCON timeout.
+- **Pulled forward from B4** (sanctioned `src/` change, additive): `BotPool.avatarName` is now
+  optional — no avatar member when absent (D-19 God-free pool). `main.ts` unaffected.
+- **B2 — RecordingBot split** ([recording-bot.ts](../eden/tests/fakes/recording-bot.ts) +
+  [recording-bot.test.ts](../eden/tests/recording-bot.test.ts), 14 seam tests), commit `19f724e`.
+  Keeps recorders / fault seams / event sourcing / live-mutable inventory + seeded block map (P-8);
+  INERT `findBlocks`/`findBlock` (never the R76 palette), `openContainer` named refusal,
+  `activateBlock` records-only (the R55 *knob* survives); the `Bot`-seam compile proof moved onto it.
+  **Ground-truth surprise:** the 13 target files (10 stay + `skills-engine` + `bots-hardening`±cov)
+  touch ONLY kept seams — re-pointed wholesale, no in-file split surgery; the 7 B6-deferred files
+  (anchors/helpers ±cov, exemplars, god-body, fakes) still import `fake-bot` as planned. FakeBot
+  untouched (per plan — deletion is B7).
+- **B2 DoD evidence**: `npm run check` green — 639 tests (was 625), 0 fail; R4-order / R66 / stall /
+  W-canary / R55-fault-seam / D1 asserts all serverless on RecordingBot; import-path grep shows only
+  the 7 planned files + `fakes.test.ts` on `fake-bot`; `src/` LINE coverage byte-identical to the
+  pre-B2 baseline (two BRANCH rows strictly up — curriculum 83.97→84.62, library 87.90→88.62 — the
+  inert `findBlock` steers gate/loop through miss branches FakeBot's seeded world never hit; stable
+  across repeat runs).
+- Tree caveat (declared in both commit messages): the branch carried a large pre-existing uncommitted
+  backlog; the B1/B2 commits sweep the full working-tree content of the files they touch (pool.ts's
+  R16 `onMissing` hunk, docs/07's R73–R81 entries, `bots-signals.test.ts` never added at M5, prior
+  edits inside the re-pointed test files). The owner's staged sqlite-vec files were kept OUT and
+  re-staged untouched.
+- Next: **B3a** (the `flip-gate` core + O-4 docs/22 amendment), then B3b ∥ B3c per docs/26 §2.
+
+## 2026-07-03 — Plan: real-mineflayer CI, the ordered build (doc 26) — DOCS ONLY
+- Done: wrote **[docs/26-realbot-ci-implementation-plan.md](26-realbot-ci-implementation-plan.md)** — the
+  finalized, stepwise build plan (B1–B7 + DAG) that delivers the [docs/24](24-realbot-ci-final-product.md)
+  end state. Supersedes the CI-0…CI-6 DAG in docs/23 §8/§11.2. No code changed.
+- Ordering honored by construction: **D-16 gate + stock paired tests (B3a/c) before the per-skill
+  catalogue (B5)**; **RecordingBot (B2) before deleting FakeBot's world-model half (B7)**; the logic
+  tier never regresses.
+- Open questions of 24 §10 resolved in-plan: readiness = RCON `list` + `:8767` mod probe + gamerule
+  readback; reset = properties overlay + disposable flat fixed-seed `eden-ci` world wiped per run
+  (**D-17**) + fresh `.eden-data`; catalogue = hand-authored `SkillCase` registry with a per-push
+  completeness gate (**D-18**, resolves Q7); ephemeral skills = the D-16 event-trace oracle; cadence =
+  merge + label + nightly + dispatch with a `concurrency` group.
+- Drift re-derived vs docs 23/24: 20 FakeBot importer files confirmed but the split is 6 port + 2 SPLIT
+  (`skills-engine`, `bots-hardening±cov`) + 10 stay + 1 delete; 47 (not ~46) pure-logic files;
+  `EdenHost` exposes no engine/pool → the skill-tier harness composes its own minimal stack over
+  `BotPool` (two-member roster incl. the avatar); `npm test` globs `tests/**` so the skill tier lives
+  under `live-tests/skill-tier/`; ~31 mortal + ~9 divine stock skills (exact count owned by the
+  completeness gate).
+- Owner flags raised: **O-1** self-hosted runner now vs `workflow_dispatch`-only; **O-2** the
+  unresourced-world contract (24 §3 "no throw" vs today's S10 named-error stock skills — recommended:
+  per-case `unresourcedExpect`); **O-3** the **D-16 label collision** (docs/04/05/07 use D-16 for
+  embed-at-write memory vectors; docs/22 reuses it for the god-free loop — recommend relabeling the
+  older one).
+- Reviewed by a **5-Opus-subagent panel** (infra · test estate · determinism · architecture/D-16 · spec
+  compliance) same day — findings appended as **docs/26 §9** (P-1…P-35): 3 critical (avatar must be
+  spectator-parked per case; the per-case reset must reset the *bot*, not just the arena; the skill job's
+  path filter misses `src/**`), plus a real D-16 gap — observer/movement skills can never satisfy Sδ≠∅ →
+  new owner decision **O-4** (a third `oracle:'return'` class + Sδ name-counts, amends docs/22). The DAG
+  survived review intact; revisions are additive. Also: runtime state reset — `eden/.eden-data` archived
+  to `.eden-data.bak-2026-07-03` (journal + library + bot memories); next boot reseeds stock clean.
+- **Rev 2 (same day, owner-directed):** all 35 panel findings folded into the step bodies (§9 is now a
+  disposition ledger). Owner directives: **D-19 — the CI is God-free end to end** (no avatar bot, no
+  divine cases, no op'd bot; supersedes the avatar-parking fix — P-1 dissolved, not mitigated; needs
+  one additive `src/` change: `BotPool` avatar-optional) and the full **per-case bot reset** (P-2) in
+  the harness protocol. Owner delegation resolved **O-2** (unresourced contract = per-case
+  `unresourcedExpect`, default `named-error` — 24 §3's literal "no throw" amended) and **O-4**
+  (`oracle:'return'` class exempt from Sδ≠∅ + Sδ `nearbyBlocks` name-counts — amends docs/22 §3.5/§6,
+  ships with B3a). Notable folds: `flip-gate` naming (the M3-GATE `gate.test.ts` is *rewired* by B3b),
+  `Provenance.source` discriminator + `RolloutsView` folding `skill.self-verdict`, B7 trigger paths
+  gain `src/**`, the B5 flake bar (5 clean consecutive greens before merge-blocking), counts corrected
+  to 66/46. D-19 removes God from **CI only** — the in-world God at runtime is untouched (docs/22
+  still stands).
+- Still owner-open: **O-1** (self-hosted runner now vs dispatch-only) and **O-3** (the D-16 label
+  collision).
+- Wrote **[docs/27-realbot-ci-build-prompt.md](27-realbot-ci-build-prompt.md)** — the reusable kickoff
+  prompt for the build sessions (locates build state from this file, locked decisions, per-step DoD
+  discipline, the three sanctioned out-of-`eden/` exceptions, mapped landmines).
+- Next: paste docs/27 into a fresh session; it starts at B1 ∥ B2 ∥ B3a per docs/26 §2; new findings
+  file as **R82+**.
+
+## 2026-07-01 — Design: split-FakeBot / real-mineflayer CI (no-LLM skill gate) — DOCS ONLY
+- Done: designed the CI pivot the owner asked for ("eradicate FakeBot, test on a live server") and
+  captured it as **[docs/23-real-mineflayer-ci-plan.md](23-real-mineflayer-ci-plan.md)**, reviewed by a
+  **5-subagent panel** (CI/infra · coverage · determinism · local-model · architecture/D-16). No code changed.
+- Ground truth established: **20** test files import `fakes/fake-bot` (not 21 — `village-launch` has its own
+  local fake); only ~8 exercise a real mineflayer API; the other ~12 + ~46 non-bot files are pure logic. The
+  live harness ([live-tests/](../eden/live-tests/)) already does RCON-arena → real host → real bots → RCON/journal
+  asserts, but ASSUMES a running server and defaults to the paid `deepseek` provider.
+- Owner decisions (via question tool):
+  - **Q1 = RecordingBot split** (NOT wholesale delete): keep a slim RecordingBot (calls[]/fault-injection
+    seams) as fast T1 tests for the ~8 asserts a real server can't reproduce (R4 abort order, R66 kick-storm
+    identity, stall/W-CRIT-1, R55 read-after-write, D1 registry miss); delete FakeBot's world-model half; port
+    the ~8 API-surface files to real-bot T2.
+  - **Q6 = NO LLM in CI** (refines the literal "with LLM calls"): CI runs **every skill + its D-16 paired test
+    on a live server without a villager LLM** (T2, deterministic) + a no-server pure-logic tier (T1). The
+    real-LLM authoring suite is **de-scoped from CI** to a manual `npm run live-test` tool. This dissolves the
+    panel's entire LLM-reliability risk class (local-model capability, forced tool-calling, temp-0 determinism,
+    32k-vs-48k token budget). **T2 = the D-16 gate exercised without the authoring model** — its highest-leverage
+    outcome, only possible because of D-16.
+- Panel findings folded in (non-LLM): CI-0 server lifecycle = reaper + world-wipe + fresh `.eden-data` +
+  **RCON-`list`-ready poll** (the harness only polls bot-connected today); `randomTickSpeed 0` + peaceful
+  baseline; split-assert (hard RCON oracle vs soft `system.error` — the `errs.length===0` clause is a flake
+  amplifier); **`temperature`/`seed` are NOT in `llm/client.ts`** (only matters for the manual suite now);
+  gradle **`copyToMods` is hardcoded to the PRODUCTION `PaulsBrawlsVanilla/mods`** → CI must build with
+  `-Pmods_folder=<ci-server>/mods` or it hot-swaps the live jar; T2 needs its **own `T2Case[]` catalogue**
+  (not the `Scenario` interface) reusing `BotPool`; `depcruise` scopes `src/` only (tests aren't graphed);
+  **land the D-16 gate BEFORE the skill cases** so they assert the flip oracle, not `god.verdict`.
+- CI shape: **T1 blocks per-push** (GitHub-hosted, seconds); **T2 merge-gated** (real MC server, no GPU
+  since no LLM). DAG CI-0…CI-6 in [docs/23 §8](23-real-mineflayer-ci-plan.md).
+- **Q2 RESOLVED = the auto-opened `run/` dev server** (`./gradlew runServer`): it IS the Fabric mod's own
+  server, so settlement `:8767`/`coin`/op-on-join come free with **no jar build/copy** (avoids the
+  copyToMods production-jar hazard); dev port, never production.
+- **[docs/24-realbot-ci-final-product.md](24-realbot-ci-final-product.md)** written — the CLEAN
+  final-product spec + full changelist (created/changed/deleted/prereq + acceptance criteria), **no
+  implementation detail**, to seed a fresh implementation-planning session. Sharpened the testing model:
+  each skill tested in TWO worlds (RESOURCED → paired test flips to `worked` = capability; UNRESOURCED →
+  stays `nothing-to-do`, no throw/no false success = robustness/anti-fraud) + truth-table honesty checks
+  — validates BOTH skills AND their paired tests, no LLM.
+- Next: a fresh session turns docs/24 into an implementation plan. Prereq: land the D-16 gate + stock
+  paired tests first (the skill tier asserts the flip oracle). Open (for that plan): server
+  readiness/reset, per-skill world setup, skill enumeration + completeness gate.
+
+## 2026-07-01 — Design: the god-free, self-refining skill loop (paired-test admission) — DOCS ONLY
+- Done: a cooperative design session pressure-tested the "remove God from the skill-refinement loop"
+  direction (seed: memory note `eden-godfree-refinement-direction`, 2026-06-24) across four failure axes
+  and captured the converged design as **[docs/22-godfree-skill-loop.md](22-godfree-skill-loop.md)**. **No
+  behavior changed** — docs lead (S8); a later session pairs docs + code.
+- Decisions (owner, via question tool):
+  - **D-16 — the doctrine reversal.** God's **critic** leaves the skill-admission path; admission is
+    decided by a mechanical, LLM-free **paired-test flip gate**. God's **curriculum** (task selection,
+    decomposition, R65 give-up, R72 blocked-pivot incl. a small STRONG follow-up call) and **orchestrator**
+    are KEPT; the in-world God (persona/avatar/divine skills) is untouched. Reverses owner #1 / D-06 **for
+    the library only**. Recorded in [22 §1](22-godfree-skill-loop.md).
+  - **The gate = a composed oracle** (who-tests-the-test answer): ADMIT iff `validTest && Sδ≠∅ &&
+    postV=='worked' && (task.check ? checkSatisfied : true)`. Engine per-run delta = fraud floor, paired
+    test = goal shape, `task.check` = mission anchor. Full truth table in [22 §3.5](22-godfree-skill-loop.md).
+  - **Test purity = convention, not enforced** — safe because `Sδ` is bracketed around the skill alone;
+    `Tδ` is measured + journaled for audit (S9), never gated.
+  - **Self-debug tier = STRONG** (no FAST tier / no escalation ladder); the throughput win is exactly
+    "delete the per-revision critic" (~halves strong calls on the converging path, frees the D-13 lane).
+  - **Continuity = discretionary `reflect` → lesson** (≤2/session, skill-tagged) + the never-trimmed
+    density payload; reflect-timing is load-bearing.
+  - **Blocked follow-up = tiny STRONG curriculum call** on the (rare) blocked path.
+  - **Probation = trial-only flip; production runs graduate on `outcome.ok`** (real work carries no test tax).
+  - **Test supervision = same as skills** (no dedicated settle) — relies on the skill's R55 discipline (R79).
+  - **Permit released during bot work, re-acquired rollout-immune** (R81) — the subtlest build item.
+  - **Composition resolves to highest ACTIVE version** (R80, fixes a current cliff); regression protection
+    is passive (a broken composer fails its own paired test next run).
+  - **First milestone = A · Solo self-sufficiency** (empty start → wood→tools→farm→bread→eat→stock a chest,
+    zero God; PASS via the journal + the D2-proof chest-delta test). B (two-role trade) and C (sustained
+    society) are the trajectory. [22 §8](22-godfree-skill-loop.md).
+- Landmines filed: **R78** (relative/precondition-framed test predicate, not absolute), **R79** (no
+  gate-level settle → relies on skill R55), **R80** (compose = highest-active, the cliff fix), **R81**
+  (rollout-immune permit re-acquire). All design-time acceptance criteria, to be pinned when built.
+- Corrections surfaced vs the seed: `entityDead`/`playerCollect` are NOT in `STALL_EVENTS` today (the
+  event-trace needs new subscriptions); probation graduation currently counts ANY clean root run;
+  `ProbationError` blocks composition of a re-authored skill (R80).
+- Next: an implementation session (pairs docs + code, S8) — the flip-gate judge (layer 2), `submit_skill` +
+  `reflect` tools (layer 3), `ctx.events` trace + `skill.self-verdict` kind (layer 1), `readComposable`,
+  paired tests on the stock skills, and the permit-release scheduler change. Milestone A is the live-test target.
+
+## 2026-06-20 — Four verified-defect fixes (combat path / critic snapshot / retention / plugin visibility)
+- Done: fixed four verified defects, `npm run check` green (612 tests / 610 pass / 0 fail / 2 pre-existing
+  skips; lint + tsc + 0 depcruise violations).
+  - **FIX 1 (High) — combat skills were DEAD in CI.** `kill-mob` + `shoot-mob`
+    (`eden/src/skills/exemplars/index.ts`) computed distance with Vec3 `.distanceTo`, which THREW against
+    FakeBot's plain-object `entity.position`, so the whole combat path never executed in any test. Switched
+    both to `Math.hypot(...)` over `.x/.y/.z` (the project convention every other stock skill follows).
+    Taught the fake the combat shape: `pvp.attack(target)` (flips `target.isValid` false — the kill loop's
+    terminator, mirroring mineflayer-pvp's death-packet flip), seeded entities default `isValid:true`, and a
+    new `FakeEntity` interface (`name`/`username`/`type`/`isValid`/`height`/`id`). Regression tests
+    (`tests/skills-exemplars.test.ts`): *combat: kill-mob attacks the nearest matching hostile and kills it*,
+    *…errors (does not throw) when no hostile in range*, *defend-self … composes kill-mob to the kill*,
+    *shoot-mob compiles + runs … errors clearly when no bow is held* (shoot-mob's full bow/lookAt firing is
+    not modeled by the fake, so its EXECUTING test is scoped to the no-bow guard — its distance line is now
+    `Math.hypot`-consistent and it parses/runs).
+  - **FIX 2 (Med) — critic snapshot omitted players/villagers.** `readNearbyEntities`
+    (`eden/src/skills/engine.ts`) skipped any entity without `.name`, but real mineflayer PLAYER entities
+    expose `username`/`type`, so every player/villager was silently dropped from the critic's
+    `nearbyEntities`. Now labels `name ?? username ?? type` (mirrors `bots/signals.ts:171`); widened the
+    `Bot.entities` value type in `eden/src/types/bot.ts` with optional `username?`/`type?`. Regression test
+    (`tests/skills-engine.test.ts`): *snapshot: nearbyEntities labels a username-only PLAYER entity*.
+  - **FIX 3 (Med) — `journal.retentionDays` parsed but never consumed (unbounded journal).** Added
+    `Journal.prune(retentionDays, now=Date.now())` (`eden/src/journal/journal.ts`) that deletes rows older
+    than the cutoff for ONLY `PRUNABLE_KINDS = ['vitals','system.loop-lag']` — the high-volume OBSERVABILITY
+    kinds verified against `views/index.ts` to be folded by NO view, so the rebuild==live invariant holds.
+    Wired into `eden/src/main.ts`: one prune at boot + a daily `setInterval(...).unref()` on a real boot,
+    cleared in `stop()`. Regression test (`tests/journal.test.ts`): *prune deletes old prunable rows, keeps
+    durable + recent rows, and leaves a view fold unchanged* (asserts a `SkillStatsView` fold is identical
+    before/after prune; retention disabled when `retentionDays<=0`).
+  - **FIX 4 (Med) — load-bearing plugins not asserted present after load.** `loadPlugins`
+    (`eden/src/bots/plugins.ts`) caught failed `loadPlugin` and only warned (R16). Now, after the load loop,
+    it checks `bot.pvp`/`bot.armorManager`/`bot.collectBlock` attached and calls a new injected
+    `onMissing(name)` for each absent one; `pool.ts` wires `onMissing` to a journal `system.error` naming the
+    plugin (S10), so the absence is VISIBLE — the bot still comes online (R16 posture unchanged). Added a
+    FakeBot `dropLoadBearingPlugin(name)` test helper. Regression tests: *loadPlugins calls onMissing for a
+    load-bearing plugin that did not attach* + *reports NOTHING when every one attached*
+    (`tests/bots-hardening.test.ts`), and *a spawned bot missing a load-bearing plugin journals a named
+    system.error* (`tests/bots-pool.test.ts`).
+- Decisions (D#/R#): no new D#/R# — these are corrections to existing mechanisms (R44 vitals/lag retention,
+  R16 plugin posture, HIGH-1 snapshot, the FakeBot reality-modeling discipline). The retention scope is
+  pinned in a code comment + `PRUNABLE_KINDS` constant (the fold-parity constraint is load-bearing).
+- Next: unchanged — formal smoke/parity sign-off + v1 decommission (docs/17) remain the open step.
+
+## 2026-06-16 — Deep review + remediation (multi-agent)
+- Done: ran a deep, multi-agent review of Eden (8 parallel reviewers + an adversarial-verify pass);
+  findings in `eden/REVIEW-PLAN.md` + `eden/REVIEW-FINDINGS.md` (4 Critical / 6 High / 14 Med / 10 Low).
+  Then fixed **20** of them via 4 disjoint-file fix agents + 3 owner-directed feature fixes, `npm run
+  check` green at every step (600 tests, 598 pass, 2 pre-existing skips). Fixed: HIGH-1 `captureSnapshot`
+  now populates time/entities/blocks/equipment (critic no longer judges an empty world); HIGH-2 bounded
+  RunReport rendering + over-budget journal warning; HIGH-3 **bridged the dead reactivity signals**
+  (time/chat/playerCollect/entity-spotted poll/inbox now drive reflexes — `night-falls`/`player-chat`/
+  `inbox` were inert); HIGH-4 **wired the social subsystem live** (new `say`/`propose_trade` villager
+  tools, `Conversation`+`TradeService` constructed per-villager, R69 social-memory/relations closed,
+  settlement failure surfaced not swallowed); HIGH-6 documented the admin-API loopback-trust posture;
+  MED-1 recursive arg/return validation; MED-2a admit↔success critic rail; MED-2b corrected the probation
+  "re-judged" claim; MED-4 `verifyHashes()` now called at boot; MED-5 idempotent stock-skill seeding (no
+  more per-boot version growth — the 173→27 symptom); MED-6 corrected the QA-cache "persisted" claim;
+  MED-8 failed LLM calls now journal `llm.call`; MED-9 `brain.done` guaranteed in `finally`; MED-12
+  `journal.retentionDays` wired; MED-14 orchestrator forces `tool_choice` for task-driven dispatch; LOW-1
+  `?ref=` query hits the json_extract indexes; LOW-2/3 admin quarantine existence-check + body cap; LOW-5
+  named-file JSON parse errors; LOW-6 dead param; LOW-7 `pool.start()` rejections logged; LOW-8
+  `subscription.enabled/disabled` journaled (2 new kinds). Also CRIT-3 (env-scrub) — see below.
+- Decisions (D#/R# if any): security posture (CRIT-2/3/4) made explicit. **CRIT-3 fixed** — the API key is
+  scrubbed from `process.env` after the LLM client captures it (real-boot-gated), closing the
+  `globalThis.process.env.OPENAI_API_KEY` exfil path. **CRIT-2 partially fixed (R77)** — `guardHostKillers`
+  (main.ts, real-boot-gated) neutralizes `process.exit/reallyExit/abort/kill` on the REAL process object, so
+  `globalThis.process.exit()` / `require('process').abort()` / `new Function('return process')().kill()` are
+  all blocked (journal + `SkillForbiddenError`, host survives); the host never calls these so it's free.
+  Residual: OS-kill via `import('node:child_process')` / fs writes remain — full closure needs worker
+  isolation. **Still OPEN** (need design/owner): CRIT-1 (recursion/microtask spins wedge the host —
+  loop-budget canary only covers loop bodies, the R75 lesson was written but never built; exploration prompt
+  exists), CRIT-4 (chat→`write_skill` RCE — HIGH-3/HIGH-4 widened this surface; background task chip spawned
+  for the data-only/worker-isolate design pass). New journal kinds: `subscription.enabled`, `subscription.disabled`.
+- Next: explore + fix CRIT-1 (function-body loop-budget injection and/or worker isolation); decide CRIT-4
+  mitigation before exposing villagers to untrusted players; the website domain map needs the two new
+  subscription kinds for colouring (graceful-degrades today).
+- Surprises: the codebase's biggest risks were exactly where its own posture predicted — a porous skill
+  sandbox documented as "by design" but never cost out, and several mechanisms fully *described* but only
+  partially *wired* (reactivity, social, token budget, probation re-judge, QA persistence, combineDesks).
+  One review seed-hypothesis was refuted in verification: the journal write path is loud, not swallowed.
+
+## 2026-06-16 — D-16/R74: embed-at-write memory vectors on the eden.db spine (sqlite-vec), Phase 1
+- The defect (docs/21): `VillagerMemory.retrieve()` re-embedded the ENTIRE window+archive (≤2200 entries)
+  through the in-process ONNX model on EVERY recall — measured ~7.3 s wall-clock per recall on a full
+  pool, the result discarded each time; now on every rollout-revision turn ([main.ts](../eden/src/main.ts))
+  and reactive wake-up. The read path scaled O(pool) inference and induced `system.loop-lag` (D-07).
+- **Step 0 (research + spike, docs/21):** parallel research lanes on `sqlite-vec`/`better-sqlite3`, then a
+  throwaway local spike on THIS box (Windows + Node 24.15 + better-sqlite3 12.10). Verdict **PASS** —
+  `sqlite-vec@0.1.9`'s prebuilt `sqlite-vec-windows-x64` DLL loads and `vec_version()` returns (no silent
+  ABI mismatch); `float[384] distance_metric=cosine`, partition-key KNN, and journal-table coexistence all
+  work. So the owner's recommended path (native `sqlite-vec`, not Plan B) was taken.
+- **D-16 (owner decision recorded here): embedding vectors live in the spine via embed-at-write.** Each
+  `MemoryEntry` gets a stable `id` (ulid); its vector is computed ONCE at `remember()` (off the hot path,
+  the summarizer pattern) and stored in a `sqlite-vec` `vec0` table in the existing `eden.db` on the SAME
+  `better-sqlite3` connection as the journal (distinct tables → S2 intact; the "one spine, one connection"
+  refinement — `Journal` now accepts a `Database | string`). Recall embeds ONLY the query (1 inference)
+  then KNNs the stored vectors in C via the unchanged 0.5/0.25/0.25 blend over the FULL pool (no cosine
+  prefilter — docs/21 §6). **~7.3 s → ~4 ms.** float32 (not int8) for v0. Plan B (a plain Float32 BLOB +
+  JS brute force) is the documented fallback if a future platform can't load the extension, but is NOT
+  implemented because Step 0 passed (S3/S7).
+- New layer-1 module [`vectors/store.ts`](../eden/src/vectors/store.ts) (`IVectorStore` + `SqliteVecStore`),
+  cruiser rule `vectors-only-types` (imports better-sqlite3 + sqlite-vec + types only — reports failures
+  through an injected `onWarn`, not `logger/`). Gated to a real boot (`spawnBots`) so CI never loads the
+  native dep; `journal.vectorStore: "sqlite-vec" | "off"` is the escape hatch.
+- **R74** filed: a pre-1.0 native extension — pin the exact version, VERIFY `vec_version()` after load
+  (not just "no throw"), upsert = DELETE-then-INSERT (vec0 won't `INSERT OR REPLACE` a text PK), KNN
+  `ORDER BY distance` ASC only, and degrade to the keyword floor (R38) on any failure — never crash.
+- Scope: **Phase 1 (memory) only** — the defect + the proof. Phases 2 (`SkillRetriever` persistence) and
+  3 (curriculum QA-cache) are the earned 2nd/3rd consumers, deferred as independently-shippable follow-ons.
+- Tests: `tests/villagers-memory-vectors.test.ts` (8 §8 proofs incl. the headline "recall embeds only the
+  query"), `tests/vectors-store.test.ts` (real round-trip, gated `EDEN_TEST_SQLITE_VEC=1`), `tests/fakes/
+  vector-store.ts`, plus the config golden + the existing `max(cosine,keyword)` test updated to exercise
+  the store. A real-correctness bug the tests caught: deferred upsert vs sync trim-delete races → orphan
+  vectors; fixed by routing trim deletes through the same FIFO `pendingVectors` chain.
+- Docs (S8): docs/04 §Memory + docs/05 §Derived-state updated to embed-at-write; eden.example.json key.
+- **State of `npm run check`:** all of THIS work is green (lint + tsc + depcruise 0-violation + the new/
+  updated tests pass). ONE pre-existing failure remains and is NOT from this change — `R73: write_skill
+  rejects a malformed params schema` in `tests/villagers-tools.test.ts`: that test is NOT in HEAD (it's an
+  uncommitted, mid-implementation feature) and its target files (`skills/engine.ts`, `types/skill.ts`,
+  `villagers/tools.ts`) are working-tree-`M`, none touched here. (The working tree also had a smart-quote
+  syntax error in `tools.ts:103` that was breaking typecheck globally at session start; it was corrected
+  externally mid-session.) Finishing R73 is the owner's in-progress work, intentionally left untouched.
+- Next: optionally Phases 2/3 (skills + QA migration); resolve the unrelated R73 in-progress feature.
+
 ## 2026-06-16 — R66: fix the /villagers restart duplicate-login kick storm
 - Symptom (from the live admin journal): a single bot (`Harry`) connect/kick-looped at ~1 Hz,
   reaching `system.bot-connected` every cycle BEFORE the kick, reason logged `kicked: [object Object]`.
@@ -1502,6 +1800,86 @@ surprises. Newest first.
 - Surprises: the memory module's unit tests were all green the whole time — the bug was 100% in the
   composition root (an option that existed on the type but never appeared at the `new ToolRegistry({…})` call
   site). Green module tests ≠ wired.
+
+## 2026-06-16 — findBlock palette pre-check: the 22-version `till-and-sow` finder bug (R76)
+- Done: root-caused why `till-and-sow` churned 22 versions and always reported an empty field beside open
+  grass. The bug is a real-mineflayer-only semantics of `bot.findBlock`/`findBlocks`: before scanning a chunk
+  section it runs the `matching` function against the section's PALETTE as synthetic `Block.fromStateId`
+  blocks (`position = null`, no neighbours, `name` set). Every churned finder did its "air directly above"
+  test INSIDE the matcher (`if (!b.position) return false; bot.blockAt(above)…`), so the matcher returned
+  false for every synthetic palette entry ⇒ every section skipped ⇒ `findBlock` null. The air-above check was
+  a red herring (the matcher bailed at `!b.position` first); `explore-until`'s name-only matcher found grass
+  at the same spot, which is the tell.
+  - Seeded a stock primitive **`find-tillable`** ([eden/src/skills/exemplars/index.ts](../eden/src/skills/exemplars/index.ts)):
+    a NAME-ONLY `findBlocks` matcher (palette-safe) → post-filter for air-above + `exclude` + an OPTIONAL
+    water-proximity preference that never gates. Returns a nearest-first LIST of spots so the composer tills
+    each without re-searching (and without a position-keyed skip-set inside a matcher — the same trap). Fills
+    the real gap: `find-till-spot`/`till-spot-near-water` require water in range, and on this map it usually
+    isn't, so tilling never started.
+  - The always-in-prompt `find-block` exemplar now teaches the rule; `scenarios/farm.json`'s skill-1 brief
+    steers the villager to compose `find-tillable` + `till-block` and warns off the in-matcher air check.
+  - **CI catch:** `FakeBot.findBlock`/new `findBlocks` now MIRROR the palette pre-check (a function matcher is
+    first run against a synthetic `{name, position:null}` per distinct block name; only passing names are
+    scannable), so a position-reading matcher now fails in CI exactly as it does live. This was a pure
+    FakeBot/real-mineflayer divergence (the Z/C/E class) — 22 versions were CI-green and live-broken.
+  - Tests: 4 new in `tests/skills-exemplars.test.ts` (the palette-skip trap, + `find-tillable` finds open
+    ground with no water / skips covered blocks / honors exclude+degrades / prefers a hydrated spot).
+    `npm run check` green — lint/tsc/depcruise clean, **554/554** (2 sqlite-vec gated skips).
+- Decisions (D#/R# if any): **R76** filed — a `findBlock` matcher must test name/type ONLY; neighbour /
+  position / age checks go AFTER on returned positions. No new D#, no new journal kind (S1).
+- Next: restart the live host to seed `find-tillable` (stock skills are seeded at boot). The next
+  `till-and-sow` authoring rollout should retrieve+compose it instead of re-deriving the trap.
+- Surprises: the discriminating clue was already in the journal — one finder ("0 écartés", null) failing on
+  the exact block another finder (`explore-until`) had just located. The matcher, not the world, was the lie.
+
+## 2026-06-18 — scenario: `detect-and-defend` (archer + swordsman, proactive detection, no-damage)
+- Done:
+  - **PRIMARY — interactive JSON scenario** [`eden/scenarios/detect-and-defend.json`](../eden/scenarios/detect-and-defend.json):
+    the operator-driven runtime preset (NOT the live-test harness). `Aldric` (`archer`) + `Bertrand`
+    (`swordsman`), full iron armor + iron sword + bow + 128 arrows each, with a `godPrompt` mission to teach
+    three skills one-at-a-time — `perch-high` → `snipe-hostiles` (archer), `intercept-hostiles` (swordsman) —
+    success bar = ZERO damage taken. Run it: `"scenario": "detect-and-defend"` in eden.json → boot →
+    `/villagers start`, then hand-build the tower next to Aldric + place a spawner in aggro range (operator
+    owns difficulty ≥ easy + darkness). +1 test in `tests/scenario-loader.test.ts`. (This is the form the
+    request actually described — building the tower + spawner yourself and watching the village learn.)
+  - **ALSO — automated live-scenario counterpart** [`detect-and-defend.ts`](../eden/live-tests/scenarios/detect-and-defend.ts):
+    the `npm run live-test` regression form (RCON arena + auto-injected tasks + PASS/FAIL asserts), 4th in the
+    catalogue. Same roster/behavior, deterministic. Kept alongside the JSON as the automated guard.
+  - **Detection was ALREADY wired** (HIGH-3, uncommitted in the working tree): `bots/signals.ts` runs a
+    bounded `bot.entities` poll → `entitySpotted`/`entityGone` on range crossings (deduped by id, self-skip,
+    re-entry re-fires), assembled through `VillagerReactivity` in `main.ts`; 11/11 green in the untracked
+    `tests/bots-signals.test.ts`. The previously-dead `entity-spotted` reflex is live. This session ADDED the
+    consumers, not the seam.
+  - **Two new stock skills** ([exemplars/index.ts](../eden/src/skills/exemplars/index.ts)): **`shoot-mob`**
+    (ranged: equip bow → `lookAt` upper body → `activateItem` draw → ~1.2 s full charge → `deactivateItem`
+    release, repeat until dead/budget; clear error names a missing bow/arrows — S10) and **`find-high-spot`**
+    (highest STANDABLE block nearby via a NAME-ONLY `findBlocks` matcher — R76-safe — with air+headroom
+    checks done AFTER on returned positions; returns the cell on top; degrades to `{found:false}`).
+  - **Two new roles** ([roles.json](../eden/roles.json)): `archer` + `swordsman`, each `hurt → defend-self`
+    (zero-token backstop, overrides everyone's flee — D-15) + `entity-spotted (hostile, within 24/20) →
+    deliberate (interrupt)` with role-specific hints (archer: shoot from the tower; swordsman: intercept).
+    The **TASK** drives the *learning* (write_skill → run → verdict → admit); the reflex makes detection
+    proactive in real time.
+  - **Harness `setupPauseMs`** ([harness.ts](../eden/live-tests/harness.ts) + [run.ts](../eden/live-tests/run.ts)):
+    an optional MANUAL-SETUP pause (default 90 s, `EDEN_LIVE_SETUP_PAUSE_MS` override) AFTER connect+equip,
+    BEFORE tasks inject — the window to hand-build the tower + place the spawner. Folded into the parent
+    supervisor's hard-kill grace so a long pause never reads as a wedge. Shared resolver `setupPauseMsOf`.
+  - **Hands-off world (operator's "neither" choice):** the arena sets ONLY `keepInventory` +
+    `doImmediateRespawn` — no terrain fill, no forced time/difficulty, no summoned mobs. The operator owns
+    the tower, the spawner, difficulty (≥ easy), and darkness (zombies need block-light 0). Bot muster is an
+    editable `MUSTER` constant (default: no tp).
+  - **Asserts:** PASS core = `entity-spotted` reflex fired ∧ a combat `skill.run{ok}` ∧ no death ∧ no
+    `system.error`; REPORTED-not-gated `★ no damage` / `★ ranged engagement` / `★ skill.admit` are the
+    refinement targets (docs/20). `npm run check` green — lint/tsc/depcruise clean, **600/600** (2 gated
+    skips); +1 catalogue test (setupPauseMs structural check).
+- Decisions (D#/R# if any): no new D#/R# — clean additions on the existing M5 seam (no debugging scar). Docs:
+  [19-live-test-suite.md](19-live-test-suite.md) now lists FOUR scenarios.
+- Next: live run — boot a host with this roster, build the tower + spawner during the pause, watch the
+  `entity-spotted → deliberate → shoot-mob` chain. The swordsman's no-damage (LLM-latency reflex racing an
+  approaching zombie) is the expected hardening target; the tower archer's elevation makes its no-damage free.
+- Surprises: the detection seam I set out to build was already in the working tree (uncommitted, fully
+  tested). The first read of `signals.ts` was stale; the grep/`git status` told the truth — verify the disk,
+  not the memory.
 
 ## Template
 ## YYYY-MM-DD — <milestone/topic>
