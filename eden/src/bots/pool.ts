@@ -56,7 +56,11 @@ export interface BotPoolOptions {
   port: number;
   version?: string;
   villagers: ReadonlyArray<{ name: string; role: string }>;
-  avatarName: string;
+  /**
+   * The single divine member. OPTIONAL since D-19 (docs/26): the real-mineflayer CI is God-free end
+   * to end — its pool holds mortal runners only. Every production boot (main.ts) still passes one.
+   */
+  avatarName?: string;
   dataDir: string;
   /** Stable identifier of the world this data dir belongs to (R32). */
   worldId: string;
@@ -114,9 +118,12 @@ export class BotPool {
     this.createBot = opts.createBot ?? defaultCreateBot;
     this.staggerMs = opts.staggerMs ?? LOGIN_STAGGER_MS;
     // Villagers are mortal; the avatar is the single divine member (R14). Avatar LAST (R13/I1).
+    // No avatarName → an all-mortal pool (D-19: the CI skill tier runs God-free; nothing is ever op'd).
     this.members = [
       ...opts.villagers.map((v) => ({ name: v.name, role: v.role, tier: 'mortal' as Tier, isAvatar: false })),
-      { name: opts.avatarName, role: 'avatar', tier: 'divine' as Tier, isAvatar: true },
+      ...(opts.avatarName !== undefined
+        ? [{ name: opts.avatarName, role: 'avatar', tier: 'divine' as Tier, isAvatar: true }]
+        : []),
     ];
     for (const m of this.members) {
       this.records.set(m.name, { member: m, bot: null, state: 'disconnected', reconnectAttempts: 0 });
@@ -202,7 +209,16 @@ export class BotPool {
     rec.state = 'connected';
     rec.reconnectAttempts = 0; // healthy again — reset the backoff
     boundPathfinder(bot); // R6
-    loadPlugins(bot, { onWarn: (m) => logger.warn(`bot:${member.name}`, m) }); // R15/R16/R17
+    loadPlugins(bot, {
+      onWarn: (m) => logger.warn(`bot:${member.name}`, m), // R15/R16/R17
+      // A load-bearing plugin that did NOT attach is journaled (not just warned) so its absence is VISIBLE
+      // (S10) — the bot stays online either way (R16). FakeBot hardcodes working plugins, so CI never sees
+      // this path without an explicit injected failure (the regression test does exactly that).
+      onMissing: (plugin) =>
+        this.opts.journal.append(`bot:${member.name}`, 'system.error', {
+          message: `bot:${member.name} load-bearing plugin "${plugin}" did not attach after load — degraded (R16)`,
+        }),
+    });
     this.opts.journal.append(`bot:${member.name}`, 'system.bot-connected', { name: member.name });
     logger.info(`bot:${member.name}`, `spawned (${member.tier})`);
     // Reactivity attaches here (and re-attaches on reconnect) — fired AFTER connected is journaled so the

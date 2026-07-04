@@ -862,6 +862,237 @@ channel to act on the difference. Residual gap: if the acquire-task is itself bl
 seeds — a truly bankrupt farm), the chain still needs an external seed source (grass drops, a chest, trade);
 the dedup bounds the thrash but does not manufacture the resource.
 
+**R73 — an authoring rollout that never authors a draft is a real no-progress signal (owned by the R65
+convergence breaker); and a manifest schema that isn't a well-formed JSON Schema silently defeats arg
+validation.**
+Live finding (2026-06-16, farming-hamlet, Harry; follow-up to R72). The journal showed `till-and-sow v2`
+running 16× — every run `ok:true` with `tilled:0, sown:0` (11 of them called with `args:{}`, `callTree`
+length 0: the body never executed). The `brain.tool-call` stream was `read_skill / run_skill / search_skills
+/ report_to_god / done` with **no `write_skill` at all**, and across 14 rollouts the count was `write=0,
+ticket=0, verdict=0` — 47 skill runs in one 25-min stretch with **zero `god.verdict`**: the loop churned
+invisibly, neither converging nor failing with a signal. Three coupled causes, three fixes (one commit, S8):
+
+1. **The no-op that lied.** `till-and-sow v2`'s manifest `params` was `{ "maxBlocks": "number" }` — a
+   properties-map written WITHOUT the `{ type:'object', properties }` wrapper. `engine.run` *does* call
+   `validateArgs` (same as composition `ctx.skills.run`), but `validateArgs` short-circuits on a schema whose
+   `type !== 'object'` — so a malformed schema gets **no validation**, `run_skill('till-and-sow', {})` runs
+   with `maxBlocks` undefined (`for (i=0; i<undefined)` skips, the farmland fallback `<=NaN` skips), and the
+   skill returns `{ok:true, tilled:0, sown:0}`. The same malformation makes `renderSignature` render `({})`
+   (empty args) — a **lying signature** (D-04: signatures can't lie). Fix: `tools.writeSkill` rejects a
+   malformed params/returns schema BEFORE it enters the library, with a readable boundary error naming the
+   exact shape (`{ type:'object', properties:{…}, required:[…] }`) — the same inline-retry pattern as a parse
+   error. With a well-formed schema, `run_skill({})` now throws `ArgValidationError: missing required arg
+   "maxBlocks"` at the boundary — a readable error, never a silent no-op.
+
+2. **The villager believed the lie.** Because the existing `till-and-sow` reported `ok:true`, the villager
+   ran it, saw "success", and called `done` — so it never authored a fix. Fix: the `hint:'authoring'`
+   context-pack section now states the OBJECTIF explicitly — *you must `write_skill` (or improve) a reusable
+   skill, then `run_skill` it; running existing skills + `done` without `write_skill` is NOT an acceptable
+   outcome; if a skill exists but is defective (succeeds doing nothing), REWRITE it (new version)*.
+
+3. **The coordinator swallowed it.** `RolloutCoordinator.assignAndRun` filed a critic ticket only when
+   `delib.draft && delib.lastRunReport`; otherwise it silently `continue`d — so a draftless authoring rollout
+   burned every `maxRetries` running existing skills with nothing for the critic to judge (the 0-verdict
+   churn). A first cut added a `NO_DRAFT_AUTHORING_LIMIT` (2) early-bail counter — but that fix was **removed**
+   as ineffective: `delib.draft` is seeded from the density payload (the draft pointer is carried forward by
+   `brain.ts` once any draft exists), so the `if (!delib.draft)` guard only ever fires for a rollout that has
+   **never authored anything at all** — once a draft is authored it never triggers again, so the counter could
+   not catch the live churn (where the villager authored nothing only some turns). A draftless turn now simply
+   `continue`s (the pre-R73 behavior); the give-up is owned entirely by the post-loop **R65 convergence
+   breaker**, which closes the task `failed` after K exhausted rollouts (the existing behavior — it lands in
+   the curriculum's failed-frontier, R70, so God re-tasks instead of re-proposing the same wall). What IS kept
+   from this work: the draft pointer is captured the moment a draft exists, so an author-but-don't-trial turn
+   carries the draft forward via the density payload instead of re-authoring from scratch. Pinned by
+   `tests/skills-engine.test.ts` (`run_skill` of a required-param skill with `{}` is an `ArgValidationError`,
+   not a no-op), `tests/villagers-tools.test.ts` (`write_skill` rejects a malformed params schema; accepts a
+   well-formed one and renders an honest signature), `tests/villagers-context-pack.test.ts` (the authoring hint
+   demands `write_skill`), and `tests/loop-integration.test.ts` (the R70 breaker test — a draftless rollout
+   again grinds all 4 retries before the R65 breaker closes the task `failed`).
+   Lesson: the refinement loop's only currency is the *judged draft*; an authoring rollout that produces no
+   draft converges nothing, so the R65 breaker must own the give-up (don't add a second per-rollout bail that
+   the density-seeded `delib.draft` quietly defeats) — and a manifest schema is a load-bearing contract (it
+   gates arg validation AND the prompt signature), so a schema that isn't a well-formed JSON Schema must be
+   rejected at the authoring boundary, never quietly tolerated. Diagnostic
+   tell: many `skill.run ok=true` with a zero-delta value + a `brain.tool-call` stream with no `write_skill` +
+   `god.verdict` count ≈ 0 ⇒ the villager is brute-forcing with primitives because nothing forces (or judges)
+   authoring — not a perception/world bug.
+
+**R74 — `sqlite-vec` is a pre-1.0 NATIVE extension: pin the exact version, VERIFY it registered functions
+after loading (not just "no throw"), and degrade to the keyword floor if it didn't — never crash the host
+on a missing/broken vector backend.** Co-design + Step-0 spike for the embed-at-write migration (docs/21,
+2026-06-16). The defect being fixed: `VillagerMemory.retrieve()` re-embedded the ENTIRE window+archive
+(up to 2200 entries) through the in-process ONNX model on EVERY recall — ~7.3 s of wall-clock per recall
+on a full pool, discarding the result each time; with the avatar + 10 villagers on one loop and recall now
+on every rollout-revision turn and reactive wake-up, that path also induces `system.loop-lag` (D-07). The
+fix (D-16) stores each entry's vector ONCE at write in a `sqlite-vec` `vec0` table on the `eden.db` spine
+and embeds only the query at read (~7.3 s → ~4 ms). The pre-1.0 native dep carries three concrete traps
+the spike surfaced on Windows + Node 24 + better-sqlite3 12.10 (all baked into [`vectors/store.ts`](../eden/src/vectors/store.ts)):
+(1) the prebuilt `sqlite-vec-windows-x64` DLL can **load without error yet register no functions** on a
+bundled-SQLite ABI mismatch — so the constructor runs `SELECT vec_version()` and treats an empty/throwing
+result as "disabled," exactly like embeddings being off → keyword floor (R38 extended to the store); (2)
+`INSERT OR REPLACE` does **not** replace by a text primary key on a `vec0` table (`UNIQUE constraint
+failed`) — upsert is **DELETE-then-INSERT** in a transaction; (3) KNN `ORDER BY distance` accepts **ASC
+only** (`DESC` is rejected — nearest-first is what we want anyway). The store NEVER throws into a caller:
+a load failure or any per-call error reports through an injected `onWarn` (it cannot import `logger/` —
+the dependency law) and degrades. The native dep is gated to a real boot (`spawnBots`) so CI never loads
+it, and a config escape hatch (`journal.vectorStore: "off"`) forces the keyword floor on any platform.
+Pinned by `tests/villagers-memory-vectors.test.ts` (recall embeds ONLY the query, ranking parity, R38
+floor two ways, vector lifecycle on eviction/trim, idempotent backfill, R32 wipe-clear) and
+`tests/vectors-store.test.ts` (the real `sqlite-vec` round-trip, gated behind `EDEN_TEST_SQLITE_VEC=1` so
+CI skips it). Diagnostic tell: a multi-second stall on the FIRST recall that scales with pool size ⇒
+O(pool) inference on the read path, not a model-warmup cost; `vec_version()` succeeding but KNN returning
+nothing ⇒ check the `ns` partition value, not the vectors.
+
+**R75 — the loop-budget/gap-W canary guarded only LOOP bodies; a runaway with no loop node freezes the
+whole host with no in-process abort. Inject the canary at every FUNCTION body too (count-free).** CRIT-1,
+found by an empirical blast-radius audit (2026-06-16; harness preserved under `eden/.review-scratch/`,
+gitignored). `instrument()` injected `__loopBudget()` (the loop count + the gap-W macrotask-starvation
+canary `checkProgress`) **only at loop-statement body tops** ([instrument.ts](../eden/src/skills/instrument.ts)),
+and EVERY other supervisor — wall-clock timeout, StallDetector, the canary heartbeat, the pos/inventory
+sampler, `sleep`, even the global `system.loop-lag` monitor — is a `setTimeout`/`setInterval`, i.e. a
+**macrotask**. So a skill that generates unbounded work with **no loop node** — `async f(n){ await
+Promise.resolve(); return f(n+1) }`, a self-referential `Promise.resolve().then(s)` chain, a
+`queueMicrotask`/`globalThis.process.nextTick` trampoline, or an idiomatic `Array.reduce`-built `.then`
+chain / `Promise.all` flood — yields only to the **microtask** queue: it never calls `__loopBudget` (so the
+two synchronous guards are never even invoked) and never lets the event loop reach the timer phase (so every
+macrotask supervisor is starved). Confirmed empirically: the run never settles (or settles `ok:true` then
+the host can't exit, for the `queueMicrotask`/`nextTick` shapes — a host-killer the critic would *admit*),
+0 macrotask ticks, only an external `SIGKILL` ends it. This is the farm-wheat wedge generalized beyond the
+`while(true){await Promise.resolve()}` LOOP form (which the canary already caught). **Fix:** inject a
+**count-free** canary (`__fnTick`, = `checkProgress` without the loop count) at the top of every
+`FunctionDeclaration`/`FunctionExpression`/`ArrowFunctionExpression` body (expression-bodied arrows via a
+comma-operator wrap, `() => ({…})` → `() => ((__fnTick(),{…}))`). It is the only synchronous guard a no-loop
+spinner hits; `.then`/`queueMicrotask`/`nextTick` callbacks are function nodes, so they are covered. **It
+must be count-free:** a legitimate deep-but-finite call tree (recursive flood-fill, build-plan walk, JS A*)
+can exceed the 1e6 loop budget between awaits — ticking the COUNT at function entry false-aborts it
+(measured: `fib(32)` ~7M calls aborts under count, passes under canary). Only the time-based starvation
+check fires, and only on genuine starvation. **Residual the fix CANNOT close** (no JS frame to instrument):
+a single synchronous native call that never returns to JS — catastrophic-backtracking regex (ReDoS),
+`Promise.all(new Array(n).fill(p))` (native combinator + microtask drain, no per-element callback), and the
+worst, `Atomics.wait` (a native thread *park*). These are bounded only by `worker_threads` execution
+isolation — the deferred last resort R45/owner-#5 already names — plus the out-of-process backstops already
+in place (pm2 crash-only respawn D-08; villagers never op'd, tier gate R25). Do **not** answer the residual
+by growing the syscall shim's denylist (R45 — `Atomics`/`SharedArrayBuffer` stay reachable by design; the
+boundary is the tier gate, not the shim). In production `installProcessGuards` ([main.ts](../eden/src/main.ts))
+catches the detached self-termination throw and the host survives. Pinned by `tests/skills-instrument.test.ts`
+(`__fnTick` injected at function bodies; `__fnTick` runs the guard without touching the count) and
+`tests/skills-engine.test.ts` (★ async recursion + `.then`-chain abort as `stalled`; deep finite recursion
+~2.7M calls is NOT false-aborted). Diagnostic tell: simultaneous bot disconnects + a frozen journal + 0
+event-loop progress while a skill runs ⇒ a microtask-starvation wedge in a no-loop runaway, not a network
+bug (the macrotask supervisors can't fire, so there is no `skill.run` abort to read).
+
+**R76 — a `bot.findBlock`/`findBlocks` MATCHING FUNCTION must test ONLY `block.name`/type; it is also run
+against synthetic palette blocks (no position, no neighbours), so a matcher that reads `b.position` or calls
+`bot.blockAt` finds NOTHING though matches are everywhere.** Live finding (2026-06-16, farming-hamlet,
+Harry; the saga behind 22 dead `till-and-sow` versions). The journal showed `till-and-sow v22` logging
+`exploration a trouvé -370,64,-113` (so `explore-until`'s name-only matcher `(b)=>b.name==='grass_block'`
+DID find grass) and then, from the same position, `plus de dirt/grass labourable (0 écartés)` — its own
+finder returned null beside the very grass `explore-until` just located. Root cause is in mineflayer's
+`findBlocks` ([node_modules/mineflayer/lib/plugins/blocks.js](../eden/node_modules/mineflayer/lib/plugins/blocks.js)):
+before scanning a chunk section block-by-block it runs a **palette pre-check** (`isBlockInSection`) that calls
+your `matching` function on each palette entry — a `Block.fromStateId(stateId, 0)` whose constructor sets
+**`position = null`** (and has no world neighbours) but DOES set `name`. If no palette entry matches, the
+**whole section is skipped**. Every churned `till-and-sow` put its "air directly above" test INSIDE the
+matcher (`if (!b.position) return false; const above = bot.blockAt(b.position.offset(0,1,0)); …`), which
+returns false for every synthetic palette block ⇒ every section skipped ⇒ `findBlock` null ⇒ "champ vide"
+beside an open field. The air-above logic was a **red herring** — the matcher bailed at `!b.position`
+before ever reaching it. **Fix:** match on NAME/type only; do air-above / position-dedup / neighbour checks
+AFTER, on the returned positions. Seeded a stock `find-tillable` primitive (name-only `findBlocks` →
+post-filter for air-above + an optional water-proximity preference that NEVER gates) so the villager
+composes it instead of re-deriving the trap; the always-in-prompt `find-block` exemplar now teaches the rule
+in a comment. **Why CI never caught it across 22 versions:** the `FakeBot` modelled `findBlock` as a flat
+scan of placed blocks with no palette pre-check, so a position-reading matcher "worked" on the fake and
+failed only live — the Z/C/E class ("a stock skill validated against FakeBot but wrong on real mineflayer").
+`FakeBot.findBlock`/`findBlocks` now mirror the palette pre-check (run the function matcher against a
+synthetic `{name, position:null}` per distinct block name; only passing names are scannable), turning this
+whole class into a CI failure. Pinned by `tests/skills-exemplars.test.ts` (★ R76: a position-reading matcher
+returns null while a name-only one finds the block; `find-tillable` finds open dirt/grass with no water,
+skips covered blocks, honors `exclude`, degrades to `{found:false}`, and prefers a hydrated spot). Diagnostic
+tell: a `findBlock` that returns null while a *different* name-only `findBlock`/`explore-until` finds the
+same block type at the same spot ⇒ a non-name property (`position`, a `bot.blockAt` neighbour read, a
+`metadata`/age test that the palette can't satisfy) inside the matcher, not a missing block.
+
+**R77 — the D-08 shim only shadows the LOCAL `process` binding, so a skill kills the host via
+`globalThis.process.exit()` / `require('process').abort()` / `new Function('return process')().kill(pid)` —
+the FOUR-method denylist (R45) was theatre against the global object.** CRIT-2 (2026-06-16 deep-review,
+confirmed by reproduction). `compile()` wraps skill source as `const { process, … } = __shim; …`, which
+rebinds only the bare identifier; `globalThis` is untouched and every route above reaches the SAME real
+`process` whose `.exit` the shim never replaced. **Fix:** `guardHostKillers(journal, target=process)` in
+[main.ts](../eden/src/main.ts) replaces `exit`/`reallyExit`/`abort`/`kill` ON THE REAL process object at
+real boot (gated with `installProcessGuards`) with wrappers that journal a `system.error` and throw
+`SkillForbiddenError` — inside a run the engine catches it (clean failure), in a deferred callback the
+`installProcessGuards` uncaughtException handler does; either way the host lives. The host never calls
+these (crash-only/pm2; the entrypoint sets `process.exitCode`, never `exit()`), so blocking them outright is
+free, and `target` is injected in tests so the runner's own `process` is never mutated. This REFINES R45:
+footgun-removal now neutralizes the host-killers on the real object, not just the skill-scope binding.
+**Scope — partial:** this closes the `process.*` host-kill vector ONLY. An OS-level kill via
+`import('node:child_process')` (`execSync('taskkill /PID …')`) and arbitrary `node:fs` writes remain
+reachable — the full-Node-capability surface (owner #11). Closing THAT (and the CRIT-1 runaway-wedge, and
+the CRIT-4 chat→`write_skill` RCE) needs worker/VM isolation of skill execution, still open. Pinned by
+`tests/main.test.ts` (★ R77). Don't grow the in-process denylist further chasing `child_process`/`fs` — that
+is the worker-isolation work, not another shim entry (R45's lesson still holds for the shim itself).
+
+**R78 — a paired test's goal predicate must be RELATIVE (or precondition-framed), never an
+already-satisfiable absolute, or the flip gate rejects a legitimate skill.** Co-design landmine
+(2026-06-30, [22 §3.6](22-godfree-skill-loop.md)). The god-free admission gate (D-16) proves a skill by
+a pre→skill→post FLIP: it REJECTS a test that already answers `worked` BEFORE the skill runs (the rule
+that kills the trivial-test + D2 "deposit items I already had" fraud). But an absolute predicate like
+"inventory has ≥1 wheat" reads `worked` at `T(pre)` whenever the villager merely *happens to hold* the
+item — so a perfectly good `harvest-wheat` is rejected. **Fix (design):** the gate uses a **relative
+bar** it computes from the engine's own per-run delta (`worldAfter_S.inv(X) > worldBefore_S.inv(X)`) for
+count tasks, and tests are authored **precondition-framed** ("ripe wheat present pre, gained post") for
+the rest. Absolute "have ≥N" belongs on `task.check` (the mission anchor), not on the paired test's flip
+predicate. To be pinned when the gate is built.
+
+**R79 — the flip gate runs T(post) with NO enforced settle, so its correctness RELIES on the skill's
+R55 poll-until-confirmed discipline; a skill that returns pre-settle makes BOTH `worldAfter_S` and
+`T(post)` misread → a false REVISE.** Co-design landmine (2026-06-30, [22 §5.1](22-godfree-skill-loop.md)).
+Test runs reuse the skill supervision defaults (no dedicated settle before the post-check) — which is
+safe *only because* a well-formed skill already waits for the server block-update before returning (R55),
+leaving `worldAfter_S` settled and `T(post)` reading settled state too. A skill that resolves on
+packet-send (the R55 anti-pattern) makes the engine snapshot AND the test both read the pre-mutation
+world, and the gate false-fails a working skill (wasted revision, R1/R55 packet-quiescence class).
+**Fix (design):** R55 poll-until-confirmed is a stock-**test** template requirement, not just a stock-skill
+one; the churn it causes is caught in-context and ideally `reflect`ed. To be pinned when the gate + stock
+tests are built.
+
+**R80 — composition must resolve a callee to the highest ACTIVE (graduated) version, not the highest
+LIVE version; otherwise re-authoring an already-composed skill BLOCKS every composer until the new
+version graduates.** Current-code cliff found in co-design (2026-06-30, [22 §5.4](22-godfree-skill-loop.md)).
+[`composerRun`](../eden/src/skills/engine.ts) resolves `readRunnable` (highest active OR active-probation)
+then throws `ProbationError` when that version is on probation — it does NOT fall back to the last
+graduated version. So authoring `v(k+1)` of a widely-composed primitive (`go-to`, `harvest-field`) makes
+every composer throw until `v(k+1)` earns 3 clean direct runs — a village-wide break on every improvement,
+worse as the library matures. **Fix (design):** a new `readComposable(name)` returning the highest ACTIVE
+version, distinct from `readRunnable` (highest live, kept for direct `run_skill`); `composerRun` switches
+to it. `ProbationError` stays for a *first* admission (no active fallback — the D-12
+probation-before-composition intent is preserved; the bug was the missing fallback, not the rail). This
+also *is* the passive regression protection: a composer a newly-graduated version breaks fails its OWN
+paired test at its next run. To be pinned when the resolver is built.
+
+**R81 — releasing the LLM concurrency permit during a deliberation's bot work must re-acquire it
+ROLLOUT-IMMUNE / front-of-lane, or a villager mid-self-debug loses its density-invariant continuity.**
+Co-design landmine (2026-06-30, [22 §2.1](22-godfree-skill-loop.md)). The god-free loop drives the flip
+gate (3 bot-bound, zero-LLM runs) inside one deliberation; holding the scheduler permit through minutes of
+that bot work idles the strong lane at 10 villagers. Releasing it breaks the "one deliberation = one
+scheduler unit" invariant ([brain.ts:17](../eden/src/villagers/brain.ts)) — and if the re-acquire is an
+ordinary enqueue, a villager resuming its self-debug can be queued behind peers or hit
+coalescing/cooldown, losing the never-trimmed density payload's continuity (rollout immunity, D-11).
+**Fix (design):** the re-acquire is privileged — rollout-immune (bypasses coalescing/cooldown/rate-cap)
+and front-of-lane — exactly the immunity a revision turn already gets. This is the subtlest build item in
+D-16; to be pinned when the permit-release is built.
+
+**R82 — spawn the gradle wrapper by ABSOLUTE path: `cmd /c gradlew.bat` with a correct `cwd` still
+fails ("not recognized") when Windows' `NoDefaultCurrentDirectoryInExePath` hardening is set.**
+B1 build session (2026-07-04, the CI lifecycle's first boot). Node's `spawn('cmd', ['/c',
+'gradlew.bat', …], {cwd: repoRoot})` sets the child's cwd correctly (verified with `cmd /c cd`), but
+with `NoDefaultCurrentDirectoryInExePath=1` in the environment (it is, on this box) `cmd` no longer
+resolves executables from its current directory — and a `.\` prefix is easy to mangle across shell
+escaping layers. **Fix:** always pass the wrapper's absolute path
+([lifecycle.ts](../eden/live-tests/server/lifecycle.ts) step 6). The failure is silent-adjacent: gradle
+"exits 1" instantly, which without the ready-gate's gradle-exit fast-fail would present as a 10-minute
+RCON readiness timeout.
+
 ## Reading failures (the debugging playbook, preserved)
 
 - `act … FAILED after 0ms` → perception/availability check failed (thing absent or
