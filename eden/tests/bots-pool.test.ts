@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { FakeBot } from './fakes/fake-bot';
+import { RecordingBot } from './fakes/recording-bot';
 import { MemoryJournal } from './fakes/memory-journal';
 import { BotPool, stampWorldId, LOGIN_STAGGER_MS, type SpawnRequest } from '../src/bots/pool';
 
@@ -17,12 +17,12 @@ function tmp(t: TestContext): string {
 }
 
 /** A createBot factory that records each spawn request and emits `spawn` on the next microtask. */
-function recordingFactory(): { createBot: (o: SpawnRequest) => FakeBot; requests: SpawnRequest[]; bots: FakeBot[] } {
+function recordingFactory(): { createBot: (o: SpawnRequest) => RecordingBot; requests: SpawnRequest[]; bots: RecordingBot[] } {
   const requests: SpawnRequest[] = [];
-  const bots: FakeBot[] = [];
-  const createBot = (o: SpawnRequest): FakeBot => {
+  const bots: RecordingBot[] = [];
+  const createBot = (o: SpawnRequest): RecordingBot => {
     requests.push(o);
-    const b = new FakeBot({ username: o.username });
+    const b = new RecordingBot({ username: o.username });
     bots.push(b);
     queueMicrotask(() => b.emit('spawn'));
     return b;
@@ -63,6 +63,40 @@ test('spawnAll staggers logins and brings the avatar up LAST (R13/I1)', async (t
 
   // Each spawn journalled exactly one system.bot-connected.
   assert.equal(journal.query({ kinds: ['system.bot-connected'] }).length, 3);
+});
+
+// FIX 4: on spawn the pool calls loadPlugins; a load-bearing plugin that did NOT attach is journaled as a
+// system.error naming it (the absence is VISIBLE, S10) — the bot still comes online (R16).
+test('FIX 4: a spawned bot missing a load-bearing plugin journals a named system.error (R16 visible)', async (t) => {
+  const journal = new MemoryJournal();
+  const createBot = (o: SpawnRequest): RecordingBot => {
+    const b = new RecordingBot({ username: o.username });
+    b.dropLoadBearingPlugin('pvp'); // pvp silently failed to attach on this bot
+    queueMicrotask(() => b.emit('spawn'));
+    return b;
+  };
+  const pool = new BotPool({
+    createBot,
+    journal,
+    host: '127.0.0.1',
+    port: 25599,
+    villagers: [{ name: 'Firmin', role: 'farmer' }],
+    avatarName: 'Dieu',
+    dataDir: tmp(t),
+    worldId: 'w',
+    vitalsIntervalMs: 10_000,
+    staggerMs: 1,
+  });
+  await pool.spawnAll();
+  await delay(5);
+
+  // The bot still connected (R16 — a missing plugin degrades, never crashes).
+  assert.ok(journal.query({ kinds: ['system.bot-connected'] }).length >= 1, 'the bot came online');
+  const errs = journal.query({ kinds: ['system.error'] });
+  assert.ok(
+    errs.some((e) => /pvp/.test((e.payload as { message: string }).message) && /did not attach/.test((e.payload as { message: string }).message)),
+    'a system.error names the missing load-bearing plugin (pvp)',
+  );
 });
 
 test('op is the avatar-only privilege — the pool never ops, and exactly one member is divine (R14)', (t) => {

@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ScriptedLlm, type ScriptedTurn } from './fakes/scripted-llm';
-import { FakeBot } from './fakes/fake-bot';
+import { RecordingBot } from './fakes/recording-bot';
 import { MemoryJournal } from './fakes/memory-journal';
 import { SkillLibrary, AllGranted } from '../src/skills/library';
 import { SkillEngine } from '../src/skills/engine';
@@ -34,7 +34,7 @@ const MORTAL: RunnerRef = { name: 'Firmin', role: 'farmer', tier: 'mortal' };
 const SNAP: Snapshot = { biome: 'plains', time: 1200, position: [0, 64, 0], health: 20, hunger: 20, equipment: [], inventory: [], nearbyEntities: [], nearbyBlocks: ['oak_log'], knownChests: [] };
 
 const BAD = 'async function collect(bot, args, ctx) { throw new Error("pas encore implémenté"); }';
-// FakeBot test affordance: bot.give simulates ending up with the logs (no Minecraft in CI). The
+// RecordingBot test affordance: bot.give simulates ending up with the logs (no Minecraft in CI). The
 // engine's worldAfter snapshot then satisfies the check {oak_log:3}.
 const GOOD = 'async function collect(bot, args, ctx) { bot.give("oak_log", 3); return { collected: 3 }; }';
 
@@ -59,7 +59,7 @@ async function wire(turns: ScriptedTurn[]): Promise<Wiring> {
   const dir = mkdtempSync(join(tmpdir(), 'eden-gate-'));
   const journal = new MemoryJournal();
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
-  const bot = new FakeBot({ username: 'Firmin' });
+  const bot = new RecordingBot({ username: 'Firmin' });
   const engine = new SkillEngine({
     library, journal, grants: new AllGranted(), resolveBot: () => bot,
     runDefaultTimeoutMs: 120_000, stallSeconds: 20, maxCallDepth: 8, autoQuarantineAfter: 5,

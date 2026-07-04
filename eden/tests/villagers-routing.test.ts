@@ -12,7 +12,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { FakeBot } from './fakes/fake-bot';
+import { RecordingBot } from './fakes/recording-bot';
 import { MemoryJournal } from './fakes/memory-journal';
 import { SkillLibrary, AllGranted } from '../src/skills/library';
 import { SkillEngine } from '../src/skills/engine';
@@ -32,7 +32,7 @@ function harness(over: HarnessOpts = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'eden-route-'));
   const journal = new MemoryJournal();
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
-  const bot = new FakeBot({ username: 'Firmin' });
+  const bot = new RecordingBot({ username: 'Firmin' });
   const engine = new SkillEngine({
     library, journal, grants: new AllGranted(), resolveBot: () => bot,
     runDefaultTimeoutMs: 120_000, stallSeconds: 20, maxCallDepth: 8, autoQuarantineAfter: 5,

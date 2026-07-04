@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ScriptedLlm, type ScriptedTurn } from './fakes/scripted-llm';
-import { FakeBot } from './fakes/fake-bot';
+import { RecordingBot } from './fakes/recording-bot';
 import { MemoryJournal } from './fakes/memory-journal';
 import { SkillLibrary, AllGranted } from '../src/skills/library';
 import { SkillEngine } from '../src/skills/engine';
@@ -68,7 +68,7 @@ async function wire(villagers: string[], turns: ScriptedTurn[], wopts: WireOpts 
   const dir = mkdtempSync(join(tmpdir(), 'eden-loop-'));
   const journal = new MemoryJournal();
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
-  const bots = new Map<string, Bot>(villagers.map((v) => [v, new FakeBot({ username: v }) as unknown as Bot]));
+  const bots = new Map<string, Bot>(villagers.map((v) => [v, new RecordingBot({ username: v }) as unknown as Bot]));
   const engine = new SkillEngine({
     library, journal, grants: new AllGranted(),
     resolveBot: (name) => bots.get(name) ?? (bots.values().next().value as Bot),
@@ -234,6 +234,7 @@ test('★ R70: a non-converging task is RESUMED across runOnce (not re-proposed)
   try {
     const r1 = await w.coordinator.runOnce({ trigger: 'idle', villager: 'Firmin' });
     assert.equal(r1?.converged, false, 'first rollout exhausted without converging');
+    assert.equal(r1?.revisions, 4, 'first rollout exhausted all retries (no draft) without converging');
     assert.equal(w.god.state.ledger.open.length, 1, 'the task stays open after one exhausted rollout');
     assert.equal(w.god.state.ledger.open[0]!.currentRolloutId, undefined, 'its rollout pointer is cleared → resumable next turn');
 
@@ -374,7 +375,7 @@ test('★ R61 (reactive path): a reactive wake-up pre-loads retrieved skills for
   const journal = new MemoryJournal();
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
   seedActiveSkill(library, 'defend-self', 'fight back against a hostile attacker', ['hurt', 'zombie', 'defend']);
-  const bot = new FakeBot({ username: 'Garde' }) as unknown as Bot;
+  const bot = new RecordingBot({ username: 'Garde' }) as unknown as Bot;
   const engine = new SkillEngine({
     library, journal, grants: new AllGranted(), resolveBot: () => bot,
     runDefaultTimeoutMs: 120_000, stallSeconds: 20, maxCallDepth: 8, autoQuarantineAfter: 5,

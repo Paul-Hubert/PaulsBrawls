@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { FakeBot } from './fakes/fake-bot';
+import { RecordingBot } from './fakes/recording-bot';
 import { MemoryJournal } from './fakes/memory-journal';
 import { BotPool, type SpawnRequest } from '../src/bots/pool';
 
@@ -27,13 +27,13 @@ function tmp(t: TestContext): string {
 }
 
 /** Factory where every bot emits 'spawn' immediately. */
-function allSpawnFactory(): { createBot: (o: SpawnRequest) => FakeBot; requests: SpawnRequest[]; bots: FakeBot[] } {
+function allSpawnFactory(): { createBot: (o: SpawnRequest) => RecordingBot; requests: SpawnRequest[]; bots: RecordingBot[] } {
   const requests: SpawnRequest[] = [];
-  const bots: FakeBot[] = [];
+  const bots: RecordingBot[] = [];
   return {
     createBot: (o) => {
       requests.push(o);
-      const b = new FakeBot({ username: o.username });
+      const b = new RecordingBot({ username: o.username });
       bots.push(b);
       queueMicrotask(() => b.emit('spawn'));
       return b;
@@ -45,13 +45,13 @@ function allSpawnFactory(): { createBot: (o: SpawnRequest) => FakeBot; requests:
 
 /** Factory where only bots whose usernames are in `autoSpawnSet` emit 'spawn'. */
 function selectiveFactory(autoSpawnSet: ReadonlySet<string>): {
-  createBot: (o: SpawnRequest) => FakeBot;
-  bots: FakeBot[];
+  createBot: (o: SpawnRequest) => RecordingBot;
+  bots: RecordingBot[];
 } {
-  const bots: FakeBot[] = [];
+  const bots: RecordingBot[] = [];
   return {
     createBot: (o) => {
-      const b = new FakeBot({ username: o.username });
+      const b = new RecordingBot({ username: o.username });
       bots.push(b);
       if (autoSpawnSet.has(o.username)) queueMicrotask(() => b.emit('spawn'));
       return b;
@@ -267,9 +267,9 @@ test('stop() is idempotent — calling it twice does not throw', (t) => {
 // ── R66: the /villagers restart duplicate-login kick storm ────────────────────
 
 test('restart swap: a superseded instance kicked/end does NOT clobber its replacement or storm (R66)', async (t) => {
-  const bots: FakeBot[] = [];
-  const createBot = (o: SpawnRequest): FakeBot => {
-    const b = new FakeBot({ username: o.username });
+  const bots: RecordingBot[] = [];
+  const createBot = (o: SpawnRequest): RecordingBot => {
+    const b = new RecordingBot({ username: o.username });
     bots.push(b);
     queueMicrotask(() => b.emit('spawn'));
     return b;
@@ -286,7 +286,7 @@ test('restart swap: a superseded instance kicked/end does NOT clobber its replac
 
   await pool.start();
   await delay(5);
-  const firminOld = pool.bot('Firmin') as FakeBot;
+  const firminOld = pool.bot('Firmin') as RecordingBot;
   assert.ok(firminOld, 'old Firmin is the live bot after start');
 
   // Restart: stop() quits the old instances, start() re-spawns FRESH ones. The old instances are now
@@ -294,7 +294,7 @@ test('restart swap: a superseded instance kicked/end does NOT clobber its replac
   pool.stop();
   await pool.start();
   await delay(5);
-  const firminNew = pool.bot('Firmin') as FakeBot;
+  const firminNew = pool.bot('Firmin') as RecordingBot;
   assert.notEqual(firminNew, firminOld, 'a fresh Firmin instance is live after restart');
 
   const createsBefore = bots.length;

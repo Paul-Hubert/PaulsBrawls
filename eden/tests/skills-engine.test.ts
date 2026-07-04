@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { FakeBot } from './fakes/fake-bot';
+import { RecordingBot } from './fakes/recording-bot';
 import { MemoryJournal } from './fakes/memory-journal';
 import { SkillLibrary, AllGranted, type DraftInput } from '../src/skills/library';
 import { seedStockSkills } from '../src/skills/exemplars/index';
@@ -22,15 +22,15 @@ interface Harness {
   engine: SkillEngine;
   library: SkillLibrary;
   journal: MemoryJournal;
-  bot: FakeBot;
+  bot: RecordingBot;
   tripwired: string[];
 }
 
-function harness(opts: { stallSeconds?: number; bot?: FakeBot; macrotaskStallMs?: number } = {}): Harness {
+function harness(opts: { stallSeconds?: number; bot?: RecordingBot; macrotaskStallMs?: number } = {}): Harness {
   const dir = mkdtempSync(join(tmpdir(), 'eden-engine-'));
   const journal = new MemoryJournal();
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
-  const bot = opts.bot ?? new FakeBot({ username: 'Firmin' });
+  const bot = opts.bot ?? new RecordingBot({ username: 'Firmin' });
   const tripwired: string[] = [];
   const engine = new SkillEngine({
     library,
@@ -86,14 +86,113 @@ test('M2-3: validateArgs rejects a bad arg at the boundary with a readable messa
   );
 });
 
+test('MED-1: validateArgs recurses into nested objects and reports a PATH-QUALIFIED error', async () => {
+  const h = harness();
+  seed(h.library, {
+    name: 'place-at',
+    code: 'async function placeAt(bot, a, c) { return 1; }',
+    params: {
+      type: 'object',
+      properties: {
+        pos: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] },
+      },
+      required: ['pos'],
+    },
+  });
+  // A nested field of the wrong type fails at the boundary, not deep in mineflayer (D-04).
+  await assert.rejects(
+    h.engine.run('place-at', { pos: { x: 1, y: 'high' } }, MORTAL),
+    (e: unknown) => e instanceof ArgValidationError && /pos\.y: expected number/.test((e as Error).message),
+  );
+  // A missing nested required field is also caught, path-qualified.
+  await assert.rejects(
+    h.engine.run('place-at', { pos: { x: 1 } }, MORTAL),
+    (e: unknown) => e instanceof ArgValidationError && /pos: missing required field "y"/.test((e as Error).message),
+  );
+});
+
+test('MED-1: validateArgs checks array items and enum membership', async () => {
+  const h = harness();
+  seed(h.library, {
+    name: 'pick',
+    code: 'async function pick(bot, a, c) { return 1; }',
+    params: {
+      type: 'object',
+      properties: {
+        names: { type: 'array', items: { type: 'string' } },
+        mode: { type: 'string', enum: ['mine', 'place'] },
+      },
+    },
+  });
+  await assert.rejects(
+    h.engine.run('pick', { names: ['ok', 7] }, MORTAL),
+    (e: unknown) => e instanceof ArgValidationError && /names\[1\]: expected string/.test((e as Error).message),
+  );
+  await assert.rejects(
+    h.engine.run('pick', { mode: 'destroy' }, MORTAL),
+    (e: unknown) => e instanceof ArgValidationError && /mode: expected one of/.test((e as Error).message),
+  );
+  // A well-typed bag passes.
+  const ok = await h.engine.run('pick', { names: ['a', 'b'], mode: 'mine' }, MORTAL);
+  assert.equal(ok.outcome.ok, true);
+});
+
+test('R73: run_skill of a required-param skill with {} is a readable boundary error, NOT a silent no-op', async () => {
+  // The live `till-and-sow` bug: run_skill called with {} while `maxBlocks` was required ran the body with
+  // maxBlocks=undefined and no-op'd { ok:true }. With a WELL-FORMED manifest schema (required:['maxBlocks'])
+  // the engine throws at the boundary BEFORE the body runs — a missing required arg can never silently
+  // no-op. (The companion fix — tools.writeSkill — keeps a malformed schema from ever entering the library.)
+  const h = harness();
+  seed(h.library, {
+    name: 'till-and-sow',
+    code: 'async function tillAndSow(bot, { maxBlocks }, c) { let t = 0; for (let i = 0; i < maxBlocks; i++) t++; return { ok: true, tilled: t }; }',
+    params: { type: 'object', properties: { maxBlocks: { type: 'integer' } }, required: ['maxBlocks'] },
+  });
+  await assert.rejects(
+    h.engine.run('till-and-sow', {}, MORTAL),
+    (e: unknown) => e instanceof ArgValidationError && /maxBlocks/.test((e as Error).message),
+    'a missing required arg throws before the body can no-op',
+  );
+});
+
 test('M2-3: ctx.log lands as skill.log, not console (R23)', async () => {
   const h = harness();
-  seed(h.library, { name: 'chatty', code: "async function chatty(bot, a, c) { c.log('working'); return 1; }" });
+  seed(h.library, { name: 'chatty', code: "async function chatty(bot, a, c) { c.log('info', 'working'); return 1; }" });
   const report = await h.engine.run('chatty', {}, MORTAL);
   const logs = h.journal.query({ kinds: ['skill.log'] });
   assert.equal(logs.length, 1);
   assert.equal((logs[0]!.payload as Record<string, unknown>)['message'], 'working');
   assert.equal(logs[0]!.refs.runId, report.runId);
+});
+
+test('back-compat: a persisted skill on the LEGACY single-arg c.log(message) records level:info, not a corrupted level', async () => {
+  // `ctx.log` changed from `log(message)` to `log(level, message)`. Villager-authored skills persist as
+  // plain `.js` on disk and run verbatim in later boots: a legacy single-arg call MUST NOT bind
+  // level='working', message=undefined (which would corrupt the critic's load-bearing level semantics —
+  // warn=blocked/impossible, error=defect). The runtime normalizes arg1 to the message + level:info.
+  const h = harness();
+  seed(h.library, { name: 'legacy-log', code: "async function legacyLog(bot, a, c) { c.log('working'); return 1; }" });
+  const report = await h.engine.run('legacy-log', {}, MORTAL);
+  const logs = h.journal.query({ kinds: ['skill.log'] });
+  assert.equal(logs.length, 1);
+  const payload = logs[0]!.payload as Record<string, unknown>;
+  assert.equal(payload['level'], 'info', 'legacy single-arg must default level to info, not the message text');
+  assert.equal(payload['message'], 'working', 'the single arg becomes the message');
+  assert.equal(logs[0]!.refs.runId, report.runId);
+});
+
+test('back-compat: a bogus level string is clamped to info so the kinds.ts level union stays honest', async () => {
+  // The kinds.ts union is `'info'|'warn'|'error'` but nothing validated `level` at runtime. A skill (or a
+  // miswritten authored call) passing a level outside the union is treated as a legacy/bogus form: arg1
+  // becomes the message and level clamps to info.
+  const h = harness();
+  seed(h.library, { name: 'bogus-level', code: "async function bogusLevel(bot, a, c) { c.log('notalevel', 'x'); return 1; }" });
+  await h.engine.run('bogus-level', {}, MORTAL);
+  const logs = h.journal.query({ kinds: ['skill.log'] });
+  assert.equal(logs.length, 1);
+  const payload = logs[0]!.payload as Record<string, unknown>;
+  assert.equal(payload['level'], 'info', 'a level outside info|warn|error clamps to info');
+  assert.equal(payload['message'], 'notalevel', 'the bogus level is reinterpreted as the message (arg1)');
 });
 
 // ── D-10: the stall detector (the deliverable test) ──────────────────────────
@@ -132,8 +231,49 @@ test('gap W: a loop that awaits a REAL macrotask (setTimeout) is NOT false-abort
   assert.equal(report.aborted, undefined);
 });
 
+// ── CRIT-1/R75: the canary now also guards NON-loop runaways (function-body injection) ──────────
+test('CRIT-1: async recursion awaiting a resolved promise aborts as a stall (no loop node)', async () => {
+  const h = harness({ macrotaskStallMs: 50 });
+  // No loop node ⇒ __loopBudget never runs; the await resets nothing that matters. Before R75 this WEDGED
+  // the host (a microtask trampoline starves every timer-based supervisor). The function-body canary
+  // (__fnTick) is the only synchronous guard a no-loop spinner hits, so it now aborts as a stall.
+  seed(h.library, {
+    name: 'rec-wedge',
+    code: 'async function recWedge(bot, a, c) { async function f(n) { await Promise.resolve(); return f(n + 1); } return f(0); }',
+  });
+  const report = await h.engine.run('rec-wedge', {}, MORTAL);
+  assert.equal(report.outcome.ok, false);
+  assert.equal(report.aborted, 'stalled', 'the function-entry canary aborts a no-loop microtask spin');
+});
+
+test('CRIT-1: a self-referential .then() chain (microtask trampoline) aborts as a stall', async () => {
+  const h = harness({ macrotaskStallMs: 50 });
+  seed(h.library, {
+    name: 'then-wedge',
+    code: 'async function thenWedge(bot, a, c) { function s() { return Promise.resolve().then(s); } return s(); }',
+  });
+  const report = await h.engine.run('then-wedge', {}, MORTAL);
+  assert.equal(report.outcome.ok, false);
+  assert.equal(report.aborted, 'stalled');
+});
+
+test('CRIT-1: deep but finite recursion (>1e6 calls) is NOT false-aborted — the canary is count-free', async () => {
+  // The function-entry guard ticks the count-free canary, never the loop budget — so a legitimate deep
+  // recursion (~2.7M fib calls, well past the 1e6 loop budget) completes cleanly. Were function bodies to
+  // tick the COUNT instead, this would false-abort with 'loop budget'. Default 8 s window ≫ the few-ms run.
+  const h = harness();
+  seed(h.library, {
+    name: 'deep-fib',
+    code: 'async function deepFib(bot, a, c) { function fib(k) { return k < 2 ? k : fib(k - 1) + fib(k - 2); } return { r: fib(30) }; }',
+  });
+  const report = await h.engine.run('deep-fib', {}, MORTAL);
+  assert.equal(report.outcome.ok, true, 'deep finite recursion must not trip the loop budget');
+  assert.equal(report.aborted, undefined);
+  assert.deepEqual(report.outcome.ok ? report.outcome.value : null, { r: 832040 });
+});
+
 test('D-10(ii): pathfinder path_update pulses keep a long, stationary goTo alive (R26)', async () => {
-  const bot = new FakeBot({ username: 'Firmin' });
+  const bot = new RecordingBot({ username: 'Firmin' });
   const h = harness({ stallSeconds: 0.15, bot });
   seed(h.library, { name: 'walk', code: 'async function walk(bot, a, c) { await new Promise((r) => setTimeout(r, a.ms)); return { arrived: true }; }', params: { type: 'object', properties: { ms: { type: 'number' } } } });
   const stop = bot.startPathUpdates(40); // a churning A* emits path_update while the bot stands still
@@ -144,7 +284,7 @@ test('D-10(ii): pathfinder path_update pulses keep a long, stationary goTo alive
 });
 
 test('D-10(iii): a never-resolving dig with one start pulse stalls at ~stallSeconds', async () => {
-  const bot = new FakeBot({ username: 'Firmin' });
+  const bot = new RecordingBot({ username: 'Firmin' });
   bot.setBlock({ x: 1, y: 64, z: 0 }, 'stone');
   bot.setDigMode('never');
   const h = harness({ stallSeconds: 0.2, bot });
@@ -160,7 +300,7 @@ test('D-10(iii): a never-resolving dig with one start pulse stalls at ~stallSeco
 });
 
 test('R25: when the avatar (divine runner) runs a MORTAL skill, its /-chat is intercepted', async () => {
-  const bot = new FakeBot({ username: 'Dieu' });
+  const bot = new RecordingBot({ username: 'Dieu' });
   const h = harness({ bot });
   seed(h.library, { name: 'demo', code: "async function demo(bot, a, c) { bot.chat('coucou'); bot.chat('/op @s'); return 1; }" });
   const avatar: RunnerRef = { name: 'Dieu', role: 'god', tier: 'divine' };
@@ -306,7 +446,7 @@ test('D1: ctx.mcData exposes the bot registry so a skill reads itemsByName[...].
 test('D1: a stock registry lookup of an unknown item fails with a NAMED error, not a raw undefined deref', async () => {
   // place-item resolves the held item via the inlined itemId() guard. An unknown name must surface the
   // named "unknown item ..." message (S10) — never the cryptic "Cannot read properties of undefined".
-  const bot = new FakeBot({ username: 'Firmin' });
+  const bot = new RecordingBot({ username: 'Firmin' });
   bot.setUnknownItems(['__nope__']); // model a real mineflayer registry miss
   const h = harness({ bot });
   seedStockSkills(h.library);
@@ -320,4 +460,23 @@ test('D1: a stock registry lookup of an unknown item fails with a NAMED error, n
   assert.match(err, /unknown item "__nope__"/, 'the error names the offending item');
   assert.match(err, /itemsByName/, 'the error names the lookup path (D1)');
   assert.doesNotMatch(err, /Cannot read properties of undefined/, 'no cryptic undefined deref');
+});
+
+// FIX 2 (critic snapshot omitted players): a real mineflayer PLAYER entity exposes `username` (and `type`),
+// not `name`, so the old `!e.name` guard silently dropped every player/villager from worldBefore/After's
+// nearbyEntities — the critic judged a scene with no people in it. The label now falls back name→username→type.
+test('snapshot: nearbyEntities labels a username-only PLAYER entity (FIX 2 — not silently dropped)', async () => {
+  const bot = new RecordingBot({ username: 'Firmin', position: { x: 0, y: 64, z: 0 } });
+  bot.setEntities({
+    1: { username: 'Steve', position: { x: 2, y: 64, z: 0 } }, // a player — no `name`, only `username`
+    2: { name: 'zombie', position: { x: 3, y: 64, z: 0 } }, // a mob — `name` as usual
+    3: { type: 'object', position: { x: 4, y: 64, z: 0 } }, // a typed entity with neither name nor username
+  });
+  const h = harness({ bot });
+  seed(h.library, { name: 'noop', code: 'async function noop(bot, a, c) { return { ok: true }; }' });
+  const report = await h.engine.run('noop', {}, MORTAL);
+  const names = (report.worldBefore?.nearbyEntities ?? []).map((e) => e.name);
+  assert.ok(names.includes('Steve'), 'the username-only player is in the snapshot (was dropped before FIX 2)');
+  assert.ok(names.includes('zombie'), 'the named mob is still in the snapshot');
+  assert.ok(names.includes('object'), 'a type-only entity falls back to its type label');
 });

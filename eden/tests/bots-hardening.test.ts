@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { FakeBot } from './fakes/fake-bot';
+import { RecordingBot } from './fakes/recording-bot';
 import {
   boundPathfinder,
   abortActiveTasks,
@@ -12,7 +12,7 @@ import {
 import { loadPlugins, AUTO_EAT_OPTS } from '../src/bots/plugins';
 
 test('boundPathfinder bounds thinkTimeout/tickTimeout/searchRadius (R6)', () => {
-  const bot = new FakeBot();
+  const bot = new RecordingBot();
   // Upstream defaults are unbounded/high — the canary that we actually changed them.
   assert.equal(bot.pathfinder.searchRadius, -1);
   boundPathfinder(bot);
@@ -22,7 +22,7 @@ test('boundPathfinder bounds thinkTimeout/tickTimeout/searchRadius (R6)', () => 
 });
 
 test('abortActiveTasks runs the ordered sequence (R4): collect → pvp → pathfinder.stop → setGoal(null) → close window', async () => {
-  const bot = new FakeBot();
+  const bot = new RecordingBot();
   bot.openWindow({ id: 7, type: 'minecraft:crafting' }); // a stray window to close last
   await abortActiveTasks(bot);
   // The order is load-bearing: a lone pathfinder.stop() arms a latent flag, so setGoal(null)
@@ -41,7 +41,7 @@ test('abortActiveTasks runs the ordered sequence (R4): collect → pvp → pathf
 });
 
 test('abortActiveTasks survives missing plugins (R5/R16) — never throws', async () => {
-  const bot = new FakeBot() as unknown as Record<string, unknown>;
+  const bot = new RecordingBot() as unknown as Record<string, unknown>;
   // Simulate a bot that never loaded pvp/collectblock/pathfinder.
   bot['pvp'] = undefined;
   bot['collectBlock'] = undefined;
@@ -50,7 +50,7 @@ test('abortActiveTasks survives missing plugins (R5/R16) — never throws', asyn
 });
 
 test('installChatInterceptor drops /-prefixed chat on an op-able mortal run (R25)', () => {
-  const bot = new FakeBot();
+  const bot = new RecordingBot();
   const remove = installChatInterceptor(bot);
   bot.chat('hello villagers');
   bot.chat('/op @s'); // a slash command phrased as speech — must be dropped
@@ -62,7 +62,7 @@ test('installChatInterceptor drops /-prefixed chat on an op-able mortal run (R25
 });
 
 test('waitForInventoryQuiescence resolves only after packets settle (R2)', async () => {
-  const bot = new FakeBot();
+  const bot = new RecordingBot();
   const quietMs = 60;
   const started = Date.now();
   const done = waitForInventoryQuiescence(bot, { quietMs, timeoutMs: 2_000 });
@@ -75,7 +75,7 @@ test('waitForInventoryQuiescence resolves only after packets settle (R2)', async
 });
 
 test('craftQuiescence closes the stray window, pauses mutators, then restores (R1–R3)', async () => {
-  const bot = new FakeBot();
+  const bot = new RecordingBot();
   bot.openWindow({ id: 9, type: 'minecraft:chest' }); // R1: a stray chest hijacks clicks
   let pausedDuringCraft = false;
   const result = await craftQuiescence(
@@ -96,7 +96,7 @@ test('craftQuiescence closes the stray window, pauses mutators, then restores (R
 });
 
 test('loadPlugins is individually fallible (R16) and applies auto-eat config verbatim (R17)', () => {
-  const bot = new FakeBot();
+  const bot = new RecordingBot();
   const bad = { name: 'bad-plugin' };
   const good = [{ name: 'pvp' }, { name: 'armor' }, { name: 'tool' }, { name: 'collect' }];
   // One plugin throws on load; the rest must still load and a warning is recorded.
@@ -120,4 +120,27 @@ test('loadPlugins is individually fallible (R16) and applies auto-eat config ver
   // The load-bearing fields, restated (so a silent upstream default shift is caught — R17).
   assert.equal(AUTO_EAT_OPTS.returnToLastItem, true);
   assert.ok(AUTO_EAT_OPTS.bannedFood.includes('poisonous_potato'));
+});
+
+// FIX 4: a load-bearing plugin that did NOT attach (bot.pvp/armorManager/collectBlock undefined) must be
+// surfaced — not just warned. loadPlugins calls onMissing(name) for each absent one (the host wires it to a
+// journal system.error); the bot stays online either way (R16). RecordingBot hardcodes the plugins, so absence
+// is modeled with dropLoadBearingPlugin — the only way CI ever sees this path.
+test('FIX 4: loadPlugins calls onMissing for a load-bearing plugin that did not attach (R16 — visible, not silent)', () => {
+  const bot = new RecordingBot();
+  bot.dropLoadBearingPlugin('pvp'); // simulate pvp silently failing to attach
+  const warnings: string[] = [];
+  const missing: string[] = [];
+  loadPlugins(bot, { onWarn: (m) => warnings.push(m), onMissing: (p) => missing.push(p) });
+  assert.deepEqual(missing, ['pvp'], 'the absent load-bearing plugin was reported via onMissing');
+  assert.ok(warnings.some((w) => /pvp/.test(w) && /did not attach/.test(w)), 'and warned (R16/R41)');
+  // The bot is still usable — armorManager + collectBlock are present, so they are NOT reported.
+  assert.ok(!missing.includes('armorManager') && !missing.includes('collectBlock'));
+});
+
+test('FIX 4: loadPlugins reports NOTHING when every load-bearing plugin attached', () => {
+  const bot = new RecordingBot();
+  const missing: string[] = [];
+  loadPlugins(bot, { onMissing: (p) => missing.push(p) });
+  assert.deepEqual(missing, [], 'all load-bearing plugins present → no onMissing calls');
 });

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ScriptedLlm } from './fakes/scripted-llm';
-import { FakeBot } from './fakes/fake-bot';
+import { RecordingBot } from './fakes/recording-bot';
 import { MemoryJournal } from './fakes/memory-journal';
 import { SkillLibrary, AllGranted } from '../src/skills/library';
 import { SkillEngine } from '../src/skills/engine';
@@ -28,7 +28,7 @@ async function harness(turns: Parameters<typeof ScriptedLlm.start>[0]) {
   const dir = mkdtempSync(join(tmpdir(), 'eden-brain-'));
   const journal = new MemoryJournal();
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
-  const bot = new FakeBot({ username: 'Firmin' });
+  const bot = new RecordingBot({ username: 'Firmin' });
   const engine = new SkillEngine({
     library, journal, grants: new AllGranted(), resolveBot: () => bot,
     runDefaultTimeoutMs: 120_000, stallSeconds: 20, maxCallDepth: 8, autoQuarantineAfter: 5,
@@ -172,6 +172,38 @@ test('M3-3: a deliberation that stops issuing tool calls ends cleanly (implicit 
   } finally {
     await h.llm.close();
   }
+});
+
+test('MED-9: an LLM error still appends a matching brain.done (no dangling deliberation) and re-throws', async () => {
+  // A client.chat throw inside the deliberation loop must not unwind past the terminal brain.done — every
+  // brain.wakeup gets a matching brain.done in a finally (summary names the failure), then the error propagates.
+  const dir = mkdtempSync(join(tmpdir(), 'eden-brain-err-'));
+  const journal = new MemoryJournal();
+  const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
+  const bot = new RecordingBot({ username: 'Firmin' });
+  const engine = new SkillEngine({
+    library, journal, grants: new AllGranted(), resolveBot: () => bot,
+    runDefaultTimeoutMs: 120_000, stallSeconds: 20, maxCallDepth: 8, autoQuarantineAfter: 5,
+  });
+  const retriever = new SkillRetriever({ library, embeddings: new EmbeddingsService({}), grants: new AllGranted() });
+  const tools = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: 400 });
+  const boom = new Error('provider 500 — boom');
+  const throwingClient = { chat: () => Promise.reject(boom) } as unknown as LlmClient;
+  const brain = new Brain({
+    builder: new ContextPackBuilder({ journal }),
+    tools,
+    scheduler: new LlmScheduler({ maxConcurrent: 3, perVillagerCooldownMs: 0 }),
+    client: throwingClient,
+    journal,
+  });
+
+  await assert.rejects(brain.deliberate(input(), { rolloutId: 'roll-err' }), /boom/, 'the error propagates to the caller');
+  const wake = journal.query({ kinds: ['brain.wakeup'], ref: 'roll-err' });
+  const done = journal.query({ kinds: ['brain.done'], ref: 'roll-err' });
+  assert.equal(wake.length, 1, 'the deliberation opened with a brain.wakeup');
+  assert.equal(done.length, 1, 'a matching brain.done was appended despite the throw (no dangling)');
+  assert.equal((done[0]!.payload as { summary: string }).summary, '(LLM error)', 'the failure is named in the summary');
+  assert.equal((done[0]!.payload as { toolCalls: number }).toolCalls, 0);
 });
 
 test('M3-3: revision context (activeRollout draft + density + history) persists into the pack', async () => {

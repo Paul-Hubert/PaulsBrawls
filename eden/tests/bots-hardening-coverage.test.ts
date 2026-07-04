@@ -6,13 +6,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { FakeBot } from './fakes/fake-bot';
+import { RecordingBot } from './fakes/recording-bot';
 import { abortActiveTasks, craftQuiescence, waitForInventoryQuiescence } from '../src/bots/hardening';
 
 // ── waitForInventoryQuiescence hard-timeout valve (R39) ─────────────────────
 
 test('waitForInventoryQuiescence resolves via hard-timeout when packets never stop (R39)', async () => {
-  const bot = new FakeBot();
+  const bot = new RecordingBot();
   // Keep emitting packets at 20 ms intervals — the quiet timer can never settle.
   // The hard timeout (50 ms) must fire and resolve instead.
   const interval = setInterval(() => bot.packetSetSlot(0, 0, null), 20);
@@ -29,7 +29,7 @@ test('waitForInventoryQuiescence resolves via hard-timeout when packets never st
 // ── abortActiveTasks continues past a rejecting pvp.stop() (R5) ─────────────
 
 test('abortActiveTasks continues the abort sequence when pvp.stop() rejects (R5)', async () => {
-  const bot = new FakeBot();
+  const bot = new RecordingBot();
   // Replace pvp with a version that rejects on stop — the catch in abortActiveTasks must
   // swallow this and continue with pathfinder.stop() → setGoal(null) (R4/R5).
   (bot as any).pvp = {
@@ -52,7 +52,7 @@ test('abortActiveTasks continues the abort sequence when pvp.stop() rejects (R5)
 // ── craftQuiescence finally path when fn() throws (R3) ───────────────────────
 
 test('craftQuiescence restores auto-eat and armor-manager in the finally path when fn() throws (R3)', async () => {
-  const bot = new FakeBot();
+  const bot = new RecordingBot();
 
   let mutatorsPausedWhenFnThrew = false;
   const boom = new Error('craft fn exploded');

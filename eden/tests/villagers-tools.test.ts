@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { FakeBot } from './fakes/fake-bot';
+import { RecordingBot } from './fakes/recording-bot';
 import { MemoryJournal } from './fakes/memory-journal';
 import { SkillLibrary, AllGranted } from '../src/skills/library';
 import { SkillEngine } from '../src/skills/engine';
@@ -14,7 +14,7 @@ import { ToolRegistry, type ToolContext } from '../src/villagers/tools';
 import { SubscriptionStore } from '../src/villagers/subscriptions';
 import { VillagerMemory } from '../src/villagers/memory';
 import type { LlmToolCall } from '../src/llm/client';
-import type { RunnerRef } from '../src/types/index';
+import type { RunnerRef, SayBeat, TradeItem, VillagerSocial } from '../src/types/index';
 
 const RUNNER: RunnerRef = { name: 'Firmin', role: 'farmer', tier: 'mortal' };
 
@@ -22,7 +22,7 @@ function harness() {
   const dir = mkdtempSync(join(tmpdir(), 'eden-tools-'));
   const journal = new MemoryJournal();
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
-  const bot = new FakeBot({ username: 'Firmin' });
+  const bot = new RecordingBot({ username: 'Firmin' });
   const engine = new SkillEngine({
     library,
     journal,
@@ -44,19 +44,22 @@ const CTX = (over: Partial<ToolContext> = {}): ToolContext => ({ villager: 'Firm
 
 const OBJ = { type: 'object', properties: {} };
 
-test('M3-2 (golden schemas): the villager tool surface is exactly the M3+M5 set', () => {
+test('M3-2 (golden schemas): the villager tool surface is exactly the M3+M5+M6-social set', () => {
   const { tools } = harness();
   const names = tools.definitions().map((d) => d.function.name).sort();
   // M5 added `unsubscribe` (the plan §4 M5-2 lists subscribe/unsubscribe/list_subscriptions) and wired
-  // subscribe/list_subscriptions to the real store (no longer stubs) — an intentional schema change.
+  // subscribe/list_subscriptions to the real store (no longer stubs). HIGH-4 added the social/economic
+  // tools `say` + `propose_trade` (wiring the trade + conversation subsystem live) — an intentional change.
   assert.deepEqual(names, [
     'done',
     'list_subscriptions',
+    'propose_trade',
     'read_skill',
     'recall',
     'remember',
     'report_to_god',
     'run_skill',
+    'say',
     'search_skills',
     'subscribe',
     'unsubscribe',
@@ -123,6 +126,38 @@ test('M3-2: write_skill returns a parse error inline for immediate retry (never 
   assert.equal(out.authored, undefined);
   assert.match(out.content, /erreur|error|parse|syntax/i);
   assert.equal(library.getVersion('broken', 1), undefined);
+});
+
+test('R73: write_skill rejects a malformed params schema (typeless properties-map) for immediate re-author', async () => {
+  const { tools, library } = harness();
+  // The live bug: `params: { maxBlocks: "number" }` — a properties-map written WITHOUT the
+  // `{ type:'object', properties }` wrapper. It defeats run-boundary arg validation (validateArgs skips a
+  // typeless schema) AND renders a lying `({})` signature. Reject it inline, like a parse error.
+  const out = await tools.dispatch(
+    call('write_skill', { name: 'till-and-sow', summary: 's', params: { maxBlocks: 'number' }, returns: OBJ, code: 'async function tillAndSow(bot,{maxBlocks},ctx){ return { ok: true }; }' }),
+    CTX(),
+  );
+  assert.equal(out.authored, undefined, 'no draft created');
+  assert.equal(out.ok, false);
+  assert.match(out.content, /type|schéma|schema|properties/i, 'a readable boundary error naming the schema shape');
+  assert.equal(library.getVersion('till-and-sow', 1), undefined, 'the malformed schema never entered the library');
+});
+
+test('R73: write_skill accepts a well-formed object schema (no false rejection of valid params)', async () => {
+  const { tools, library } = harness();
+  const out = await tools.dispatch(
+    call('write_skill', {
+      name: 'till-and-sow',
+      summary: 's',
+      params: { type: 'object', properties: { maxBlocks: { type: 'integer' } }, required: ['maxBlocks'] },
+      returns: { type: 'object', properties: { ok: { type: 'boolean' } } },
+      code: 'async function tillAndSow(bot,{maxBlocks},ctx){ return { ok: true }; }',
+    }),
+    CTX(),
+  );
+  assert.deepEqual(out.authored, { name: 'till-and-sow', version: 1 }, 'a proper JSON Schema is accepted');
+  // The signature is now honest — it names the required arg (D-04: signatures can't lie).
+  assert.match(library.read('till-and-sow', 1)!.manifest.signature, /maxBlocks/, 'the rendered signature names the required arg');
 });
 
 test('M3-2: run_skill runs the live version and records the RunReport', async () => {
@@ -233,6 +268,117 @@ test('M3-2: an unknown tool name returns an error string, never throws', async (
   const { tools } = harness();
   const out = await tools.dispatch(call('frobnicate', {}), CTX());
   assert.match(out.content, /unknown|inconnu/i);
+});
+
+// ── HIGH-4 society: say / propose_trade (wiring the trade + conversation subsystem live) ───────────
+// A recording VillagerSocial fake (the types/ seam main.ts binds per villager) so the tool surface is
+// proven without a live bot — the seam itself is wired in main-social.test.ts.
+
+function recordingSocial(): { social: VillagerSocial; says: Array<{ to?: string; text: string; beat?: SayBeat }>; trades: Array<{ to: string; give: TradeItem[]; want: TradeItem[] }>; failTrade?: boolean } {
+  const rec = {
+    says: [] as Array<{ to?: string; text: string; beat?: SayBeat }>,
+    trades: [] as Array<{ to: string; give: TradeItem[]; want: TradeItem[] }>,
+    failTrade: false as boolean | undefined,
+    social: undefined as unknown as VillagerSocial,
+  };
+  rec.social = {
+    say: async (opts) => { rec.says.push(opts); return { ok: true }; },
+    proposeTrade: async (opts) => {
+      rec.trades.push(opts);
+      return rec.failTrade ? { ok: false, reason: 'settlement HTTP 422: insufficient items' } : { ok: true };
+    },
+  };
+  return rec;
+}
+
+function wiredSocialHarness() {
+  const base = harness();
+  const rec = recordingSocial();
+  const wired = new ToolRegistry({
+    library: base.library, engine: base.engine, retriever: base.retriever, journal: base.journal,
+    maxSkillLines: 400, socialFor: (v) => (v === 'Firmin' ? rec.social : undefined),
+  });
+  return { ...base, tools: wired, rec };
+}
+
+test('HIGH-4: say/propose_trade degrade gracefully when no social port is wired (never a throw)', async () => {
+  const { tools } = harness(); // no socialFor
+  const say = await tools.dispatch(call('say', { text: 'bonjour' }), CTX());
+  assert.equal(say.ok, false);
+  assert.match(say.content, /société|non câbl/i);
+  const trade = await tools.dispatch(call('propose_trade', { to: 'Pilou', give: [{ item: 'wheat', count: 1 }], want: [{ item: 'coin', count: 1 }] }), CTX());
+  assert.equal(trade.ok, false);
+  assert.match(trade.content, /société|non câbl/i);
+});
+
+test('HIGH-4 (say reaches game chat): a plain say is delivered through the social port', async () => {
+  const { tools, rec } = wiredSocialHarness();
+  const out = await tools.dispatch(call('say', { text: 'Bonjour le village !' }), CTX());
+  assert.notEqual(out.ok, false, 'a clean say is a success');
+  assert.equal(rec.says.length, 1);
+  assert.equal(rec.says[0]!.text, 'Bonjour le village !');
+  assert.equal(rec.says[0]!.to, undefined, 'no addressee → public chat');
+});
+
+test('HIGH-4 (SECURITY): say STRIPS/REJECTS a leading "/" — no command emission from chat input', async () => {
+  const { tools, rec } = wiredSocialHarness();
+  const out = await tools.dispatch(call('say', { text: '/op Firmin' }), CTX());
+  assert.equal(out.ok, false, 'a "/"-prefixed message is refused');
+  assert.match(out.content, /\//, 'the error names the slash-command guard');
+  assert.equal(rec.says.length, 0, 'the command NEVER reached the chat sink (no command emission)');
+  // whitespace-then-slash is also caught (mirror the God-body interceptor regex)
+  const out2 = await tools.dispatch(call('say', { text: '   /say hi' }), CTX());
+  assert.equal(out2.ok, false);
+  assert.equal(rec.says.length, 0);
+});
+
+test('HIGH-4 (say to a peer + beat): a directed say carries the addressee + the relationship beat', async () => {
+  const { tools, rec } = wiredSocialHarness();
+  const beat = { opinion: 3, note: 'généreux', headline: 'Pilou m’a aidé' };
+  const out = await tools.dispatch(call('say', { text: 'merci !', to: 'Pilou', beat }), CTX());
+  assert.notEqual(out.ok, false);
+  assert.equal(rec.says[0]!.to, 'Pilou');
+  assert.deepEqual(rec.says[0]!.beat, beat, 'the beat is forwarded to the social port (it moves relations)');
+});
+
+test('HIGH-4 (say guard): a malformed beat is a usage error (not silently dropped)', async () => {
+  const { tools, rec } = wiredSocialHarness();
+  const out = await tools.dispatch(call('say', { text: 'salut', to: 'Pilou', beat: { opinion: 'lots' } }), CTX());
+  assert.equal(out.ok, false);
+  assert.match(out.content, /beat/i);
+  assert.equal(rec.says.length, 0, 'a malformed beat never reached the port');
+});
+
+test('HIGH-4 (trade happy path): propose_trade forwards a typed offer to the social port', async () => {
+  const { tools, rec } = wiredSocialHarness();
+  const out = await tools.dispatch(call('propose_trade', { to: 'Pilou', give: [{ item: 'oak_log', count: 8 }], want: [{ item: 'coin', count: 2 }] }), CTX());
+  assert.notEqual(out.ok, false, 'a settled trade is a success');
+  assert.equal(rec.trades.length, 1);
+  assert.deepEqual(rec.trades[0]!.give, [{ item: 'oak_log', count: 8 }]);
+  assert.match(out.content, /Pilou/);
+});
+
+test('HIGH-4 (settlement failure is SURFACED): a failed trade is ok:false with the named cause — never a silent success', async () => {
+  const { tools, rec } = wiredSocialHarness();
+  rec.failTrade = true;
+  const out = await tools.dispatch(call('propose_trade', { to: 'Pilou', give: [{ item: 'oak_log', count: 8 }], want: [{ item: 'coin', count: 2 }] }), CTX());
+  assert.equal(out.ok, false, 'the brain must see the failure, not a fake success');
+  assert.match(out.content, /échou|422|insufficient/i, 'the named settlement cause is surfaced (S10)');
+  assert.match(out.content, /rien|untouched|échangé/i, 'and that nothing was swapped (inventory belief intact)');
+});
+
+test('HIGH-4 (trade guards): propose_trade rejects an empty partner / empty give / empty want', async () => {
+  const { tools, rec } = wiredSocialHarness();
+  const noTo = await tools.dispatch(call('propose_trade', { to: '  ', give: [{ item: 'wheat', count: 1 }], want: [{ item: 'coin', count: 1 }] }), CTX());
+  assert.equal(noTo.ok, false);
+  assert.match(noTo.content, /to|partenaire/i);
+  const noGive = await tools.dispatch(call('propose_trade', { to: 'Pilou', give: [], want: [{ item: 'coin', count: 1 }] }), CTX());
+  assert.equal(noGive.ok, false);
+  assert.match(noGive.content, /give/i);
+  const noWant = await tools.dispatch(call('propose_trade', { to: 'Pilou', give: [{ item: 'wheat', count: 1 }], want: [] }), CTX());
+  assert.equal(noWant.ok, false);
+  assert.match(noWant.content, /want/i);
+  assert.equal(rec.trades.length, 0, 'no malformed offer reached the settlement path');
 });
 
 // ── Coverage: input-validation branches every tool guards (audit 2026-06-14) ──────────────────────

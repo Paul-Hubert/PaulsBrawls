@@ -1,21 +1,21 @@
 // M5-1 — the EventRouter: normalize raw mineflayer/world signals into EdenEvent Envelopes through an
 // EMITTER REGISTRY (S1: one row per emitter, never a branch), with hysteresis IN the emitter for the
 // two edge-style events (health-low, night-falls) and a tick-30s clock. Proofs:
-//   • per-event emitter unit tests on FakeBot (each raw signal → exactly one normalized Envelope);
+//   • per-event emitter unit tests on RecordingBot (each raw signal → exactly one normalized Envelope);
 //   • the hysteresis edge test — crossing the threshold fires once, staying past it does NOT re-fire,
 //     re-crossing after recovery fires again (the subscriber never needs debounce logic, 04).
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { FakeBot } from './fakes/fake-bot';
+import { RecordingBot } from './fakes/recording-bot';
 import { MemoryJournal } from './fakes/memory-journal';
 import { EventRouter, type EventRouterOptions } from '../src/villagers/events';
 import type { Envelope, EdenEvent } from '../src/types/index';
 
-/** Attach a router to a FakeBot and collect every normalized Envelope it emits (the routing sink). */
+/** Attach a router to a RecordingBot and collect every normalized Envelope it emits (the routing sink). */
 function harness(over: Partial<EventRouterOptions> = {}) {
-  const bot = new FakeBot({ username: 'Firmin' });
+  const bot = new RecordingBot({ username: 'Firmin' });
   const journal = new MemoryJournal();
   const seen: Envelope[] = [];
   const router = new EventRouter({
@@ -114,6 +114,15 @@ test('M5-1 (hysteresis): starting already-low fires once, not repeatedly', () =>
   bot.emit('health');
   bot.emit('health');
   assert.deepEqual(types(seen), ['health-low']);
+});
+
+test('M5-1 (tick samples time): tick() re-evaluates the time phase so night-falls fires off the 30 s clock', () => {
+  // Production drives the day/night phase off the coarse 30 s clock (the adapter does NOT forward the
+  // 20 Hz native `time` — signals.ts). So tick() must edge the phase, not just emit tick-30s.
+  const { bot, router, seen } = harness();
+  bot.setTime(1000); router.tick(); // day — first sample (no edge); emits tick-30s
+  bot.setTime(14000); router.tick(); // → night: emits tick-30s, THEN the night-falls edge
+  assert.deepEqual(types(seen), ['tick-30s', 'tick-30s', 'night-falls'], 'tick emits the clock then samples the phase');
 });
 
 test('M5-1 (hysteresis): night-falls fires once on day→night; new-day on night→day; no re-fire mid-phase', () => {
