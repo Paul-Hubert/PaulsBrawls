@@ -77,7 +77,7 @@ test('M2-5: admission triggers the pass — the derived description replaces the
       code: CODE,
       author: { kind: 'villager', name: 'Firmin' },
     });
-    library.admit('collect-wood', v.version, { rolloutId: 'r1', verdictId: 'v1' });
+    library.admit('collect-wood', v.version, { rolloutId: 'r1', source: 'critic' as const, verdictId: 'v1' });
     // The admission flow (M3 wires this at the critic) runs the pass + patches the manifest.
     const pass = new DescriptionPass(clientFor(llm.url));
     const patch = await pass.derive('collect-wood', CODE);

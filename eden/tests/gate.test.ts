@@ -61,6 +61,7 @@ async function wire(turns: ScriptedTurn[]): Promise<Wiring> {
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
   const bot = new RecordingBot({ username: 'Firmin' });
   const engine = new SkillEngine({
+    traceGraceMs: 0, // D-16 trace grace off — logic-tier speed; the grace-specific tests set their own
     library, journal, grants: new AllGranted(), resolveBot: () => bot,
     runDefaultTimeoutMs: 120_000, stallSeconds: 20, maxCallDepth: 8, autoQuarantineAfter: 5,
   });

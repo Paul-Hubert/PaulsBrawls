@@ -24,6 +24,8 @@ export const JOURNAL_KINDS = [
   'skill.archive',
   'skill.run',
   'skill.log',
+  // Skills domain (D-16, docs/22 §3) — the mechanical flip gate's judgment (one row per gate run).
+  'skill.self-verdict',
   // LLM domain (M2).
   'llm.call',
   // Brain domain (M3) — one villager deliberation, start to finish.
@@ -57,6 +59,8 @@ export const JOURNAL_KINDS = [
   // matched-and-routed event, NEVER a per-tick stream (R44/D-07 — the emitter pulses stay in RAM).
   'subscription.created',
   'subscription.removed',
+  'subscription.enabled',
+  'subscription.disabled',
   'subscription.fired',
   'subscription.suppressed',
   // Scenario domain — in-game /villagers command loaded/stopped/reset a scenario roster.
@@ -102,8 +106,28 @@ export interface KindPayloads {
   'skill.archive': { name: string; version: number };
   // The full RunReport — Voyager-rendered snapshots keep this a SMALL row (D-07/R44).
   'skill.run': RunReport;
+  // D-16 (docs/22 §3.5): the flip gate's mechanical judgment over one T(pre)→S→T(post) attempt.
+  // `decision` is the truth-table outcome; `evidence` is the concrete assertion failure (revision
+  // fuel); `testDeltaEmpty`/`testPostDeltaEmpty` journal Tδ for the §3.3 purity AUDIT (measured
+  // free, never gated on). refs carry rolloutId/runId/skill so a rollout's gate runs are one query.
+  'skill.self-verdict': {
+    skill: string;
+    version: number;
+    decision: 'admit' | 'reject-test' | 'reject' | 'revise' | 'nothing-to-do' | 'suspect-test' | 'failed';
+    preVerdict: string;
+    postVerdict: string;
+    deltaEmpty: boolean;
+    checkOk?: boolean;
+    evidence: string;
+    testSkill: string;
+    testVersion: number;
+    /** T(pre)'s own engine delta was empty (purity audit, §3.3). */
+    testDeltaEmpty?: boolean;
+    /** T(post)'s own engine delta was empty (purity audit, §3.3). */
+    testPostDeltaEmpty?: boolean;
+  };
   // An in-run ctx.log line (refs.runId/rolloutId tie it to its run).
-  'skill.log': { skill: string; message: string };
+  'skill.log': { skill: string; level: 'info' | 'warn' | 'error'; message: string };
   // ── LLM domain (M2). desk/villager, model, latency, tokens, finish reason — NEVER raw prompt
   // bodies (those go to .eden-data/llm/<id>.json when debugPrompts). refs.llmCallId. ──
   'llm.call': {
@@ -213,6 +237,10 @@ export interface KindPayloads {
   };
   // A subscription was removed (an `unsubscribe` tool call or an admin). refs carry nothing extra.
   'subscription.removed': { id: string; villager: string };
+  // A subscription was re-enabled (admin toggle or quarantine self-heal). Every mutation journals (P4).
+  'subscription.enabled': { id: string; villager: string };
+  // A subscription was disabled without removal (admin toggle or the quarantine auto-disable path, 04).
+  'subscription.disabled': { id: string; villager: string };
   // A subscription matched an event (filter passed) and ROUTED. `outcome` is 'skill' (a zero-token
   // SkillEngine.run) or 'deliberate' (a brain wake-up). One of the two windowed high-volume kinds
   // (Retention, 05) — the windowed SUMMARY of a routed event, never a per-tick stream (R44).
@@ -256,6 +284,7 @@ export const KIND_REGISTRY = {
   'skill.quarantine': { doc: 'an active version was quarantined (God/admin/tripwire/boot hash-mismatch) with reason' },
   'skill.archive': { doc: 'a version was archived (invisible to retrieval, visible to admin)' },
   'skill.run': { doc: 'the full RunReport of one skill tree run (P4) — the critic reads it; stats fold from it' },
+  'skill.self-verdict': { doc: 'the D-16 flip gate judged one T(pre)→S→T(post) attempt: truth-table decision + evidence + the Tδ purity audit (docs/22 §3.5)' },
   'skill.log': { doc: 'an in-run ctx.log line — NOT console (R23); refs.runId ties it to its run' },
   'llm.call': { doc: 'one LLM call: caller/model/tier/latency/tokens/finish — NEVER prompt bodies (debugPrompts→file)' },
   'brain.wakeup': { doc: 'a villager deliberation began: triggers + context-pack section token sizes (D-11) — prompt bloat is measurable' },
@@ -280,6 +309,8 @@ export const KIND_REGISTRY = {
   'trade.failed': { doc: 'settlement failed (non-2xx / network / re-validation reject); inventories UNTOUCHED; reason carries the cause (S10) (M6)' },
   'subscription.created': { doc: 'a subscription was created (role-default/self/god/admin) — the "when X, do Y" reflex as data (P5) (M5)' },
   'subscription.removed': { doc: 'a subscription was removed (unsubscribe/admin) (M5)' },
+  'subscription.enabled': { doc: 'a subscription was re-enabled without removal (admin toggle / quarantine self-heal) — every mutation journals (P4) (M5)' },
+  'subscription.disabled': { doc: 'a subscription was disabled without removal (admin toggle / quarantine auto-disable) — every mutation journals (P4) (M5)' },
   'subscription.fired': { doc: 'a subscription matched + routed: outcome skill (zero-token run) or deliberate (wake-up) — windowed high-volume kind (Retention) (M5)' },
   'subscription.suppressed': { doc: 'a matched subscription did NOT route: cooldown/disabled/not-while-running — suppression is information, not silence (R36) (M5)' },
   'scenario.start': { doc: 'in-game /villagers start loaded a scenario and connected its bots (journaled before acting, 05)' },

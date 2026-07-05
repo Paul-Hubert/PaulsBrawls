@@ -116,6 +116,7 @@ function hostHarness(roster: Array<{ name: string; role: string }>): HostHarness
   seedStockSkills(library); // flee-to-safety / defend-self / go-to / kill-mob all enter the library
   const bots = new Map<string, RecordingBot>();
   const engine = new SkillEngine({
+    traceGraceMs: 0, // D-16 trace grace off — logic-tier speed; the grace-specific tests set their own
     library, journal, grants: new AllGranted(),
     resolveBot: (name) => bots.get(name),
     runDefaultTimeoutMs: 120_000, stallSeconds: 20, maxCallDepth: 8, autoQuarantineAfter: 5,
@@ -366,6 +367,7 @@ test('M5 host (runningSkills): the engine reports a skill running mid-tree, empt
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
   const bot = new RecordingBot({ username: 'Firmin' });
   const engine = new SkillEngine({
+    traceGraceMs: 0, // D-16 trace grace off — logic-tier speed; the grace-specific tests set their own
     library, journal, grants: new AllGranted(), resolveBot: () => bot,
     runDefaultTimeoutMs: 120_000, stallSeconds: 60, maxCallDepth: 8, autoQuarantineAfter: 5,
   });

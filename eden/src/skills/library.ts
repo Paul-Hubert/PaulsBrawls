@@ -49,6 +49,12 @@ export interface DraftInput {
   description?: string;
   tags?: string[];
   exemplar?: boolean;
+  /** D-16: this skill IS a paired test (hidden from retrieval, never composable — docs/22 §3). */
+  test?: boolean;
+  /** On a test: the subject skill it validates (the S↔T pairing key). */
+  validates?: string;
+  /** On a test: the oracle class (O-4). 'return' pairs are exempt from the Sδ≠∅ floor. */
+  oracle?: 'state' | 'events' | 'return';
 }
 
 /** A version resolved for execution / reading: its manifest, metadata, and source. */
@@ -72,7 +78,12 @@ interface SkillRecord {
 export interface SkillLibraryOptions {
   dataDir: string;
   journal: JournalAppender;
-  /** Clean re-judged runs an admitted draft needs to graduate active-probation → active (D-12). */
+  /**
+   * Clean runs an admitted draft needs to graduate active-probation → active (D-12). These are
+   * COUNTED, not critic-re-judged: each is a run the engine recorded as not-throwing (`outcome.ok`),
+   * NOT a fresh verdict. The "auto-ticket for re-review" rail of 03-god.md §Probation is unbuilt
+   * (DEFERRED) — see {@link recordProbationRun}.
+   */
   probationRuns: number;
   now?: () => number;
 }
@@ -126,8 +137,18 @@ export class SkillLibrary {
     return sv;
   }
 
-  /** Seed a stock/exemplar skill straight into a live status (curated review IS its probation, D-12). */
+  /**
+   * Seed a stock/exemplar skill straight into a live status (curated review IS its probation, D-12).
+   * IDEMPOTENT (MED-5 / the 173→27 dedup symptom): a crash-only/pm2 respawn re-seeds every stock skill
+   * on each boot. If the newest version's code is byte-identical (same `codeHash`) AND already at the
+   * requested live status, this is a no-op that returns that version — never minting a fresh version +
+   * file. Only a genuine code change (new hash) or a status change appends a version.
+   */
   seedStock(input: DraftInput, status: 'active' | 'active-probation' = 'active'): SkillVersion {
+    const newest = this.newestNonArchived(input.name);
+    if (newest && newest.version.codeHash === sha256(input.code) && newest.version.status === status) {
+      return newest.version;
+    }
     const sv = this.upsertDraft({ ...input, author: { kind: 'stock', name: input.author.name } });
     const rec = this.find(input.name, sv.version)!;
     rec.version.status = status;
@@ -137,23 +158,33 @@ export class SkillLibrary {
   }
 
   // ── D-12 status machine (only the engine + God move these) ───────────────
-  /** Admit a draft → active-probation (D-12), stamping provenance. The passing direction is gated. */
+  /**
+   * Admit a draft → active-probation (D-12), stamping provenance. The passing direction is gated.
+   * S2 (docs/26 P-17): on the `source:'self-verdict'` path the flip-gate module is the SOLE caller —
+   * `submit_skill` and the CI harness both invoke `flipGate.run(...)`, which performs the admission;
+   * neither re-implements truth-table→admit.
+   */
   admit(name: string, version: number, provenance: Provenance): SkillVersion {
     const rec = this.require(name, version);
     rec.version.status = 'active-probation';
     rec.version.probationRunsLeft = this.probationRuns;
     rec.version.provenance = provenance;
     this.persist(name);
-    this.journal.append('god:critic', 'skill.admit', { name, version, provenance }, {
+    const actor = provenance.source === 'self-verdict' ? 'flip-gate' : 'god:critic';
+    this.journal.append(actor, 'skill.admit', { name, version, provenance }, {
       skill: name,
       skillVersion: version,
       rolloutId: provenance.rolloutId,
-      verdictId: provenance.verdictId,
+      ...(provenance.verdictId !== undefined ? { verdictId: provenance.verdictId } : {}),
     });
     return rec.version;
   }
 
-  /** Record one re-judged run of the live probationary version; N clean runs graduate it to active. */
+  /**
+   * Record one CLEAN RUN (the engine's `outcome.ok`, NOT a fresh critic verdict — re-review is
+   * DEFERRED, see {@link SkillLibraryOptions.probationRuns}) of the live probationary version;
+   * `probationRuns` clean runs graduate it to active.
+   */
   recordProbationRun(name: string, ok: boolean): void {
     const rec = this.liveRecord(name);
     if (!rec || rec.version.status !== 'active-probation') return;
@@ -243,12 +274,46 @@ export class SkillLibrary {
     return rec ? this.resolve(rec) : undefined;
   }
 
-  /** The always-in-prompt exemplar set for a tier — live, exemplar-flagged skills only. */
+  /**
+   * R80 — composition resolves to the highest ACTIVE (graduated) version, NOT the highest live one.
+   * Composers keep the stable v(k) while a re-authored v(k+1) proves itself on probation via direct
+   * runs; without this, re-authoring a widely-composed primitive blocked every composer until
+   * graduation (the current-code cliff docs/22 §5.4 names). Returns undefined when NO version has
+   * ever graduated — the composer path then raises ProbationError for a live probationary first
+   * admission (D-12 intent preserved: the bug was the missing fallback, not the rail).
+   */
+  readComposable(name: string): ResolvedSkill | undefined {
+    const records = this.skills.get(name)?.records ?? [];
+    let best: VersionRecord | undefined;
+    for (const r of records) {
+      if (r.version.status === 'active') {
+        if (!best || r.version.version > best.version.version) best = r;
+      }
+    }
+    return best ? this.resolve(best) : undefined;
+  }
+
+  /**
+   * D-16 pairing: the paired test skill of `name` — the newest non-archived skill whose manifest says
+   * `test && validates === name`. Newest-non-archived (not live-only) so a freshly-drafted T is
+   * usable in its own subject's admission attempt (the gate runs both at explicit draft versions).
+   */
+  pairedTestFor(name: string): ResolvedSkill | undefined {
+    for (const rec of this.skills.values()) {
+      const newest = this.newestNonArchived(rec.name);
+      if (newest && newest.manifest.test === true && newest.manifest.validates === name) {
+        return this.resolve(newest);
+      }
+    }
+    return undefined;
+  }
+
+  /** The always-in-prompt exemplar set for a tier — live, exemplar-flagged, non-test skills only. */
   exemplars(tier: Tier): SkillVersion[] {
     const out: SkillVersion[] = [];
     for (const rec of this.skills.values()) {
       const live = this.liveRecord(rec.name);
-      if (live && live.manifest.exemplar && live.manifest.tier === tier) out.push(live.version);
+      if (live && live.manifest.exemplar && live.manifest.tier === tier && live.manifest.test !== true) out.push(live.version);
     }
     return out;
   }
@@ -309,6 +374,9 @@ export class SkillLibrary {
       tags: input.tags ?? [],
       tier: input.tier ?? 'mortal',
       exemplar: input.exemplar ?? false,
+      ...(input.test !== undefined ? { test: input.test } : {}),
+      ...(input.validates !== undefined ? { validates: input.validates } : {}),
+      ...(input.oracle !== undefined ? { oracle: input.oracle } : {}),
     };
   }
 

@@ -169,7 +169,7 @@ export class GodService {
         this.library.unquarantine(name, version);
         admitted = true;
       } else if (current?.status === 'draft') {
-        this.library.admit(name, version, { rolloutId: opts.rolloutId, verdictId });
+        this.library.admit(name, version, { rolloutId: opts.rolloutId, source: 'critic', verdictId });
         admitted = true;
         await this.runDescriptionPass(name, version);
       }

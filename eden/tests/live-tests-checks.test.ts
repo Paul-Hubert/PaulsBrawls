@@ -32,6 +32,7 @@ function runReport(skill: string, version: number, rolloutId: string, ok: boolea
     pulses: 0,
     deepestDepth: 0,
     callTree: [],
+    logs: [],
     worldBefore: null,
     worldAfter: null,
   };
@@ -52,7 +53,7 @@ test('chainStatus: draftByVillager ties an un-rollout-scoped draft to the versio
   j.append('villager:Firmin', 'skill.run', runReport('harvest_wheat', 2, ROLLOUT, true), { runId: 'run-harvest_wheat-2', rolloutId: ROLLOUT, skill: 'harvest_wheat', skillVersion: 2 });
   j.append('god:critic', 'god.ticket', { source: 'rollout', skill: 'harvest_wheat', version: 2 }, { rolloutId: ROLLOUT, runId: 'run-harvest_wheat-2', skill: 'harvest_wheat', skillVersion: 2 });
   j.append('god:critic', 'god.verdict', { ticketId: 't1', success: true, libraryAction: 'admit', critique: 'ok' }, { rolloutId: ROLLOUT, verdictId: 'v1', skill: 'harvest_wheat', skillVersion: 2 });
-  j.append('god:critic', 'skill.admit', { name: 'harvest_wheat', version: 2, provenance: { rolloutId: ROLLOUT, verdictId: 'v1' } }, { skill: 'harvest_wheat', skillVersion: 2, rolloutId: ROLLOUT, verdictId: 'v1' });
+  j.append('god:critic', 'skill.admit', { name: 'harvest_wheat', version: 2, provenance: { rolloutId: ROLLOUT, source: 'critic' as const, verdictId: 'v1' } }, { skill: 'harvest_wheat', skillVersion: 2, rolloutId: ROLLOUT, verdictId: 'v1' });
 
   const chain = chainStatus(hostWith(j), ROLLOUT);
   assert.equal(chain.draftByVillager, true, 'the version the rollout ran + admitted was villager-authored');
@@ -75,3 +76,4 @@ test('chainStatus: draftByVillager scopes to the RAN version, not "any villager 
   assert.equal(chain.draftByVillager, false, 'the ran version was stock-authored — an unrelated villager draft must not count');
   assert.equal(chain.runOk, true);
 });
+

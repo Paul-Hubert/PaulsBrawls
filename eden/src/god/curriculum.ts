@@ -6,7 +6,11 @@
 // Ported Voyager mechanics, kept deliberately:
 //   • propose ONE task at the edge of current ability (strong tier — novelty, D-13);
 //   • the QA knowledge cache ("how to X in Minecraft?" answered once by the FAST tier,
-//     embedding-deduped, persisted, folded into Task.context forever after — zero-token on a hit);
+//     embedding-deduped, folded into Task.context — zero-token on a hit FOR THE LIFE OF THE PROCESS.
+//     MED-6: the cache is IN-MEMORY ONLY (the `qa` array) and resets on every restart — it is NOT yet
+//     persisted across boots. True persistence (the accumulated handbook surviving a crash-only/pm2
+//     respawn, the D-13/R49 cost lever) is DEFERRED: it needs a dataDir wired from main.ts (mirroring
+//     how memory/library persist), and CurriculumOptions takes no path today;
 //   • decompose(goal) → ordered sub-tasks with `parent`;
 //   • warm-up: an early/empty ledger keeps proposals survival-basic (a config table, not code);
 //   • clean_up_tasks: a `failed` record is retired when a later task completes the same goal.
@@ -155,6 +159,8 @@ export class Curriculum {
   private readonly budget?: BudgetTracker;
   private readonly degradeOnBreach: boolean;
   private readonly now: () => number;
+  /** The QA "how to" cache. MED-6: IN-MEMORY ONLY — it resets on every restart (no dataDir is wired into
+   *  this desk, so it cannot persist without a constructor change in main.ts). Persistence is deferred. */
   private readonly qa: QaEntry[] = [];
   /** R65 convergence breaker: per-task count of EXHAUSTED rollouts (a rollout that ran its full
    *  maxRetries without converging). Curriculum-owned (sole ledger writer — S2); the entry is dropped
@@ -234,7 +240,10 @@ export class Curriculum {
   /**
    * QA knowledge cache (Voyager). Answers a "how to X in Minecraft?" question ONCE on the fast tier,
    * dedups near-identical questions (embedding cosine ≥ threshold, keyword floor when off — R38), and
-   * persists the answer. A cache HIT spends zero LLM calls (zero-token reactivity — D-13/R49).
+   * caches the answer in memory. A cache HIT spends zero LLM calls (zero-token reactivity — D-13/R49).
+   * MED-6: the cache lives in the in-memory `qa` array only — it is NOT persisted, so it resets on every
+   * restart and re-spends fast-tier tokens on already-answered questions after a respawn (persistence is
+   * deferred — it needs a dataDir wired from main.ts; see the class header).
    */
   async howTo(question: string): Promise<string> {
     const hit = await this.findCached(question);
@@ -504,7 +513,7 @@ export class Curriculum {
    *  re-deriving capabilities it already has. Empty string when no library is wired or none are live. */
   private renderLibraryCoverage(): string {
     if (!this.library) return '';
-    const live = this.library.liveSkills().filter((s) => s.manifest.tier !== 'divine');
+    const live = this.library.liveSkills().filter((s) => s.manifest.tier !== 'divine' && s.manifest.test !== true);
     if (live.length === 0) return '';
     const lines = live.slice(0, 40).map((s) => `• ${s.manifest.name} — ${s.manifest.summary}`).join('\n');
     return `## COMPÉTENCES EXISTANTES (réutilisables, ${live.length})\n${lines}\nUne bonne tâche COMPOSE celles-ci plus UN seul nouveau pas.`;

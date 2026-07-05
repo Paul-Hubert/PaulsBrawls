@@ -19,11 +19,15 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import type { CriticTicket, Dossier, ItemCheck, RunReport, SkillStats, Snapshot, Task, TaskSuggestion, Verdict } from '../types/index';
+import type { CriticTicket, Dossier, ItemCheck, RunReport, SkillStats, Task, TaskSuggestion, Verdict } from '../types/index';
 import type { LlmClient, LlmToolDef, ModelTier } from '../llm/client';
 import { LlmScheduler } from '../llm/scheduler';
 import type { BudgetTracker } from '../llm/scheduler';
 import { renderRunReport } from '../render/run-report';
+// D-16 (docs/22 §3.1): checkSatisfied LIFTED into the flip gate (the objective check is the gate's
+// mission anchor now); the critic imports it back for its remaining verdict rails until B3b retires
+// its skill-admission role. Legal downward import (god/ layer 3 → skills/ layer 2).
+import { checkSatisfied } from '../skills/flip-gate';
 
 /** Everything the critic needs to judge one run (03 §The critic's context pack). */
 export interface CriticContext {
@@ -270,6 +274,16 @@ export class CriticDesk {
       if (libraryAction === 'admit' || libraryAction === 'quarantine') libraryAction = 'none';
     }
 
+    // MED-2a admit↔success rail (one-directional, R48): admission requires the critic's OWN success flag.
+    // The prior rails can force success:false (a failed check, divine overreach, a blocked run) AFTER the
+    // LLM chose `admit`; without this coupling a `{success:false, admit}` verdict — whether emitted
+    // directly by the model or produced by a downgrading rail — would still admit (to active-probation).
+    // Admission is judging the skill a success, so a non-success verdict can never admit (kept-draft instead).
+    if (!success && libraryAction === 'admit') {
+      libraryAction = 'keep-draft';
+      critique = `${critique} [admission refusée: un verdict non-succès n'admet jamais (R48: l'admission exige le drapeau de succès du critique).]`;
+    }
+
     return { ...verdict, success, libraryAction, critique };
   }
 }
@@ -305,11 +319,4 @@ function parseContentJson(content: string | null): Record<string, unknown> | und
   } catch {
     return undefined;
   }
-}
-
-/** Whether worldAfter holds at least `check.count` of `check.item` (the objective task criterion). */
-function checkSatisfied(after: Snapshot | null, check: ItemCheck): boolean {
-  if (!after) return false;
-  const have = after.inventory.filter((i) => i.name === check.item).reduce((s, i) => s + i.count, 0);
-  return have >= check.count;
 }

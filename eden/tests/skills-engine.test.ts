@@ -33,6 +33,7 @@ function harness(opts: { stallSeconds?: number; bot?: RecordingBot; macrotaskSta
   const bot = opts.bot ?? new RecordingBot({ username: 'Firmin' });
   const tripwired: string[] = [];
   const engine = new SkillEngine({
+    traceGraceMs: 0, // D-16 trace grace off — logic-tier speed; the grace-specific tests set their own
     library,
     journal,
     grants: new AllGranted(),

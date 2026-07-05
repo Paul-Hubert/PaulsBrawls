@@ -63,6 +63,8 @@ export class SkillRetriever {
     const villager = search.villager ?? '*';
     const candidates = this.opts.library
       .liveSkills()
+      // D-16: paired tests are invisible to retrieval (docs/22 §3 — pairing is a gate concern).
+      .filter((s) => s.manifest.test !== true)
       // Tier filter: mortal sees only mortal; divine (God) sees both (divine composes mortal).
       .filter((s) => s.manifest.tier === 'mortal' || search.tier === 'divine')
       .filter((s) => this.opts.grants.canRetrieve(villager, s.manifest.name));

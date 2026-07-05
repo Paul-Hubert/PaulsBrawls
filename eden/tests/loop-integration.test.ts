@@ -70,6 +70,7 @@ async function wire(villagers: string[], turns: ScriptedTurn[], wopts: WireOpts 
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
   const bots = new Map<string, Bot>(villagers.map((v) => [v, new RecordingBot({ username: v }) as unknown as Bot]));
   const engine = new SkillEngine({
+    traceGraceMs: 0, // D-16 trace grace off — logic-tier speed; the grace-specific tests set their own
     library, journal, grants: new AllGranted(),
     resolveBot: (name) => bots.get(name) ?? (bots.values().next().value as Bot),
     runDefaultTimeoutMs: 120_000, stallSeconds: 20, maxCallDepth: 8, autoQuarantineAfter: 5,
@@ -377,6 +378,7 @@ test('★ R61 (reactive path): a reactive wake-up pre-loads retrieved skills for
   seedActiveSkill(library, 'defend-self', 'fight back against a hostile attacker', ['hurt', 'zombie', 'defend']);
   const bot = new RecordingBot({ username: 'Garde' }) as unknown as Bot;
   const engine = new SkillEngine({
+    traceGraceMs: 0, // D-16 trace grace off — logic-tier speed; the grace-specific tests set their own
     library, journal, grants: new AllGranted(), resolveBot: () => bot,
     runDefaultTimeoutMs: 120_000, stallSeconds: 20, maxCallDepth: 8, autoQuarantineAfter: 5,
   });

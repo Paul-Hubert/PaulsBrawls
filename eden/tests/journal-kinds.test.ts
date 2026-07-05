@@ -29,6 +29,8 @@ test('M0..M6 register their kinds (one row per kind; each milestone adds only it
       'skill.archive',
       'skill.run',
       'skill.log',
+      // Skills domain (D-16, docs/22 §3) — the flip gate's judgment (B3a).
+      'skill.self-verdict',
       // LLM domain (M2).
       'llm.call',
       // Brain domain (M3).
@@ -59,6 +61,8 @@ test('M0..M6 register their kinds (one row per kind; each milestone adds only it
       // Reactivity domain (M5).
       'subscription.created',
       'subscription.removed',
+      'subscription.enabled',
+      'subscription.disabled',
       'subscription.fired',
       'subscription.suppressed',
       // Scenario domain (M7+ / /villagers command).

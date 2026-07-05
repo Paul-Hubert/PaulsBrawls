@@ -19,6 +19,7 @@ function harness(bot: FakeBot): { engine: SkillEngine; library: SkillLibrary } {
   const library = new SkillLibrary({ dataDir: dir, journal: new MemoryJournal(), probationRuns: 3 });
   seedStockSkills(library);
   const engine = new SkillEngine({
+    traceGraceMs: 0, // D-16 trace grace off — logic-tier speed; the grace-specific tests set their own
     library,
     journal: new MemoryJournal(),
     grants: new AllGranted(),
@@ -91,6 +92,25 @@ test('M2-6: find-block throws a named error when nothing matches in range (write
   const report = await engine.run('find-block', { name: 'oak_log', maxDistance: 8 }, MORTAL);
   assert.equal(report.outcome.ok, false);
   assert.match(report.outcome.ok ? '' : report.outcome.error, /oak_log/);
+});
+
+test('R76: a findBlock matcher reading b.position finds NOTHING (palette pre-check skip); name-only works', () => {
+  const bot = new FakeBot({ username: 'Firmin', position: { x: 0, y: 64, z: 0 } });
+  bot.setBlock({ x: 2, y: 64, z: 0 }, 'grass_block'); // open: air above (unset) — clearly present
+  // A NAME-ONLY matcher survives mineflayer's synthetic-palette pre-check and finds the grass.
+  assert.ok(bot.findBlock({ matching: (b) => !!b && b.name === 'grass_block', maxDistance: 16 }), 'name-only matcher finds it');
+  // The live bug (22 dead till-and-sow versions): reading b.position / calling bot.blockAt INSIDE the
+  // matcher — the synthetic palette block has position:null, so the matcher rejects every palette entry,
+  // the section is skipped, and findBlock returns null though the grass is right there.
+  const trap = bot.findBlock({
+    matching: (b) => {
+      if (!b || !b.position) return false; // ← false on the synthetic palette block ⇒ whole world skipped
+      const above = bot.blockAt({ x: b.position.x, y: b.position.y + 1, z: b.position.z });
+      return b.name === 'grass_block' && (!above || above.name === 'air');
+    },
+    maxDistance: 16,
+  });
+  assert.equal(trap, null, 'position-reading matcher is skipped by the palette pre-check (R76)');
 });
 
 test('M2-6 (R10): collect-blocks takes the grounded trunk only, never floating leaf-logs', async () => {
@@ -255,6 +275,50 @@ test('bread: find-till-spot returns {found:false} (never throws) when no water i
   assert.equal(report.outcome.ok ? (report.outcome.value as { found: boolean }).found : true, false);
 });
 
+test('R76: find-tillable finds open dirt/grass with NO water (skipping covered blocks), nearest-first', async () => {
+  const bot = new FakeBot({ username: 'Firmin', position: { x: 0, y: 64, z: 0 } });
+  bot.setBlock({ x: 1, y: 64, z: 0 }, 'grass_block'); // covered by stone above — must be skipped
+  bot.setBlock({ x: 1, y: 65, z: 0 }, 'stone');
+  bot.setBlock({ x: 3, y: 64, z: 0 }, 'dirt'); // open, farther
+  bot.setBlock({ x: 2, y: 64, z: 0 }, 'grass_block'); // open, nearer — must be first
+  const { engine } = harness(bot);
+  const report = await engine.run('find-tillable', { maxDistance: 32, preferWater: false }, MORTAL);
+  assert.equal(report.outcome.ok, true);
+  const v = report.outcome.ok
+    ? (report.outcome.value as { found: boolean; count: number; spots: Array<{ x: number; y: number; z: number }>; x: number; y: number; z: number })
+    : null;
+  assert.equal(v?.found, true);
+  assert.deepEqual({ x: v?.x, y: v?.y, z: v?.z }, { x: 2, y: 64, z: 0 }, 'nearest OPEN spot first');
+  assert.equal(v?.count, 2, 'both open spots returned; the covered grass_block excluded');
+  assert.ok(!v?.spots.some((s) => s.x === 1 && s.y === 64 && s.z === 0), 'the covered block is never a spot');
+});
+
+test('R76: find-tillable honors the exclude list and degrades to {found:false} (never throws) on bare ground', async () => {
+  const bot = new FakeBot({ username: 'Firmin', position: { x: 0, y: 64, z: 0 } });
+  bot.setBlock({ x: 2, y: 64, z: 0 }, 'grass_block'); // the only open spot
+  const { engine } = harness(bot);
+  let report = await engine.run('find-tillable', { maxDistance: 32, exclude: [{ x: 2, y: 64, z: 0 }], preferWater: false }, MORTAL);
+  assert.equal(report.outcome.ok ? (report.outcome.value as { found: boolean }).found : true, false, 'excluded → nothing left');
+  const bare = new FakeBot({ username: 'Firmin' });
+  bare.setBlock({ x: 1, y: 64, z: 0 }, 'stone'); // no dirt/grass at all
+  const h2 = harness(bare);
+  report = await h2.engine.run('find-tillable', { maxDistance: 8 }, MORTAL);
+  assert.equal(report.outcome.ok, true, 'no tillable ground is a graceful success, not an error');
+  assert.equal(report.outcome.ok ? (report.outcome.value as { found: boolean }).found : true, false);
+});
+
+test('R76: find-tillable floats a water-adjacent spot ahead of a nearer dry one (yield preference, never gated)', async () => {
+  const bot = new FakeBot({ username: 'Firmin', position: { x: 0, y: 64, z: 0 } });
+  bot.setBlock({ x: 3, y: 64, z: 0 }, 'grass_block'); // nearer but dry (>4 from water)
+  bot.setBlock({ x: 10, y: 64, z: 10 }, 'water');
+  bot.setBlock({ x: 9, y: 64, z: 10 }, 'dirt'); // farther but hydrated (Chebyshev 1 from water)
+  const { engine } = harness(bot);
+  const report = await engine.run('find-tillable', { maxDistance: 48, preferWater: true }, MORTAL);
+  assert.equal(report.outcome.ok, true);
+  const v = report.outcome.ok ? (report.outcome.value as { x: number; y: number; z: number }) : null;
+  assert.deepEqual({ x: v?.x, y: v?.y, z: v?.z }, { x: 9, y: 64, z: 10 }, 'hydrated spot preferred over the nearer dry one');
+});
+
 test('bread: till-spot-near-water composes find-till-spot → till-block (dirt becomes farmland)', async () => {
   const bot = new FakeBot({ username: 'Firmin', position: { x: 0, y: 64, z: 0 } });
   bot.setBlock({ x: 5, y: 64, z: 5 }, 'water');
@@ -350,4 +414,48 @@ test('bread: tend-bread-farm runs one cycle — harvest → bake → store — c
   assert.ok(report.callTree.some((f) => f.skill === 'make-bread'), 'composed the bake pair');
   assert.ok(report.callTree.some((f) => f.skill === 'store-in-chest'), 'composed the stash step');
   assert.ok((bot.chestContents({ x: 2, y: 64, z: 1 }).find((i) => i.name === 'bread')?.count ?? 0) >= 2, 'loaves stored');
+});
+
+// FIX 1 (combat path was DEAD in CI): kill-mob/shoot-mob used Vec3 .distanceTo, which threw against the
+// fake's plain-object entity.position, so the whole combat path never EXECUTED in any test. These run it.
+test('combat: kill-mob attacks the nearest matching hostile and kills it (Math.hypot distance)', async () => {
+  const bot = new FakeBot({ username: 'Bertrand', position: { x: 0, y: 64, z: 0 } });
+  bot.setEntities({ 7: { name: 'zombie', position: { x: 3, y: 64, z: 0 } } }); // isValid defaults true
+  const { engine } = harness(bot);
+  const report = await engine.run('kill-mob', { entityName: 'zombie', maxDistance: 16 }, MORTAL);
+  assert.equal(report.outcome.ok, true, 'kill-mob ran to completion (not thrown by a missing .distanceTo)');
+  assert.deepEqual(report.outcome.ok ? report.outcome.value : null, { killed: true });
+  assert.equal(bot.entities['7']?.isValid, false, 'pvp.attack flipped the target invalid (the kill)');
+  assert.ok(bot.calls.includes('pvp.attack'), 'the pvp combat loop was actually entered');
+});
+
+test('combat: kill-mob errors (does not throw) when no matching hostile is in range', async () => {
+  const bot = new FakeBot({ username: 'Bertrand', position: { x: 0, y: 64, z: 0 } });
+  bot.setEntities({ 7: { name: 'zombie', position: { x: 99, y: 64, z: 0 } } }); // out of range
+  const { engine } = harness(bot);
+  const report = await engine.run('kill-mob', { entityName: 'zombie', maxDistance: 16 }, MORTAL);
+  assert.equal(report.outcome.ok, false);
+  assert.match(report.outcome.ok ? '' : report.outcome.error, /no zombie within 16/);
+});
+
+test('combat: defend-self finds its own nearest hostile and composes kill-mob to the kill (D-15 reflex)', async () => {
+  const bot = new FakeBot({ username: 'Bertrand', position: { x: 0, y: 64, z: 0 } });
+  bot.setEntities({ 9: { name: 'zombie', position: { x: 4, y: 64, z: 0 } } });
+  const { engine } = harness(bot);
+  const report = await engine.run('defend-self', { maxDistance: 16 }, MORTAL);
+  assert.equal(report.outcome.ok, true);
+  assert.deepEqual(report.outcome.ok ? report.outcome.value : null, { defended: true });
+  assert.equal(bot.entities['9']?.isValid, false, 'the hostile was killed through the kill-mob composition');
+  assert.ok(report.callTree.some((f) => f.skill === 'kill-mob'), 'defend-self composed kill-mob');
+});
+
+test('combat: shoot-mob compiles + runs against the fake — errors clearly when no bow is held', async () => {
+  // shoot-mob needs bow/arrows + lookAt/activateItem to actually fire; the FakeBot does not model those,
+  // so this test proves it PARSES + runs + hits its no-bow guard (the distance line is now Math.hypot-safe).
+  const bot = new FakeBot({ username: 'Aldric', position: { x: 0, y: 64, z: 0 } });
+  bot.setEntities({ 5: { name: 'zombie', position: { x: 10, y: 64, z: 0 }, height: 1.95 } });
+  const { engine } = harness(bot);
+  const report = await engine.run('shoot-mob', { entityName: 'zombie', maxDistance: 32 }, MORTAL);
+  assert.equal(report.outcome.ok, false);
+  assert.match(report.outcome.ok ? '' : report.outcome.error, /arc \(bow\)/);
 });

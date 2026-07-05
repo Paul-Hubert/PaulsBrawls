@@ -61,17 +61,17 @@ test('M2-2: upsertDraft is append-only and version-monotonic; code lands on disk
 test('M2-2 (D-12): admit lands in active-probation, not active; journals provenance', () => {
   const { library, journal } = lib();
   library.upsertDraft(draft());
-  const admitted = library.admit('collect-wood', 1, { rolloutId: 'r1', verdictId: 'v1' });
+  const admitted = library.admit('collect-wood', 1, { rolloutId: 'r1', source: 'critic' as const, verdictId: 'v1' });
   assert.equal(admitted.status, 'active-probation');
   assert.equal(admitted.probationRunsLeft, 3);
   const ev = journal.query({ kinds: ['skill.admit'] })[0]!;
-  assert.deepEqual((ev.payload as Record<string, unknown>)['provenance'], { rolloutId: 'r1', verdictId: 'v1' });
+  assert.deepEqual((ev.payload as Record<string, unknown>)['provenance'], { rolloutId: 'r1', source: 'critic' as const, verdictId: 'v1' });
 });
 
 test('M2-2 (D-12): probation graduates after N clean re-judged runs; a failure does not count', () => {
   const { library } = lib();
   library.upsertDraft(draft());
-  library.admit('collect-wood', 1, { rolloutId: 'r1', verdictId: 'v1' });
+  library.admit('collect-wood', 1, { rolloutId: 'r1', source: 'critic' as const, verdictId: 'v1' });
   library.recordProbationRun('collect-wood', false); // a failure must not advance graduation
   assert.equal(library.activeVersion('collect-wood')?.status, 'active-probation');
   assert.equal(library.activeVersion('collect-wood')?.probationRunsLeft, 3);
@@ -86,7 +86,7 @@ test('M2-2 (D-12): probation graduates after N clean re-judged runs; a failure d
 test('M2-2 (D-12/R37): quarantine then self-healing un-quarantine lands in active-probation', () => {
   const { library, journal } = lib();
   library.upsertDraft(draft());
-  library.admit('collect-wood', 1, { rolloutId: 'r1', verdictId: 'v1' });
+  library.admit('collect-wood', 1, { rolloutId: 'r1', source: 'critic' as const, verdictId: 'v1' });
   library.quarantine('collect-wood', 'stats decayed');
   assert.equal(library.getVersion('collect-wood', 1)?.status, 'quarantined');
   assert.equal(library.activeVersion('collect-wood'), undefined, 'a quarantined skill is not live');
@@ -100,7 +100,7 @@ test('M2-2 (D-12/R37): quarantine then self-healing un-quarantine lands in activ
 test('M2-2: archive removes a version from retrieval/default-read but keeps it on disk', () => {
   const { library } = lib();
   library.upsertDraft(draft());
-  library.admit('collect-wood', 1, { rolloutId: 'r', verdictId: 'v' });
+  library.admit('collect-wood', 1, { rolloutId: 'r', source: 'critic' as const, verdictId: 'v' });
   library.archive('collect-wood', 1);
   assert.equal(library.activeVersion('collect-wood'), undefined);
   assert.equal(library.read('collect-wood'), undefined, 'default read skips archived');
@@ -111,7 +111,7 @@ test('M2-2: read default = newest non-archived; explicit version still resolves'
   const { library } = lib();
   library.upsertDraft(draft());
   library.upsertDraft(draft({ code: 'async function collectWood(bot, a, c) { return { collected: 99 }; }' }));
-  library.admit('collect-wood', 2, { rolloutId: 'r', verdictId: 'v' });
+  library.admit('collect-wood', 2, { rolloutId: 'r', source: 'critic' as const, verdictId: 'v' });
   const def = library.read('collect-wood');
   assert.equal(def?.version.version, 2);
   assert.match(def!.code, /99/);
@@ -130,11 +130,30 @@ test('M2-2: exemplars are tier-filtered and active-only', () => {
   assert.deepEqual(divine, ['fly-to']);
 });
 
+test('MED-5: re-seeding identical stock code is idempotent — no new version per boot', () => {
+  const dir = tmp();
+  // First boot seeds the skill.
+  const a = lib(dir);
+  const v1 = a.library.seedStock(draft({ name: 'go-to' }), 'active');
+  assert.equal(v1.version, 1);
+  // A pm2/crash respawn re-seeds the SAME code at the SAME status → must be a no-op, not v2.
+  const b = lib(dir);
+  const again = b.library.seedStock(draft({ name: 'go-to' }), 'active');
+  assert.equal(again.version, 1, 're-seeding identical code does not mint a new version');
+  assert.equal(b.library.versionCount('go-to'), 1, 'no unbounded version growth (173→27 symptom)');
+  const files = readdirSync(join(dir, 'library', 'go-to'));
+  assert.ok(!files.includes('v2.js'), 'no second code file written');
+  // A genuine code change DOES append a new version.
+  const c = lib(dir);
+  const changed = c.library.seedStock(draft({ name: 'go-to', code: 'async function goTo(bot, a, c) { return { arrived: false }; }' }), 'active');
+  assert.equal(changed.version, 2, 'changed code still appends a version');
+});
+
 test('M2-2: verifyHashes quarantines a tampered code file at boot', () => {
   const dir = tmp();
   const first = lib(dir);
   first.library.upsertDraft(draft());
-  first.library.admit('collect-wood', 1, { rolloutId: 'r', verdictId: 'v' });
+  first.library.admit('collect-wood', 1, { rolloutId: 'r', source: 'critic' as const, verdictId: 'v' });
   // Tamper the on-disk code out from under the recorded hash.
   writeFileSync(join(dir, 'library', 'collect-wood', 'v1.js'), 'async function x(){ return { hacked: true }; }');
   // A fresh library boots from the same dir and re-verifies.

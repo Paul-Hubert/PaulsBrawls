@@ -19,6 +19,7 @@ function harness(opts: { avatar?: FakeBot | undefined; embodied?: boolean } = {}
   seedStockSkills(library); // includes the divine stock (appear-near, vanish, gesture, …)
   const avatar = 'avatar' in opts ? opts.avatar : new FakeBot({ username: 'Dieu' });
   const engine = new SkillEngine({
+    traceGraceMs: 0, // D-16 trace grace off — logic-tier speed; the grace-specific tests set their own
     library, journal, grants: new AllGranted(),
     resolveBot: (name) => (name === 'Dieu' ? avatar : undefined),
     runDefaultTimeoutMs: 120_000, stallSeconds: 20, maxCallDepth: 8, autoQuarantineAfter: 5,
