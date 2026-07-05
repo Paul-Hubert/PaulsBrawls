@@ -3,6 +3,39 @@
 One dated section per session: what was done, decisions taken, what's next,
 surprises. Newest first.
 
+## 2026-07-05 — Build: real-mineflayer CI **B3a landed** (docs/26) — the D-16 flip-gate core
+- **B3a — the mechanical gate** ([flip-gate.ts](../eden/src/skills/flip-gate.ts), layer 2, commit
+  `cddcc95`): T(pre)→S→T(post) then the docs/22 §3.5 truth table — every row encoded (ADMIT, both
+  REJECTs, REVISE, both nothing-to-do rows, test-throws→failed conservative) plus two documented
+  conservative defaults for the two unlisted rows (`failed`→`nothing-to-do` = REVISE;
+  `nothing-to-do`→other with empty δ = SUSPECT-TEST). `checkSatisfied` lifted out of the critic
+  (which imports it back until B3b). **S2/P-17 invariant stated in code:** flip-gate is the sole
+  `library.admit` caller on the self-verdict path. Every outcome journals `skill.self-verdict`
+  (new kinds.ts row) incl. the §3.3 Tδ purity audit.
+- **Sδ comparator + O-4**: inventory count Δ, `nearbyBlocks` name-**counts** Δ (`Snapshot` gains
+  `nearbyBlockCounts` from the same bounded scan; set-fallback for old snapshots), or an
+  `entityDead` in the trace; `oracle:'return'` pairs exempt from the Sδ≠∅ floor. Both pinned
+  caveats encoded: `nearbyEntities` excluded; a nearbyBlocks-only delta never convicts a MOVED bot
+  (P-32). **docs/22 §3.5/§6 amended in the same commit (S8).**
+- **Event-trace (engine)**: new `entityDead`/`playerCollect` subscriptions (+`diggingCompleted`)
+  into a bounded 64-ring + dropped-count on `RunReport`; `playerCollect` filtered to the runner;
+  bounded close grace (`traceGraceMs`, default 500 ms — P-5) before `worldAfter`; `ctx.events` =
+  the frozen injected subject trace on T(post) runs. Logic-tier test engines pass `traceGraceMs: 0`.
+- **Provenance.source** (`'critic' | 'self-verdict'`, P-9) with god.ts stamping `'critic'`;
+  **readComposable** (R80 — composition resolves highest ACTIVE; ProbationError kept for first
+  admissions; `composerRun` switched); paired tests hidden from retrieval/exemplars/curriculum
+  coverage and never composable.
+- **DoD evidence**: [flip-gate.test.ts](../eden/tests/flip-gate.test.ts) — 20 tests covering every
+  truth-table row, O-4, the Sδ caveats, ring bound/grace/filters, `ctx.events` injection,
+  `skill.admit{source}`, R80 + the first-admission rail. `npm run check` green: **659 tests**
+  (was 639), 0 fail, depcruise clean. B3a is inert (P-34): nothing calls the gate until B3b/B4;
+  the one live behavior change is `readComposable` (no existing test pinned the old cliff).
+- Housekeeping: the untracked docs/22–27 design series was committed (`cddcc95`, `63253d6`) — the
+  plan of record was sitting outside git.
+- Next: **B3b** (loop rewiring: `submit_skill`/`reflect` tools, coordinator off the gate outcome,
+  critic leaves admission, `RolloutsView` folds the new signal, M3-GATE rewired) ∥ **B3c**
+  (stock paired tests, family by family).
+
 ## 2026-07-04 — Build: real-mineflayer CI **B1 + B2 landed** (docs/26)
 - **B1 — CI server lifecycle** (`eden/live-tests/server/`: [properties-overlay.ts](../eden/live-tests/server/properties-overlay.ts),
   [reaper.ts](../eden/live-tests/server/reaper.ts), [readiness.ts](../eden/live-tests/server/readiness.ts),
