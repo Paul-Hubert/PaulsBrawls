@@ -62,6 +62,9 @@ public class ChatCommand {
                     .then(CommandManager.literal("off")
                         .executes(ctx -> {
                             int dropped = GodActionQueue.clear();
+                            // Bug #5: commands run on the server thread, so restore directly —
+                            // the queue that would have carried restoreAvatar was just cleared.
+                            ChatBotActions.restoreAvatarOnMain(ctx.getSource().getServer());
                             GodBody.vanish();
                             GodSessionManager.forceEndSession();
                             BridgeConfig.INSTANCE.enabled = false;

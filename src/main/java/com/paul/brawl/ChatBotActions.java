@@ -412,6 +412,21 @@ public class ChatBotActions {
     }
 
     /**
+     * Bug #5: clear the avatar's Invulnerable flag from a path that is ALREADY on
+     * the server thread and has just dropped the action queue — {@code /godbody off}
+     * and {@code SERVER_STOPPING}. Both used to leave the flag set, and it persists
+     * in the avatar's player data across restarts. Never call off the main thread.
+     * An avatar that is offline at that moment keeps whatever flag it saved with.
+     */
+    public static String restoreAvatarOnMain(MinecraftServer server) {
+        if (server == null) return "Serveur indisponible.";
+        ServerPlayerEntity bot = server.getPlayerManager().getPlayer(BridgeConfig.INSTANCE.botUsername);
+        if (bot == null) return "Avatar introuvable.";
+        bot.setInvulnerable(false);
+        return "Avatar redevenu mortel.";
+    }
+
+    /**
      * Called from the idle watchdog (off-thread). Queues vanish + restoreAvatar
      * on the main thread without needing a live player reference.
      */

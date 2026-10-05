@@ -139,10 +139,10 @@ Note `/pray stop` is a literal branch: praying the single word "stop" is impossi
 
 | Syntax | Perm | Behaviour (semantics: [god-body.md](god-body.md)) |
 |---|---|---|
-| `/godbody off` | 2 | `GodActionQueue.clear()`, `GodBody.vanish()`, `GodSessionManager.forceEndSession()`, `BridgeConfig.enabled=false` + save; broadcast-to-ops feedback `Killed god-body: <n> queued action(s) dropped, session released, bridge disabled.` |
+| `/godbody off` | 2 | `GodActionQueue.clear()`, `ChatBotActions.restoreAvatarOnMain(server)`, `GodBody.vanish()`, `GodSessionManager.forceEndSession()`, `BridgeConfig.enabled=false` + save; broadcast-to-ops feedback `Killed god-body: <n> queued action(s) dropped, session released, bridge disabled.` |
 | `/godbody on` | 2 | `BridgeConfig.enabled=true` + save; feedback `Bridge re-enabled.` |
 
-`/godbody off` does not restore avatar invulnerability and does not clear chat memory.
+`/godbody off` restores avatar invulnerability directly (bug #5) but does not clear chat memory.
 
 ## Prompt and build-debug commands
 

@@ -176,7 +176,7 @@ Plan: [GOD_BOT_INTEGRATION_PLAN.md](GOD_BOT_INTEGRATION_PLAN.md). Verification: 
 | Damage/loot/weather/build, `SpawnCreature` | Server-side `ChatBotActions`, through `GodActionQueue` (main thread) |
 | When/where to appear, pacing | The model's `Appear`/`Wait`/`Vanish` tool calls |
 | One-encounter-at-a-time | `GodSessionManager` (single-owner busy lock) |
-| Avatar invulnerability | `ChatBotActions.buffAvatar/restoreAvatar` flip the `Invulnerable` NBT on `Appear` / session end — **not** on `/godbody off` or `SERVER_STOPPING`, which leave the flag set |
+| Avatar invulnerability | `ChatBotActions.buffAvatar/restoreAvatar` flip the `Invulnerable` NBT on `Appear` / session end; `/godbody off` and `SERVER_STOPPING` clear it directly with `restoreAvatarOnMain` |
 
 Java side: [BridgeConfig](src/main/java/com/paul/brawl/BridgeConfig.java) (bridge URL, `botUsername`=`LLMBot`,
 clamps, idle watchdog, griefing toggle; persists to `bridge_config.properties`), [BotBridgeClient](src/main/java/com/paul/brawl/BotBridgeClient.java)
@@ -192,8 +192,8 @@ Bridge contract (HTTP, localhost): `GET /health`, `POST /appear {x,y,z,facing?}`
 **Termination:** `ChatBot.setupGeneralCallback` computes `willContinue` once; `Vanish` fires only when
 `!willContinue && needsGodTools && GodSessionManager.isActive(player)`. The depth cap (`MAX_FUNCTION_CALL_DEPTH=100`),
 the API-error branch, and `/pray stop` call `ChatBot.endPrayerSession(player)` → `restoreAvatar` +
-`GodBody.vanish()` + `GodSessionManager.endSession`. `/godbody off` does **not**: it clears the queue, vanishes,
-calls `forceEndSession()` and disables the bridge, with no `restoreAvatar` (`ChatCommand.java:62-73`).
+`GodBody.vanish()` + `GodSessionManager.endSession`. `/godbody off` does not call it: it clears the queue, restores
+the avatar directly (`restoreAvatarOnMain`), vanishes, calls `forceEndSession()` and disables the bridge.
 **Watchdog vs `Wait`:** the watchdog fires after `max(idleTimeoutSeconds, waitMaxSeconds+5)`
 (`GodSessionManager.java:123-124`), and `/llm bridge waitmax|idle` keep `idle > waitMax`, so a deliberate
 `Wait` cannot trip it. The watchdog resets only on claim, `Appear` and `Wait`, so a long chain of other tool calls

@@ -50,6 +50,9 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			GodActionQueue.clear();
+			// Bug #5: SERVER_STOPPING runs on the server thread before players are saved,
+			// so the cleared flag is what lands in the avatar's player data.
+			ChatBotActions.restoreAvatarOnMain(server);
 			GodSessionManager.forceEndSession();
 			ChatBotActions.setServer(null);
 			VillageHttpListener.stop();

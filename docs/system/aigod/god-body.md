@@ -31,8 +31,8 @@ verified_at: 4a8081f
 **bridge** (`http://127.0.0.1:8765`). `GodBody` turns intents (appear in front of a player, speak, look, gesture,
 vanish) into `BotBridgeClient` POSTs that are async and never throw. One player at a time owns the body
 (`GodSessionManager` busy lock + idle watchdog). World-touching work hops to the server thread via `GodActionQueue`
-(8 per tick); `Wait` deferrals run on `GodScheduler`. The avatar is made invulnerable on `Appear` and mortal again on most
-exits; the bot is auto-op'd on join so it can `/tp`.
+(8 per tick); `Wait` deferrals run on `GodScheduler`. The avatar is made invulnerable on `Appear` and mortal again on every
+exit, including `/godbody off` and server stop (bug #5); the bot is auto-op'd on join so it can `/tp`.
 
 > ⚠ Unverified: the Node side of the bridge (`minecraft-mcp-server/`, an empty submodule gitlink in this checkout) is not
 > available. Everything below about what a route *does* inside Mineflayer (e.g. `/appear` → `bot.chat("/tp …")`,
@@ -223,7 +223,8 @@ scheduler thread — anything touching the world must re-enter `GodActionQueue`.
 | `findAvatar(prayingPlayer)` | any | `server.getPlayerManager().getPlayer(BridgeConfig.botUsername)` (server from the player, else the captured `SERVER`) (`:383-389`) |
 | `buffAvatar` | main (queued) | `bot.setInvulnerable(true); bot.extinguish();` → `Avatar rendu invincible.` / `Avatar introuvable (pas de buff).` (`:396-405`) |
 | `restoreAvatar` | main (queued) | `bot.setInvulnerable(false)` → `Avatar redevenu mortel.` / `Avatar introuvable.` (`:407-412`) |
-| `dismissAvatarOnWatchdog(uuid)` | scheduler | queue invuln clear + `GodBody.vanish()` (`:418-428`) |
+| `dismissAvatarOnWatchdog(uuid)` | scheduler | queue invuln clear + `GodBody.vanish()` |
+| `restoreAvatarOnMain(server)` | main (direct, never queued) | `bot.setInvulnerable(false)` on the avatar found by `botUsername`; used by `/godbody off` and `SERVER_STOPPING`, which have just cleared the queue (bug #5) |
 
 `setInvulnerable` sets the entity's `Invulnerable` flag (persisted in entity NBT).
 
@@ -244,8 +245,8 @@ appear/vanish are done by the bot issuing `/tp` (per the plan). Only meaningful 
 | LLM API error | exceptional future | if manifested | if manifested | yes (if owner) | `ChatBot.java:427-439` |
 | `/pray stop` | owner, perm 0; chat `Dieu : (la séance est close.)` | if manifested | if manifested | yes | `ChatCommand.java:30-39` |
 | Idle watchdog | no reset for `max(idle, waitMax+5)` s | yes (queued) | always | yes (force) | `GodSessionManager.java:125-134` |
-| `/godbody off` | admin | **no** | always (sent before disabling) | yes (force) | `ChatCommand.java:62-73` |
-| Server stopping | `SERVER_STOPPING` | **no** | **no** | yes (force) + queue cleared | `ServerEntryPoint.java:51-56` |
+| `/godbody off` | admin | yes (direct, `restoreAvatarOnMain`) | always (sent before disabling) | yes (force) | `ChatCommand.java` `registerKillSwitch` |
+| Server stopping | `SERVER_STOPPING` | yes (direct, `restoreAvatarOnMain`, before players are saved) | **no** | yes (force) + queue cleared | `ServerEntryPoint.java` |
 
 `endPrayerSession(player)` (`ChatBot.java:580-587`): `if hasManifested() { submit(restoreAvatar); GodBody.vanish(); }`
 then `GodSessionManager.endSession(player)`. Idempotent.
@@ -273,9 +274,10 @@ conversations are answered normally.
 
 ## Gotchas & known issues
 
-- **`/godbody off` and server stop never clear invulnerability.** Neither path queues `restoreAvatar`; `/godbody off`
-  even clears the queue (dropping a pending restore). The avatar can remain invulnerable (flag persists in NBT) until the
-  next Appear→exit cycle. CLAUDE.md claims `/godbody off` calls `endPrayerSession` — it does not.
+- ~~**`/godbody off` and server stop never clear invulnerability.**~~ **Fixed (bug #5):** both run on the server thread,
+  so after clearing the queue they call `ChatBotActions.restoreAvatarOnMain(server)` directly. Still true: an avatar
+  that is *offline* at that moment keeps the flag it saved with. Only an in-game check proves this (no Minecraft-free
+  logic to unit-test). `/godbody off` still does not call `endPrayerSession`.
 - **`/godbody off` does not disable MCP tools**: the God can still move the bot through `MCPGateway` tools (see
   [mcp-gateway.md](mcp-gateway.md)).
 - **Watchdog is not reset per turn.** A long chain of non-`Wait` tool calls (e.g. slow MCP tools) lasting more than
