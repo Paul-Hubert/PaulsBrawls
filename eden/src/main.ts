@@ -31,7 +31,7 @@ import { ContextPackBuilder, type ContextPackInput } from './villagers/context-p
 import { Brain } from './villagers/brain';
 import { VillagerInbox } from './villagers/inbox';
 import { SubscriptionStore, type FilterContext } from './villagers/subscriptions';
-import { loadRoles, seedRoleDefaults } from './villagers/role-defaults';
+import { loadRoles, resetRoleDefaults, seedRoleDefaults, upgradeRoleDefaults } from './villagers/role-defaults';
 import { VillagerReactivity } from './villagers/reactivity';
 import { DriveTracker, type DriveKind, type DriveSnapshot } from './villagers/drives';
 import type { WakeupRequest } from './villagers/events';
@@ -289,6 +289,9 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
           resetVillager: (name: string) => {
             wiring.memories.get(name)?.reset();
             wiring.store.removeSelfAuthored(name);
+            // A fresh life gets every current role default back, including any it had unsubscribed (review fix).
+            const role = config.villagers.find((v) => v.name === name)?.role ?? 'villager';
+            resetRoleDefaults(wiring.store, name, role, loadRoles());
           },
         }
       : {}),
@@ -794,10 +797,15 @@ function wireGod(args: {
   if (pool) {
     const roles = loadRoles();
     let seeded = 0;
-    for (const v of config.villagers) seeded += seedRoleDefaults(store, v.name, v.role, roles);
+    let upgraded = 0;
+    for (const v of config.villagers) {
+      seeded += seedRoleDefaults(store, v.name, v.role, roles);
+      upgraded += upgradeRoleDefaults(store, v.name, v.role, roles); // an edited roles.json reaches old data dirs
+    }
     if (seeded > 0) {
       logger.info('villagers', `M5: seeded ${seeded} role-default reflex(es) across ${config.villagers.length} villager(s) (first boot)`);
     }
+    if (upgraded > 0) logger.info('villagers', `refreshed ${upgraded} role-default reflex(es) from roles.json`);
 
     // A reactive deliberate wake-up: build a context pack from the coalesced request (R36) and run the
     // brain on its lane. Self-contained — it SWALLOWS its own LLM errors (logger, never a host

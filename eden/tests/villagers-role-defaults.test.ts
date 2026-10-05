@@ -11,7 +11,7 @@ import { join } from 'node:path';
 
 import { MemoryJournal } from './fakes/memory-journal';
 import { SubscriptionStore } from '../src/villagers/subscriptions';
-import { loadRoles, seedRoleDefaults, DEFAULT_ROLES_PATH } from '../src/villagers/role-defaults';
+import { loadRoles, resetRoleDefaults, seedRoleDefaults, upgradeRoleDefaults, DEFAULT_ROLES_PATH } from '../src/villagers/role-defaults';
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), 'eden-roles-'));
@@ -93,3 +93,34 @@ function overlap(roles: ReturnType<typeof loadRoles>): number {
   }
   return n;
 }
+
+// Review of B3.6/bug #16: role defaults seed on FIRST boot only, so (a) an existing data dir never received the
+// updated go-home args ($home.x/y/z) and (b) /villagers restart left a villager without any role default it had
+// unsubscribed. upgradeRoleDefaults refreshes a still-present default in place; resetRoleDefaults reseeds them all.
+test('upgradeRoleDefaults refreshes a still-present role default to the current roles.json (removals stay removed)', () => {
+  const store = new SubscriptionStore({ dataDir: tmp(), journal: new MemoryJournal() });
+  const roles = loadRoles(DEFAULT_ROLES_PATH);
+  // An old data dir: go-home seeded without args; the hurt reflex was unsubscribed by the villager.
+  store.add({ villager: 'Firmin', on: 'night-falls', handler: { kind: 'skill', name: 'go-home', args: {} }, source: 'role-default' });
+  store.add({ villager: 'Firmin', on: 'tick-30s', handler: { kind: 'skill', name: 'look-around', args: {} }, source: 'self' });
+  assert.equal(upgradeRoleDefaults(store, 'Firmin', 'farmer', roles), 1);
+  const goHome = store.list('Firmin').find((s) => s.on === 'night-falls')!;
+  assert.deepEqual((goHome.handler as { args: unknown }).args, { x: '$home.x', y: '$home.y', z: '$home.z' });
+  assert.equal(store.list('Firmin').some((s) => s.on === 'hurt'), false, 'a removed default is not re-added');
+  assert.equal(store.list('Firmin').some((s) => s.source === 'self'), true, 'self-authored untouched');
+  assert.equal(upgradeRoleDefaults(store, 'Firmin', 'farmer', roles), 0, 'idempotent');
+});
+
+test('resetRoleDefaults gives a restarted villager its full current role defaults back', () => {
+  const store = new SubscriptionStore({ dataDir: tmp(), journal: new MemoryJournal() });
+  const roles = loadRoles(DEFAULT_ROLES_PATH);
+  const n = seedRoleDefaults(store, 'Firmin', 'farmer', roles);
+  const hurt = store.list('Firmin').find((s) => s.on === 'hurt')!;
+  store.remove(hurt.id); // the villager unsubscribed it
+  store.add({ villager: 'Firmin', on: 'tick-30s', handler: { kind: 'deliberate', hint: 'x' }, source: 'god' });
+  assert.equal(resetRoleDefaults(store, 'Firmin', 'farmer', roles), n);
+  const subs = store.list('Firmin');
+  assert.equal(subs.filter((s) => s.source === 'role-default').length, n, 'all role defaults, once each');
+  assert.ok(subs.some((s) => s.on === 'hurt'));
+  assert.ok(subs.some((s) => s.source === 'god'), 'god/admin subscriptions are not the villager’s life — kept');
+});

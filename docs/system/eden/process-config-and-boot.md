@@ -332,8 +332,11 @@ prefix `WARN ` / `ERROR `. ESLint `no-console: error` everywhere except `src/log
   rewrites the file~~ **Fixed (bug #16):** after deleting the file the launcher calls `resetVillager(name)`, which
   `main.ts` wires to `VillagerMemory.reset()` (clears window, archive, relations, summary, R32 quarantine; an
   in-flight summary of the old life is dropped) and `SubscriptionStore.removeSelfAuthored(name)` (self-authored
-  subscriptions go; role defaults and God-wired ones stay). Pinned through `start()` in
-  `tests/main-full-wiring.test.ts`.
+  subscriptions go) then `resetRoleDefaults` (the full current role defaults come back, including any the villager had
+  unsubscribed — review fix; God/admin ones stay). Pinned through `start()` in `tests/main-full-wiring.test.ts`.
+  **Still open:** work already in flight when the restart lands (a deliberation's `remember`, a conversation that ends
+  just after, a trade notice) can still write the old life into the new memory — `reset()` guards only its own
+  in-flight summary.
 - ~~`redactSecrets` masks `inputTokenBudget` and `apiKeyEnv`~~ Fixed (bug #17), see above.
 - ~~Views are only fed live~~ — replayed at boot since B3.9.
 - `GodService` gets a `DescriptionPass` describer (B3.4); its ledger is injected by a cast

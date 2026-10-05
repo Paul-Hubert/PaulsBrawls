@@ -76,12 +76,58 @@ export function seedRoleDefaults(
   roles: RolesConfig,
 ): number {
   if (store.list(villager).length > 0) return 0; // already seeded (or self-authored) — first boot only
+  return addRoleDefaults(store, villager, effectiveSpecs(role, roles));
+}
+
+/**
+ * `/villagers restart` (bug #16 review): a fresh life gets the full CURRENT role defaults back — the old ones
+ * (including any the villager had unsubscribed) are replaced. Subscriptions from God or an admin are kept.
+ * Returns how many were seeded.
+ */
+export function resetRoleDefaults(store: SubscriptionStore, villager: string, role: string, roles: RolesConfig): number {
+  for (const s of store.list(villager)) if (s.source === 'role-default') store.remove(s.id);
+  return addRoleDefaults(store, villager, effectiveSpecs(role, roles));
+}
+
+/**
+ * Every boot (B3.6 review): bring each role default the villager STILL holds up to date with roles.json — same event
+ * and same handler (kind + skill name), different args/filter/cooldown/hint. A default the villager removed stays
+ * removed (seeding is still first-boot only). Without this, an existing data dir never got go-home's `$home.*` args.
+ * Returns how many were refreshed.
+ */
+export function upgradeRoleDefaults(store: SubscriptionStore, villager: string, role: string, roles: RolesConfig): number {
+  const specs = effectiveSpecs(role, roles);
+  let upgraded = 0;
+  for (const sub of store.list(villager)) {
+    if (sub.source !== 'role-default') continue;
+    const spec = specs.find((sp) => sp.on === sub.on && sameHandlerTarget(sp.handler, sub.handler));
+    if (!spec) continue;
+    const current = { handler: sub.handler, filter: sub.filter, cooldownMs: sub.cooldownMs };
+    const wanted = { handler: spec.handler, filter: spec.filter, cooldownMs: spec.cooldownMs };
+    if (JSON.stringify(current) === JSON.stringify(wanted)) continue;
+    store.remove(sub.id);
+    addRoleDefaults(store, villager, [spec]);
+    upgraded++;
+  }
+  return upgraded;
+}
+
+/** everyone + the role block, a role spec on event E replacing everyone's specs on E (D-15). */
+function effectiveSpecs(role: string, roles: RolesConfig): RoleDefaultSpec[] {
   const roleBlock = roles[role] ?? [];
   const overriddenEvents = new Set(roleBlock.map((r) => r.on));
   // Drop any everyone reflex whose event the role redefines — the role's reflex for that event wins.
   const everyone = (roles.everyone ?? []).filter((e) => !overriddenEvents.has(e.on));
-  let seeded = 0;
-  for (const spec of [...everyone, ...roleBlock]) {
+  return [...everyone, ...roleBlock];
+}
+
+function sameHandlerTarget(a: RoleDefaultSpec['handler'], b: RoleDefaultSpec['handler']): boolean {
+  if (a.kind !== b.kind) return false;
+  return a.kind !== 'skill' || (b.kind === 'skill' && a.name === b.name);
+}
+
+function addRoleDefaults(store: SubscriptionStore, villager: string, specs: RoleDefaultSpec[]): number {
+  for (const spec of specs) {
     store.add({
       villager,
       on: spec.on,
@@ -90,9 +136,8 @@ export function seedRoleDefaults(
       ...(spec.cooldownMs !== undefined ? { cooldownMs: spec.cooldownMs } : {}),
       source: 'role-default',
     });
-    seeded++;
   }
-  return seeded;
+  return specs.length;
 }
 
 /** A roles.json entry is valid iff it names an event + a handler with a known kind (data, not code — P5). */

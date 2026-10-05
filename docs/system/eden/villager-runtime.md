@@ -385,7 +385,10 @@ sees the messages through `peek()` and does not drain them. Directives and criti
 - **`subscribe` accepts any `on` string and any filter shape**; a typo'd event type silently never fires.
 - ~~**Villager-authored subscriptions are impossible in the host**~~ **Fixed (B1):** the `SubscriptionStore` is built
   before the `ToolRegistry` and passed as `subscriptions` (`eden/src/main.ts:726-728`). `/villagers restart` removes the
-  self-authored ones (`removeSelfAuthored`, bug #16).
+  self-authored ones (`removeSelfAuthored`, bug #16) and reseeds the full role defaults (`resetRoleDefaults`).
+- **Role defaults** seed on a villager's first boot; on every later boot `upgradeRoleDefaults` refreshes each default
+  the villager still holds (same event + handler target) to the current `roles.json` — args, filter, cooldown, hint —
+  without re-adding one it removed (review fix: an existing data dir never got go-home's `$home.*` args).
 - **`setEnabled` has no caller** — the documented "auto-disable on God's quarantine of the underlying skill" is not
   wired; a quarantined skill's subscription keeps firing and erroring (`system.error`).
 - ~~**Drives are dead code in the host**~~ **Fixed (B3.7):** `wireDrives` builds them when `behavior.drives` is true (see

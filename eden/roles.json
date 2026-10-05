@@ -8,8 +8,9 @@
   //
   // "everyone" seeds every villager regardless of role; a named role block adds to it. A role spec that
   // duplicates an everyone spec (same event + handler kind) replaces it (D-15 — no double-reflex).
-  // Edit freely — re-seeding only happens on a villager's FIRST boot (delete its
-  // .eden-data/subscriptions/<name>.json to re-adopt these).
+  // Edit freely — the full set seeds on a villager's FIRST boot (and on /villagers restart); on every later boot an
+  // edit to a default the villager still holds (same event + handler) is applied in place, but a default it removed
+  // is not re-added (delete its .eden-data/subscriptions/<name>.json to re-adopt everything).
 
   "everyone": [
     // Took damage → flee to safety (a free reflex). notWhileRunning suppresses it while already fleeing.

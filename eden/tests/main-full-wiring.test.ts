@@ -371,3 +371,28 @@ test('B3.9 review: an in-flight rollout is snapshotted once its first run is jou
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('bug #16 review: /scenario/restart gives back a role default the villager had unsubscribed', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'eden-restart2-'));
+  const cfg = join(dir, 'eden.json');
+  writeFileSync(cfg, JSON.stringify({
+    minecraft: { host: '127.0.0.1', port: 1, version: '1.21.1' },
+    villagers: [{ name: 'Firmin', role: 'farmer' }],
+    god: { name: 'Dieu' },
+    admin: { port: 0 },
+  }));
+  const host = await start(cfg, { dataDir: join(dir, '.eden-data'), spawnBots: true, serveWeb: false });
+  t.after(async () => {
+    await host.stop();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const subs = async (): Promise<Array<{ when: string }>> => (await getJson(host.adminPort, '/villagers/Firmin')).body.subscriptions;
+  const seeded = (await subs()).length;
+  const hurt = host.journal.query({ kinds: ['subscription.created'] }).map((e) => e.payload as { id: string; on: string }).find((p) => p.on === 'hurt')!;
+  await host.tools!.dispatch(call('unsubscribe', { id: hurt.id }), FIRMIN);
+  assert.equal((await subs()).length, seeded - 1);
+  const r = await postJson(host.adminPort, '/scenario/restart', { name: 'whatever', x: 0, z: 0 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal((await subs()).length, seeded, 'the fresh villager has its full role defaults again');
+  assert.ok((await subs()).some((s) => s.when.startsWith('hurt')));
+});
