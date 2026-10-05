@@ -54,7 +54,9 @@ export function serializeGodState(state: GodState): GodStateSnapshot {
     ledger: state.ledger,
     extraTasks: [...state.tasks.values()].filter((t) => !openIds.has(t.id)),
     dossiers: [...state.dossiers.values()],
-    rollouts: [...state.rollouts.values()],
+    // Closed rollouts of tasks no longer open are history (journal + RolloutsView): keeping them made every save
+    // grow with uptime (review fix). An open task's earlier attempts stay — openRollout numbers attempts from them.
+    rollouts: [...state.rollouts.values()].filter((r) => r.open || openIds.has(r.taskId)),
     directivesOpen: state.directivesOpen ?? [],
   })) as GodStateSnapshot;
 }

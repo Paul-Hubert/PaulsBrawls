@@ -83,3 +83,17 @@ test('B3.9: serializeGodState/hydrateGodState round-trip keeps ledger and task m
   assert.deepEqual(b.dossiers.get('Firmin')!.competence, { farming: { runs: 2, successes: 1 } });
   assert.equal(b.criticQueue.length, 0, 'the critic queue is transient');
 });
+
+// Review of B3.9: every rollout ever (critique chains included) went into each debounced save, so the save cost grew
+// with uptime. Closed rollouts of tasks that are no longer open are history (the journal and RolloutsView keep it).
+test('B3.9 review: the snapshot keeps open rollouts and those of open tasks, not closed ones of closed tasks', () => {
+  const s: GodState = { ledger: { open: [], completed: [], failed: [] }, dossiers: new Map(), criticQueue: [], rollouts: new Map(), tasks: new Map(), directivesOpen: [] };
+  const open = { id: 'open', goal: 'g', successCriteria: 's', context: '', maxRetries: 2 };
+  s.ledger.open.push(open);
+  s.tasks.set('open', open);
+  const r = (id: string, taskId: string, isOpen: boolean) => ({ id, taskId, villager: 'Firmin', attempt: 1, draftVersions: [], critiqueChain: [], open: isOpen });
+  s.rollouts.set('a', r('a', 'open', false)); // an earlier attempt of an open task: kept (attempt numbering)
+  s.rollouts.set('b', r('b', 'open', true));
+  s.rollouts.set('c', r('c', 'done-task', false)); // closed, task gone: dropped
+  assert.deepEqual(serializeGodState(s).rollouts.map((x) => x.id).sort(), ['a', 'b']);
+});

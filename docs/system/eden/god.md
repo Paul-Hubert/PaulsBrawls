@@ -30,7 +30,7 @@ Dependency law: `god/` imports `skills/`, `llm/`, `render/`, `journal/`, `types/
 ## God state (single home)
 
 `GodState` (`eden/src/god/god.ts:27-35`), held by `GodService.state` and shared **by reference** with the curriculum and orchestrator (`eden/src/main.ts:742,749`). It lives in memory and is **snapshotted** since B3.9: a `snapshots` table in `eden.db` (`key`, `at`, `value` JSON; `Journal.putSnapshot`/`getSnapshot`) holds God's working
-state under key `god` — `serializeGodState` (`eden/src/god/god.ts:50-60`: ledger, tasks, dossiers, rollouts, open directives; not the critic queue)
+state under key `god` — `serializeGodState` (`eden/src/god/god.ts:50-60`: ledger, tasks, dossiers, the rollouts that are open or belong to an open task (closed ones of closed tasks are dropped so a save does not grow with uptime), open directives; not the critic queue)
 plus the curriculum's QA cache and R65 exhausted counts, stamped with the world id. `persistGodState` (`eden/src/main.ts:951-996`, called at `:271`)
 restores it (`hydrateGodState`, mutated in place) before D-09 recovery (a different world restores nothing, R32) and saves it 250 ms after any `god.*`
 journal event or any event tagged with a `rolloutId` (so an in-flight rollout is saved before its first verdict) and on `host.stop()` (`eden/src/main.ts:504-505`) (B3.9, bug #15).
