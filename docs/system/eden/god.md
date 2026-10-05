@@ -33,7 +33,7 @@ Dependency law: `god/` imports `skills/`, `llm/`, `render/`, `journal/`, `types/
 state under key `god` — `serializeGodState` (`eden/src/god/god.ts:50-60`: ledger, tasks, dossiers, rollouts, open directives; not the critic queue)
 plus the curriculum's QA cache and R65 exhausted counts, stamped with the world id. `persistGodState` (`eden/src/main.ts:951-996`, called at `:271`)
 restores it (`hydrateGodState`, mutated in place) before D-09 recovery (a different world restores nothing, R32) and saves it 250 ms after any `god.*`
-journal event and on `host.stop()` (`eden/src/main.ts:504-505`) (B3.9, bug #15).
+journal event or any event tagged with a `rolloutId` (so an in-flight rollout is saved before its first verdict) and on `host.stop()` (`eden/src/main.ts:504-505`) (B3.9, bug #15).
 
 | Field | Type | Sole writer |
 |---|---|---|

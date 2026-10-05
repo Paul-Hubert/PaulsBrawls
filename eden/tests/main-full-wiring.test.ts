@@ -350,3 +350,24 @@ test('B4: an offer left open by a previous host is closed at boot as trade.faile
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Review of B3.9: openRollout journals no god.* event, so a crash during the first trial run (before god.ticket)
+// left the snapshot without the rollout — D-09 could not abandon it and the rollout view showed it open forever.
+// Any event tagged with a rolloutId now schedules a save too.
+test('B3.9 review: an in-flight rollout is snapshotted once its first run is journaled (no stop/flush needed)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eden-godsave-'));
+  const host = await start(writeConfig(dir), { dataDir: join(dir, '.eden-data'), spawnBots: false, enableGod: true });
+  try {
+    const god = host.god!;
+    god.addTask({ id: 'task-x', goal: 'g', assignee: 'Firmin', successCriteria: 's', context: '', maxRetries: 1 });
+    await new Promise((r) => setTimeout(r, 400)); // the task's own save has happened; the rollout opens later
+    const rollout = god.openRollout('task-x');
+    host.journal.append('villager:Firmin', 'llm.call', { desk: 'villager', model: 'm', tokensIn: 1, tokensOut: 1, ms: 1 } as never, { rolloutId: rollout.id });
+    await new Promise((r) => setTimeout(r, 400)); // > the 250 ms debounce
+    const snap = host.journal.getSnapshot<{ god: { rollouts: Array<{ id: string }> } }>('god');
+    assert.ok(snap?.value.god.rollouts.some((r) => r.id === rollout.id), 'the open rollout reached the snapshot');
+  } finally {
+    await host.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

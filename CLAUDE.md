@@ -284,7 +284,7 @@ The remaining sections describe the **design**. Where a design point is in the l
 
 - **One Node process** (D-01): bots, God brain, avatar, skill engine, journal, admin server. The refinement loop is too chatty for cross-process hops. Worker threads are the escape hatch.
 - **SQLite holds the journal + God's snapshot** (D-03 as built): `better-sqlite3`, WAL, tables `journal` and `snapshots` (B3.9: God's ledger, dossiers, rollouts, directives and QA cache under key `god`). The library is `library/<skill>/skill.json` + `v<N>.js` files; subscriptions and per-bot memory are JSON files; derived views are folds over the journal, replayed at boot.
-- **Crash-only** for what is persisted (journal, library, bot JSON): it is written when it changes; the God snapshot is saved 250 ms after any `god.*` event and on stop, and restored at boot before D-09 recovery.
+- **Crash-only** for what is persisted (journal, library, bot JSON): it is written when it changes; the God snapshot is saved 250 ms after any `god.*` event or any event tagged with a `rolloutId` (so an in-flight rollout is saved before its first verdict) and on stop, and restored at boot before D-09 recovery.
 - **`main.ts` is the ONLY composition root** ([eden/src/main.ts](eden/src/main.ts)): it imports everything and wires it with plain constructor args (no DI container, no singletons).
 
 The **dependency law** is enforced by dependency-cruiser ([eden/.dependency-cruiser.cjs](eden/.dependency-cruiser.cjs),

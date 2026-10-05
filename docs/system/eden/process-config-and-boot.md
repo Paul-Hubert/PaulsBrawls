@@ -60,7 +60,7 @@ God is wired), `stop()`.
 | 7 | Build `BotPool` iff `spawnBots && villagers.length > 0` | 226-245 | `worldId = host:port`; `vitalsIntervalMs = vitalsIntervalSeconds*1000`; `onBotSpawn` → reactivity attach + launcher setup + `healAnchors`. |
 | 8 | `wireGod(...)` iff `enableGod` (gets `homeOf` = the healed home anchor) | 248-251 | Throws if the provider declares `apiKeyEnv` and that env var is empty (R56, lines 563-572). |
 | 9 | 30 s `setInterval` → `reactivity.tick()` + `drives.tick()` (unref'd) iff reactivity exists | 256-262 | |
-| 10 | `persistGodState(...)`: restore God's snapshot (same `worldId` only), then save 250 ms after any `god.*` event | 271 | B3.9; defined at 951-997. |
+| 10 | `persistGodState(...)`: restore God's snapshot (same `worldId` only), then save 250 ms after any `god.*` event or any event tagged with a `rolloutId` (so an in-flight rollout is saved before its first verdict) | 271 | B3.9; defined at 951-997. |
 | 11 | `wiring.god.recoverRollouts()` (D-09) | 272-275 | Logs `boot recovery: re-enqueued N …` if N>0. |
 | 12 | `new VillageLauncher({ pool, villagers, avatarName, scenarioName, dataDir, journal, resetVillager? })` | 281-297 | `resetVillager` (God wired only) = `memory.reset()` + `store.removeSelfAuthored(name)`. |
 | 13 | `new VillageLoop(...)` iff God wired AND pool exists | 306-312 | Not started until `/scenario/start` succeeds. |

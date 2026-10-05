@@ -973,7 +973,9 @@ export function persistGodState(deps: {
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const unsubscribe = journal.subscribe((e) => {
-    if (!e.kind.startsWith('god.') || timer) return;
+    // Every God mutation journals a god.* event — except openRollout; any event tagged with a rolloutId (the first
+    // deliberation or trial run) covers it, so a crash mid-trial still leaves the rollout for D-09 (review fix).
+    if (timer || !(e.kind.startsWith('god.') || e.refs?.rolloutId !== undefined)) return;
     timer = setTimeout(() => {
       timer = undefined;
       try {
