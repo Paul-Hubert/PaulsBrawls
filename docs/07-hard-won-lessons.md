@@ -877,6 +877,16 @@ such a promise outside a live host owns a ref'd handle for the duration. Tests d
 that truly never settles is still cancelled visibly instead of hanging the run. Production exposure: any CLI that
 runs a skill or an enqueue without a bot connection (none does today) must do the same.
 
+**R74 — a staggered loop that awaits between steps must re-check "am I still wanted?" after EVERY wait; a
+`stopping` flag checked only by the reconnect path does not stop it.** Found 2026-10-05 while pinning bug #16
+through `start()`: `BotPool.spawnAll` awaits the 4 s login stagger between `connect()` calls, but only the
+reconnect timer looked at `stopping`. A `stop()` mid-stagger (a host shutdown, or a `/villagers stop`/`restart`)
+let the loop keep logging the remaining bots in; on shutdown their `end` handler journaled into the already
+closed database and crashed with `TypeError: The database connection is not open`, and a stop→start restart
+could run two login loops at once. Fix: a login epoch bumped by every `start()` and `stop()`; the loop returns
+when its captured epoch is stale (`tests/bots-pool.test.ts` R74). Same shape as `VillageLoop`'s epoch: any
+long-lived async loop that outlives the call that started it needs an identity check at every resume point.
+
 ## Reading failures (the debugging playbook, preserved)
 
 - `act … FAILED after 0ms` → perception/availability check failed (thing absent or

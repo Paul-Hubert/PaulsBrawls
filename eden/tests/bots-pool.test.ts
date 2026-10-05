@@ -164,3 +164,54 @@ test('stampWorldId stamps fresh, matches on re-boot, and flags a world swap (R32
   assert.equal(swap.status, 'mismatch');
   assert.equal(swap.previous, 'world-A'); // R32: a regenerated world poisons persisted beliefs
 });
+
+// R74: stop() during the staggered login used to let spawnAll's loop keep logging bots in AFTER the stop — on a
+// host shutdown those late logins journaled into a closed database ("The database connection is not open").
+test('R74: stop() during the staggered login stops the remaining logins (no bot after stop)', async (t) => {
+  const { createBot, requests } = recordingFactory();
+  const journal = new MemoryJournal();
+  const pool = new BotPool({
+    createBot,
+    journal,
+    host: '127.0.0.1',
+    port: 25599,
+    villagers: [{ name: 'Firmin', role: 'farmer' }, { name: 'Remy', role: 'lumberjack' }],
+    avatarName: 'Dieu',
+    dataDir: tmp(t),
+    worldId: 'w',
+    vitalsIntervalMs: 10_000,
+    staggerMs: 40,
+  });
+  const started = pool.start();
+  await delay(10); // Firmin is logging in; Remy + Dieu are still waiting out the stagger
+  pool.stop();
+  await started;
+  await delay(120);
+  assert.deepEqual(requests.map((r) => r.username), ['Firmin'], 'no login after stop()');
+});
+
+test('R74: a stop→start cycle mid-stagger does not let the OLD login loop double-connect members', async (t) => {
+  const { createBot, requests } = recordingFactory();
+  const journal = new MemoryJournal();
+  const pool = new BotPool({
+    createBot,
+    journal,
+    host: '127.0.0.1',
+    port: 25599,
+    villagers: [{ name: 'Firmin', role: 'farmer' }, { name: 'Remy', role: 'lumberjack' }],
+    avatarName: 'Dieu',
+    dataDir: tmp(t),
+    worldId: 'w',
+    vitalsIntervalMs: 10_000,
+    staggerMs: 40,
+  });
+  const first = pool.start();
+  await delay(10);
+  pool.stop();
+  const second = pool.start(); // a /villagers restart: the old loop must not resume alongside the new one
+  await Promise.all([first, second]);
+  await delay(20);
+  t.after(() => pool.stop());
+  const counts = requests.reduce<Record<string, number>>((m, r) => ({ ...m, [r.username]: (m[r.username] ?? 0) + 1 }), {});
+  assert.deepEqual(counts, { Firmin: 2, Remy: 1, Dieu: 1 }, 'Firmin once per start; the rest only from the live loop');
+});

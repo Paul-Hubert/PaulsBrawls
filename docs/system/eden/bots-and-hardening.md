@@ -86,8 +86,8 @@ checkTimeoutInterval: 90_000, plugins: { pathfinder } })` (`eden/src/bots/pool.t
 
 | Phase | Behaviour | Code |
 |---|---|---|
-| `start()` | reset `stopping=false`; `stampWorldId`; on mismatch `logger.warn('bots', 'world id changed A → B — persisted memories may be from a dead world (R32)…')`; `spawnAll()`; `startVitals()` | `eden/src/bots/pool.ts:146-161` |
-| `spawnAll()` | `connect()` each member in order, `await delay(4000)` **between** connects (does not wait for spawn) | `eden/src/bots/pool.ts:164-169` |
+| `start()` | reset `stopping=false`; bump the login epoch (R74); `stampWorldId`; on mismatch `logger.warn('bots', 'world id changed A → B — persisted memories may be from a dead world (R32)…')`; `spawnAll()`; `startVitals()` | `eden/src/bots/pool.ts:146-161` |
+| `spawnAll()` | `connect()` each member in order, `await delay(4000)` **between** connects (does not wait for spawn); after each wait it returns if the pool is stopping or a newer `start()`/`stop()` moved the login epoch (R74) | `eden/src/bots/pool.ts:164-169` |
 | `connect()` | create bot, record `state:'connecting'`, attach `once('spawn')`, `on('end')`, `on('kicked')`, `_client.on('death_combat_event')` — all closed over **this bot instance** (R66) | `eden/src/bots/pool.ts:172-197` |
 | spawn | identity guard; `state:'connected'`; reset backoff; `boundPathfinder(bot)`; `loadPlugins(bot)`; journal `system.bot-connected {name}` (actor `bot:<name>`); `logger.info`; `onBotSpawn(name, bot)` (throws are caught and warned) | `eden/src/bots/pool.ts:199-215` |
 | end / kicked | identity guard (a superseded instance's events are ignored); `state:'disconnected'`, `bot=null`; journal `system.bot-disconnected {name, reason}`; reconnect unless stopping | `eden/src/bots/pool.ts:217-227` |
@@ -282,6 +282,9 @@ actually sees for run evidence.
 - **Infinite reconnects**: a permanently refused login (whitelist, ban, wrong version) retries every 30 s
   forever, journaling `system.bot-disconnected` each time.
 - `spawnAll` staggers *connect calls*, not spawns; slow logins can still overlap.
+- **R74 (fixed 2026-10-05):** `stop()` mid-stagger used to let the login loop keep connecting the remaining
+  members after the stop; on host shutdown their `end` journaled into the closed database (`The database
+  connection is not open`). `stop()` now bumps the login epoch and the loop checks it after every wait.
 - `death_combat_event` is subscribed on `bot._client` per instance; the payload `message` is a chat
   component on 1.21 and is stored as JSON text.
 - The anchor scans visit ~(2·16+1)³ ≈ 36k cells synchronously per scan — up to 3 `blockAt` calls per cell

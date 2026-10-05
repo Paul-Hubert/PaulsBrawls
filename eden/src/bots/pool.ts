@@ -108,6 +108,8 @@ export class BotPool {
   private readonly records = new Map<string, BotRecord>();
   private vitalsTimer?: ReturnType<typeof setInterval>;
   private stopping = false;
+  /** R74: bumped by every start() and stop(); a staggered login loop only connects while its epoch is current. */
+  private loginEpoch = 0;
 
   constructor(opts: BotPoolOptions) {
     this.opts = opts;
@@ -147,6 +149,7 @@ export class BotPool {
     // Restart-safe: a prior stop() left `stopping=true`, which would suppress reconnects (R53 — the pool is
     // reused across /villagers stop→start in the deferred-spawn model, not recreated). Clear it before spawning.
     this.stopping = false;
+    const epoch = ++this.loginEpoch;
     const stamp = stampWorldId(this.opts.dataDir, this.opts.worldId);
     if (stamp.status === 'mismatch') {
       // R32: a regenerated world leaves stale BELIEFS, not just coordinates. The quarantine-behind-
@@ -156,14 +159,19 @@ export class BotPool {
         `world id changed ${stamp.previous} → ${stamp.worldId} — persisted memories may be from a dead world (R32); quarantine is an M6 admin decision`,
       );
     }
-    await this.spawnAll();
-    this.startVitals();
+    await this.spawnAll(epoch);
+    if (epoch === this.loginEpoch) this.startVitals();
   }
 
-  /** Spawn every member with a stagger between logins; the avatar comes up last (R13/I1). */
-  async spawnAll(): Promise<void> {
+  /**
+   * Spawn every member with a stagger between logins; the avatar comes up last (R13/I1). R74: the loop re-checks
+   * its epoch after every stagger wait, so a stop() (or a stop→start restart) mid-stagger ends it — it used to keep
+   * logging bots in after stop(), and on host shutdown those late logins journaled into a closed database.
+   */
+  async spawnAll(epoch: number = this.loginEpoch): Promise<void> {
     for (let i = 0; i < this.members.length; i++) {
       if (i > 0) await delay(this.staggerMs);
+      if (this.stopping || epoch !== this.loginEpoch) return;
       this.connect(this.members[i] as Member);
     }
   }
@@ -276,6 +284,7 @@ export class BotPool {
   /** Crash-only friendly shutdown: stop timers, cancel reconnects, quit the bots (D-08). */
   stop(): void {
     this.stopping = true;
+    this.loginEpoch++; // R74: end any staggered login loop still waiting out its delay
     if (this.vitalsTimer) {
       clearInterval(this.vitalsTimer);
       this.vitalsTimer = undefined;
