@@ -4,8 +4,8 @@ title: Eden Java integration - settlement listener, /village, /villagers, op-on-
 system: eden
 summary: The mod's server-authority duties for the village - the :8767 trade-settlement HTTP listener, VillageConfig, /village and /villagers commands, op-on-join, and how Eden's clients match (or do not match) them.
 tags: [eden, village, settlement, trade, http, 8767, 8770, VillageHttpListener, VillageConfig, VillageCommand, VillagersCommand, op-on-join, scenario, coin]
-sources: [src/main/java/com/paul/brawl/VillageHttpListener.java, src/main/java/com/paul/brawl/TradeMath.java, eden/tests/fakes/fake-settlement.ts, src/main/java/com/paul/brawl/VillageConfig.java, src/main/java/com/paul/brawl/VillageCommand.java, src/main/java/com/paul/brawl/VillagersCommand.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/BridgeConfig.java, eden/src/social/trade.ts, eden/src/types/social.ts, eden/src/main.ts, eden/src/config.ts, eden/src/admin/server.ts, eden/src/village-launch.ts, eden/eden.example.json, eden/tests/social-trade.test.ts]
-verified_at: 4a8081f
+sources: [src/main/java/com/paul/brawl/VillageHttpListener.java, src/main/java/com/paul/brawl/TradeMath.java, eden/tests/fakes/fake-settlement.ts, src/main/java/com/paul/brawl/VillageConfig.java, src/main/java/com/paul/brawl/VillageCommand.java, src/main/java/com/paul/brawl/VillagersCommand.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/BridgeConfig.java, eden/src/social/trade.ts, eden/src/types/social.ts, eden/src/main.ts, eden/src/config.ts, eden/src/admin/server.ts, eden/src/village-launch.ts, eden/eden.example.json, eden/tests/social-trade.test.ts, src/main/java/com/paul/brawl/EdenRetry.java, src/test/java/com/paul/brawl/EdenRetryTest.java, src/test/java/com/paul/brawl/TradeMathTest.java, eden/roles.json]
+verified_at: 98cb908
 ---
 
 # Eden Java integration - settlement listener, /village, /villagers, op-on-join
@@ -23,11 +23,11 @@ POSTed here (with `X-Village-Token` when `EDEN_SETTLEMENT_TOKEN` is set).
 
 | Piece | Class | Port / file | Registered at |
 |---|---|---|---|
-| Settlement listener | `VillageHttpListener` | `127.0.0.1:8767` (`listenerPort`) | started in `SERVER_STARTED`, stopped in `SERVER_STOPPING` (`ServerEntryPoint.java:49`, `:55`) |
+| Settlement listener | `VillageHttpListener` | `127.0.0.1:8767` (`listenerPort`) | started in `SERVER_STARTED`, stopped in `SERVER_STOPPING` (`ServerEntryPoint.java:49`, `:59`) |
 | Config | `VillageConfig` | `village_config.properties` in JVM cwd | singleton, loaded on first class use |
 | `/village` | `VillageCommand` | talks to `nodeAdminUrl` (`:8766`, legacy v1) | `ServerEntryPoint.java:39` |
 | `/villagers` | `VillagersCommand` | talks to `edenAdminUrl` (`:8770`, Eden) | `ServerEntryPoint.java:42` |
-| Op-on-join | inline in `ServerEntryPoint` | — | `ServerEntryPoint.java:61-74` |
+| Op-on-join | inline in `ServerEntryPoint` | — | `ServerEntryPoint.java:62-78` |
 
 ## `VillageConfig` (`VillageConfig.java`)
 
@@ -163,10 +163,10 @@ The coin is the village currency simply because `paulsbrawls:coin` resolves here
 
 | Aspect | Eden code |
 |---|---|
-| URL | `settlement.url`, default `http://127.0.0.1:8767/trade/execute` (`eden/src/config.ts:127`, `eden/eden.example.json:64`) |
+| URL | `settlement.url`, default `http://127.0.0.1:8767/trade/execute` (`eden/src/config.ts:130`, `eden/eden.example.json:67`) |
 | Method / headers | `POST`, `content-type: application/json`, plus `X-Village-Token` when a token is configured (`eden/src/social/trade.ts:102-107`) |
-| Token | `process.env.EDEN_SETTLEMENT_TOKEN` (`eden/src/main.ts:556`) — a secret, so env-only like the LLM key; unset/empty → no header |
-| **Body sent** | `{ botA, botB, aGives: TradeItem[], bGives: TradeItem[] }` built by `toSettlementRequest` with `coin` → `paulsbrawls:coin` (`eden/src/social/trade.ts:47-62`, `:332-334`) |
+| Token | `process.env.EDEN_SETTLEMENT_TOKEN` (`eden/src/main.ts:642`) — a secret, so env-only like the LLM key; unset/empty → no header |
+| **Body sent** | `{ botA, botB, aGives: TradeItem[], bGives: TradeItem[] }` built by `toSettlementRequest` with `coin` → `paulsbrawls:coin` (`eden/src/social/trade.ts:47-62`, `:354-356`) |
 | Timeout | `AbortController`, 10 000 ms default (`eden/src/social/trade.ts:89`, `:100`) |
 | Success | any 2xx → journal `trade.settled` (`eden/src/social/trade.ts:114-117`) |
 | Failure | non-2xx → `trade.failed` with reason `settlement HTTP <status>: <first 160 chars>`; network/timeout → `settlement could not reach …` / `settlement timed out after …` (`eden/src/social/trade.ts:108-124`) |
@@ -181,16 +181,16 @@ The coin is the village currency simply because `paulsbrawls:coin` resolves here
 | `bGives` | `want` | items moved `botB → botA` |
 
 Before the fix, Eden sent the right-hand names verbatim, so every settlement failed with
-`settlement HTTP 400: {"ok":false,"error":"missing botA"}`, and CI missed it because the fake accepted any
+`settlement HTTP 400: {"ok":false,"error":"missing botA"}`, and the test suite missed it because the fake accepted any
 body. Now `eden/tests/social-trade.test.ts` pins the exact body (`deepEqual` against the Java names), and
 `FakeSettlement` ports `validateShape` (same checks and error strings), so a drifted body fails every
-happy-path test. Java was not changed. Only the shape is covered by CI; a live `:8767` smoke run is still
+happy-path test. Java was not changed. Only the shape is covered by `npm test` (there is no CI); a live `:8767` smoke run is still
 the proof for resolution and the swap.
 
 ### Who calls it
 
-`eden/src/main.ts:552-593` builds one `SettlementClient` and a `TradeBook` and injects the book into the
-villager `ToolRegistry`. A villager's `propose_trade` only records an offer and wakes the partner; the
+`eden/src/main.ts:638-681` (inside `wireGod`) builds one `SettlementClient` and a `TradeBook` and injects the book into the
+villager `ToolRegistry` (`:728`). A villager's `propose_trade` only records an offer and wakes the partner; the
 partner's `answer_trade {accept:true}` walks it to the proposer (R33, the `go-to` skill, aiming within
 `settlement.reach`, default 8 blocks) and then POSTs here. Eden only lets roster villagers be parties, which covers the "any two online
 players, humans included" gap below from the Eden side (a different local caller is still only stopped by the
@@ -198,7 +198,7 @@ token). Details: [social-and-trade.md](social-and-trade.md).
 
 ## Live smoke runbook — the first real `:8767` trade (B4)
 
-Not runnable in CI or in a container without Minecraft: CI proves only the request shape (against `FakeSettlement`).
+Not runnable without a real Minecraft server (and there is no CI): `npm test` proves only the request shape (against `FakeSettlement`).
 This is the checklist for the first run against the real mod. Run it on the dev server (port in
 `run/server.properties`, R28) or on `PaulsBrawlsVanilla`; record the result in `docs/PROGRESS.md`.
 
@@ -211,7 +211,8 @@ This is the checklist for the first run against the real mod. Run it on the dev 
 3. Token: if `village_config.properties` sets `settlementToken`, export the same value as `EDEN_SETTLEMENT_TOKEN` in
    the shell that boots Eden. Otherwise the log warns `No settlementToken configured …` — fine on a private box.
 4. Eden's `settlement.maxTradeDistance` equals the mod's `maxTradeDistance` (default 16 both sides), and
-   `settlement.reach` is below it (default 8).
+   `settlement.reach` is below it (default 8). Eden refuses to boot otherwise (`parseConfig` throws, `eden/src/config.ts:333-338`),
+   but it cannot see the mod's value — keeping the two equal is manual.
 
 **Step 1 — the listener alone (no Eden).** Two online players (or two connected villager bots) `A` and `B`. Give `A`
 one coin and `B` one bread (`/give A paulsbrawls:coin 1`, `/give B bread 1`), stand them within `maxTradeDistance`,
@@ -222,13 +223,17 @@ curl.exe -s -X POST http://127.0.0.1:8767/trade/execute -H "content-type: applic
   -d '{"botA":"A","botB":"B","aGives":[{"item":"paulsbrawls:coin","count":1}],"bGives":[{"item":"bread","count":1}]}'
 ```
 
+(The single-quoted JSON works as-is in PowerShell 7.3+; Windows PowerShell 5.1 strips the inner double quotes of a
+native argument, so there escape them as `\"`.)
+
 Expect `{"ok":true}` and the items swapped (check with `/clear A paulsbrawls:coin 0` and `/clear B bread 0`, which
 count without removing, or over RCON). Repeat once with the players 40 blocks apart → `400` with a distance
 error, inventories unchanged.
 
 **Step 2 — through Eden.** Boot Eden with two roster villagers online (`npx tsx src/main.ts eden.json`, then
 `/villagers start <scenario>`). Give the proposer one coin and the partner one bread as above. Ask the proposer
-through the admin API:
+through the admin API (the tell lands in its inbox and the `everyone` `inbox → deliberate` reflex wakes it,
+`eden/roles.json:23`):
 
 ```powershell
 curl.exe -s -X POST http://127.0.0.1:8770/villagers/<A>/prompt -H "content-type: application/json" `
@@ -236,7 +241,8 @@ curl.exe -s -X POST http://127.0.0.1:8770/villagers/<A>/prompt -H "content-type:
 ```
 
 Expected journal sequence (`GET /journal?kinds=trade.proposed,trade.settled,trade.failed`):
-`trade.proposed` (actor `villager:<A>`) → the partner wakes (`inbox`/conversation lane) and calls
+`trade.proposed` (actor `villager:<A>`) → the partner is woken on the `conversation` lane with the offer text
+(`wakeForTrade`, `eden/src/main.ts:849-851` — a trade notice does not raise the `inbox` signal) and calls
 `answer_trade {accept:true}` → if they were farther than `settlement.reach` a `skill.run` of `go-to` for `<B>` →
 `trade.settled` with the same `refs.tradeId`. Inventories swapped as in step 1.
 
@@ -248,8 +254,9 @@ Expected journal sequence (`GET /journal?kinds=trade.proposed,trade.settled,trad
 | `settlement HTTP 401` | Token mismatch between `settlementToken` and `EDEN_SETTLEMENT_TOKEN`. |
 | `settlement HTTP 400: … missing botA` | Body shape drift — should be impossible (pinned by tests); file a bug. |
 | `settlement HTTP 400: … are too far apart` | The walk ended outside the mod's `maxTradeDistance`: lower `settlement.reach` or check the two `maxTradeDistance` values match. |
-| `settlement HTTP 400: … is not online` / item shortfall | A party lacked the items at settlement time — the mod re-validates on the main thread; inventories untouched. |
-| `partenaire "<B>" hors de portée …` | The R33 walk failed (go-to error or proposer offline); nothing was POSTed. |
+| `settlement HTTP 400: … is not online` / `… does not have …` | A party was offline or lacked the items at settlement time — the mod re-validates on the main thread; inventories untouched. |
+| `partenaire "<B>" hors de portée …` | The R33 walk failed or ended out of range (go-to error or proposer offline); nothing was POSTed. |
+| `expirée sans réponse de <B>` / `refusée par <B>` | The partner never answered within 5 min, or declined; nothing was POSTed. |
 | `hôte redémarré` | Eden restarted with the offer open (B4); nothing moved. |
 
 ## `/village` (`VillageCommand.java`)
@@ -271,14 +278,14 @@ pause/resume → `Village process unreachable — is \`npm run village\` running
 `Village status (raw): <first 400 chars>`.
 
 `status`, `pause`, `resume` target the **legacy v1** Node admin API (port 8766, paths `/village/*`). Eden's
-admin server exposes `POST /pause` and `/resume` on 8770 instead (`eden/src/admin/server.ts:231-232`), so
+admin server exposes `POST /pause` and `/resume` on 8770 instead (`eden/src/admin/server.ts:233-234`), so
 these subcommands cannot control Eden. `on`/`off` control the listener, which both v1 and Eden use.
 
 ## `/villagers` (`VillagersCommand.java`) — Eden scenario control
 
 Permission level 2 (`:79`). HTTP client pinned to **HTTP/1.1** with a 3 s connect timeout (`:54-57`):
 the JDK default (HTTP/2 cleartext) sends `Upgrade: h2c`, and Eden's admin server destroys any upgrade
-request not aimed at `/journal/stream` (`eden/src/admin/server.ts:104-109`). Request timeout 10 s.
+request not aimed at `/journal/stream` (`eden/src/admin/server.ts:106-110`). Request timeout 10 s.
 
 | Syntax | Must be run by | HTTP call to `edenAdminUrl` | Body |
 |---|---|---|---|
@@ -288,33 +295,33 @@ request not aimed at `/journal/stream` (`eden/src/admin/server.ts:104-109`). Req
 
 `<name>` is `StringArgumentType.word()`. Coordinates are the caller's position cast to `int`.
 
-Response handling (`postScenario`, `:118-163`; `stopScenario`, `:165-193`):
+Response handling (`postScenario`, `:118-164`; `stopScenario`, `:166-194`):
 
 - start/restart: parse JSON; `ok` = `root.ok`; message = `root.message` or the raw body. If `ok` and
   `botNames` is an array → `activeScenarioBots` is **cleared and replaced** with those names. Feedback
   `[villagers] <message>`; unparseable → `[villagers] Eden error (HTTP <code>)`.
 - stop: `activeScenarioBots.clear()` first (even on failure), feedback `[villagers] <message>`, or `[villagers] stopped` / `stopped (HTTP <code>)` when the body has no `message` / is unparseable.
-- Retry (`sendWithRetry`): up to `MAX_RETRIES = 3` extra attempts, `RETRY_DELAY_MS = 750`, when
-  `EdenRetry.shouldRetry(idempotent, rootCause)` allows it (bug #16, `EdenRetryTest`): `start` and `stop` retry any
+- Retry (`sendWithRetry`, `:214-235`): up to `MAX_RETRIES = 3` extra attempts, `RETRY_DELAY_MS = 750` (`:68-69`), when
+  `EdenRetry.shouldRetry(idempotent, rootCause)` allows it (bug #16, `EdenRetry.java`, `EdenRetryTest`): `start` and `stop` retry any
   `IOException` root cause (incl. `ConnectException`, `HttpTimeoutException`); `restart` — not idempotent, it wipes bot
   state — retries only a `ConnectException` (the request never arrived). After
   exhaustion: `ConnectException` → `[villagers] Eden n'est pas démarré (ou démarre encore) sur <url>.`;
-  other → `[villagers] Eden redémarre — réessaie dans un instant.` (`:243-256`).
+  other → `[villagers] Eden redémarre — réessaie dans un instant.` (`reportUnreachable`, `:242-255`).
 
-Eden's side (`eden/src/admin/server.ts:268-291`, `eden/src/village-launch.ts`):
+Eden's side (`eden/src/admin/server.ts:235-237`, `:272-299`; `eden/src/village-launch.ts`):
 
 | Route | Eden behaviour | Status / body |
 |---|---|---|
-| `POST /scenario/start` | journal `scenario.start`, `VillageLauncher.start` — **does not load a scenario file**; if Eden booted a named scenario, `name` must equal it (a direct-`villagers` boot accepts any name), otherwise `booted scenario is "<x>", not "<name>" — runtime scenario switching needs a reboot`; starts the boot pool; idempotent (`village already running`) | 200 / 404 `{ok,message,botNames?}`; 400 `{error:"name is required"}`; 503 if not wired |
-| `POST /scenario/restart` | journal `scenario.restart`, stop village loop + pool, delete `<dataDir>/bots/<villager>.json` and reset the live memory + self-authored subscriptions for each villager, start again with `/clear` | same |
-| `POST /scenario/stop` | stop village loop + pool | 200 / 500 `{ok,message}` |
+| `POST /scenario/start` | first `scenarioRefusal(name)` (**before** journaling, bug #17): if Eden booted a named scenario, `name` must equal it (a direct-`villagers` boot accepts any name), otherwise 404 `booted scenario is "<x>", not "<name>" — runtime scenario switching needs a reboot` (no pool → `no village configured …`); then journal `scenario.start` and `VillageLauncher.start` — **does not load a scenario file**; starts the boot pool and the village loop; idempotent (`village already running`) | 200 / 404 `{ok,message,botNames?}`; 400 `{error:"name is required"}`; 503 if not wired |
+| `POST /scenario/restart` | same refusal check, then journal `scenario.restart`, stop village loop + pool, delete `<dataDir>/bots/<villager>.json` and (when God is wired) reset the live memory + self-authored subscriptions for each villager (`eden/src/main.ts:290-293`), start again with `/clear` | same |
+| `POST /scenario/stop` | journal `scenario.stop`, stop village loop + pool | 200 / 500 `{ok,message}` |
 
 After a (re)start, each villager bot, ~1500 ms after spawning, **itself** chats
 `/spreadplayers <x> <z> 2 10 false <name>`, then `/clear <name>` (restart only), then
-`/give <name> <id> <count>` per configured item (`eden/src/village-launch.ts:115-132`). Those commands need
+`/give <name> <id> <count>` per configured item (`eden/src/village-launch.ts:119-137`). Those commands need
 operator rights — which is why op-on-join includes `activeScenarioBots`.
 
-## Op-on-join (`ServerEntryPoint.java:58-74`)
+## Op-on-join (`ServerEntryPoint.java:62-78`)
 
 On `JOIN` (after the Gibber backlog payout), a player is op'd if its name equals
 `BridgeConfig.INSTANCE.botUsername` (default `LLMBot`), `VillageConfig.INSTANCE.edenAvatarName`

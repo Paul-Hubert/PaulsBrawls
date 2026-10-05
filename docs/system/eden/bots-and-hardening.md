@@ -4,8 +4,8 @@ title: Eden bot pool, plugins, signals, anchors, hardening and render layer
 system: eden
 summary: How Eden connects its 11 mineflayer bots (options, stagger, reconnect, vitals, death), which plugins load with what options, the signal adapter, anchors, every hardening guard, and the snapshot/RunReport renderers.
 tags: [eden, bots, mineflayer, pool, plugins, pathfinder, auto-eat, reconnect, vitals, signals, anchors, hardening, abort, render, snapshot]
-sources: [eden/src/bots/pool.ts, eden/src/bots/plugins.ts, eden/src/bots/signals.ts, eden/src/bots/anchors.ts, eden/src/bots/helpers.ts, eden/src/bots/hardening.ts, eden/src/render/tokens.ts, eden/src/render/run-report.ts, eden/src/render/snapshot.ts, eden/src/vendor-mineflayer.d.ts, eden/src/types/bot.ts, eden/src/types/skill.ts, eden/src/config.ts, eden/src/main.ts, eden/src/village-launch.ts, eden/src/villagers/reactivity.ts, eden/src/villagers/events.ts, eden/src/skills/engine.ts, eden/package.json, eden/tests/bots-pool.test.ts, eden/tests/bots-pool-coverage.test.ts, eden/tests/bots-hardening.test.ts, eden/tests/bots-hardening-coverage.test.ts, eden/tests/bots-helpers.test.ts, eden/tests/bots-anchors.test.ts, eden/tests/fakes/fake-bot.ts, docs/07-hard-won-lessons.md]
-verified_at: 4a8081f
+sources: [eden/src/bots/pool.ts, eden/src/bots/plugins.ts, eden/src/bots/signals.ts, eden/src/bots/anchors.ts, eden/src/bots/helpers.ts, eden/src/bots/hardening.ts, eden/src/render/tokens.ts, eden/src/render/run-report.ts, eden/src/render/snapshot.ts, eden/src/vendor-mineflayer.d.ts, eden/src/types/bot.ts, eden/src/types/skill.ts, eden/src/config.ts, eden/src/main.ts, eden/src/village-launch.ts, eden/src/villagers/reactivity.ts, eden/src/villagers/events.ts, eden/src/skills/engine.ts, eden/package.json, eden/tests/bots-pool.test.ts, eden/tests/bots-pool-coverage.test.ts, eden/tests/bots-hardening.test.ts, eden/tests/bots-hardening-coverage.test.ts, eden/tests/bots-helpers.test.ts, eden/tests/bots-anchors.test.ts, eden/tests/fakes/fake-bot.ts, eden/tests/villagers-host-events.test.ts, eden/roles.json, src/main/java/com/paul/brawl/ServerEntryPoint.java, docs/07-hard-won-lessons.md]
+verified_at: 98cb908
 ---
 
 # Eden bot pool, plugins, signals, anchors, hardening and render layer
@@ -15,18 +15,19 @@ plus the avatar (divine, logged in last), staggered 4 s apart, pinned to `1.21.1
 90 s keepalive, unlimited reconnects with 1→30 s backoff. On each spawn it bounds the pathfinder and loads
 pvp / armor-manager / tool / collectblock / auto-eat (each independently fallible). `bots/hardening.ts` holds
 the abort sequence and chat interceptor the engine uses. `render/` turns snapshots and `RunReport`s into
-the deterministic text the critic and villagers read. Several layer-1 modules (anchors, helpers,
-quiescence helpers) are tested but **not wired** into the running host.
+the deterministic text the critic and villagers read. `bots/signals.ts` feeds the villager reactivity routers and
+`bots/anchors.ts` discovers home/chest anchors after spawn (B3.6); `bots/helpers.ts` and the quiescence helpers are
+tested but **not wired** into the running host.
 
 ## Files and runtime status
 
 | File | Exports | Runtime caller | Status |
 |---|---|---|---|
-| `eden/src/bots/pool.ts` | `BotPool`, `stampWorldId`, `LOGIN_STAGGER_MS` | `eden/src/main.ts:193-210`, `eden/src/village-launch.ts` | wired (only when `spawnBots` and villagers > 0) |
+| `eden/src/bots/pool.ts` | `BotPool`, `stampWorldId`, `LOGIN_STAGGER_MS` | `eden/src/main.ts:226-245`, `eden/src/village-launch.ts` | wired (only when `spawnBots` and villagers > 0) |
 | `eden/src/bots/plugins.ts` | `loadPlugins`, `AUTO_EAT_OPTS`, `pathfinder` | `eden/src/bots/pool.ts` | wired |
 | `eden/src/bots/hardening.ts` | `boundPathfinder`, `abortActiveTasks`, `installChatInterceptor`, `craftQuiescence`, `waitForInventoryQuiescence` | pool (bound), engine (abort, interceptor) | quiescence helpers: tests only |
-| `eden/src/bots/signals.ts` | `attachReactivitySignals` | `eden/src/villagers/reactivity.ts:63` | wired |
-| `eden/src/bots/anchors.ts` | `AnchorService` | none | wired (B3.6): healed 10 s after each villager spawn in `start()` |
+| `eden/src/bots/signals.ts` | `attachReactivitySignals`, `CHAT_DISTANCE_UNKNOWN` | `eden/src/villagers/reactivity.ts:67` | wired |
+| `eden/src/bots/anchors.ts` | `AnchorService` | `eden/src/main.ts:206-220` | wired (B3.6): healed 10 s after each villager spawn in `start()` |
 | `eden/src/bots/helpers.ts` | `goToHops`, `collectTrunk`, `useChest`, `deposit`, `withdraw`, `MAX_HOP_BLOCKS` | none | **not wired** — stock skills inline their own copies |
 | `eden/src/render/*.ts` | `estimateTokens`, `renderSnapshot`, `renderRunReport` | `eden/src/god/critic.ts`, `eden/src/villagers/context-pack.ts` | wired |
 | `eden/src/types/bot.ts` | narrowed `Bot` seam (D-14) | everything in bots/ + engine | — |
@@ -48,14 +49,14 @@ runtime (full mineflayer API), the seam only types Eden's own TS code. `eden/src
 
 ## BotPool
 
-### Construction (`BotPoolOptions`, `eden/src/bots/pool.ts:52-75`)
+### Construction (`BotPoolOptions`, `eden/src/bots/pool.ts:51-75`)
 
-| Option | Meaning | Main wiring (`eden/src/main.ts:193-210`) |
+| Option | Meaning | Main wiring (`eden/src/main.ts:226-245`) |
 |---|---|---|
 | `createBot?` | factory seam; default real `mineflayer.createBot` | default |
 | `journal` | journal appender | shared journal |
-| `host`, `port` | server | `config.minecraft.host/port` (defaults `127.0.0.1:25599`, `eden/src/config.ts:86`) |
-| `version?` | protocol pin; default `'1.21.1'` | `config.minecraft.version` (warns if ≠ 1.21.1, `eden/src/config.ts:206-210`) |
+| `host`, `port` | server | `config.minecraft.host/port` (defaults `127.0.0.1:25599`, `eden/src/config.ts:90`) |
+| `version?` | protocol pin; default `'1.21.1'` | `config.minecraft.version` (warns if ≠ 1.21.1, `eden/src/config.ts:209-213`) |
 | `villagers` | `{name, role}[]` | `config.villagers` |
 | `avatarName` | the divine member | `config.god.name` (default `'Dieu'`) |
 | `dataDir` | for `world.json` | `.eden-data` |
@@ -63,13 +64,13 @@ runtime (full mineflayer API), the seam only types Eden's own TS code. `eden/src
 | `vitalsIntervalMs` | vitals cadence | `journal.vitalsIntervalSeconds * 1000` (default 10 s) |
 | `staggerMs?` | login stagger override | not set → 4000 |
 | `currentRunOf?` | vitals `currentRun` source | **not set** → always `null` |
-| `onBotSpawn?` | per-(re)spawn hook | reactivity `attach` + `VillageLauncher.onSpawn` |
+| `onBotSpawn?` | per-(re)spawn hook | reactivity `attach` + `VillageLauncher.onSpawn` + `healAnchors` (B3.6) |
 
 Members: every villager as `{tier:'mortal', isAvatar:false}`, then the avatar `{role:'avatar',
-tier:'divine', isAvatar:true}` **last** (`eden/src/bots/pool.ts:117-123`). The pool never ops anyone (R14);
+tier:'divine', isAvatar:true}` **last** (`eden/src/bots/pool.ts:118-122`). The pool never ops anyone (R14);
 `roster()` exposes tiers.
 
-### Connection options (`SpawnRequest`, `eden/src/bots/pool.ts:28-38, 172-180`)
+### Connection options (`SpawnRequest`, `eden/src/bots/pool.ts:28-38, 180-188`)
 
 `mineflayer.createBot({ host, port, username: member.name, version, viewDistance: 'short',
 checkTimeoutInterval: 90_000, plugins: { pathfinder } })` (`eden/src/bots/pool.ts:91-99`).
@@ -86,17 +87,17 @@ checkTimeoutInterval: 90_000, plugins: { pathfinder } })` (`eden/src/bots/pool.t
 
 | Phase | Behaviour | Code |
 |---|---|---|
-| `start()` | reset `stopping=false`; bump the login epoch (R74); `stampWorldId`; on mismatch `logger.warn('bots', 'world id changed A → B — persisted memories may be from a dead world (R32)…')`; `spawnAll()`; `startVitals()` | `eden/src/bots/pool.ts:146-161` |
-| `spawnAll()` | `connect()` each member in order, `await delay(4000)` **between** connects (does not wait for spawn); after each wait it returns if the pool is stopping or a newer `start()`/`stop()` moved the login epoch (R74) | `eden/src/bots/pool.ts:164-169` |
-| `connect()` | create bot, record `state:'connecting'`, attach `once('spawn')`, `on('end')`, `on('kicked')`, `_client.on('death_combat_event')` — all closed over **this bot instance** (R66) | `eden/src/bots/pool.ts:172-197` |
-| spawn | identity guard; `state:'connected'`; reset backoff; `boundPathfinder(bot)`; `loadPlugins(bot)`; journal `system.bot-connected {name}` (actor `bot:<name>`); `logger.info`; `onBotSpawn(name, bot)` (throws are caught and warned) | `eden/src/bots/pool.ts:199-215` |
-| end / kicked | identity guard (a superseded instance's events are ignored); `state:'disconnected'`, `bot=null`; journal `system.bot-disconnected {name, reason}`; reconnect unless stopping | `eden/src/bots/pool.ts:217-227` |
-| death | journal `world.death {name, cause?}` from the packet's `message` (string, or JSON of an object) — R27 authoritative cause | `eden/src/bots/pool.ts:229-238, 333-339` |
-| reconnect | backoff `[1000, 2000, 5000, 10000, 30000]` ms indexed by attempts (clamped to 30 s), **no attempt limit**, timer `unref`'d, reset to 0 on spawn | `eden/src/bots/pool.ts:25, 241-251` |
-| vitals | every `vitalsIntervalMs`, for each **connected** bot journal `vitals {name, health (?? 0), food (?? 0), position [rounded x,y,z] or [0,0,0], held (heldItem.name ?? null), currentRun}` | `eden/src/bots/pool.ts:254-274` |
-| `stop()` | `stopping=true`; bump the login epoch (R74); clear vitals; cancel reconnect timers; `bot.quit('pool shutdown')` (best-effort); all records disconnected | `eden/src/bots/pool.ts:277-293` |
+| `start()` | reset `stopping=false`; bump the login epoch (R74); `stampWorldId`; on mismatch `logger.warn('bots', 'world id changed A → B — persisted memories may be from a dead world (R32)…')`; `spawnAll()`; `startVitals()` only if no newer `start()`/`stop()` moved the epoch meanwhile | `eden/src/bots/pool.ts:148-164` |
+| `spawnAll()` | `connect()` each member in order, `await delay(4000)` **between** connects (does not wait for spawn); before each connect it returns if the pool is stopping or a newer `start()`/`stop()` moved the login epoch (R74) | `eden/src/bots/pool.ts:171-177` |
+| `connect()` | create bot, record `state:'connecting'`, attach `once('spawn')`, `on('end')`, `on('kicked')`, `_client.on('death_combat_event')` — all closed over **this bot instance** (R66) | `eden/src/bots/pool.ts:180-205` |
+| spawn | identity guard; `state:'connected'`; reset backoff; `boundPathfinder(bot)`; `loadPlugins(bot)`; journal `system.bot-connected {name}` (actor `bot:<name>`); `logger.info`; `onBotSpawn(name, bot)` (throws are caught and warned) | `eden/src/bots/pool.ts:207-223` |
+| end / kicked | identity guard (a superseded instance's events are ignored); `state:'disconnected'`, `bot=null`; journal `system.bot-disconnected {name, reason}`; reconnect unless stopping | `eden/src/bots/pool.ts:225-235` |
+| death | journal `world.death {name, cause?}` from the packet's `message` (string, or JSON of an object) — R27 authoritative cause; identity-guarded like end | `eden/src/bots/pool.ts:237-246, 342-348` |
+| reconnect | backoff `[1000, 2000, 5000, 10000, 30000]` ms indexed by attempts (clamped to 30 s), **no attempt limit**, timer `unref`'d, reset to 0 on spawn | `eden/src/bots/pool.ts:25, 249-259` |
+| vitals | every `vitalsIntervalMs`, for each **connected** bot journal `vitals {name, health (?? 0), food (?? 0), position [rounded x,y,z] or [0,0,0], held (heldItem.name ?? null), currentRun}` | `eden/src/bots/pool.ts:262-282` |
+| `stop()` | `stopping=true`; bump the login epoch (R74); clear vitals; cancel reconnect timers; `bot.quit('pool shutdown')` (best-effort); all records disconnected | `eden/src/bots/pool.ts:285-302` |
 
-Reason formatting (`formatEndReason`/`reasonText`, `eden/src/bots/pool.ts:302-330`): `end` → text or `'end'`; `kicked` →
+Reason formatting (`formatEndReason`/`reasonText`, `eden/src/bots/pool.ts:311-339`): `end` → text or `'end'`; `kicked` →
 `'kicked: <text>'`. Text extraction handles strings, JSON strings, and chat components (`text`, `value`,
 `translate`, else `JSON.stringify`) so 1.21 kick objects never render as `[object Object]`.
 
@@ -104,7 +105,7 @@ Accessors: `bot(name)`, `avatar()`, `connectedCount()`, `roster()`.
 
 ### World stamp (R32)
 
-`stampWorldId(dataDir, worldId)` (`eden/src/bots/pool.ts:353-363`) writes `<dataDir>/world.json` =
+`stampWorldId(dataDir, worldId)` (`eden/src/bots/pool.ts:362-372`) writes `<dataDir>/world.json` =
 `{"worldId": "<host>:<port>", "stampedAt": <ms>}` on first boot and returns `fresh`; later boots return
 `match` or `mismatch` (original stamp left in place). The pool only warns; quarantining stale memories is
 handled elsewhere (see [villager-memory.md](villager-memory.md)).
@@ -112,10 +113,10 @@ handled elsewhere (see [villager-memory.md](villager-memory.md)).
 ### When the pool exists
 
 `eden/src/main.ts` builds a pool only for `opts.spawnBots && config.villagers.length > 0`; the direct boot sets
-`spawnBots:true` (`eden/src/main.ts:1195`). Spawning itself is deferred to the in-game `/villagers start`
-(`VillageLauncher.start` → `pool.start()`, `eden/src/village-launch.ts:75-83`); `restart` deletes
-`bots/<name>.json` for every villager before reconnecting (`:96-107`). The engine resolves a runner's bot via
-`pool.bot(name)` (`eden/src/main.ts:528`).
+`spawnBots:true` (`eden/src/main.ts:1599`). Spawning itself is deferred to the in-game `/villagers start`
+(`VillageLauncher.start` → `pool.start()`, `eden/src/village-launch.ts:78-86`); `restart` deletes
+`bots/<name>.json` for every villager and calls the host's `resetVillager` hook before reconnecting (`:99-111`). The engine resolves a runner's bot via
+`pool.bot(name)` (`resolveBot`, `eden/src/main.ts:605`).
 
 ## Plugins (`bots/plugins.ts`)
 
@@ -159,8 +160,8 @@ Called on every spawn: `thinkTimeout = 2000`, `tickTimeout = 10`, `searchRadius 
 | Guard | R# | Behaviour | Used by |
 |---|---|---|---|
 | `boundPathfinder(bot)` | R6 | see above; no-op if pathfinder missing | pool onSpawn |
-| `abortActiveTasks(bot)` | R4/R5 | ordered, each step try/caught: (1) `collectBlock.cancelTask?.()` + empty `collectBlock.targets`; (2) `await pvp.stop()`; (3) `pathfinder.stop()` **then** `pathfinder.setGoal(null)` (a lone `stop()` arms a latent flag that cancels the next goal); (4) close `currentWindow`; (5) `await setImmediate` | engine on timeout/stall/preempt (`eden/src/skills/engine.ts:373`) |
-| `installChatInterceptor(bot)` | R25 | replaces `bot.chat` with a wrapper dropping `/^\s*\//` messages silently; returns a restorer | engine when a divine runner runs a mortal root skill |
+| `abortActiveTasks(bot)` | R4/R5 | ordered, each step try/caught: (1) `collectBlock.cancelTask?.()` + empty `collectBlock.targets`; (2) `await pvp.stop()`; (3) `pathfinder.stop()` **then** `pathfinder.setGoal(null)` (a lone `stop()` arms a latent flag that cancels the next goal); (4) close `currentWindow`; (5) `await setImmediate` | engine on timeout/stall/preempt (`eden/src/skills/engine.ts:392`; the engine then waits up to `abortSettleMs` for the fenced code to settle, `:393-396`) |
+| `installChatInterceptor(bot)` | R25 | replaces `bot.chat` with a wrapper dropping `/^\s*\//` messages silently; returns a restorer | engine when a divine runner runs a mortal root skill (`eden/src/skills/engine.ts:311-312`) |
 | `waitForInventoryQuiescence(bot, {quietMs=120, timeoutMs=2000})` | R2/R39 | resolves after `quietMs` without `set_slot`/`window_items` on `bot._client`, or at the hard `timeoutMs` | tests only |
 | `craftQuiescence(bot, fn, opts)` | R1–R3 | close stray window, pause auto-eat + armor-manager, run `fn`, wait quiescence; always resume in `finally` | tests only |
 
@@ -169,11 +170,12 @@ The stock `craft-item` skill inlines its own variant (80 ms quiet window, **no h
 
 ### Host process guards (Blocker Z)
 
-Not in bots/, but the last hardening layer: `installProcessGuards(journal)` (`eden/src/main.ts:1169-1186`)
+Not in bots/, but the last hardening layer: `installProcessGuards(journal)` (`eden/src/main.ts:1531-1550`)
 adds `uncaughtException` / `unhandledRejection` handlers that log and journal `system.error {message,
 stack?}` (actor `engine`) and **do not exit** — an async throw from mineflayer's physics tick (e.g. a skill
 passing a plain-object goal to pathfinder) would otherwise kill the whole village. Installed only on a
-direct boot (`installProcessGuards:true`), never under tests.
+direct boot (`installProcessGuards:true`, `eden/src/main.ts:168`), never under tests. A direct boot also installs
+SIGINT/SIGTERM handlers (`installShutdownHandlers`, bug #17) that run `host.stop()` once and force `exit(1)` on a second signal.
 
 ## Helpers (`bots/helpers.ts`) — not wired
 
@@ -188,8 +190,8 @@ TS twins of the stock primitives, ported from v1, exercised only by tests:
 
 ## Signals (`eden/src/bots/signals.ts`)
 
-`attachReactivitySignals(bot)` (`eden/src/bots/signals.ts:56-85`) creates a fresh `EventEmitter` bus (max listeners
-unlimited) for the villager `EventRouter` (`eden/src/villagers/reactivity.ts:63-77`), so the router never sees
+`attachReactivitySignals(bot)` (`eden/src/bots/signals.ts:74-153`) creates a fresh `EventEmitter` bus (max listeners
+unlimited) for the villager `EventRouter` (`eden/src/villagers/reactivity.ts:64-95`), so the router never sees
 mineflayer's native per-entity `entityHurt`.
 
 | Native bot event | Synthetic bus emission |
@@ -197,22 +199,22 @@ mineflayer's native per-entity `entityHurt`.
 | `health` | if health dropped since last observation: `entityHurt(bot.entity, {damage: last - hp, byEntity?})` where `byEntity` is the **name of the nearest hostile** in `bot.entities`; then always `health` (no args) |
 | `death` | `death` |
 
-The baseline is `bot.health` at attach time (first observation never emits a hurt); `undefined` health
-reads as 20. Hostile names (27): zombie, zombie_villager, husk, drowned, skeleton, stray, wither_skeleton,
+The baseline is `bot.health` at attach time (if it is not yet a number, the first observation only sets it); an `undefined`
+health reads as 20. Hostile names (27): zombie, zombie_villager, husk, drowned, skeleton, stray, wither_skeleton,
 creeper, spider, cave_spider, witch, slime, silverfish, phantom, pillager, vindicator, illusioner,
 ravager, evoker, blaze, ghast, magma_cube, zoglin, hoglin, piglin, piglin_brute, enderman
-(`eden/src/bots/signals.ts`). `detach()` removes every native listener and clears the bus.
+(`eden/src/bots/signals.ts:28-33`). `detach()` removes every native listener, clears the spotted set and the bus.
 
 Since docs/22 B3.1 (D-17) the adapter also forwards, with `attachReactivitySignals(bot, {isVillager, spotRadius=16,
-loseRadius=24})`:
+loseRadius=24})` (`loseRadius` is raised to `spotRadius` if smaller; `reactivity.ts` passes only `isVillager`):
 
 | Native | Bus signal | Rule |
 |---|---|---|
 | `chat(username, message)` | `chat(username, message, {isVillager, distance})` | the bot's own lines dropped; `distance` from `bot.players[u].entity.position`, `CHAT_DISTANCE_UNKNOWN` (9999) if unloaded |
-| `entitySpawn` / `entityMoved` (entity) | `entitySpotted({id, name, distance})` | once on entering ≤ `spotRadius`; types `object/orb/projectile/global/other` and the bot itself ignored |
+| `entitySpawn` / `entityMoved` (entity) | `entitySpotted({id, name, distance})` (distance rounded to 0.1) | once on entering ≤ `spotRadius`; types `object/orb/projectile/global/other` and the bot itself ignored |
 | `entityMoved` beyond `loseRadius`, `entityGone` | `entityGone({id, name})` | only for an entity in the spotted set (hysteresis — no flapping on the boundary) |
 | `time` | `time` | the router computes the night-falls/new-day edge from `bot.time` (`new-day.day` = `bot.time.day` when present) |
-| — (host) | `inbox` via `BotSignals.emit` | `VillagerReactivity.signal(villager, 'inbox')`, raised by `main.ts` when a non-trade `tell` lands |
+| — (host) | `inbox` via `BotSignals.emit` | `VillagerReactivity.signal(villager, 'inbox')` (`eden/src/villagers/reactivity.ts:101-103`), raised by `main.ts` when a non-trade `tell` lands |
 
 `itemReceived`, `blockBrokenNearby` and `runFinished` still have no source (no role subscribes to them). Pinned by
 `eden/tests/villagers-host-events.test.ts`; only a live run proves mineflayer emits the native events as modelled. Stall-detector
@@ -234,12 +236,12 @@ pulses are a different mechanism (engine-side bot listeners, see [skills-engine.
   preserving other keys (memory etc.); a corrupt file is treated as empty.
 
 `AnchorInput` is an empty interface: configured home/chest hints are **not** an input, and
-`VillagerConfig` has no `home`/`chest` keys (allowed keys: `name, role, persona, items`, `eden/src/config.ts:223`).
-**Wiring (B3.6):** `start()` builds one `AnchorService(dataDir)`; the pool's `onBotSpawn` schedules `heal` for a roster
-villager `ANCHOR_SETTLE_MS = 10 s` later (after the launcher's `/spreadplayers` at +1.5 s), skipped if the bot reconnected
+`VillagerConfig` has no `home`/`chest` keys (allowed keys: `name, role, persona, items`, `eden/src/config.ts:226`).
+**Wiring (B3.6):** `start()` builds one `AnchorService(dataDir)` (`eden/src/main.ts:206-220`); the pool's `onBotSpawn` schedules `heal` for a roster
+villager `ANCHOR_SETTLE_MS = 10 s` later (`:1195`) (after the launcher's `/spreadplayers` at +1.5 s), skipped if the bot reconnected
 or left meanwhile; the result lands in an in-memory map. `wireGod` gets `homeOf(name)`, and `VillagerReactivity`'s
 `scopeFor` exposes `{ home: {x,y,z} | undefined }` so a skill handler may template `$home.x/y/z` — the `everyone`
-`night-falls → go-home` reflex does (`roles.json`). Only a live run proves the heal (it needs a real world); the
+`night-falls → go-home` reflex does (`eden/roles.json:26`). Only a live run proves the heal (it needs a real world); the
 templating is pinned by `eden/tests/villagers-host-events.test.ts`. A `/villagers restart` deletes the persisted
 anchors with `bots/<name>.json`, so the next spawn re-discovers them.
 
@@ -289,7 +291,7 @@ actually sees for run evidence.
 - **Vitals `currentRun` is always `null`** — `currentRunOf` is not passed (`engine.runningSkills` exists).
 - ~~**Most reactivity events have no source**~~ **Fixed (B3.1, D-17):** chat, entity-spotted/-lost, time and inbox are
   forwarded, so every `roles.json` default can fire. item-received / block-broken-nearby / run-finished remain inert.
-- **`stampWorldId` throws on a corrupt `world.json`** (`JSON.parse` without try, `eden/src/bots/pool.ts:357`), which
+- **`stampWorldId` throws on a corrupt `world.json`** (`JSON.parse` without try, `eden/src/bots/pool.ts:366`), which
   rejects `pool.start()`.
 - **`start()` is not idempotent at the pool level**: a second call without `stop()` connects a second bot
   per member (same usernames → server kicks; R66 guards only the bookkeeping). `VillageLauncher` guards it
@@ -303,11 +305,13 @@ actually sees for run evidence.
 - `death_combat_event` is subscribed on `bot._client` per instance; the payload `message` is a chat
   component on 1.21 and is stored as JSON text.
 - The anchor scans visit ~(2·16+1)³ ≈ 36k cells synchronously per scan — up to 3 `blockAt` calls per cell
-  for the home scan plus one per cell for the chest scan, i.e. ~36k–144k calls per heal (would block the
-  event loop if wired).
+  for the home scan plus one per cell for the chest scan, i.e. ~36k–144k calls per heal. Now that the heal is wired
+  (10 s after each villager spawn), each heal blocks the event loop for that scan; only a live run shows how long.
 - `VillageLauncher.onSpawn` issues `/spreadplayers`, `/clear`, `/give` through the **villager's** own
-  `bot.chat` (`eden/src/village-launch.ts:124-128`); villagers are never op'd by design (R14), so these succeed only
-  if the server grants them permission some other way.
+  `bot.chat` 1.5 s after spawn (`eden/src/village-launch.ts:128-136`). The pool never ops anyone (R14), but the mod's
+  op-on-join ops every name in `VillagersCommand.activeScenarioBots` (filled by `/villagers start|restart`,
+  `src/main/java/com/paul/brawl/ServerEntryPoint.java:62-78`), so these succeed on the real dedicated server — and an
+  op'd villager can run any `/` command; the mortal/divine boundary is enforced by the engine, not by server permissions.
 
 ## Related
 
