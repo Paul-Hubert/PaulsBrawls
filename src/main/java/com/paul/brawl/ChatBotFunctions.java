@@ -51,16 +51,16 @@ public class ChatBotFunctions {
     static class Trade {
         @JsonPropertyDescription("The name of the item to give to the player in the trade. Example: minecraft:diamond")
         public String giveItemName;
-        @JsonPropertyDescription("The number of items to give to the player in the trade.")
+        @JsonPropertyDescription("The number of items to give to the player in the trade (1-512).")
         public int giveAmount;
-
         @JsonPropertyDescription("The name of the item to take from the player in the trade. Example: minecraft:diamond")
         public String takeItemName;
-        @JsonPropertyDescription("The number of items to take from the player in the trade.")
+        @JsonPropertyDescription("The number of items to take from the player in the trade (1-512).")
         public int takeAmount;
 
         public String execute(ServerPlayerEntity player) {
-            return ChatBotActions.sendTradeOffer(player, giveItemName, giveAmount, takeItemName, takeAmount);
+            String bad = TradeOffers.checkAmounts(giveAmount, takeAmount); // a negative takeAmount used to duplicate items on /accept
+            return bad != null ? bad : ChatBotActions.sendTradeOffer(player, giveItemName, giveAmount, takeItemName, takeAmount);
         }
     }
 

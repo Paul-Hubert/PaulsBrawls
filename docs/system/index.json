@@ -88,6 +88,8 @@
         "eden/CLAUDE.md",
         "docs/README.md",
         "src/main/java/com/paul/brawl/VillageHttpListener.java",
+        "src/main/java/com/paul/brawl/TradeOffers.java",
+        "src/main/java/com/paul/brawl/TradeMath.java",
         "eden/src/social/trade.ts",
         "eden/src/main.ts"
       ],
@@ -102,7 +104,7 @@
         "6. Eden",
         "Related"
       ],
-      "bytes": 19031
+      "bytes": 19913
     },
     {
       "id": "aigod.actions-and-trades",
@@ -127,6 +129,7 @@
       "sources": [
         "src/main/java/com/paul/brawl/ChatBotActions.java",
         "src/main/java/com/paul/brawl/TradeOffers.java",
+        "src/main/java/com/paul/brawl/TradeMath.java",
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
         "src/main/java/com/paul/brawl/ChatPrinter.java",
         "src/main/java/com/paul/brawl/BridgeConfig.java",
@@ -152,7 +155,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 14848
+      "bytes": 16596
     },
     {
       "id": "aigod.building",
@@ -254,7 +257,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 14719
+      "bytes": 14720
     },
     {
       "id": "aigod.god-body",
@@ -509,7 +512,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 13704
+      "bytes": 13715
     },
     {
       "id": "aigod.tools-catalogue",
@@ -568,7 +571,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 19554
+      "bytes": 19903
     },
     {
       "id": "ctf.capture-the-flag",
@@ -605,7 +608,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 7329
+      "bytes": 7333
     },
     {
       "id": "eden.admin-api",
@@ -817,6 +820,7 @@
       ],
       "sources": [
         "src/main/java/com/paul/brawl/VillageHttpListener.java",
+        "src/main/java/com/paul/brawl/TradeMath.java",
         "src/main/java/com/paul/brawl/VillageConfig.java",
         "src/main/java/com/paul/brawl/VillageCommand.java",
         "src/main/java/com/paul/brawl/VillagersCommand.java",
@@ -845,7 +849,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 18708
+      "bytes": 21405
     },
     {
       "id": "eden.journal-and-views",
@@ -1256,7 +1260,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 13056
+      "bytes": 13394
     },
     {
       "id": "eden.skills.stock",
@@ -1611,7 +1615,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 11304
+      "bytes": 11327
     },
     {
       "id": "platform.build-and-runtime",
@@ -1740,7 +1744,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 14133
+      "bytes": 14134
     },
     {
       "id": "reference.commands",
@@ -1788,7 +1792,7 @@
         "Eden — admin HTTP verbs (`127.0.0.1:8770`, no auth)",
         "Related"
       ],
-      "bytes": 9137
+      "bytes": 9147
     },
     {
       "id": "reference.ports-files-config",
@@ -1832,7 +1836,7 @@
         "Login names (must be pairwise distinct)",
         "Related"
       ],
-      "bytes": 9723
+      "bytes": 9938
     }
   ]
 }

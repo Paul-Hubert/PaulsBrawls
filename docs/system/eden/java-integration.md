@@ -4,15 +4,15 @@ title: Eden Java integration - settlement listener, /village, /villagers, op-on-
 system: eden
 summary: The mod's server-authority duties for the village - the :8767 trade-settlement HTTP listener, VillageConfig, /village and /villagers commands, op-on-join, and how Eden's clients match (or do not match) them.
 tags: [eden, village, settlement, trade, http, 8767, 8770, VillageHttpListener, VillageConfig, VillageCommand, VillagersCommand, op-on-join, scenario, coin]
-sources: [src/main/java/com/paul/brawl/VillageHttpListener.java, src/main/java/com/paul/brawl/VillageConfig.java, src/main/java/com/paul/brawl/VillageCommand.java, src/main/java/com/paul/brawl/VillagersCommand.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/BridgeConfig.java, eden/src/social/trade.ts, eden/src/types/social.ts, eden/src/main.ts, eden/src/config.ts, eden/src/admin/server.ts, eden/src/village-launch.ts, eden/eden.example.json, eden/tests/social-trade.test.ts]
+sources: [src/main/java/com/paul/brawl/VillageHttpListener.java, src/main/java/com/paul/brawl/TradeMath.java, src/main/java/com/paul/brawl/VillageConfig.java, src/main/java/com/paul/brawl/VillageCommand.java, src/main/java/com/paul/brawl/VillagersCommand.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/BridgeConfig.java, eden/src/social/trade.ts, eden/src/types/social.ts, eden/src/main.ts, eden/src/config.ts, eden/src/admin/server.ts, eden/src/village-launch.ts, eden/eden.example.json, eden/tests/social-trade.test.ts]
 verified_at: 4a8081f
 ---
 
 # Eden Java integration - settlement listener, /village, /villagers, op-on-join
 
 **TL;DR** — The Fabric mod gives the village four things: (1) a localhost HTTP listener
-`POST 127.0.0.1:8767/trade/execute` that validates and swaps items between two online players on the main
-thread; (2) `/village` (config + listener toggle + legacy v1 status/pause/resume); (3) `/villagers
+`POST 127.0.0.1:8767/trade/execute` that validates (per-item totals) and swaps the real item stacks between
+two nearby online players on the main thread; (2) `/village` (config + listener toggle + legacy v1 status/pause/resume); (3) `/villagers
 start|stop|restart` which drives Eden's admin API on `:8770`; (4) op-on-join for `LLMBot`, `Dieu` and the
 current scenario's villagers. **The Eden `SettlementClient` sends `{from,to,give,want}` but the listener
 requires `{botA,botB,aGives,bGives}`, so every Eden settlement would be rejected with 400 `missing botA`**
@@ -38,27 +38,30 @@ File: `Path.of("village_config.properties")` — relative to the JVM working dir
 |---|---|---|---|---|
 | `enabled` | `enabled` | boolean | `true` | `VillageHttpListener.start` gate |
 | `listenerPort` | `listenerPort` | int | `8767` | listener bind port |
+| `maxTradeDistance` | `maxTradeDistance` | double | `16.0` | max blocks between the two settlement parties (same dimension required); `<= 0` disables the distance check |
+| `settlementToken` | `settlementToken` | string | `""` | if non-blank, every settlement must send it in the `X-Village-Token` header (else 401) |
 | `nodeAdminUrl` | `nodeAdminUrl` | string | `http://127.0.0.1:8766` | `/village status|pause|resume` (v1 Node process) |
 | `edenAvatarName` | `edenAvatarName` | string | `Dieu` | op-on-join |
 | `edenAdminUrl` | `edenAdminUrl` | string | `http://127.0.0.1:8770` | `/villagers …` |
 
-Lines `:28-40`. Lifecycle:
+Lines `:28-53`. Lifecycle:
 
-- `load()` runs once in the private constructor (`:42-44`, `:60-74`). Missing file → defaults, **no file
-  is written**. Unparseable int → keeps default; booleans use `Boolean.parseBoolean` (anything but `true`
-  → `false`).
-- `save()` (`:46-58`) writes all five keys; it is only called by `/village on` and `/village off`.
+- `load()` runs once in the private constructor (`:55-57`, `:75-91`). Missing file → defaults, **no file
+  is written**. Unparseable int/double → keeps default; booleans use `Boolean.parseBoolean` (anything but `true`
+  → `false`); `settlementToken` is trimmed.
+- `save()` (`:59-73`) writes all seven keys; it is only called by `/village on` and `/village off`.
 - There is no reload command; edits to the file need a server restart (the class Javadoc's "tune without a
   restart" is not implemented).
-- `describe()` returns `VillageConfig{enabled=…, listenerPort=…, nodeAdminUrl=…, edenAvatarName=…, edenAdminUrl=…}`.
+- `describe()` returns `VillageConfig{enabled=…, listenerPort=…, maxTradeDistance=…, settlementToken=set|unset, nodeAdminUrl=…, edenAvatarName=…, edenAdminUrl=…}`
+  — the token itself is never echoed (it is shown in chat by `/village`).
 
 ## Settlement listener — `VillageHttpListener`
 
-### Lifecycle (`VillageHttpListener.java:80-113`)
+### Lifecycle (`VillageHttpListener.java:93-129`)
 
 | Method | Behaviour |
 |---|---|
-| `start(mc)` (`synchronized`) | No-op if already running. If `!enabled` logs `Village settlement listener disabled by config.` and returns. Binds `com.sun.net.httpserver.HttpServer` on `127.0.0.1:<listenerPort>` (backlog 0). On bind failure logs `Village settlement listener failed to bind 127.0.0.1:<port>: <msg>` (warn) and stays stopped — the server keeps running. Registers one context `/trade/execute`, a single-thread daemon executor named `village-settlement-http`, then logs `Village settlement listener on http://127.0.0.1:<port>/trade/execute`. |
+| `start(mc)` (`synchronized`) | No-op if already running. If `!enabled` logs `Village settlement listener disabled by config.` and returns. Binds `com.sun.net.httpserver.HttpServer` on `127.0.0.1:<listenerPort>` (backlog 0). On bind failure logs `Village settlement listener failed to bind 127.0.0.1:<port>: <msg>` (warn) and stays stopped — the server keeps running. Registers one context `/trade/execute`, a single-thread daemon executor named `village-settlement-http`, then logs `Village settlement listener on http://127.0.0.1:<port>/trade/execute` (plus `No settlementToken configured — any local process can settle village trades.` when the token is blank). |
 | `stop()` (`synchronized`) | `server.stop(0)`, logs `Village settlement listener stopped.` |
 | `isRunning()` | `server != null` |
 
@@ -67,9 +70,11 @@ Requests are handled **one at a time** (single executor thread), each blocking ~
 ### Route
 
 `POST /trade/execute` — `HttpServer` contexts are prefix matches, so `/trade/execute/anything` reaches the
-same handler; other paths get the JDK default 404. No authentication; bound to loopback only.
+same handler; other paths get the JDK default 404. Bound to loopback only. Authentication is opt-in: when
+`settlementToken` is set, the `X-Village-Token` header must match it (constant-time compare,
+`tokenMatches`, `:203-210`); with the default blank token any local process may call it.
 
-Request body (Gson → `TradeRequest`, `:63-68`):
+Request body (Gson → `TradeRequest`, `:76-81`):
 
 ```json
 {
@@ -89,51 +94,66 @@ Response (always `Content-Type: application/json`, Gson omits nulls):
 | Swap done | 200 | `{"ok":true}` |
 | Any validation / game failure | 400 | `{"ok":false,"error":"<reason>"}` |
 | Non-POST method | 405 | `{"ok":false,"error":"POST only"}` |
+| Token configured and header missing/wrong | 401 | `{"ok":false,"error":"bad or missing X-Village-Token"}` |
 
-### Validation — HTTP thread (`handleTrade` + `validateShape`/`validateSpec`, `:117-181`)
+### Validation — HTTP thread (`handleTrade` + `validateShape`/`validateSpec`, `:133-200`)
 
 | Check | Error string |
 |---|---|
 | Method ≠ POST (case-insensitive) | `POST only` (405) |
+| Token set and `X-Village-Token` ≠ token | `bad or missing X-Village-Token` (401) |
 | Body > 64 KiB (`MAX_BODY_BYTES = 65536`) | `body too large` |
 | Malformed JSON / wrong types | `bad json: <gson message>` |
 | Empty body (Gson returns null) | `empty request` |
 | `botA` null/blank | `missing botA` |
 | `botB` null/blank | `missing botB` |
-| `botA.equals(botB)` (case-sensitive) | `botA and botB are the same` |
+| `botA.equalsIgnoreCase(botB)` | `botA and botB are the same` |
 | `aGives` or `bGives` null | `missing aGives/bGives` |
 | Both lists empty | `nothing to trade` |
 | Either list > 6 lines (`MAX_OFFER_LINES`) | `too many item lines (max 6)` |
 | Line null / `item` null/blank | `missing item name` |
 | `count < 1` or `count > 512` (`MAX_STACK_COUNT`) | `bad count for <item>` |
 
-One-sided trades (a gift) are allowed: one list may be empty.
+One-sided trades (a gift) are allowed: one list may be empty. The 512 cap is per line; lines naming the same
+item are summed on the main thread (below), so a side can owe at most 6 × 512 of one item.
 
-### Execution — main thread (`executeTrade`, `:185-223`)
+### Execution — main thread (`executeTrade`, `:214-259`)
 
-The handler calls `mc.submit(() -> executeTrade(mc, request)).join()` (`:144`). Any exception from the
+The handler calls `mc.submit(() -> executeTrade(mc, request)).join()` (`:164`). Any exception from the
 main-thread task becomes `server error: <message>` (400) and a `Trade execution failed: …` warn log.
+Validation and the swap run in this **one** main-thread task, so no tick can change either inventory in
+between.
 
-1. `getPlayerManager().getPlayer(botA/botB)` — both must be online: `<name> is not online`.
-2. **Validate everything before mutating**: for each line resolve the item (`unknown item: <item>`) and
-   check the giver holds at least `count` (`<giver> does not have <count>x <item>`).
-3. Swap: for each `aGives` line `removeItems(a)` then `addItems(b)`; then each `bGives` line the other way.
-4. `sendContentUpdates()` on both players' current screen handlers; return success and log
+1. `getPlayerManager().getPlayer(botA/botB)` — both must be online: `<name> is not online`; the two lookups
+   must be different players (`botA and botB are the same`).
+2. **Proximity**: same `ServerWorld` (`<a> and <b> are not in the same dimension`) and, unless
+   `maxTradeDistance <= 0`, within `maxTradeDistance` blocks
+   (`<a> and <b> are too far apart (<d> > <max> blocks)`).
+3. **Aggregate per item, then validate**: every line is resolved (`unknown item: <item>`) and summed into a
+   per-side `Item → total` map (`aggregate` → `TradeMath.addLine`, `:262-269`). Each total must be covered by
+   the giver's main inventory (`TradeMath.firstShortfall`): `<giver> does not have <total>x <namespace:id>`.
+   With 15 coins, `aGives: [{coin,10},{coin,10}]` is now checked as 20 and rejected.
+4. **Extract both sides, then deliver**: `extract` (`:297-317`) plans exactly `total` items per item across the
+   36 main/hotbar slots in slot order (`TradeMath.planTakes`) and `split`s them out of the real stacks — the
+   moved stacks keep their components (damage, enchantments, custom name, contents). Both givers are emptied
+   **before** either receiver gets anything, so a party never re-gives what it just received. Each moved stack
+   then goes to the receiver via vanilla `PlayerInventory.offerOrDrop`: it fills matching/empty slots and
+   drops whatever doesn't fit at the receiver's feet.
+5. `sendContentUpdates()` on both players' current screen handlers; return success and log
    `Village trade settled: <botA> <-> <botB>`.
 
-Item resolution (`resolveItem`, `:225-234`): `trim().toLowerCase()`; if it contains `:` it is parsed with
-`Identifier.tryParse`, else as `minecraft:<name>`; if that is `AIR` **and** the name had no namespace,
-retry as `paulsbrawls:<name>`. So `"coin"` → `paulsbrawls:coin`, `"paulsbrawls:coin"` works directly,
-`"minecraft:coin"` fails. An unparseable bare name (e.g. containing a space) makes `Identifier.of` throw →
-`server error: …`.
+Item resolution (`resolveItem`, `:271-282`): `trim().toLowerCase()`; if it contains `:` it is parsed with
+`Identifier.tryParse`, else as `minecraft:<name>` (also `tryParse`); if that is `AIR` **and** the name had no
+namespace, retry as `paulsbrawls:<name>`. So `"coin"` → `paulsbrawls:coin`, `"paulsbrawls:coin"` works directly,
+`"minecraft:coin"` fails. An unparseable name (e.g. containing a space) is `unknown item: …`.
 
 Inventory helpers:
 
 | Helper | Slots | Behaviour |
 |---|---|---|
-| `countItems` (`:236-244`) | all `inventory.size()` slots — main, **armor and offhand** | sums counts of stacks `isOf(item)` (components ignored) |
-| `removeItems` (`:246-256`) | same, in slot order | `decrement` until `count` removed |
-| `addItems` (`:258-269`) | — | creates **fresh default `ItemStack(item, n)`** in chunks of the item's max stack size; `insertStack`; if it returns false and the stack is non-empty, `dropItem(stack, false)` at the receiver's feet |
+| `countItems` (`:285-291`) | `inventory.main` only — 36 main + hotbar slots; **armour and offhand are excluded** | sums counts of stacks `isOf(item)` (components ignored for matching) |
+| `extract` (`:297-317`) | same 36 slots, in slot order | `TradeMath.planTakes` then `ItemStack.split` — the real stacks move, components preserved |
+| `TradeMath` (`TradeMath.java`) | — | Minecraft-free `addLine` / `firstShortfall` / `planTakes`; unit-tested in `src/test/java/com/paul/brawl/TradeMathTest.java` (`gradle test`) |
 
 The coin is the village currency simply because `paulsbrawls:coin` resolves here; see
 [../gibber/money-system.md](../gibber/money-system.md).
@@ -249,22 +269,23 @@ dedicated server (the entrypoint does not run on an integrated server).
 ## Gotchas & known issues
 
 - **Shape mismatch** with Eden's `SettlementClient` (above) — all Eden settlements 400; plus the client is unused.
-- **Item duplication**: validation checks each line independently against the full inventory, so
-  `aGives: [{coin,10},{coin,10}]` passes with only 15 coins; removal then takes 15 but `addItems` creates
-  20. Duplicate item lines must be summed before validating.
-- **Item data is destroyed/forged**: removal ignores components, and the receiver gets fresh default
-  stacks — enchantments, custom names (e.g. CTF Flags), damage and contents are lost; a damaged tool arrives
-  at full durability.
-- **Armor and offhand count and are removed**: a bot can trade away the armour it is wearing.
-- **No restrictions on who**: any two online players (including humans, any distance, any dimension) can be
-  swapped by any local process; no auth.
-- Overflow handling: the code only drops a stack when `insertStack` returns `false`.
-  > ⚠ Unverified: if vanilla `insertStack` returns `true` on a *partial* insert, the remainder would be
-  > neither inserted nor dropped (vanilla source not in repo).
+- **Fixed — item duplication** (VERIFICATION-NOTES bug #2): lines are now summed per item before validation,
+  and validation, removal and delivery share one main-thread task and the same per-item totals.
+- **Fixed — item data**: the real stacks are split out and moved, so enchantments, custom names (e.g. CTF
+  Flags), damage and contents survive. Matching still ignores components: asked for 1 `diamond_sword`, the
+  giver hands over whichever sword comes first in slot order (possibly an enchanted one).
+- **Fixed — armour/offhand**: only the 36 main/hotbar slots are counted or taken.
+- **Fixed — overflow loss**: the old `addItems` dropped only when `insertStack` returned `false`, but vanilla
+  `insertStack` returns `true` on a *partial* insert (checked against the 1.21.1 yarn jar), so remainders were
+  silently deleted. Delivery now uses `offerOrDrop`, which drops every leftover.
+- **Who can trade**: the parties must share a dimension and stand within `maxTradeDistance` (16 blocks by
+  default). They can still be *any* two online players, humans included — the listener cannot tell a bot
+  from a human. Setting `settlementToken` limits callers to processes that know the secret; Eden's
+  `SettlementClient` does not send the header yet, so only set it once the caller does.
 - Eden aborts after 10 s; a swap that completes on the Java side after the abort is journaled by Eden as
   `trade.failed`.
-- `botA.equals(botB)` is case-sensitive while player lookup may not be.
-  > ⚠ Unverified: case sensitivity of `PlayerManager.getPlayer(String)` in 1.21.1.
+- `botA`/`botB` naming the same player is rejected both case-insensitively and by comparing the resolved
+  player entities, whatever `PlayerManager.getPlayer(String)`'s case sensitivity.
 - `/village status|pause|resume` only speak to the deprecated v1 process.
 - `/villagers` retries on `HttpTimeoutException` too, so a slow `restart` (non-idempotent: wipes bot state)
   can be re-sent.

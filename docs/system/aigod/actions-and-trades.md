@@ -4,7 +4,7 @@ title: AI God — world actions (ChatBotActions) and trades (/accept)
 system: aigod
 summary: ChatBotActions world effects (items, lightning, weather, spawns, block placement, getBlockInfo, avatar invulnerability) and the TradeOffers pending-offer + /accept flow.
 tags: [aigod, chatbotactions, tradeoffers, accept, reward, punishment, smite, weather, spawncreature, getblockinfo, avatar, invulnerable, coin]
-sources: [src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/ChatPrinter.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/Money.java, src/main/java/com/paul/brawl/Raycaster.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/GodSessionManager.java]
+sources: [src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/TradeMath.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/ChatPrinter.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/Money.java, src/main/java/com/paul/brawl/Raycaster.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/GodSessionManager.java]
 verified_at: 4a8081f
 ---
 
@@ -13,8 +13,8 @@ verified_at: 4a8081f
 **TL;DR.** `ChatBotActions` holds the server-side effects behind the God's tools: giving items, lightning
 (`smite`), `/weather`, entity spawning, block placement, a block-context probe, and the avatar's invulnerability flip.
 All must run on the server thread (tool dispatch wraps them in `GodActionQueue`). `TradeOffers` keeps one pending
-offer per player in RAM, executed by `/accept` (perm 0) — no expiry, no special coin logic (`paulsbrawls:coin` is just
-another item id).
+offer per player in RAM, executed by `/accept` (perm 0) within 5 minutes; both amounts must be 1–512 and the take side
+matches by registry item. No special coin logic (`paulsbrawls:coin` is just another item id).
 
 ## Thread contract
 
@@ -161,24 +161,28 @@ semantics: [god-body.md](god-body.md).
 
 ### Storage
 
-- `private static final HashMap<UUID, TradeOffer> offers` (`TradeOffers.java:91`) — one pending offer per player,
-  **in RAM only**, no expiry, no cap. A new `Trade` call replaces the previous offer. Not thread-safe, but all
+- `private static final HashMap<UUID, TradeOffer> offers` (`TradeOffers.java:114`) — one pending offer per player,
+  **in RAM only**. A new `Trade` call replaces the previous offer. Offers expire `OFFER_TTL_MILLIS` (5 min, `:25`)
+  after creation; the expiry is checked lazily on `/accept`. Not thread-safe, but all
   accesses happen on the server thread (`Trade` via `runOnMain`, `/accept` via Brigadier).
-- `TradeOffer` (`:20-87`): `giveItemName`, `giveAmount`, `takeItemName`, `takeAmount`, resolved `giveItem`,
-  `takeItem`.
+- `TradeOffer` (`:27-87`): `giveItemName`, `giveAmount`, `takeItemName`, `takeAmount`, `createdAtMillis`, resolved
+  `giveItem`, `takeItem`.
+- `MAX_TRADE_AMOUNT = 512` (`:22`); `checkAmounts(give, take)` (`:94-100`) returns
+  `"Trade cancelled. giveAmount and takeAmount must both be between 1 and 512 (got <g> and <t>). Please try again."`
+  or `null`.
 
-### Offer creation — `updateOffer(player, giveItemName, giveAmount, takeItemName, takeAmount)` (`:124-136`)
+### Offer creation — `updateOffer(player, giveItemName, giveAmount, takeItemName, takeAmount)` (`:161-177`)
 
-1. `verifyItems()` (`:33-46`) resolves both names with `ChatBotActions.getItemFromString`; failure returns
+0. The `Trade` tool itself calls `checkAmounts` first (`ChatBotFunctions.java:62-63`) and returns its error to the
+   model; `updateOffer` repeats the check (`:166-169`), so no out-of-range offer is ever stored.
+1. `verifyItems()` (`:41-54`) resolves both names with `ChatBotActions.getItemFromString`; failure returns
    `"Trade cancelled. <name> was not a correct item. Please try again."` (offer not stored).
 2. Stores the offer, returns `null`.
 3. Caller `ChatBotActions.sendTradeOffer` (`ChatBotActions.java:64-76`) then privately messages the player
-   `"God has offered you a trade: \n You receive <giveAmount> <giveItemName> for <takeAmount> <takeItemName>"` and
+   `"God has offered you a trade: \n You receive <giveAmount> <giveItemName> for <takeAmount> <takeItemName>\n Type /accept within 5 minutes."` and
    returns the model-facing `"God offered a trade to the player: God gives … \nThe player may accept or decline this trade."`.
 
-Amounts are not validated (zero/negative allowed).
-
-### `/accept` (`:97-122`)
+### `/accept` (`:120-159`)
 
 | | |
 |---|---|
@@ -188,15 +192,19 @@ Amounts are not validated (zero/negative allowed).
 
 `executeOffer(player)`:
 1. No offer → `"You have no trade request in progress, ask God with /pray."`
-2. `offer.execute(player)` (`:48-86`):
-   - Counts items in `player.getInventory().main` (36 main slots; armor/offhand ignored) whose
-     `stack.getItem().getName().getString()` equals `takeItem.getName().getString()` — matching by **translated
-     default item name**, not registry id.
-   - If total `< takeAmount` → `"The trade is cancelled. You only have <n> <takeItemName>, but <takeAmount> are required."`,
-     return `false` (offer **kept**, player can retry later).
-   - Removes `takeAmount` across stacks (`setCount(count - removed)`), then if the remainder ≠ 0 messages
-     `"Trade didn't add up"`; then `giveItem(player, giveItem, giveAmount)`; returns `true`.
-3. On success the offer is removed. The God is **not** notified (no LLM turn).
+2. Expired (≥ 5 min old, `TradeMath.isExpired`) → offer removed, `"God's trade offer has expired, ask God again with /pray."`
+3. Amounts re-checked with `checkAmounts` (defence in depth: the offer is stored LLM output) → if invalid, offer removed,
+   `"God's trade offer was invalid and has been cancelled."` and a `Dropped invalid trade offer …` warn log.
+4. `offer.execute(player)` (`:56-86`):
+   - Scans `player.getInventory().main` (36 main + hotbar slots; armour/offhand ignored) for stacks that are
+     `isOf(takeItem)` — matching by **registry item**, not by translated display name.
+   - `TradeMath.planTakes(slots, takeAmount)` plans exactly `takeAmount` across the stacks in slot order; it returns
+     `null` when the player holds too few **or `takeAmount < 1`** → `"The trade is cancelled. You only have <n> <takeItemName>, but <takeAmount> are required."`,
+     return `false` (offer **kept**, player can retry within the TTL).
+   - `decrement`s the planned counts, then `giveItemsOrDrop(player, giveItem, giveAmount)` (`:103-110`): fresh stacks
+     in max-stack-size chunks via `PlayerInventory.offerOrDrop`, so nothing above the stack limit is created and
+     whatever doesn't fit drops at the player's feet; returns `true`.
+5. On success the offer is removed. The God is **not** notified (no LLM turn).
 
 ### Coins
 
@@ -210,20 +218,25 @@ There is no coin-specific code. The God can trade/reward Gibber coins by naming 
 |---|---|---|---|
 | `/block <x> <y> <z>` (ints) | 2 | `ChatBotActions.java:164-179` | `placeBlock(player, x, y, z, "minecraft:stone")` — **offsets relative to the player's `/construction` pivot**, no-op if none. |
 | `/construction` | 2 | `ChatBotActions.java:181-193` | `Raycaster.setLastPos(player)` (100-block look raycast; stores hit pos or `null`) and `ChatBot.buildBot.clearMemory(player)`. See [building.md](building.md). |
-| `/accept` | 0 | `TradeOffers.java:97-107` | See above. |
+| `/accept` | 0 | `TradeOffers.java:120-130` | See above. |
 
 Both `/block` and `/construction` call `getPlayer()` and will fail from the console.
 
 ## Gotchas & known issues
 
-- **Negative `takeAmount` duplicates items**: `amount < takeAmount` is false, `min(count, negative)` is negative, so
-  `setCount(count - negative)` *increases* the stack (if the player holds at least one matching stack). LLM-controlled.
-- Trade matching by display name means two distinct items sharing a translated name are interchangeable.
+- **Fixed — negative `takeAmount` duplicated items** (VERIFICATION-NOTES bug #3): `amount < takeAmount` was false
+  for a negative amount and `setCount(count - negative)` *grew* the stack. Amounts are now rejected outside 1–512 at
+  tool execution, in `updateOffer` and on `/accept`, and `planTakes` refuses a non-positive need on its own.
+- **Fixed — display-name matching**: the take side now uses `stack.isOf(takeItem)`. Components are still ignored
+  for matching, so an enchanted or renamed stack of the right item counts (and can be taken).
+- `giveItem` (`ChatBotActions.java:106-108`, still used by `Reward`) passes one `ItemStack(item, amount)` to
+  `giveItemStack`, whose result is ignored: whatever doesn't fit a full inventory is lost. `/accept` no longer uses it.
 - Unclamped `Punishment.amount` (mass lightning in one tick) and `Reward.amount`.
 - `changeWeather` duration units and always-success return (see above).
 - `getBlockInfo` output is malformed pseudo-JSON and keyed off `/construction`, not the cursor.
 - Dead code: `giveGoodReward`, `giveBadReward`, `giveItemWithCommand`, `stripArguments` (broken).
-- No trade expiry; offers vanish on restart.
+- Offers expire after 5 minutes (checked on `/accept`, not proactively) and vanish on restart. The God is not told
+  when an offer expires.
 
 ## Related
 

@@ -99,8 +99,8 @@ named `server` but is a `ServerWorld`), for each player in that world:
 
 ## Interactions with other systems
 
-- **Village settlement** (`VillageHttpListener`) recreates traded items as fresh default stacks, so a
-  traded Flag banner loses its custom name (and thus its Flag status). See
+- **Village settlement** (`VillageHttpListener`) moves the real stacks, so a traded Flag banner keeps its
+  custom name and stays a Flag (only main/hotbar slots are tradeable). See
   [../eden/java-integration.md](../eden/java-integration.md).
 - Mineflayer bots (God avatar, Eden villagers) are `ServerPlayerEntity`s and obey all three rules.
 - Nothing else in `src/` references `FlagManager`.

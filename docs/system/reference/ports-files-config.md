@@ -79,11 +79,13 @@ Source: `MCPConfig.java:46-102`. See [aigod/mcp-gateway.md](../aigod/mcp-gateway
 |---|---|---|
 | `enabled` | `true` | settlement listener on/off (`/village on|off` persists it) |
 | `listenerPort` | `8767` | |
+| `maxTradeDistance` | `16.0` | max blocks between settlement parties (same dimension required); `<= 0` disables |
+| `settlementToken` | `""` | if set, `/trade/execute` requires it in `X-Village-Token` (else 401) |
 | `nodeAdminUrl` | `http://127.0.0.1:8766` | legacy v1 admin |
 | `edenAvatarName` | `Dieu` | op'd on join |
 | `edenAdminUrl` | `http://127.0.0.1:8770` | used by `/villagers` |
 
-Source: `VillageConfig.java:23-52`. See [eden/java-integration.md](../eden/java-integration.md).
+Source: `VillageConfig.java:23-73`. See [eden/java-integration.md](../eden/java-integration.md).
 
 ### Prompt files
 

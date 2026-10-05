@@ -4,7 +4,7 @@ title: Verification notes — where existing docs disagree with the code, and bu
 system: meta
 summary: Every place CLAUDE.md, README, docs/*.md or code comments contradict the code at 4a8081f, plus a ranked list of real bugs and sharp edges found during verification.
 tags: [verification, discrepancies, errata, bugs, known-issues, claude.md, stale-docs]
-sources: [CLAUDE.md, README.md, eden/CLAUDE.md, docs/README.md, src/main/java/com/paul/brawl/VillageHttpListener.java, eden/src/social/trade.ts, eden/src/main.ts]
+sources: [CLAUDE.md, README.md, eden/CLAUDE.md, docs/README.md, src/main/java/com/paul/brawl/VillageHttpListener.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/TradeMath.java, eden/src/social/trade.ts, eden/src/main.ts]
 verified_at: 4a8081f
 ---
 
@@ -16,7 +16,7 @@ ranked. The biggest themes:
 - Several Eden features documented as live are **constructed in tests only**.
 - The Eden→Java **trade settlement cannot work**: the JSON shapes don't match, and the client is never wired.
 - The CI workflows **don't exist in the repo**.
-- A handful of Java exploits let players **duplicate items or coins**.
+- A handful of Java exploits let players **duplicate items or coins** (the two trade paths, #2 and #3, are fixed).
 
 Citations are `path:line` at `4a8081f`.
 
@@ -24,9 +24,9 @@ Citations are `path:line` at `4a8081f`.
 
 | # | Sev | Area | Finding | Evidence |
 |---|---|---|---|---|
-| 1 | High | Eden ↔ Java | **Settlement contract mismatch.** Eden POSTs `{from,to,give,want}`; the Java listener requires `{botA,botB,aGives,bGives}` and answers 400 `missing botA`. The client is also never wired (`void new SettlementClient`), and `TradeService` is never constructed. | `eden/src/social/trade.ts:74-79`, `VillageHttpListener.java:63-68,158-161`, `eden/src/main.ts:577` |
-| 2 | High | Java settlement | **Item duplication.** Duplicate item lines are each validated against the whole inventory: with 15 coins, two lines of 10 pass, 15 are removed and 20 created. Receivers also get fresh default stacks, so damage, enchantments and names are lost. Any two online players can be swapped, at any distance, with no auth. | [eden/java-integration.md](eden/java-integration.md) |
-| 3 | High | AI God trades | **Negative `Trade.takeAmount` duplicates items** on `/accept`. Items are matched by translated display name, and offers never expire. | `TradeOffers.java:59-77` |
+| 1 | High | Eden ↔ Java | **Settlement contract mismatch.** Eden POSTs `{from,to,give,want}`; the Java listener requires `{botA,botB,aGives,bGives}` and answers 400 `missing botA`. The client is also never wired (`void new SettlementClient`), and `TradeService` is never constructed. | `eden/src/social/trade.ts:74-79`, `VillageHttpListener.java:76-81,178-181`, `eden/src/main.ts:577` |
+| 2 | ~~High~~ Fixed | Java settlement | ~~**Item duplication.** Duplicate item lines are each validated against the whole inventory: with 15 coins, two lines of 10 pass, 15 are removed and 20 created.~~ **Fixed:** lines are summed per item before validation, and validation and removal use the same totals in one main-thread task. The real stacks now move (damage, enchantments and names survive). Only the 36 main/hotbar slots count (no armour or offhand). Partial-insert overflow, which was silently deleted, now drops. The parties must share a dimension and be within `maxTradeDistance` (16). An optional `settlementToken` header check exists, off by default. **Still open:** any two nearby online players, humans included, can be swapped by a local caller unless the token is set. | [eden/java-integration.md](eden/java-integration.md), `VillageHttpListener.java:214-317`, `TradeMath.java` |
+| 3 | ~~High~~ Fixed | AI God trades | ~~**Negative `Trade.takeAmount` duplicates items** on `/accept`.~~ **Fixed:** both amounts must be 1–512. This is checked at tool execution, in `updateOffer` and again on `/accept`, and `planTakes` rejects a non-positive need. Items are matched by registry item, not display name. Offers expire after 5 minutes. | [aigod/actions-and-trades.md](aigod/actions-and-trades.md), `TradeOffers.java:56-159` |
 | 4 | High | Eden tests | `npm test` / `npm run check` **fail on a clean checkout**: `tests/live-tests-catalogue.test.ts` loads the gitignored `eden/providers.json`. | [eden/testing-eval-live.md](eden/testing-eval-live.md) |
 | 5 | Med | AI God body | `/godbody off` and server shutdown **leave the avatar invulnerable**: `restoreAvatar` is never queued, and the NBT flag persists. | `ChatCommand.java:62-73`, `ServerEntryPoint.java:51-56` |
 | 6 | Med | AI God | `Reward`/`Punishment` amounts and `SpawnCreature` offsets are **unclamped** (e.g. mass lightning in one tick). `Reward`'s advertised item-component syntax always fails because `getItemFromString` splits on `:`. | [aigod/actions-and-trades.md](aigod/actions-and-trades.md) |

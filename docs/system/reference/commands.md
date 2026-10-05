@@ -34,7 +34,7 @@ Details: [gibber/money-system.md](../gibber/money-system.md).
 |---|---|---|---|
 | `/pray <text…>` | 0 | `ChatCommand.java:28-41` | Greedy `MessageArgumentType`. Sends a prayer to the Java God; claims the avatar via `GodSessionManager` (bodiless if another player owns it). |
 | `/pray stop` | 0 | `ChatCommand.java:30` | Ends *your* session (owner only); chat `Dieu : (la séance est close.)`. |
-| `/accept` | 0 (no `.requires`) | `TradeOffers.java:100-104` | Accepts your pending God trade offer (RAM-only, no expiry). |
+| `/accept` | 0 (no `.requires`) | `TradeOffers.java:123-127` | Accepts your pending God trade offer (RAM-only, expires after 5 min). |
 | `/prompt` | 2 | `ChatCommand.java:137-142` | Re-reads `prompt.txt` / `build_prompt.txt` for both bots, then prints the hardcoded + custom prompt (NPE from console). |
 | `/prompt <text…>` | 2 | `ChatCommand.java:117-119` | Sets the custom prompt (`prompt` field) on **both** `godBot` and `buildBot`; in RAM only. |
 | `/godbody off` | 2 | `ChatCommand.java:62` | Kill-switch: clears `GodActionQueue`, vanishes the avatar, force-ends the session, disables the bridge. **Does not** restore avatar vulnerability. |

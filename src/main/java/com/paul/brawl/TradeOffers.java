@@ -11,15 +11,23 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 
 
 public class TradeOffers {
 
+    /** Upper bound for either side of a God trade (LLM-supplied amounts). */
+    public static final int MAX_TRADE_AMOUNT = 512;
+
+    /** A pending offer that isn't {@code /accept}ed within this window is dropped. */
+    public static final long OFFER_TTL_MILLIS = 5 * 60 * 1000L;
+
     private static class TradeOffer {
         public String giveItemName, takeItemName;
         public int giveAmount, takeAmount;
+        public final long createdAtMillis = System.currentTimeMillis();
 
         private Item giveItem, takeItem;
 
@@ -47,42 +55,57 @@ public class TradeOffers {
 
         public boolean execute(ServerPlayerEntity player) {
 
+            // Match by registry item (stack.isOf), not by translated display
+            // name — two items sharing a name must not be interchangeable.
+            var main = player.getInventory().main;
+            int[] available = new int[main.size()];
             int amount = 0;
-            for (var stack : player.getInventory().main) {
-                if (!stack.isEmpty()
-                && stack.getItem().getName().getString()
-                .equals(takeItem.getName().getString())) {
+            for (int i = 0; i < available.length; i++) {
+                var stack = main.get(i);
+                if (!stack.isEmpty() && stack.isOf(takeItem)) {
+                    available[i] = stack.getCount();
                     amount += stack.getCount();
                 }
             }
-            
-            int toBeRemoved = takeAmount;
 
-            if(amount < toBeRemoved) {
+            // planTakes rejects takeAmount < 1, so a negative amount can no
+            // longer turn the removal into an addition.
+            int[] takes = TradeMath.planTakes(available, takeAmount);
+            if(takes == null) {
                 ChatPrinter.sendMessage(player, "The trade is cancelled. You only have " + amount + " " + takeItemName + ", but " + takeAmount + " are required.");
                 return false;
             }
-            
-            for (var stack : player.getInventory().main) {
-                if (!stack.isEmpty()
-                && stack.getItem().getName().getString()
-                .equals(takeItem.getName().getString())) {
-                    var actuallyRemoved = Math.min(stack.getCount(), toBeRemoved);
-                    stack.setCount(stack.getCount() - actuallyRemoved);
-                    toBeRemoved -= actuallyRemoved;
-                    if(toBeRemoved <= 0) {
-                        break;
-                    }
-                }
+
+            for (int i = 0; i < takes.length; i++) {
+                if (takes[i] > 0) main.get(i).decrement(takes[i]);
             }
 
-            if(toBeRemoved != 0) {
-                ChatPrinter.sendMessage(player, "Trade didn't add up");
-            }
-
-            ChatBotActions.giveItem(player, giveItem, giveAmount);
+            giveItemsOrDrop(player, giveItem, giveAmount);
 
             return true;
+        }
+    }
+
+    /**
+     * Returns a model-facing error if either amount is outside
+     * {@code [1, MAX_TRADE_AMOUNT]}, else {@code null}. Checked when the
+     * {@code Trade} tool runs AND again on {@code /accept}.
+     */
+    public static String checkAmounts(int giveAmount, int takeAmount) {
+        if (!TradeMath.isValidAmount(giveAmount, MAX_TRADE_AMOUNT) || !TradeMath.isValidAmount(takeAmount, MAX_TRADE_AMOUNT)) {
+            return "Trade cancelled. giveAmount and takeAmount must both be between 1 and " + MAX_TRADE_AMOUNT
+                + " (got " + giveAmount + " and " + takeAmount + "). Please try again.";
+        }
+        return null;
+    }
+
+    /** Gives in max-stack-size chunks; whatever doesn't fit drops at the player's feet. */
+    private static void giveItemsOrDrop(ServerPlayerEntity player, Item item, int amount) {
+        int maxPerStack = Math.max(1, item.getDefaultStack().getMaxCount());
+        for (int remaining = amount; remaining > 0; ) {
+            int n = Math.min(remaining, maxPerStack);
+            player.getInventory().offerOrDrop(new ItemStack(item, n));
+            remaining -= n;
         }
     }
 
@@ -113,6 +136,20 @@ public class TradeOffers {
             return;
         }
 
+        if(TradeMath.isExpired(offer.createdAtMillis, System.currentTimeMillis(), OFFER_TTL_MILLIS)) {
+            offers.remove(player.getUuid());
+            ChatPrinter.sendMessage(player, "God's trade offer has expired, ask God again with /pray.");
+            return;
+        }
+
+        // Defence in depth: the offer is stored LLM output.
+        if(checkAmounts(offer.giveAmount, offer.takeAmount) != null) {
+            offers.remove(player.getUuid());
+            ChatPrinter.sendMessage(player, "God's trade offer was invalid and has been cancelled.");
+            LOGGER.warn("Dropped invalid trade offer for {}: give {} / take {}", player.getName().getString(), offer.giveAmount, offer.takeAmount);
+            return;
+        }
+
         var executed = offer.execute(player);
 
         // if failed, don't remove offer (probably doesn't have inventory)
@@ -126,8 +163,12 @@ public class TradeOffers {
         String giveItemName, int giveAmount,
         String takeItemName, int takeAmount) {
 
+        String error = checkAmounts(giveAmount, takeAmount);
+        if(error != null) {
+            return error;
+        }
         var offer = new TradeOffer(giveItemName, giveAmount, takeItemName, takeAmount);
-        String error = offer.verifyItems();
+        error = offer.verifyItems();
         if(error != null) {
             return error;
         }

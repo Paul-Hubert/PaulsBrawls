@@ -112,18 +112,20 @@ Returns `"You gave the player a reward: <amount> <itemName>"` or `"Reward cancel
 | | |
 |---|---|
 | Description | `Offers a trade to the player.` |
-| Calls | `ChatBotActions.sendTradeOffer(...)` on main thread → `TradeOffers.updateOffer` |
+| Calls | `TradeOffers.checkAmounts` (both amounts must be 1–512), then `ChatBotActions.sendTradeOffer(...)` on main thread → `TradeOffers.updateOffer` |
 
 | Param | Type | Req | Description |
 |---|---|---|---|
 | `giveItemName` | string | yes | `The name of the item to give to the player in the trade. Example: minecraft:diamond` |
-| `giveAmount` | integer | yes | `The number of items to give to the player in the trade.` |
+| `giveAmount` | integer | yes | `The number of items to give to the player in the trade (1-512).` |
 | `takeItemName` | string | yes | `The name of the item to take from the player in the trade. Example: minecraft:diamond` |
-| `takeAmount` | integer | yes | `The number of items to take from the player in the trade.` |
+| `takeAmount` | integer | yes | `The number of items to take from the player in the trade (1-512).` |
 
 Returns on success `"God offered a trade to the player: God gives <ga> <give> for <ta> <take>\nThe player may accept or decline this trade."`
-and messages the player `God has offered you a trade: \n You receive …`. On a bad item:
-`"Trade cancelled. <name> was not a correct item. Please try again."`. Player accepts with `/accept`.
+and messages the player `God has offered you a trade: \n You receive … \n Type /accept within 5 minutes.`. On an
+amount outside 1–512: `"Trade cancelled. giveAmount and takeAmount must both be between 1 and 512 (got <ga> and <ta>). Please try again."`
+(no offer stored). On a bad item: `"Trade cancelled. <name> was not a correct item. Please try again."`. Player accepts with
+`/accept` within 5 minutes; see [actions-and-trades.md](actions-and-trades.md).
 
 ## Punishment
 

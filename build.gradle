@@ -90,6 +90,15 @@ dependencies {
 	include ("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.10")
 	// victools jsonschema-* fed addTool(Class) in the OpenAI SDK; replaced by
 	// JsonSchemaAdapter, which uses plain reflection.
+
+	// Unit tests for Minecraft-free helpers (e.g. TradeMath). Not bundled.
+	testImplementation platform("org.junit:junit-bom:5.11.4")
+	testImplementation "org.junit.jupiter:junit-jupiter"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+	useJUnitPlatform()
 }
 
 processResources {
