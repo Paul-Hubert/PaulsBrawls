@@ -44,21 +44,25 @@ public class Screenshotter {
 	// /proof
 	public static void registerCommands() {
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
+			// Bug #9: .executes used to hang off the literal, where getString("text")
+			// has no argument to read — /prove could never run. It now sits on the
+			// argument, and both commands take the rest of the line (greedyString),
+			// so "/prove j'ai fini la tour" works without quotes.
 			dispatcher.register(
 				ClientCommandManager.literal("prove")
-						.then(ClientCommandManager.argument("text", string()))
+						.then(ClientCommandManager.argument("text", greedyString())
 						.executes(context -> {
 							var s = getString(context, "text");
 							sendProofScreenshot(s);
 							return Command.SINGLE_SUCCESS;
-						})
+						}))
 					);
 		});
 
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
 			dispatcher.register(
 				ClientCommandManager.literal("build")
-						.then(ClientCommandManager.argument("text", string())
+						.then(ClientCommandManager.argument("text", greedyString())
 						.executes(context -> {
 							var s = getString(context, "text");
 							sendBuildScreenshot(s);
@@ -109,6 +113,7 @@ public class Screenshotter {
 			e.printStackTrace();
 		} finally {
 			nativeImage.close();
+			img2.close();
 		}
 
 	}

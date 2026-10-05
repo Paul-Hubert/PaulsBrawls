@@ -142,10 +142,8 @@ never registered twice.
   the Eden roster returned by `/villagers start|restart`. This contradicts docs saying only the avatar is op'd.
 - Ops granted on join are permanent (written to `ops.json`); renaming the bot in config does not de-op
   the old name.
-- `/prove` is mis-built: `.then(argument("text", string()))` is closed before `.executes(...)`, so the
-  executor sits on the bare literal (`Screenshotter.java:47-54`). `/prove <text>` has no executor, and
-  bare `/prove` calls `getString(context,"text")` for an argument that was not parsed. `/build` is wired
-  correctly. Both use `StringArgumentType.string()`, so multi-word text must be quoted.
+- ~~`/prove` is mis-built~~ **Fixed (bug #9):** both `/prove` and `/build` nest `.executes` inside
+  `argument("text", greedyString())`, so multi-word text needs no quotes.
 - `ChatPrinter`'s lazy registration uses a non-volatile flag and can be invoked from worker threads;
   a race could register two flush listeners (harmless duplicate flushing from one queue).
 - The server logger is named `Gibber` for all subsystems; per-class loggers exist elsewhere.

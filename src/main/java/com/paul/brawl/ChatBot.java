@@ -133,7 +133,9 @@ public class ChatBot {
         buildBot = new ChatBot("build_prompt.txt");
 
         godBot.hasImage = true;
-        buildBot.hasImage = false;
+        // Bug #9: /build ships a screenshot of the site to buildBot; with hasImage=false the
+        // server dropped it. BuildSubAgent is not a ChatBot, so this costs the sub-agents nothing.
+        buildBot.hasImage = true;
 
         godBot.needsInfo = true;
         buildBot.needsInfo = false;
@@ -238,7 +240,7 @@ public class ChatBot {
                 String base64 = Base64.getEncoder().encodeToString(bytes);
                 UserMessage userMsg = UserMessage.from(
                     TextContent.from(input),
-                    ImageContent.from(base64, "image/jpeg")
+                    ImageContent.from(base64, ImageMime.sniff(bytes))
                 );
                 memory.add(userMsg);
             } else {

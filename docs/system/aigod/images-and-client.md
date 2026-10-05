@@ -12,9 +12,9 @@ verified_at: 4a8081f
 
 **TL;DR.** The client mod registers `/prove` and `/build`; after a 1 s delay it grabs the framebuffer, resizes it to
 854×480, and sends `ImagePayload(bytes, "Prove : …" | "Build : …")` on channel `screenshot:image`. The server's
-`ImageReceiver` routes `"Prove :"` to `godBot` (image attached, avatar claimed) and `"Build :"` to `buildBot` (image
-**dropped** — `buildBot.hasImage=false`). As written, `/prove` is broken (its `executes` hangs off the wrong node) and
-`/build` takes a single word or a quoted string.
+`ImageReceiver` routes `"Prove :"` to `godBot` (avatar claimed) and `"Build :"` to `buildBot`; both now attach the image,
+labelled with its sniffed type (`image/png` for the client's bytes). Bug #9 is fixed: `/prove` runs (its `executes` sits
+on the argument) and both commands take the rest of the line (`greedyString()`).
 
 ## Client entrypoint
 
@@ -32,23 +32,17 @@ The client never calls `ChatBot.register()`; the AI God runs only on a dedicated
 
 | Command | Lines | Arg type | Text prefix sent |
 |---|---|---|---|
-| `/prove <text>` | `:46-56` | `StringArgumentType.string()` (one word, or `"quoted string"`) | `"Prove : " + text` (`:75-77`) |
-| `/build <text>` | `:58-68` | `StringArgumentType.string()` | `"Build : " + text` (`:71-73`) |
+| `/prove <text>` | `registerCommands` | `StringArgumentType.greedyString()` (the rest of the line) | `"Prove : " + text` |
+| `/build <text>` | `registerCommands` | `StringArgumentType.greedyString()` | `"Build : " + text` |
 
 These are Fabric **client** commands (`ClientCommandRegistrationCallback`), executed locally — the server never sees
 the command, only the resulting payload. No permission level applies.
 
-### `/prove` is mis-wired
+### `/prove` was mis-wired (bug #9, fixed)
 
-```java
-ClientCommandManager.literal("prove")
-    .then(ClientCommandManager.argument("text", string()))   // argument node has NO executes
-    .executes(context -> { var s = getString(context, "text"); ... })   // attached to the literal
-```
-
-(`Screenshotter.java:48-55`). Consequences: `/prove foo` is an incomplete command (the argument node is not
-executable); bare `/prove` runs the lambda, where `getString(context, "text")` throws because the argument is absent.
-Either way no screenshot is sent. `/build` (`:60-66`) nests `.executes` inside the argument correctly.
+The `.executes(...)` used to hang off the `prove` literal instead of the `text` argument, so `/prove foo` was an
+incomplete command and bare `/prove` threw on `getString(context, "text")`. Both commands now nest `.executes` inside
+`argument("text", greedyString())`; a bare `/prove` or `/build` is an incomplete command (Brigadier's usual error).
 
 ### Capture sequence
 
@@ -62,11 +56,11 @@ Either way no screenshot is sent. `/build` (`:60-66`) nests `.executes` inside t
    - `img2 = new NativeImage(854, 480, true)`; `nativeImage.resizeSubRectTo(0, 0, w, h, img2)` (whole frame,
      stretched to 854×480 regardless of aspect ratio)
    - `ClientPlayNetworking.send(new ImagePayload(img2.getBytes(), text))`
-   - `nativeImage.close()` in `finally`; `img2` is never closed.
+   - `nativeImage.close()` and `img2.close()` in `finally` (img2 used to leak).
 
 > ⚠ Unverified (no MC sources in checkout): `NativeImage.getBytes()` in MC 1.21.1 encodes **PNG** (via STB). The
-> server nevertheless labels the data `image/jpeg` (`ChatBot.java:241`). Most vision endpoints sniff the bytes, but a
-> strict provider could reject the mismatch. CLAUDE.md's "attaches the JPEG" describes the label, not the encoding.
+> server no longer assumes: `ImageMime.sniff(bytes)` reads the magic number (PNG / JPEG / GIF / WebP, default
+> `image/png`) and `ChatBot` labels the `ImageContent` with it (bug #9; `ImageMimeTest`).
 
 ## `ImagePayload` codec (`src/main/java/com/paul/brawl/ImagePayload.java`)
 
@@ -104,30 +98,26 @@ by `ChatBot.register()` (`ChatBot.java:159`). The codec sets no explicit byte-ar
 `ChatBot.sendImageChatRequest(input, bytes, player)` (`ChatBot.java:225-250`):
 
 - Same bookkeeping as `/pray`: flush any pending Wait deferral, reset depth, set `sessionBound` (godBot).
-- If `hasImage` (godBot): `UserMessage.from(TextContent.from(input), ImageContent.from(base64(bytes), "image/jpeg"))`.
-- Else (buildBot): `UserMessage.from(input)` — **the screenshot is discarded**; `/build` is effectively a text request
-  `"Build : <text>"` relative to the admin's `/construction` pivot.
+- If `hasImage` (both `godBot` and, since bug #9, `buildBot`): `UserMessage.from(TextContent.from(input),
+  ImageContent.from(base64(bytes), ImageMime.sniff(bytes)))`.
+- Else: `UserMessage.from(input)` (no stock bot sets `hasImage=false` any more; `BuildSubAgent` is not a `ChatBot`).
 - Then `doRequest` — identical to a `/pray` turn ([llm-pipeline.md](llm-pipeline.md)).
 
 Images live in the player's token-window memory like any message and are resent on every later turn until evicted.
 
 | Path | Bot | Image to model | Avatar claim | Tools |
 |---|---|---|---|---|
-| `/prove` (if fixed) | `godBot` | yes | yes | God tools + MCP + ListTools |
-| `/build "<text>"` | `buildBot` | no | no | BuildPlan + ListTools + textual PlaceBlock* |
+| `/prove <text>` | `godBot` | yes | yes | God tools + MCP + ListTools |
+| `/build <text>` | `buildBot` | yes | no | BuildPlan + ListTools + textual PlaceBlock* |
 
 ## Gotchas & known issues
 
-- `/prove` cannot succeed as written (see above) — the quest-proof flow described in `prompt.txt` ("preuves … en
-  image") is unreachable from the stock client.
-- `/build` and `/prove` use `string()`, not `greedyString()`: unquoted multi-word input fails to parse.
-- `/build`'s screenshot is captured, uploaded and thrown away server-side (README.md claims it sends "a screenshot of a
-  site").
-- `img2` (`NativeImage`, off-heap) leaks on every capture; `flag`/`text` statics are not `volatile` and a second
-  capture within 1 s overwrites the first's text.
+- ~~`/prove` cannot run; `string()` args; `/build`'s screenshot thrown away; `img2` leaks~~ **Fixed (bug #9).** Only an
+  in-game check proves the command tree and the upload (the MIME sniffing is unit-tested).
+- `flag`/`text` statics are not `volatile` and a second capture within 1 s overwrites the first's text.
 - The server accepts `ImagePayload` from any client with arbitrary text and no rate limit or size check; any modded
   client can trigger godBot turns (equivalent to `/pray`, which is perm 0 anyway).
-- Image MIME label vs PNG bytes (see above).
+- ~~Image MIME label vs PNG bytes~~ fixed (sniffed, see above).
 
 ## Related
 

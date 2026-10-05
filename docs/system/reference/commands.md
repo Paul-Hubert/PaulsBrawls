@@ -82,8 +82,8 @@ CTF has **no commands** — it is purely event/tick driven. See [ctf/capture-the
 
 | Syntax | Source | Behaviour |
 |---|---|---|
-| `/build <text>` | `Screenshotter.java:60-66` | `StringArgumentType.string()` → one word or a `"quoted string"`. Captures the framebuffer after 1 s, sends `ImagePayload("Build : "+text)`. Server-side the image is **dropped** (`buildBot.hasImage=false`); only the text reaches the build agent. |
-| `/prove <text>` | `Screenshotter.java:48-54` | **Broken:** `.executes` is attached to the `prove` literal, not to the argument, so `/prove x` is an incomplete command and bare `/prove` throws on `getString`. |
+| `/build <text>` | `Screenshotter.registerCommands` | `StringArgumentType.greedyString()` (rest of the line). Captures the framebuffer after 1 s, sends `ImagePayload("Build : "+text)`; the build agent receives the text and the image (bug #9). |
+| `/prove <text>` | `Screenshotter.registerCommands` | `greedyString()`. Captures the framebuffer after 1 s, sends `ImagePayload("Prove : "+text)` to God (claims the avatar). Was unrunnable until bug #9. |
 
 Details: [aigod/images-and-client.md](../aigod/images-and-client.md).
 

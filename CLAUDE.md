@@ -163,8 +163,8 @@ calls `setBlockState` **off the main thread**, bypassing the queue (VERIFICATION
 
 Image inputs: client `/prove`/`/build` capture the framebuffer (resize 854×480), ship via the `ImagePayload`
 C2S packet; `ImageReceiver` → `ChatBot.sendImageChatRequest` attaches the bytes as a base64 `ImageContent`
-labelled `image/jpeg`. In practice `/prove` never runs (its `.executes` hangs off the literal, not the
-argument), and `/build`'s image is dropped (`buildBot.hasImage=false`).
+labelled by `ImageMime.sniff` (PNG for the client's bytes). Both commands take the rest of the line and both bots
+receive the image (bug #9 fixed; only an in-game check proves the command tree).
 
 ### AI God — God-Body integration
 

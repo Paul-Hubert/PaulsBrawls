@@ -75,7 +75,7 @@ constructed or not called** by the production composition root. Agents should tr
 | God body delivering verdicts, divine interventions | `GodBody` instance discarded; `intervene` never called. | [eden/god.md](eden/god.md) |
 | Critic tripwire tickets, description pass, anchors, drives, `combineDesks`, daily-cap reset, D-09 recovery | Unwired / no-op in production. | [eden/god.md](eden/god.md), [eden/skills-library.md](eden/skills-library.md) |
 | CI workflows (`ci.yml`, `eden-ci.yml`) | `.github/` is gitignored and absent from history. | [platform/build-and-runtime.md](platform/build-and-runtime.md) |
-| Client `/prove` | Mis-wired command tree; cannot execute. | [aigod/images-and-client.md](aigod/images-and-client.md) |
+| Client `/prove` | Fixed (bug #9); runs and ships the screenshot to God. In-game check only. | [aigod/images-and-client.md](aigod/images-and-client.md) |
 
 What **is** live in Eden: the bot pool, stock skills, the skill engine with its watchdogs, villager deliberation with
 the 14 tools (incl. consent-based trade settled on `:8767`), subscriptions → reflex skills / deliberation on the events that do fire, the curriculum (idle trigger) →
