@@ -56,15 +56,16 @@ Accessors: `getPlayerValue(uuid)` / `getGlobalValue(key)` return `getOrDefault(.
 (`:78-89`); both setters call `markDirty()` (`:82-94`) so the state is saved with the world. Malformed
 UUID keys are skipped on load (`:36-43`).
 
-## Payout algorithm — `RevenueManager.updateRevenue(uuid, server)` (`RevenueManager.java:28-49`)
+## Payout algorithm — `RevenueManager.updateRevenue(uuid, server)`
 
 ```
 player = server.getPlayerManager().getPlayer(uuid)      // online only
 if player == null: log "player is null"; return
 total = global[total_revenue]; paid = player_data[uuid] (0 if new)
-if paid < total:
-    player.giveItemStack(new ItemStack(coin, total - paid))
-    player_data[uuid] = total
+owed = GibberMath.owed(total, paid)                     // max(0, total - paid), no overflow
+insert owed coins as max-size stacks with PlayerInventory.insertStack, stopping when one does not fit
+player_data[uuid] = GibberMath.paidAfter(paid, inserted) // credit ONLY what landed (bug #10)
+if inserted < owed: log "<name>: inventory full, <n> of <owed> coin(s) still owed"
 ```
 
 `UpdateRevenueAll(server)` (`:51-55`) loops `getPlayerList()` (online players) and calls the above.
@@ -76,7 +77,8 @@ Consequences that follow directly from this code:
 - **New players receive the entire historical `total_revenue`** on first join (their paid value starts at 0).
 - **Every Mineflayer bot is a player**: `LLMBot`, Eden's `Dieu`, Eden villagers and `EvalBot*` names all get
   the full backlog on first join and every subsequent salary.
-- The paid marker is set to `total` regardless of whether the coins fit in the inventory.
+- The paid marker advances only by the coins that reached the inventory; the rest stays owed and is paid on the
+  next salary tick or join once there is room (bug #10 — it used to be set to `total` regardless, losing the coins).
 
 ## Salary scheduler — `SalaryScheduler`
 
@@ -104,8 +106,8 @@ None sends chat feedback to the caller; each only writes a server log line (logg
 
 | Command | Argument type | Effect | Log line | Lines |
 |---|---|---|---|---|
-| `/gib <amount>` | `IntegerArgumentType.integer()` — any int, **negatives accepted** | `total_revenue += amount`; `UpdateRevenueAll` (online players paid now) | `gibbed <amount>` | `:20-45` |
-| `/gib_salary <amount>` | `integer()` — any int, negatives accepted | `salary_per_day = amount` (takes effect on the next scheduler tick; no restart) | `gibbed salary <amount>` | `:49-68` |
+| `/gib <amount>` | `IntegerArgumentType.integer(1)` — ≥ 1 (bug #10: negatives used to be accepted) | `total_revenue = GibberMath.addToTotal(total, amount)` (saturating at `Integer.MAX_VALUE`); `UpdateRevenueAll` (online players paid now) | `gibbed <amount>` | `GibCommand.register` |
+| `/gib_salary <amount>` | `integer(0)` — ≥ 0 | `salary_per_day = amount` (takes effect on the next scheduler tick; no restart) | `gibbed salary <amount>` | `GibCommand.register` |
 | `/gib_salary_period <amount>` (seconds; the Brigadier argument is named `amount`, `GibCommand.java:76`) | `integer(1)` — min 1 | `salary_period = seconds`; `SalaryScheduler.restart(server)` (restart fires one salary tick immediately because initial delay is 0) | `gibbed salary period <seconds>` | `:72-92` |
 
 All settings are stored in `gibbers_state` and therefore **persist across restarts** (per world).
@@ -137,17 +139,14 @@ makes coin usable as the village currency.
 
 ## Gotchas & known issues
 
-- **Full inventory**: `giveItemStack`'s boolean result is ignored (`RevenueManager.java:46`) and the
-  player is marked paid anyway (`:47`). Coins that do not fit are not dropped or re-queued by mod code.
-  > ⚠ Unverified: exact vanilla 1.21.1 handling of the leftover stack (`PlayerInventory.insertStack`) —
-  > the Minecraft sources are not in the repo.
-- **Stacks above 99**: a single `ItemStack(coin, diff)` with `diff > 99` is handed to `giveItemStack`;
-  splitting into stacks relies on vanilla inventory insertion.
-- **Negative `/gib`** lowers `total_revenue` but never removes coins. Players already paid above the new
-  total receive nothing until the total climbs back past their marker; new joiners get the lower total.
-- **Integer overflow**: `total_revenue` and paid markers are `int`; no overflow checks.
-- **New-player windfall**: first join pays the whole historical total — intended "everyone is equal"
-  semantics, but it also showers every new bot account.
+- ~~**Full inventory** loses coins; stacks above 99; negative `/gib`; integer overflow~~ **Fixed (bug #10):** payouts
+  insert max-size stacks and credit only what landed (the rest stays owed); `/gib` takes `≥ 1` and `/gib_salary`
+  `≥ 0`; the total and paid markers saturate at `Integer.MAX_VALUE` (`GibberMath`, `GibberMathTest`). The inventory
+  side (`insertStack`) needs an in-game check.
+  > ⚠ Unverified: exact vanilla 1.21.1 `PlayerInventory.insertStack` semantics (the code relies on it shrinking the
+  > stack to the part that did not fit) — the Minecraft sources are not in the repo.
+- **New-player windfall** (owner decision, unchanged): first join pays the whole historical total — intended
+  "everyone is equal" semantics, but it also showers every new bot account.
 - `salary_per_day` defaults to 0 — CLAUDE.md's description implies a working default salary; out of
   the box only `/gib` pays.
 - No feedback messages for the `/gib*` commands — admins must check the server log.

@@ -39,12 +39,26 @@ public class RevenueManager {
 
 		var currentRevenue = state.getPlayerValue(uuid);
 
-		if (currentRevenue < totalRevenue) {
-			int diff = totalRevenue - currentRevenue;
+		int owed = GibberMath.owed(totalRevenue, currentRevenue);
+		if (owed == 0) return;
 
-			// Give player items to get to the total required amount
-			player.giveItemStack(new ItemStack(Money.MONEY, diff));
-			state.setPlayerValue(uuid, totalRevenue);
+		// Bug #10: giveItemStack's result was ignored and the player marked paid in full, so coins that did not
+		// fit were lost. Insert max-size stacks and credit only what actually landed; the rest stays owed and is
+		// paid on the next salary tick or login, once there is room.
+		int inserted = 0;
+		int left = owed;
+		while (left > 0) {
+			int n = Math.min(left, new ItemStack(Money.MONEY).getMaxCount());
+			ItemStack stack = new ItemStack(Money.MONEY, n);
+			player.getInventory().insertStack(stack); // shrinks `stack` to what did not fit
+			int got = n - stack.getCount();
+			inserted += got;
+			left -= n;
+			if (got < n) break; // inventory full
+		}
+		if (inserted > 0) state.setPlayerValue(uuid, GibberMath.paidAfter(currentRevenue, inserted));
+		if (inserted < owed) {
+			LOGGER.info("{}: inventory full, {} of {} coin(s) still owed", player.getName().getString(), owed - inserted, owed);
 		}
 	}
 

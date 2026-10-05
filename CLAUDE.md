@@ -130,7 +130,7 @@ Designed so offline players still "earn" salary and receive coins on next login:
 1. A single global int `total_revenue` (everyone is *entitled* to it) lives in [PlayerPersistentState](src/main/java/com/paul/brawl/PlayerPersistentState.java).
 2. Each player's *paid-out* revenue is stored per-UUID in the same persistent state.
 3. `SalaryScheduler` ticks every `salary_period` seconds (default 10; the first tick fires immediately), incrementing `total_revenue` by `salary_per_day` — via `RevenueManager.UpdateRevenueAll`, not by iterating players. **`salary_per_day` defaults to 0**, so nothing is paid until an admin runs `/gib_salary`.
-4. `RevenueManager.updateRevenue(uuid)` computes `totalRevenue - currentRevenue`, gives that many `coin` items, writes back. Same path runs on `ServerPlayConnectionEvents.JOIN`, so offline players get their backlog at login.
+4. `RevenueManager.updateRevenue(uuid)` computes `totalRevenue - currentRevenue`, inserts that many `coin` items, and credits only what fit (the rest stays owed — bug #10). Totals saturate instead of wrapping; `/gib` takes `≥ 1`. Same path runs on `ServerPlayConnectionEvents.JOIN`, so offline players get their backlog at login.
 
 `PlayerPersistentState` uses Minecraft's `PersistentState` API. NBT keys: `gibbers_state` → `player_data` (UUID→int), `global_data` (string→int).
 

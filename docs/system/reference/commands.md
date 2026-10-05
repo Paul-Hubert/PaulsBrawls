@@ -22,8 +22,8 @@ Most console invocations of player-oriented commands NPE (they call `getPlayer()
 
 | Syntax | Perm | Source | Behaviour |
 |---|---|---|---|
-| `/gib <amount:int>` | 2 | `GibCommand.java:22-24` | Adds `amount` to global `total_revenue` and pays every online player their backlog. Negative values accepted. No chat feedback (log line only). |
-| `/gib_salary <amount:int>` | 2 | `GibCommand.java:51-53` | Sets `salary_per_day` (coins added to `total_revenue` each period). **Default is 0 → no salary until set.** |
+| `/gib <amount:int≥1>` | 2 | `GibCommand.register` | Adds `amount` to global `total_revenue` (saturating) and pays every online player their backlog. Negative values are refused (bug #10). No chat feedback (log line only). |
+| `/gib_salary <amount:int≥0>` | 2 | `GibCommand.register` | Sets `salary_per_day` (coins added to `total_revenue` each period). **Default is 0 → no salary until set.** |
 | `/gib_salary_period <seconds:int≥1>` | 2 | `GibCommand.java:74-76` | Sets `salary_period` and restarts the scheduler. Default 10 s. |
 
 Details: [gibber/money-system.md](../gibber/money-system.md).

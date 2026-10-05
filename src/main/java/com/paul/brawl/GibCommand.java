@@ -21,7 +21,8 @@ public class GibCommand {
             dispatcher.register(
                 LiteralArgumentBuilder.<ServerCommandSource>literal("gib")
                     .requires(source -> source.hasPermissionLevel(2)) // Admin only
-                    .then(CommandManager.argument("amount", IntegerArgumentType.integer())
+                    // Bug #10: a negative /gib lowered the global total (players already paid kept their coins).
+                    .then(CommandManager.argument("amount", IntegerArgumentType.integer(1))
                         .executes(context -> {
 
                             int amount = IntegerArgumentType.getInteger(context, "amount");
@@ -29,9 +30,8 @@ public class GibCommand {
                             MinecraftServer server = context.getSource().getServer();
                             PlayerPersistentState state = PlayerPersistentState.getState(server);
                             var val = state.getGlobalValue(RevenueManager.TOTAL_REVENUE_KEY);
-                            // Increment by given amount
-                            val += amount;
-                            state.setGlobalValue(RevenueManager.TOTAL_REVENUE_KEY, val);
+                            // Increment by given amount — saturating, the NBT int used to wrap negative (bug #10)
+                            state.setGlobalValue(RevenueManager.TOTAL_REVENUE_KEY, GibberMath.addToTotal(val, amount));
                             
                             RevenueManager.UpdateRevenueAll(server);
                             LOGGER.info("gibbed " + amount);
@@ -50,7 +50,7 @@ public class GibCommand {
             dispatcher.register(
                 LiteralArgumentBuilder.<ServerCommandSource>literal("gib_salary")
                     .requires(source -> source.hasPermissionLevel(2)) // Admin only
-                    .then(CommandManager.argument("amount", IntegerArgumentType.integer())
+                    .then(CommandManager.argument("amount", IntegerArgumentType.integer(0))
                         .executes(context -> {
 
                             int amount = IntegerArgumentType.getInteger(context, "amount");

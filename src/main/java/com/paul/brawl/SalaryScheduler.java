@@ -31,9 +31,8 @@ public class SalaryScheduler {
         PlayerPersistentState state = PlayerPersistentState.getState(server);
         var amount = state.getGlobalValue(SALARY_KEY);
         var val = state.getGlobalValue(RevenueManager.TOTAL_REVENUE_KEY);
-        // Increment by daily income
-        val += amount;
-        state.setGlobalValue(RevenueManager.TOTAL_REVENUE_KEY, val);
+        // Increment by daily income — saturating (bug #10: the int total used to wrap negative)
+        state.setGlobalValue(RevenueManager.TOTAL_REVENUE_KEY, GibberMath.addToTotal(val, amount));
         //LOGGER.info("gibbed daily salary " + amount);
         RevenueManager.UpdateRevenueAll(server);
     }
