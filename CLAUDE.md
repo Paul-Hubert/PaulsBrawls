@@ -52,8 +52,9 @@ They copy the remapped jar into the paths set by `mods_folder` / `client_mods_fo
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
-The Java side has one JUnit 5 suite, `src/test/java/com/paul/brawl/TradeMathTest.java`, which covers the Minecraft-free
-trade arithmetic in `TradeMath` (`./gradlew test`). `jacocoTestReport` fails, because Jacoco isn't applied.
+The Java side has ten JUnit 5 classes (42 tests) under `src/test/java/com/paul/brawl/`, each covering a
+Minecraft-free helper: `TradeMath`, `ImageMime`, `BuildGuard`, `GodToolGate`, `GodClamps`, `ItemIds`, `FlagGlow`,
+`GibberMath`, `BlockInfoJson`, `EdenRetry` (`./gradlew test`). The world-facing wiring around them is in-game-check only. `jacocoTestReport` fails, because Jacoco isn't applied.
 **There is no CI in this repo:** `.github/` is gitignored (`.gitignore:1`) and absent from all of git history, so
 no workflow runs these or uploads releases. Every "CI gate" in the Eden docs means the local `npm run check`.
 
@@ -68,7 +69,7 @@ npx tsx src/main.ts eden.json    # boot the host: spawns bots + installs process
 
 ```powershell
 npm run check          # local gate: lint + tsc --noEmit + dependency-cruiser (0 violations) + npm test
-npm test               # node:test via tsx, on the fakes only — NEVER touches Minecraft (62 files, ~530 tests)
+npm test               # node:test via tsx, on the fakes only — NEVER touches Minecraft (65 files, 604 tests)
 npm run test:coverage  # node built-in coverage (~94% line / ~83% branch)
 npm run eval           # DRY RUN: builds + validates 4 scenarios, logs the plan, connects to nothing
 npm run live-test      # real server + real LLM scenario suite (needs a server + a provider key)
@@ -262,18 +263,19 @@ feedback loop shredded by anti-spam scheduling.
 The thirteen owner decisions (never relitigate) and the seven resolved hard mechanisms (D-07…D-13) are in
 [docs/README.md](docs/README.md) + [docs/13-open-questions.md](docs/13-open-questions.md). The ten-minute
 orientation is [docs/10-architecture-summary.md](docs/10-architecture-summary.md). Status: M0–M7 modules
-and a live test suite exist with unit tests, but **several designed features are built and tested in isolation
-and are not wired into the live host** (next section). Smoke/parity sign-off against a live server is still open
+and a live test suite exist with unit tests; almost every designed feature is now wired into the live host (the
+short remainder is the next section). Smoke/parity sign-off against a live server is still open
 ([docs/17-parity-signoff.md](docs/17-parity-signoff.md)). The `docs/0x` design docs describe intent; the
 code-checked as-built description is [docs/system/eden/](docs/system/eden/overview.md).
 
-### Designed vs wired (as of `4a8081f`)
+### Designed vs wired (as of `98cb908`)
 
 `eden/src/main.ts` is the only composition root, so a feature that is not constructed and passed in there does
 not run in a real boot, however well it is tested. The following are **not wired** in `main.ts`. Details and
 citations are in [docs/system/VERIFICATION-NOTES.md §6](docs/system/VERIFICATION-NOTES.md):
 
 - **`god.authoring`, `god.gamemode`:** parsed, never read (`combineDesks` was removed, D-19).
+- **Villager events:** item-received, block-broken-nearby and run-finished have no live source (chat, entity-spotted/-lost, night-falls/new-day and inbox fire since D-17).
 - **Also inert:** curriculum triggers other than `idle`, `resetDay()` for daily caps, `report_to_god` (its result is discarded), revision history (the coordinator always passes `history: []`), journal retention (`retentionDays` is not parsed, no pruning), and the R32 `wipe|migrate` admin route (doesn't exist).
 
 The remaining sections describe the **design**. Where a design point is in the list above, it is marked *(not wired)*.
@@ -327,7 +329,7 @@ run by `npm run check`) — imports run **strictly downward**, an upward import 
 - **Context pack:** deterministic assembly in 8 ordered sections, each with a token ceiling; section sizes journal with the wake-up so prompt bloat is measurable.
 - **Memory** ([villagers/memory.ts](eden/src/villagers/memory.ts)): window ~200 → archive 2000 + summarization (keyword/importance/lesson enrichment); ranked retrieval `0.5·relevance + 0.25·recency(2 h) + 0.25·importance` with multilingual embeddings + keyword fallback. **World-stamp (R32):** every data dir is stamped `${host}:${port}`; on mismatch (world regen) Eden **quarantines** stale beliefs instead of reasoning from a dead world. The admin `wipe|migrate` route that would resolve it does not exist.
 - **Scheduling** ([llm/scheduler.ts](eden/src/llm/scheduler.ts)): global concurrency cap, priority lanes, per-villager cooldown, coalescing — with God preemption, **rollout immunity** (revision turns bypass all suppression — the density invariant), and the "identical error → exponential suppression" memo **deleted** (repeated failure becomes ledger/dossier signal that makes God change the task, not an engine silently swallowing wake-ups).
-- **Society** ([eden/src/social/](eden/src/social/)): bot↔bot conversations (mirror-gated to game chat; `say`/`tell`/`start_conversation` → `ConversationBook`, fast-tier turns, D-18) + typed-offer trade (standalone, D-16). Trade has consent: `propose_trade` only records an offer and wakes the partner; the partner's `answer_trade {accept:true}` walks to the proposer (R33, `go-to`) and settles via `SettlementClient` POST to the Java `:8767` listener (`coin → paulsbrawls:coin`, body `{botA,botB,aGives,bGives}`). Offers expire after 5 min, and only roster villagers can be parties (the listener can't tell a bot from a human). The villager seam is `TradeDesk` in [types/social.ts](eden/src/types/social.ts).
+- **Society** ([eden/src/social/](eden/src/social/)): bot↔bot conversations (mirror-gated to game chat; `say`/`tell`/`start_conversation` → `ConversationBook`, fast-tier turns, D-18) + typed-offer trade (standalone, D-16). Trade has consent: `propose_trade` only records an offer and wakes the partner; the partner's `answer_trade {accept:true}` walks to the proposer (R33, `go-to`) and settles via `SettlementClient` POST to the Java `:8767` listener (`coin → paulsbrawls:coin`, body `{botA,botB,aGives,bGives}`). Offers expire after 5 min (offers open when the host died are closed at boot as `hôte redémarré`), the walk aims within `settlement.reach` (default 8, validated < `settlement.maxTradeDistance`), and only roster villagers can be parties (the listener can't tell a bot from a human). The villager seam is `TradeDesk` in [types/social.ts](eden/src/types/social.ts).
 
 ### Observability ([docs/05](docs/05-observability.md), code in [eden/src/journal/](eden/src/journal/), [eden/src/admin/](eden/src/admin/))
 
@@ -356,7 +358,7 @@ is only a dry run. NOT in `npm run check` (needs a server + paid key, non-determ
 
 ### Hard-won lessons = acceptance criteria
 
-v1's debugging scars are encoded as requirements **R1–R72** in [docs/07-hard-won-lessons.md](docs/07-hard-won-lessons.md)
+v1's debugging scars are encoded as requirements **R1–R74** in [docs/07-hard-won-lessons.md](docs/07-hard-won-lessons.md)
 (each maps to a real session; R44–R49 from the OQ co-design, R50+ from live sessions). They are pinned by tests, not prose. Clusters:
 **crafting** (R1–R3: close stray windows first / window hijack, trust inventory diffs only after packet
 quiescence, pause auto-eat/armor-manager around multi-click sequences); **abort** (R4–R5: a *sequence* —

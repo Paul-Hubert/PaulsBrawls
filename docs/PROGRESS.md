@@ -1528,7 +1528,32 @@ surprises. Newest first.
 - Surprises: `TradeService.propose` settled with no consent step, so wiring it straight to a tool would have
   let any villager take another's items — the mod swaps whatever it is asked to.
 
-## 2026-10-05 — docs/22: gates, bug fixes, wiring, corpus re-verification (session in progress)
+## 2026-10-05 — docs/22: gates, bug fixes, wiring, corpus re-verification
+- Done (one commit per item; `git log --oneline 4a8081f..HEAD`):
+  - **Gates (A):** Node 22 cancelled 28 tests that await promises only unref'd timers resolve → `tests/fakes/keep-alive.ts`
+    (R73). The live-test catalogue test now validates `providers.example.json`, so a clean checkout is green (bug #4).
+  - **Eden bugs (B1):** subscription tools wired to the live store; #14 (mutator resume), #13 (abort fence + safe
+    skill names, two commits), #12 (stock reseed only on change), #17 (five commits: quarantine/prompt single journal,
+    scenario refusal before journal, `/journal` cap, SIGINT/SIGTERM, `redactSecrets`), #16 (restart forgets live
+    memory + self-authored subscriptions), R74 (staggered login stops on `stop()`).
+  - **Java bugs (B2):** #5, #9, #7, #8, #6, #11, #10, #18 (four commits), #16 Java half. Each pure helper is unit-tested
+    (nine new JUnit classes).
+  - **Wiring (B3):** reactivity events (D-17), conversations (D-18), tripwire, describer, GodBody + `intervene`,
+    anchors + `verifyHashes`, drives, `combineDesks` removed (D-19), God state persisted + views replayed (#15).
+  - **Trade (B4):** offers left open by a previous host are closed at boot; `settlement.reach`/`maxTradeDistance`;
+    live `:8767` smoke runbook in docs/system/eden/java-integration.md.
+  - **Corpus (C):** every docs/system page re-checked against the code at `98cb908`; VERIFICATION-NOTES gained a
+    "Changes since 4a8081f" section; root and eden CLAUDE.md updated.
+  - Tests: Eden 545 (516 pass / 1 fail / 28 cancelled) → 604/604, `npm run check` green; Java 11 → 42 (10 classes).
+- Decisions: R73, R74 (docs/07); D-17, D-18 (docs/04); D-19 (docs/03).
+- Next: the live smoke runbook (first real `:8767` trade); in-game checks for the Java fixes (avatar vulnerability,
+  `/prove`/`/build`, main-thread text building, clamps, CTF offhand); a live run to see conversations, drives and
+  interventions under a real model. Still unwired: `god.authoring`/`gamemode`, item-received / block-broken-nearby /
+  run-finished events, non-idle curriculum triggers, `resetDay()`, `report_to_god`, revision history, journal
+  retention, the R32 `wipe|migrate` route.
+- Surprises: the Node 22 vs 24 difference in cancelling tests with only unref'd handles; the BotPool login loop
+  outliving `stop()` only surfaced once a test stopped a host mid-stagger; an unknown `gesture` used to report
+  success because `runDivine` ignored `value.ok === false`.
 - Plan for B3.9 (God state persistence, bug #15), written before the code:
   - **Store:** one `snapshots` table in `eden.db`, created and owned by the `Journal` class (it already owns the
     only SQLite handle): `snapshots(key TEXT PRIMARY KEY, at INTEGER, value TEXT)`, `putSnapshot(key, value)` /

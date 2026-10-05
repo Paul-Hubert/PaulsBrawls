@@ -2,29 +2,50 @@
 id: verification-notes
 title: Verification notes — where existing docs disagree with the code, and bugs found
 system: meta
-summary: Every place CLAUDE.md, README, docs/*.md or code comments contradict the code at 4a8081f, plus a ranked list of real bugs and sharp edges found during verification.
+summary: Every place CLAUDE.md, README, docs/*.md or code comments contradict the code (first audit at 4a8081f, re-verified at 98cb908), plus a ranked list of real bugs and sharp edges and what changed since the first audit.
 tags: [verification, discrepancies, errata, bugs, known-issues, claude.md, stale-docs]
-sources: [CLAUDE.md, README.md, eden/CLAUDE.md, docs/README.md, src/main/java/com/paul/brawl/VillageHttpListener.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/TradeMath.java, eden/src/social/trade.ts, eden/src/main.ts]
-verified_at: 4a8081f
+sources: [CLAUDE.md, README.md, eden/CLAUDE.md, docs/22-rework-followup-prompt.md, docs/README.md, src/main/java/com/paul/brawl/VillageHttpListener.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/TradeMath.java, eden/src/social/trade.ts, eden/src/main.ts]
+verified_at: 98cb908
 ---
 
 # Verification notes
 
 **TL;DR** — The whole corpus was written by reading the code, then re-audited citation by citation. This file lists
 (1) every claim in the existing docs that the code contradicts and (2) the bugs and sharp edges found along the way,
-ranked. The biggest themes:
-- Several Eden features documented as live are **constructed in tests only**.
-- The Eden→Java **trade settlement** was never called and sent the wrong JSON shape (bug #1). Both are fixed: villagers trade through `propose_trade`/`answer_trade`, and the body matches the listener.
-- The CI workflows **don't exist in the repo**.
-- A handful of Java exploits let players **duplicate items or coins** (the two trade paths, #2 and #3, are fixed).
+ranked. As of `98cb908`:
+- Bugs #1–#18 are **fixed** (each with a test where the code is testable without Minecraft); only #19 (ops: RCON
+  password, offline-mode op-on-join) stays open as an owner decision.
+- Most Eden features that were "constructed in tests only" are now **wired** in `main.ts` (subscriptions,
+  live reactivity events, conversations, tripwire, describer, GodBody, anchors, drives, God-state persistence).
+  What is still not wired is listed in §6 and in the root CLAUDE.md.
+- The CI workflows **don't exist in the repo**; the gates are the local `npm run check` and `gradle test`.
+- Several fixes can only be proven in game (marked "in-game check").
 
-Citations are `path:line` at `4a8081f`.
+Citations are `path:line` at `98cb908` unless a row says otherwise.
+
+## 0. Changes since `4a8081f` (re-verified 2026-10-05)
+
+Driven by [docs/22-rework-followup-prompt.md](../22-rework-followup-prompt.md); one commit per item
+(`git log --oneline 4a8081f..98cb908`). Test totals: Eden `npm test` went from 545 tests (516 pass, 1 fail,
+28 cancelled on Node 22) to 604/604; Java from 1 JUnit class (11 tests) to 10 classes (42 tests).
+
+| Area | Change | Item |
+|---|---|---|
+| Eden tests | Node 22 cancelled 28 tests awaiting unref'd timers → `tests/fakes/keep-alive.ts` holds the loop per test | R73 |
+| Eden tests | The live-test catalogue test validates against `providers.example.json`, so a clean checkout is green | #4 |
+| Eden skills | `use-chest`/`smelt-item` always resume auto-eat/armour; aborted skill code is fenced off the body; skill names are safe directory names; stock skills reseed only on change | #14, #13, #12 |
+| Eden admin/host | Single-journal quarantine/prompt; refused scenario start 404s before journaling; `GET /journal` capped; SIGINT/SIGTERM shutdown; `redactSecrets` fixed; staggered logins stop on `stop()` | #17, R74 |
+| Eden + Java | `/villagers restart` resets live memory + self-authored subscriptions; the Java side re-sends only after a refused connection | #16 |
+| Eden wiring | Subscription tools; live chat / entity / night-day / inbox events (D-17); conversations (D-18); tripwire; describer; GodBody (embodied verdicts, `intervene`); anchors + `verifyHashes`; drives; `combineDesks` removed (D-19); God state in `eden.db` + views replayed at boot | B1, B3.1–B3.9, #15 |
+| Eden trade | Offers left open by a previous host are closed at boot (`hôte redémarré`); `settlement.reach` / `maxTradeDistance` config; live smoke runbook | B4 |
+| Java AI God | Avatar vulnerability restored on `/godbody off` and stop; `/prove` and `/build` images; text building on the main thread with caps; watchdog / MCP / gesture ownership; Reward/Punishment/Spawn clamps; console-safe commands; async `/mcp reload`; no QueryTerrain echo; real JSON from `getBlockInfo` | #5–#9, #18 |
+| Java CTF / Gibber | Flags in offhand/armour count, only the mod's glow is cleared; only coins that land are credited, totals saturate, no negative `/gib` | #11, #10 |
 
 ## 1. Ranked bugs and sharp edges
 
 | # | Sev | Area | Finding | Evidence |
 |---|---|---|---|---|
-| 1 | ~~High~~ Fixed | Eden ↔ Java | ~~**Settlement contract mismatch.** Eden POSTs `{from,to,give,want}`; the Java listener requires `{botA,botB,aGives,bGives}` and answers 400 `missing botA`. The client is never wired, and `TradeService` is never constructed.~~ **Fixed.** Shape: `toSettlementRequest` maps `from→botA, to→botB, give→aGives, want→bGives` (coin → `paulsbrawls:coin`), pinned by a test and by `FakeSettlement` running the Java shape check (incl. the case-insensitive same-party check). Wiring: `main.ts` builds one `SettlementClient` (sending `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when set) and a `TradeBook` injected into the villager tools `propose_trade`/`answer_trade`/`list_trades`; an offer settles only when the partner accepts, only between roster villagers, after an R33 walk. **Still open:** no live `:8767` smoke trade yet; `Conversation` is still unwired. | `eden/src/social/trade.ts`, `eden/src/villagers/tools.ts`, `eden/src/main.ts:552-593`, `VillageHttpListener.java:76-81,176-181`, [eden/social-and-trade.md](eden/social-and-trade.md) |
+| 1 | ~~High~~ Fixed | Eden ↔ Java | ~~**Settlement contract mismatch.** Eden POSTs `{from,to,give,want}`; the Java listener requires `{botA,botB,aGives,bGives}` and answers 400 `missing botA`. The client is never wired, and `TradeService` is never constructed.~~ **Fixed.** Shape: `toSettlementRequest` maps `from→botA, to→botB, give→aGives, want→bGives` (coin → `paulsbrawls:coin`), pinned by a test and by `FakeSettlement` running the Java shape check (incl. the case-insensitive same-party check). Wiring: `main.ts` builds one `SettlementClient` (sending `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when set) and a `TradeBook` injected into the villager tools `propose_trade`/`answer_trade`/`list_trades`; an offer settles only when the partner accepts, only between roster villagers, after an R33 walk. **Still open:** no live `:8767` smoke trade yet (runbook in [eden/java-integration.md](eden/java-integration.md)). | `eden/src/social/trade.ts`, `eden/src/villagers/tools.ts`, `eden/src/main.ts:642-679`, `VillageHttpListener.java:76-81,176-181`, [eden/social-and-trade.md](eden/social-and-trade.md) |
 | 2 | ~~High~~ Fixed | Java settlement | ~~**Item duplication.** Duplicate item lines are each validated against the whole inventory: with 15 coins, two lines of 10 pass, 15 are removed and 20 created.~~ **Fixed:** lines are summed per item before validation, and validation and removal use the same totals in one main-thread task. The real stacks now move (damage, enchantments and names survive). Only the 36 main/hotbar slots count (no armour or offhand). Partial-insert overflow, which was silently deleted, now drops. The parties must share a dimension and be within `maxTradeDistance` (16). An optional `settlementToken` header check exists, off by default. **Still open:** any two nearby online players, humans included, can be swapped by a local caller unless the token is set. | [eden/java-integration.md](eden/java-integration.md), `VillageHttpListener.java:214-317`, `TradeMath.java` |
 | 3 | ~~High~~ Fixed | AI God trades | ~~**Negative `Trade.takeAmount` duplicates items** on `/accept`.~~ **Fixed:** both amounts must be 1–512. This is checked at tool execution, in `updateOffer` and again on `/accept`, and `planTakes` rejects a non-positive need. Items are matched by registry item, not display name. Offers expire after 5 minutes. | [aigod/actions-and-trades.md](aigod/actions-and-trades.md), `TradeOffers.java:56-159` |
 | 4 | ~~High~~ Fixed | Eden tests | ~~`npm test` / `npm run check` **fail on a clean checkout**: `tests/live-tests-catalogue.test.ts` loads the gitignored `eden/providers.json`.~~ **Fixed:** `baseConfig` takes the provider presets as an argument and the catalogue test injects the committed `providers.example.json`. Also fixed in the same phase: 28 tests were *cancelled* on Node 22 because they awaited promises only `unref()`'d timers resolve (R73); those files now hold the loop per test (`tests/fakes/keep-alive.ts`). | [eden/testing-eval-live.md](eden/testing-eval-live.md) |
@@ -38,15 +59,11 @@ Citations are `path:line` at `4a8081f`.
 | 12 | ~~Med~~ Fixed | Eden skills | ~~Stock skills are **re-seeded as a new version on every boot** (37 new versions and 37 `skill.draft` rows each time), shadowing admitted overrides.~~ **Fixed:** `seedStockIfChanged` appends only when the code hash or seed manifest differs from the newest stock version, and returns `overridden` (logged, not seeded) when a live non-stock version is newer. Pinned by a two-boot test through `start()`. **Still open:** overriding a stock name breaks every skill that composes it until probation passes (D-12 by design). | `eden/src/skills/library.ts` (`seedStockIfChanged`), `eden/src/main.ts` (`wireGod`) |
 | 13 | ~~Med~~ Fixed | Eden skills | ~~**Aborted skill code keeps running** after timeout, stall or preempt (`Promise.race`), so the next tree can start on the same body (breaks D-05).~~ **Fixed:** an abort fences the tree (its next loop iteration, `await` or composition throws) and the root holds the bot until the code settles, bounded by `abortSettleMs` (1 s). ~~Skill names are not sanitised as directory names (`/` nests, `..` escapes `library/`).~~ **Fixed:** `upsertDraft` rejects `/`, `\`, `..`, a leading `.`, `:` and control characters with a named `InvalidSkillNameError`. | [eden/skills-engine.md](eden/skills-engine.md), [eden/skills-library.md](eden/skills-library.md) |
 | 14 | ~~Med~~ Fixed | Eden skills | ~~`use-chest` / `smelt-item` call `pauseMutators` before the `try`, so a failed open leaves auto-eat and armor-manager **disabled**.~~ **Fixed:** the pause and the open moved inside the `try`; the `finally` closes only an opened window and always resumes. Pinned by FakeBot tests whose open rejects. | [eden/stock-skills.md](eden/stock-skills.md) |
-| 15 | ~~Med~~ Fixed | Eden | ~~God state (ledger, dossiers, QA cache, directives) is **RAM-only**. Derived views are not replayed at boot, so admin stats forget all history on restart. D-09 recovery is a no-op.~~ **Fixed (B3.9):** a `snapshots` table in `eden.db` (`key`, `at`, `value` JSON; `Journal.putSnapshot`/`getSnapshot`) holds God's working
-state under key `god` — `serializeGodState` (ledger, tasks, dossiers, rollouts, open directives; not the critic queue)
-plus the curriculum's QA cache and R65 exhausted counts, stamped with the world id. `persistGodState` (main.ts)
-restores it right after `wireGod` (a different world restores nothing, R32) and saves it 250 ms after any `god.*`
-journal event and on `host.stop()` (B3.9, bug #15). The derived views are replayed from the journal at boot (one scan, `vitals` skipped), and D-09 recovery now abandons the restored in-flight rollouts. Pinned through two boots of `start()`. | [eden/god.md](eden/god.md) |
+| 15 | ~~Med~~ Fixed | Eden | ~~God state (ledger, dossiers, QA cache, directives) is **RAM-only**. Derived views are not replayed at boot, so admin stats forget all history on restart. D-09 recovery is a no-op.~~ **Fixed (B3.9):** a `snapshots` table in `eden.db` (`key`, `at`, `value` JSON; `Journal.putSnapshot`/`getSnapshot`) holds God's working state under key `god` — `serializeGodState` (ledger, tasks, dossiers, rollouts, open directives; not the critic queue) plus the curriculum's QA cache and R65 exhausted counts, stamped with the world id. `persistGodState` (main.ts) restores it right after `wireGod` (a different world restores nothing, R32) and saves it 250 ms after any `god.*` journal event and on `host.stop()` (B3.9, bug #15). The derived views are replayed from the journal at boot (one scan, `vitals` skipped), and D-09 recovery now abandons the restored in-flight rollouts. Pinned through two boots of `start()`.| [eden/god.md](eden/god.md) |
 | 16 | ~~Low~~ Fixed | Eden + Java | ~~`/villagers restart` deletes `bots/<n>.json`, but live memory rewrites it and subscriptions survive.~~ **Fixed:** the launcher's `resetVillager` hook resets the live `VillagerMemory` and removes self-authored subscriptions. ~~The request is retried on timeout although it is not idempotent.~~ **Fixed:** `EdenRetry` re-sends a `restart` only after a refused connection (`EdenRetryTest`). **Owner decision:** op'd villagers can run any `/` command. | [eden/java-integration.md](eden/java-integration.md) |
 | 17 | ~~Low~~ Fixed | Eden admin | ~~Double journaling (quarantine, prompt). `/scenario/start` journals before its guard. `GET /journal` is uncapped. No SIGINT/SIGTERM handler. `redactSecrets` masks token budgets.~~ **Fixed:** the callee journals once with the admin's actor; a refused scenario start/restart 404s before any row; `GET /journal` defaults to 1000 and clamps at 10000; a direct boot stops gracefully on SIGINT/SIGTERM; `redactSecrets` masks only secret-valued keys. **Owner decision:** no auth (localhost-only by design, R24). | [eden/admin-api.md](eden/admin-api.md), [eden/process-config-and-boot.md](eden/process-config-and-boot.md) |
 | 18 | ~~Low~~ Fixed | Java | ~~Console NPEs: `/prompt`, `/block`, `/construction`, and `ChatMessageHistory` on console signed messages.~~ **Fixed:** `/prompt` replies via `sendFeedback`, `/block` and `/construction` use `getPlayerOrThrow`, `ChatMessageHistory` names `source.getName()`. ~~`/mcp reload` blocks the server thread.~~ **Fixed:** it reloads on the LLM worker pool and reports back on the server thread. ~~`QueryTerrain` still has a TEMP chat echo.~~ **Fixed:** removed. ~~`getBlockInfo` emits malformed pseudo-JSON.~~ **Fixed:** `BlockInfoJson` builds a real array (unit-tested). | [aigod/llm-pipeline.md](aigod/llm-pipeline.md), [aigod/mcp-gateway.md](aigod/mcp-gateway.md) |
-| 19 | Low | Ops | The RCON password is committed in plain text in `run/server.properties`. Op-on-join trusts usernames, which is exploitable in offline mode. | `run/server.properties:44` |
+| 19 | Low | Ops | **Owner decision, unchanged.** The RCON password is committed in plain text in `run/server.properties`. Op-on-join trusts usernames, which is exploitable in offline mode. | `run/server.properties:44` |
 
 ## 2. Repository-level discrepancies
 
@@ -84,8 +101,8 @@ journal event and on `host.stop()` (B3.9, bug #15). The derived views are replay
 | "Nearby blocks via getBlockInfo" | Blocks around the admin-set `/construction` pivot only; empty for everyone else (`ChatBotActions.java:257-259`). |
 | `Appear`/`Vanish` are gated on `isActive` (tool-list gating) | Always offered; the gate runs at execution and returns a French refusal (`ChatBotFunctions.java:105-107,127-129`). |
 | `/prove` / `/build` attach "the JPEG" | ~~Bytes come from `NativeImage.getBytes()` (believed PNG) but are labelled `image/jpeg`. `/build`'s image is dropped, and `/prove` never runs.~~ Fixed (bug #9): the label is sniffed from the bytes; both commands run and attach the image. |
-| `/godbody off` → `endPrayerSession` | Clears the queue, vanishes, `forceEndSession()`, disables the bridge, **no** `restoreAvatar` (`ChatCommand.java:62-73`). |
-| Invulnerability restored "on every exit" | Not on `/godbody off` or `SERVER_STOPPING`. |
+| `/godbody off` → `endPrayerSession` | Clears the queue, restores the avatar directly (`restoreAvatarOnMain`, bug #5), cancels sub-builds, vanishes, `forceEndSession()`, disables the bridge — not `endPrayerSession` (`ChatCommand.java:60-72`). |
+| Invulnerability restored "on every exit" | ~~Not on `/godbody off` or `SERVER_STOPPING`.~~ Fixed (bug #5): both call `ChatBotActions.restoreAvatarOnMain` (`ChatCommand.java:67`, `ServerEntryPoint.java:55`). |
 | Bridge `POST /vanish` has no body | Sends `{x,y,z}` = parking spot (`BotBridgeClient.java:75-80`). `GET /health` exists in the client but has no caller. |
 | `idleTimeoutSeconds > waitMaxSeconds` is a fragile invariant | Enforced three ways: the watchdog uses `max(idle, waitMax+5)` (`GodSessionManager.java:123-124`); `waitmax` auto-bumps idle; `idle` rejects values ≤ waitMax. |
 | Log line `MCP gateway start FAILED` | Actual: `MCP gateway connect failed (...); will retry in 30s.`, with automatic 30 s retry (`MCPGateway.java:246`). |
@@ -137,12 +154,12 @@ journal event and on `host.stop()` (B3.9, bug #15). The derived views are replay
 | `combineDesks` cheap mode | ~~Parsed, never read.~~ **Removed (B3.8, D-19):** now an unknown key (R22 warning); scenarios no longer set it. `god.authoring` and `god.gamemode` are still parsed and never read. |
 | `embodiedVerdicts`: the avatar delivers critiques | ~~`GodBody` instance discarded; `gesture` nod/sneak are no-ops.~~ **Wired (B3.5):** the coordinator delivers admissions and quarantines in person (fire-and-forget); nod/sneak move. |
 | "Interventions teach"; the critic voids divine-assisted success | ~~`intervene` is never called; `GodBody` lacks `runAction`.~~ **Wired (B3.5):** the orchestrator's `intervene` tool (offered with a body) runs a stage-setting divine skill and flags the task; the critic's rail voids its successes for that rollout. |
-| QA cache persisted; warm-up is config | In-memory array; hardcoded `WARMUP_COMPLETED=8`. |
+| QA cache persisted; warm-up is config | Persisted in the God snapshot since B3.9; warm-up is still the hardcoded `WARMUP_COMPLETED=8` (`eden/src/god/curriculum.ts:45`). |
 | Curriculum triggers (dawn, decompose…) | Only `idle` in production. |
 | Daily caps reset at dawn; a breach warns | `resetDay()` never called; no breach journal. |
 | God desk priority ordering in the scheduler | One FIFO `god` lane. |
 | Critic tickets from tripwire, plea, second opinion | `rollout` and (B3.3) `tripwire`. No `plea` / `second-opinion`. |
-| D-11: revision history trimmed oldest-first | The coordinator always passes `history: []` (`eden/src/main.ts:957`). The 48k/16k budgets are real but bound only the initial pack. |
+| D-11: revision history trimmed oldest-first | The coordinator always passes `history: []` (`eden/src/main.ts:1308`). The 48k/16k budgets are real but bound only the initial pack. |
 | Orchestrator sees runs and dossiers; directives expire | It sees trigger, task, event and open directives; the directive tool has no expiry. |
 
 ### Villagers and society
@@ -152,7 +169,7 @@ journal event and on `host.stop()` (B3.9, bug #15). The derived views are replay
 | Edge events with hysteresis fire live | ~~The live signal adapter forwards only health/death/hurt, plus a 30 s tick.~~ **Fixed (B3.1, D-17):** chat (with speaker distance), entity-spotted/-lost (hysteresis 16/24), night-falls/new-day and inbox (on a non-trade `tell`) fire live. item-received / block-broken-nearby / run-finished still have no source. |
 | Villager tools include `say`, `tell`, conversations, trade | 17 tools: search_skills, read_skill, write_skill, run_skill, report_to_god, done, remember, recall, subscribe, unsubscribe, list_subscriptions, the trade tools propose_trade, answer_trade, list_trades, and (D-18) the speech tools say, tell, start_conversation. `leave_conversation` is a conversation turn's structured reply, not a tool. |
 | `report_to_god` reaches critic/orchestrator queues | Result discarded. |
-| Context pack carries recent events, mood, standing orders, config persona | §5 is always empty. The persona is hardcoded `Tu es ${name}, ${role} du village. Tu parles français.` (`eden/src/main.ts:579`). |
+| Context pack carries recent events, mood, standing orders, config persona | §5 is always empty. The persona is hardcoded `Tu es ${name}, ${role} du village. Tu parles français.` (`eden/src/main.ts:754`, `:1100`). |
 | `run_skill` has a `wait` arg | Params: `name, args, timeoutMs?`. |
 | Villagers author their own subscriptions via `subscribe` | ~~The three subscription tools were stubs in the live host (`ToolRegistry` built before the store).~~ **Fixed:** `wireGod` builds the `SubscriptionStore` first and passes it as `subscriptions`; pinned through the composition root by `tests/main-full-wiring.test.ts`. |
 | Subscriptions auto-disable on skill quarantine | `setEnabled` has no caller. |

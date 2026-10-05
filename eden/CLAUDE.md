@@ -15,7 +15,7 @@ which drives this process's admin API on :8770.
   the code, plus a ranked bug list. §6 is Eden.
 - docs/README.md — the 13 owner decisions (never relitigate) + reading order.
 - docs/01..08 — architecture, skill system, God, villager runtime, observability,
-  hard-won lessons (R1–R72 = acceptance criteria), dependency law + S1–S10 recipes.
+  hard-won lessons (R1–R74 = acceptance criteria), dependency law + S1–S10 recipes.
 - docs/11 (class model) + docs/12 (views) — static structure + dynamic behavior.
 - docs/13 — D-07…D-13 (the seven resolved hard mechanisms) + deliverable tests.
 - docs/15 (M0 as-built UML) + docs/16 (M0 reference) — the spine that EXISTS today,
