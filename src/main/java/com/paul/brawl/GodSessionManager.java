@@ -108,6 +108,18 @@ public final class GodSessionManager {
     }
 
     /**
+     * Suspend the owner's idle watchdog while an LLM request is in flight. A reasoning model can take longer than
+     * {@code idleTimeoutSeconds} (90 s) to answer, well inside the LLM timeout (180 s); the watchdog used to end the
+     * session mid-chain. The request itself is bounded by the provider timeout, and its completion calls
+     * {@link #resetIdleTimer} (the error path ends the session), so the session cannot hang. Owner-only, like reset.
+     */
+    public static synchronized void pauseIdleTimer(ServerPlayerEntity player) {
+        if (player == null || !player.getUuid().equals(owner.get())) return;
+        if (watchdog != null) watchdog.cancel(false);
+        watchdog = null;
+    }
+
+    /**
      * Cancel and reschedule the idle watchdog. Called from {@link #claim} and
      * from the per-turn hooks in {@link ChatBot} so a chatty session keeps the
      * body around indefinitely.

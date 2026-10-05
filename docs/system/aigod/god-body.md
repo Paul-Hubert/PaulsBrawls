@@ -173,6 +173,7 @@ State (`GodSessionManager.java:30-36`): `AtomicReference<UUID> owner`, `volatile
 | `markManifested()` / `clearManifested()` / `hasManifested()` | Global flag set by `Appear`, cleared by `Vanish` and `forceEndSession` |
 | `endSession(player)` (sync) | No-op if `player` is not the owner; else `forceEndSession()` |
 | `forceEndSession()` (sync) | `owner = null`, `manifested = false`, cancel watchdog. Manages lock state only — no vanish/restore. |
+| `pauseIdleTimer(player)` (sync) | Owner only: cancel the watchdog while an LLM request is in flight. |
 | `resetIdleTimer(player)` (sync) | Ignored unless `player` is the owner. Cancels the old watchdog; schedules a new one after `max(idleTimeoutSeconds, waitMaxSeconds + 5)` seconds (`:123-124`). |
 
 Watchdog fire (`GodSessionManager.java:125-134`): if owner still equals the pinned UUID →
@@ -181,8 +182,10 @@ Watchdog fire (`GodSessionManager.java:125-134`): if owner still equals the pinn
 memory wiped (`ChatBot.java:541-548`).
 
 **What resets the watchdog**: `claim` (each `/pray` / `/prove` by the owner), `Appear`, a batch containing `Wait`, and —
-since bug #8 — every tool dispatch of the owning session, before and after the call (`checkForFunctions`). A plain LLM
-turn without tool calls does not reset it.
+since bug #8 — every tool dispatch of the owning session, before and after the call (`checkForFunctions`). **While an
+LLM request of a God-tools bot is in flight** the watchdog is suspended (`pauseIdleTimer` in `ChatBot.doRequest`) and it
+restarts when the answer arrives (review fix: a reasoning model's 90 s+ answer, inside the 180 s LLM timeout, used to
+trip it mid-chain). A failed request ends the session through `logApiError`, so the pause cannot leave it hanging.
 
 ### The `idleTimeoutSeconds > waitMaxSeconds` invariant — enforced three ways
 

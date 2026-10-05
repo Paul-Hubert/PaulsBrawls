@@ -401,6 +401,8 @@ public class ChatBot {
      */
     private CompletableFuture<ChatResponse> doRequest(ServerPlayerEntity player, BiConsumer<? super ChatResponse, String> callback) {
         ChatModel model = LLMConfig.INSTANCE.sharedModel();
+        // Review fix (bug #8): the watchdog must not fire while the owner's request is in flight.
+        if (needsGodTools) GodSessionManager.pauseIdleTimer(player);
         CompletableFuture<ChatResponse> response = CompletableFuture.supplyAsync(
             () -> {
                 List<ChatMessage> messages = buildMessageList(player);
@@ -417,6 +419,7 @@ public class ChatBot {
 
         response.whenComplete((r, ex) -> {
             if (ex != null) logApiError(ex, player);
+            else if (needsGodTools) GodSessionManager.resetIdleTimer(player); // the idle clock restarts on the answer
         });
 
         setupCustomCallback(response, callback);
