@@ -160,8 +160,13 @@ the offer itself (propose → accept/decline, or a new counter-offer), not insid
 | `tell(from, to, text)` | empty; to self; `<to> n'est pas un villageois` | journal `chat.said {from, to, text}`; `deliverTell` → inbox `tell` `{text, from}` as actor `villager:<from>` (raises D-17 `inbox`) |
 | `start(a, b, topic)` | self; not a villager; either side already talking; `trop de conversations en cours (max 2)`; either offline; `<b> est trop loin pour converser` (> 16 blocks, `EARSHOT`, `eden/src/main.ts:686`) | a `Conversation` (8 turns, 60 s/turn, mirror gap 4 s) with `speakerFor` turns and villagers within 16 blocks of the initiator as eavesdroppers; runs detached; both sides are freed when it ends; a throw journals `system.error` |
 
-Every spoken line (say, tell, conversation topic) goes through `clean()` (`:349-351`): whitespace collapsed to one line, leading `/`
-stripped (villagers are op'd; the `sayInGame` sink strips it again, `eden/src/main.ts:701-702`), capped at 280 characters. The
+Every spoken line (say, tell, conversation topic) goes through `clean()` → `chatSafe()` (`eden/src/social/conversation.ts`),
+and so does every mirrored conversation turn and the `sayInGame` sink itself (`eden/src/main.ts:702`). Villagers are op'd,
+and mineflayer's `bot.chat` splits a message on newlines and into 256-char chunks and sends every chunk starting with `/`
+as a command. `chatSafe` collapses all whitespace (newlines included) to one space, strips every leading `/` or space, and
+caps the line at 250 characters (`CHAT_SAFE_MAX`), so no chunk can start with `/`. Review fix: a conversation turn's
+`"ok\n/give …"` (never cleaned) or a `/` at character 257 used to run as a command. Villager-*authored skill code* still
+gets the raw bot and can `bot.chat('/…')` — that is owner decision #16 (op'd villagers). The
 mirror gate's "player in earshot" is any online player other than the speaker, the avatar and roster villagers within 16 blocks
 (`eden/src/main.ts:703-708`).
 

@@ -11,7 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { MemoryJournal } from './fakes/memory-journal';
-import { Conversation, ConversationBook } from '../src/social/conversation';
+import { CHAT_SAFE_MAX, Conversation, ConversationBook, chatSafe } from '../src/social/conversation';
 import type { Conversant, MemorySeed, MemoryWriter, Relation, TranscriptLine } from '../src/types/index';
 import type { ConversationParticipant, SpeakResult } from '../src/social/conversation';
 
@@ -264,4 +264,32 @@ test('D-18: start refuses offline, distant, non-villager and over-cap partners',
   assert.match((book().b.start('Firmin', 'paul', 't') as { reason: string }).reason, /pas un villageois/);
   const h = book({ maxConcurrent: 0 });
   assert.match((h.b.start('Firmin', 'Pilou', 't') as { reason: string }).reason, /trop de conversations/);
+});
+
+// Review fix: mineflayer's bot.chat splits a message on '\n' and into 256-char chunks, and sends every chunk that
+// starts with '/' as a command (villagers are op'd). Stripping only the leading '/' of the whole line let a newline,
+// a "/ /cmd" prefix or a '/' at character 257 run a command.
+test('chatSafe: no chunk mineflayer sends can start with "/"', () => {
+  const chunks = (line: string) => line.split('\n').flatMap((s) => s.match(/[\s\S]{1,256}/g) ?? []);
+  const attacks = ['ok\n/give @s diamond 64', ' / /op Firmin', '/\n/stop', 'a'.repeat(256) + '/op Firmin', ' /op x'];
+  for (const a of attacks) {
+    const out = chatSafe(a);
+    for (const c of chunks(out)) assert.ok(!c.startsWith('/'), `${JSON.stringify(a)} → chunk ${JSON.stringify(c)}`);
+    assert.ok(out.length <= CHAT_SAFE_MAX, 'one chunk only');
+    assert.ok(!out.includes('\n'));
+  }
+  assert.equal(chatSafe('  bonjour   Pilou '), 'bonjour Pilou');
+});
+
+test('a conversation turn is mirrored through chatSafe (a multi-line LLM turn cannot carry a command)', async () => {
+  const journal = new MemoryJournal();
+  const a = new FakeConversant('Firmin', { playerInEarshot: true });
+  const b = new FakeConversant('Pilou');
+  const convo = new Conversation({
+    journal,
+    initiator: participant(a, [{ say: 'ok\n/give @s diamond 64' }, { leave: { opinion: 0, note: 'x', headline: 'x' } }]),
+    partner: participant(b, [{ say: 'salut' }]),
+  });
+  await convo.run();
+  assert.deepEqual(a.said, ['ok /give @s diamond 64'], 'one line; a mid-line / is plain text');
 });

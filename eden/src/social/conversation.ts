@@ -173,7 +173,7 @@ export class Conversation {
 
     // Mirror to game chat ONLY when a player is in earshot of the SPEAKER, rate-limited per speaker.
     if (speaker.conversant.playerInEarshot() && this.canMirror(from)) {
-      speaker.conversant.sayInGame(text);
+      speaker.conversant.sayInGame(chatSafe(text));
       this.lastMirror.set(from, this.now());
     }
   }
@@ -255,7 +255,9 @@ export interface ConversationBookOptions {
   now?: () => number;
 }
 
-const MAX_LINE = 280;
+const MAX_LINE = 250;
+/** mineflayer's chat chunk is 256 chars (100 on servers with `lessCharsInChat`, not 1.21.1): stay inside one chunk. */
+export const CHAT_SAFE_MAX = 250;
 
 /** The conversation registry + speech tools (D-18). */
 export class ConversationBook implements ConversationDesk {
@@ -344,8 +346,17 @@ export class ConversationBook implements ConversationDesk {
   }
 }
 
-/** Trim + cap a spoken line (one chat message). Leading `/` are stripped: villagers are op'd on join, so a line
- *  starting with `/` would run as a server command if it reached the game chat. */
+/** Trim + cap a spoken line (one chat message), command-safe — see {@link chatSafe}. */
 function clean(text: string): string {
-  return String(text ?? '').replace(/\s+/g, ' ').trim().replace(/^\/+/, '').trim().slice(0, MAX_LINE);
+  return chatSafe(text).slice(0, MAX_LINE);
+}
+
+/**
+ * The only form a villager line may take on its way to `bot.chat`. Villagers are op'd on join, and mineflayer splits
+ * a message on newlines and into 256-char chunks, sending EVERY chunk that starts with `/` as a command. So: all
+ * whitespace (newlines, U+2028…) collapses to one space, every leading `/` or space is stripped, and the line is
+ * capped below one chunk — no chunk can start with `/` (review fix: `"ok\n/give …"` used to run `/give`).
+ */
+export function chatSafe(text: string): string {
+  return String(text ?? '').replace(/\s+/g, ' ').replace(/^[\s/]+/, '').slice(0, CHAT_SAFE_MAX).trim();
 }

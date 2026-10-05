@@ -43,7 +43,7 @@ import { GodBody } from './god/body';
 import { VillagerMemory } from './villagers/memory';
 import { MemorySummarizer } from './villagers/memory-summarizer';
 import { SettlementClient, TradeBook, type ReachStrategy, type TradeOffer } from './social/trade';
-import { ConversationBook } from './social/conversation';
+import { ConversationBook, chatSafe } from './social/conversation';
 import { ConversationTurner } from './villagers/conversation-turn';
 import {
   SkillStatsView,
@@ -699,7 +699,7 @@ function wireGod(args: {
         name,
         memory,
         // Villagers are op'd: never let a line reach the chat as a `/` command (ConversationBook also strips it).
-        sayInGame: (line) => bot.chat(line.replace(/^\/+/, '')),
+        sayInGame: (line) => bot.chat(chatSafe(line)),
         playerInEarshot: () => {
           const players = (bot as unknown as { players?: Record<string, { entity?: { position?: Vec3Like } }> }).players ?? {};
           return Object.entries(players).some(

@@ -34,7 +34,7 @@ const SYSTEM_PROMPT = [
   'pour la terminer. Termine dès que le sujet est épuisé ; ne tourne pas en rond.',
 ].join(' ');
 
-const MAX_SAY = 280;
+const MAX_SAY = 250; // under mineflayer's 256-char chat chunk (social/conversation.ts chatSafe)
 
 /** Builds production SpeakFns — one fast-tier LLM call per turn, scheduled on the conversation lane. */
 export class ConversationTurner {
