@@ -1528,6 +1528,24 @@ surprises. Newest first.
 - Surprises: `TradeService.propose` settled with no consent step, so wiring it straight to a tool would have
   let any villager take another's items — the mod swaps whatever it is asked to.
 
+## 2026-10-05 — docs/22: gates, bug fixes, wiring, corpus re-verification (session in progress)
+- Plan for B3.9 (God state persistence, bug #15), written before the code:
+  - **Store:** one `snapshots` table in `eden.db`, created and owned by the `Journal` class (it already owns the
+    only SQLite handle): `snapshots(key TEXT PRIMARY KEY, at INTEGER, value TEXT)`, `putSnapshot(key, value)` /
+    `getSnapshot(key)`. No second store (D-03: SQLite is the spine). The journal stays the history; a snapshot is
+    the crash-only cache of God's *working* state.
+  - **What:** `GodState` (ledger, tasks, dossiers, rollouts, open directives — not the transient critic queue) and
+    the curriculum's QA cache + R65 exhausted-rollout counts, stamped with the world id (R32: a different world
+    restores nothing and warns).
+  - **When:** every God mutation already journals a `god.*` event; a persister subscribed to the journal saves
+    (debounced 250 ms, unref'd) after any `god.*` event, and once more on `host.stop()`. Crash window ≤ 250 ms.
+  - **Boot:** hydrate God's state in place right after `wireGod` builds it, BEFORE `recoverRollouts()` — so D-09
+    finally has something to recover (abandon the in-flight rollouts, re-enqueue their tasks).
+  - **Views:** replay the journal into the derived views at boot (`rebuildByReplay`) before subscribing them
+    live, so admin stats survive a restart (must equal the live fold — the M7 law).
+  - **Tests:** snapshot round-trip; serialize/hydrate round-trip; through `start()`: a task and a dossier survive a
+    reboot, an open rollout is abandoned and its task re-enqueued, and view stats survive.
+
 ## Template
 ## YYYY-MM-DD — <milestone/topic>
 - Done:

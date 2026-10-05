@@ -33,8 +33,10 @@ Pragmas: `journal_mode = WAL`, `synchronous = NORMAL`. One table:
 Indexes: `idx_journal_at(at)`, `idx_journal_actor_at(actor, at)`, `idx_journal_kind_at(kind, at)`, and expression
 indexes on `json_extract(refs,'$.runId')`, `'$.rolloutId'`, `'$.skill'`.
 
-There are no other tables. Library index, subscriptions, memory and God state are not in SQLite (JSON files or RAM —
-see [process-config-and-boot.md](process-config-and-boot.md)). No retention/pruning code exists: rows are kept forever.
+One other table since B3.9: `snapshots(key TEXT PRIMARY KEY, at INTEGER, value TEXT)` — the crash-only working state of
+a RAM-held owner (today only `god`, see [god.md](god.md)); `putSnapshot(key, value)` upserts, `getSnapshot(key)`
+returns `{at, value}` or `undefined` (an unreadable row reads as absent). Snapshots are not journal events. Library
+index, subscriptions and memory are not in SQLite (JSON files — see [process-config-and-boot.md](process-config-and-boot.md)). No retention/pruning code exists: rows are kept forever.
 
 ## API (`IJournal`)
 
@@ -163,8 +165,8 @@ p99-based debug log (docs/05 describes one; the code has none).
 
 Base class `DerivedView<V>`: `fold(event)` (live), `value()` (fresh copy), `reset()`, and
 `rebuildByReplay(journal)` = `reset()` then fold every event of `journal.query()` (whole table, chronological).
-`ALL_VIEWS` lists the five classes. In the host they are subscribed live (`eden/src/main.ts:165-178`) and never
-replayed at boot.
+`ALL_VIEWS` lists the five classes. In the host (B3.9) they are first replayed from ONE journal scan of every kind but
+`vitals` (no view folds it), then subscribed live.
 
 | View | Folds kinds | Output shape | Consumers |
 |---|---|---|---|
@@ -190,8 +192,8 @@ edge(s), N trade(s), N rollout(s)`) and the full JSON via `logger.info('admin', 
 host (WAL allows concurrent readers), though it re-runs the CREATE/pragma statements.
 
 **Replay invariant:** a view rebuilt by replay must equal the same view folded live. Pinned by
-`tests/views.test.ts` and `tests/rebuild-stats.test.ts`. Because the host never replays at boot, the admin's live
-views only cover events since the current process started; the CLI gives the all-time fold.
+`tests/views.test.ts` and `tests/rebuild-stats.test.ts`. The host replays at boot (B3.9), so the admin's views
+cover the whole history, like the CLI's fold.
 
 ## Gotchas & known issues
 

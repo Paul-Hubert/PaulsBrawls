@@ -125,8 +125,8 @@ already paid) and `global_data` (`total_revenue`, `salary_per_day`, `salary_peri
 | `.eden-eval-data/` | gitignored | `npm run eval` scratch |
 | `live-tests/.runs/<scenario>-<ts>/` | gitignored | Per-run evidence: `eden.json`, `.eden-data`, `journal-report.txt`, `result.json` |
 
-Eden holds **no** state in SQLite besides the journal; God state (ledger, directives, dossiers, QA cache) is RAM-only and
-lost on restart. See [eden/journal-and-views.md](../eden/journal-and-views.md).
+Eden's SQLite file `eden.db` holds the journal and (B3.9) a `snapshots` table with God's working state (ledger,
+directives, dossiers, rollouts, QA cache), restored at boot. See [eden/journal-and-views.md](../eden/journal-and-views.md).
 
 ## Environment variables
 

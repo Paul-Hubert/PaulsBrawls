@@ -194,6 +194,11 @@ indexed history or live streaming, which the website requirement (#9) needs; (b)
 embedded Postgres — heavier dependency and operational surface, overkill at 11 bots
 on a private box.
 
+**As built (docs/22 B3.9):** SQLite holds the `journal` table and one `snapshots` table (the crash-only working
+state of a RAM-held owner — today God's ledger/dossiers/rollouts/directives/QA cache — restored at boot). The library
+index, stats and subscriptions stayed JSON files / journal folds; the derived views are replayed from the journal at
+boot.
+
 **Why:** the website requirement (#9) makes "query everything, stream everything"
 a first-class need. SQLite gives indexed history queries for free and is one
 dependency — lighter than Postgres for a single-box deployment. JSON files stay

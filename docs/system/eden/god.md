@@ -29,7 +29,11 @@ Dependency law: `god/` imports `skills/`, `llm/`, `render/`, `journal/`, `types/
 
 ## God state (single home)
 
-`GodState` (`eden/src/god/god.ts:27-36`), held by `GodService.state` and shared **by reference** with the curriculum and orchestrator (`eden/src/main.ts:563,566`). It is **in-memory only** — nothing in `god/` persists it (crash recovery re-derives only rollout pointers of tasks still in memory; see Recovery).
+`GodState` (`eden/src/god/god.ts:27-36`), held by `GodService.state` and shared **by reference** with the curriculum and orchestrator (`eden/src/main.ts:563,566`). It lives in memory and is **snapshotted** since B3.9: a `snapshots` table in `eden.db` (`key`, `at`, `value` JSON; `Journal.putSnapshot`/`getSnapshot`) holds God's working
+state under key `god` — `serializeGodState` (ledger, tasks, dossiers, rollouts, open directives; not the critic queue)
+plus the curriculum's QA cache and R65 exhausted counts, stamped with the world id. `persistGodState` (main.ts)
+restores it right after `wireGod` (a different world restores nothing, R32) and saves it 250 ms after any `god.*`
+journal event and on `host.stop()` (B3.9, bug #15).
 
 | Field | Type | Sole writer |
 |---|---|---|
@@ -145,7 +149,7 @@ Triggers (`CurriculumTrigger`, `:141`): `idle | verdict-close | dawn | critic-fo
 ### QA knowledge cache (`howTo`, `:239-262`; `findCached`, `:514-536`)
 - Lookup: embed the question; best cosine over cached vectors `≥ 0.92` → hit; else keyword floor `keywordScore ≥ 0.92` or exact string match. A hit costs zero LLM calls.
 - Miss: fast-tier free-text call (no tools, no tool_choice), system prompt "Réponds brièvement et concrètement à une question "how to" sur Minecraft…", `kind:'qa'`, spend charged to `curriculum`. Answer + vector appended to `this.qa`.
-- **Storage is a private in-memory array** — not persisted to disk/SQLite, lost on restart.
+- **Storage:** a private in-memory array, saved with the God snapshot (`Curriculum.exportState/importState`, B3.9).
 
 ### `decompose(goal)` (`:268-306`)
 Strong tier, forced `decompose` tool (`subtasks[]` of `{goal, successCriteria, check?}`); each becomes a Task with `parent = goal`, admitted with trigger `admin`. **No production caller.**
@@ -306,7 +310,9 @@ Key facts:
 
 ### Recovery (D-09)
 
-`GodService.recoverRollouts()` (`eden/src/god/god.ts:218-235`), called at boot when God is wired (`eden/src/main.ts:228-231`): for each task in `state.tasks` with `currentRolloutId`, journal `god.rollout-abandoned {reason:'crash-recovery', taskId}`, close the rollout, delete the pointer, re-add through the ledger writer. Because `GodState` is never persisted and the call runs on a freshly constructed state, **after a real process restart there is nothing to recover** — the ledger, tasks, dossiers and QA cache start empty (journal history remains but is not replayed into God).
+`GodService.recoverRollouts()` (`eden/src/god/god.ts:218-235`), called at boot when God is wired (`eden/src/main.ts:228-231`): for each task in `state.tasks` with `currentRolloutId`, journal `god.rollout-abandoned {reason:'crash-recovery', taskId}`, close the rollout, delete the pointer, re-add through the ledger writer. Since B3.9 it runs right after the God snapshot is restored, so after a real restart it abandons the rollouts that
+were in flight and re-enqueues their tasks with fresh retries (pinned through `start()` in
+`eden/tests/main-full-wiring.test.ts`).
 
 ### Budget degrade summary (D-13)
 
@@ -344,8 +350,9 @@ Payload types: `eden/src/journal/kinds.ts:141-167`.
 - ~~No `tripwire` ticket is ever filed~~ **Wired (B3.3):** `main.ts` passes `onTripwire` → `makeTripwireHandler` (B3.3): it files a `tripwire` critic ticket, the critic judges the last failing run against a synthetic "is this skill broken?" task, and `GodService.routeTripwireVerdict` journals `god.verdict` and applies only a `quarantine` (reason `tripwire: <critique>`, actor `god:critic`) — never admit/archive. No `plea`/`second-opinion` tickets yet.
 - Brain `report_to_god` texts are returned in `DeliberationResult.reportsToGod` and ignored by the coordinator.
 - `BudgetTracker.resetDay()` is never called — "daily" caps never reset.
-- QA cache is in-memory only (the code comment and spec say "persisted").
-- `GodState` is never persisted; boot recovery is a no-op after a real restart.
+- ~~QA cache in memory only; `GodState` never persisted; boot recovery a no-op~~ **Fixed (B3.9)** — the God snapshot.
+  Not persisted: the critic queue (transient), the orchestrator's interrupt cooldowns and divine-assist flags (D-09
+  abandons the rollouts they belonged to), and pending trade offers.
 - Rollout closes only on `admitted && success`; success with `none`/`keep-draft`, or a success running an already-active skill, keeps revising until `maxRetries`.
 - A deliberation with no draft/RunReport silently burns one of the 4 retries.
 - Orchestrator dispatch does not force its tool; if the model emits no `directive` call the task still runs (the pack falls back to `task.goal`).

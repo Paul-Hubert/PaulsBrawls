@@ -53,7 +53,7 @@ post-provider), `journal`, `coordinator?` and `god?` (present only when God is w
 | 2 | `mkdirSync(dataDir)`, `new Journal(<dataDir>/eden.db)`; each warning → `logger.warn('config', w)` + `system.config-warning` (actor `engine`) | 143-148 | |
 | 3 | `createLagMonitor(journal).start()` | 151-152 | 60 s sample interval (unref'd). |
 | 4 | `installProcessGuards(journal)` if opted in | 158-159 | |
-| 5 | Construct 5 views; `journal.subscribe` folds every appended event into each | 165-178 | Views start empty — no replay at boot (see Gotchas). |
+| 5 | Construct 5 views; replay one journal scan (all kinds but `vitals`) into them (B3.9), then `journal.subscribe` folds every appended event into each | `start()` | Views carry the whole history. |
 | 6 | Build `BotPool` iff `spawnBots && villagers.length > 0` | 192-210 | `worldId = host:port`; `vitalsIntervalMs = vitalsIntervalSeconds*1000`; `onBotSpawn` → reactivity attach + launcher setup. |
 | 7 | `wireGod(...)` iff `enableGod` | 213-216 | Throws if the provider declares `apiKeyEnv` and that env var is empty (R56, lines 497-505). |
 | 8 | 30 s `setInterval(reactivity.tick)` (unref'd) iff reactivity exists | 221-222 | |
@@ -319,13 +319,12 @@ prefix `WARN ` / `ERROR `. ESLint `no-console: error` everywhere except `src/log
   subscriptions go; role defaults and God-wired ones stay). Pinned through `start()` in
   `tests/main-full-wiring.test.ts`.
 - ~~`redactSecrets` masks `inputTokenBudget` and `apiKeyEnv`~~ Fixed (bug #17), see above.
-- Views are only fed live; after a restart their in-memory aggregates start empty until new events arrive (the
-  admin stats and `/rollouts` forget history). Use `npm run rebuild-stats` for the full fold.
+- ~~Views are only fed live~~ — replayed at boot since B3.9.
 - `GodService` gets a `DescriptionPass` describer (B3.4); its ledger is injected by a cast
   (`(god as unknown as { ledger: Curriculum }).ledger = curriculum`, line 565).
-- D-09 recovery runs on an always-empty in-memory `GodState` at a real boot (no rehydration).
+- ~~D-09 recovery runs on an always-empty `GodState`~~ — the God snapshot is restored first (B3.9).
 - `eden.example.json` comment says `scenarios/<name>.json` is gitignored; it is not (four scenarios are tracked).
-- No signal handlers: Ctrl-C / pm2 stop kills without calling `host.stop()`.
+- ~~No signal handlers~~ — a direct boot stops gracefully on SIGINT/SIGTERM (bug #17).
 
 ## Related
 

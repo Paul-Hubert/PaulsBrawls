@@ -12,6 +12,7 @@ import { loadEnvFile, loadProviders, resolveProvider } from './providers';
 import { loadScenario, applyScenario } from './scenario-loader';
 import { logger } from './logger';
 import { Journal, type JournalAppender } from './journal/journal';
+import { JOURNAL_KINDS } from './journal/kinds';
 import { createLagMonitor, type LagMonitor } from './journal/lag-monitor';
 import { BotPool } from './bots/pool';
 import { AnchorService, type Anchors } from './bots/anchors';
@@ -34,7 +35,7 @@ import { loadRoles, seedRoleDefaults } from './villagers/role-defaults';
 import { VillagerReactivity } from './villagers/reactivity';
 import { DriveTracker, type DriveKind, type DriveSnapshot } from './villagers/drives';
 import type { WakeupRequest } from './villagers/events';
-import { GodService } from './god/god';
+import { GodService, serializeGodState, hydrateGodState, type GodStateSnapshot } from './god/god';
 import { Curriculum, loadCurriculumPrompt, type CurriculumTrigger } from './god/curriculum';
 import { Orchestrator, loadOrchestratorPrompt, type DispatchTrigger } from './god/orchestrator';
 import { CriticDesk, loadCriticPrompt } from './god/critic';
@@ -177,6 +178,12 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
     tradeLedger: new TradeLedgerView(),
     rollouts: new RolloutsView(),
   };
+  // B3.9 (bug #15): replay the history first, so a restart does not forget every stat (the result must equal the
+  // live fold — `npm run rebuild-stats` is the same replay), THEN fold new events live.
+  // ONE scan, and without `vitals` (the bulk of a long journal: a row per bot every 10 s, folded by no view and
+  // never tagged with a rolloutId).
+  const history = journal.query({ kinds: JOURNAL_KINDS.filter((k) => k !== 'vitals') });
+  for (const v of Object.values(views)) v.rebuildByReplay({ query: () => history });
   journal.subscribe((e) => {
     views.skillStats.fold(e);
     views.competence.fold(e);
@@ -258,6 +265,10 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
   //    currentRolloutId is still set has its rollout journaled god.rollout-abandoned + re-enqueued with
   //    fresh maxRetries (orphan drafts stay harmless `draft`s). The re-enqueue now flows through the real
   //    ledger writer (Curriculum, S2) → the coordinator re-assigns it (M4-3). No-op when God is off.
+  // B3.9 (bug #15): God's working state (ledger, dossiers, rollouts, directives, QA cache) used to live in RAM
+  // only. Restore the last snapshot BEFORE D-09 recovery — that is what gives recovery something to recover —
+  // and keep saving it after every god.* journal event.
+  const persister = wiring ? persistGodState({ journal, wiring, worldId: `${config.minecraft.host}:${config.minecraft.port}` }) : undefined;
   if (wiring) {
     const recovered = wiring.god.recoverRollouts();
     if (recovered > 0) logger.info('god', `boot recovery: re-enqueued ${recovered} abandoned rollout(s) (D-09)`);
@@ -490,6 +501,8 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
       pool?.stop();
       lag.stop();
       await admin.stop();
+      persister?.flush(); // B3.9: the last God snapshot before the database closes
+      persister?.stop();
       journal.close();
     },
   };
@@ -912,6 +925,70 @@ export function makeTripwireHandler(deps: {
     })().catch((e: unknown) => {
       logger.warn('god', `tripwire ticket for ${skill} could not be judged: ${e instanceof Error ? e.message : String(e)}`);
     });
+  };
+}
+
+/** B3.9 — the snapshot row God's working state lives in (journal.ts `snapshots`). */
+const GOD_SNAPSHOT_KEY = 'god';
+/** B3.9 — save at most this long after the last god.* event (the crash window). */
+const GOD_SNAPSHOT_DEBOUNCE_MS = 250;
+
+interface GodSnapshotRow {
+  worldId: string;
+  god: GodStateSnapshot;
+  curriculum: ReturnType<Curriculum['exportState']>;
+}
+
+/**
+ * B3.9 (bug #15) — restore God's last snapshot into the freshly wired desks, then keep it current: every God
+ * mutation journals a `god.*` event, and each one schedules a debounced save (unref'd). A snapshot from another
+ * world (R32) is not restored — the ledger of a dead world would send villagers after things that are gone.
+ */
+export function persistGodState(deps: {
+  journal: Journal;
+  wiring: Pick<GodWiring, 'god' | 'curriculum'>;
+  worldId: string;
+}): { flush(): void; stop(): void } {
+  const { journal, wiring, worldId } = deps;
+  const saved = journal.getSnapshot<GodSnapshotRow>(GOD_SNAPSHOT_KEY);
+  if (saved && saved.value.worldId !== worldId) {
+    logger.warn('god', `God snapshot is from world ${saved.value.worldId}, not ${worldId} — starting fresh (R32)`);
+  } else if (saved && saved.value.god?.version === 1) {
+    hydrateGodState(wiring.god.state, saved.value.god);
+    wiring.curriculum.importState(saved.value.curriculum ?? {});
+    logger.info('god', `restored God state: ${wiring.god.state.ledger.open.length} open task(s), ${wiring.god.state.dossiers.size} dossier(s)`);
+  }
+  const save = (): void => {
+    journal.putSnapshot(GOD_SNAPSHOT_KEY, {
+      worldId,
+      god: serializeGodState(wiring.god.state),
+      curriculum: wiring.curriculum.exportState(),
+    } satisfies GodSnapshotRow);
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const unsubscribe = journal.subscribe((e) => {
+    if (!e.kind.startsWith('god.') || timer) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      try {
+        save();
+      } catch (err) {
+        logger.warn('god', `God snapshot save failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }, GOD_SNAPSHOT_DEBOUNCE_MS);
+    timer.unref();
+  });
+  return {
+    flush: () => {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      save();
+    },
+    stop: () => {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      unsubscribe();
+    },
   };
 }
 

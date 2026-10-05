@@ -46,7 +46,7 @@ const WARMUP_COMPLETED = 8; // ledger.completed below this ⇒ warm-up phase (co
 const QA_DEDUP_THRESHOLD = 0.92; // near-identical "how to" questions share one cached answer
 
 /** A cached "how to X in Minecraft?" Q→A entry — the village's accumulated handbook (Voyager). */
-interface QaEntry {
+export interface QaEntry {
   question: string;
   answer: string;
   vector?: number[];
@@ -303,6 +303,18 @@ export class Curriculum {
       out.push(task);
     }
     return out;
+  }
+
+  /** B3.9 — the curriculum's own working state (QA cache + R65 exhausted counts) for the God snapshot. */
+  exportState(): { qa: QaEntry[]; exhausted: Array<[string, number]> } {
+    return { qa: this.qa.map((e) => ({ ...e })), exhausted: [...this.exhaustedRollouts.entries()] };
+  }
+
+  /** B3.9 — restore what {@link exportState} saved (boot; replaces the in-memory copies). */
+  importState(s: { qa?: QaEntry[]; exhausted?: Array<[string, number]> }): void {
+    this.qa.splice(0, this.qa.length, ...(s.qa ?? []));
+    this.exhaustedRollouts.clear();
+    for (const [k, v] of s.exhausted ?? []) this.exhaustedRollouts.set(k, v);
   }
 
   /** Add an externally-created task (admin / orchestrator / a decomposed sub-task) to the ledger. */

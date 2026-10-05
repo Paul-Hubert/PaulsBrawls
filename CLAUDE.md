@@ -274,15 +274,15 @@ not run in a real boot, however well it is tested. The following are **not wired
 citations are in [docs/system/VERIFICATION-NOTES.md §6](docs/system/VERIFICATION-NOTES.md):
 
 - **`god.authoring`, `god.gamemode`:** parsed, never read (`combineDesks` was removed, D-19).
-- **Also inert:** curriculum triggers other than `idle`, `resetDay()` for daily caps, `report_to_god` (its result is discarded), revision history (the coordinator always passes `history: []`), journal retention (`retentionDays` is not parsed, no pruning), and the R32 `wipe|migrate` admin route (doesn't exist). God state (ledger, dossiers, QA cache, directives) is RAM-only.
+- **Also inert:** curriculum triggers other than `idle`, `resetDay()` for daily caps, `report_to_god` (its result is discarded), revision history (the coordinator always passes `history: []`), journal retention (`retentionDays` is not parsed, no pruning), and the R32 `wipe|migrate` admin route (doesn't exist).
 
 The remaining sections describe the **design**. Where a design point is in the list above, it is marked *(not wired)*.
 
 ### Process topology & the dependency law
 
 - **One Node process** (D-01): bots, God brain, avatar, skill engine, journal, admin server. The refinement loop is too chatty for cross-process hops. Worker threads are the escape hatch.
-- **SQLite holds only the journal** (D-03 as built): `better-sqlite3`, WAL, one table `journal` (`eden/src/journal/journal.ts:50-65`). The library is `library/<skill>/skill.json` + `v<N>.js` files; subscriptions and per-bot memory are JSON files; derived views are folds over the journal; God state is in RAM.
-- **Crash-only** for what is persisted (journal, library, bot JSON): it is written when it changes. God state (ledger, dossiers, QA cache, directives) is RAM-only, and derived views are not replayed at boot, so a restart forgets them.
+- **SQLite holds the journal + God's snapshot** (D-03 as built): `better-sqlite3`, WAL, tables `journal` and `snapshots` (B3.9: God's ledger, dossiers, rollouts, directives and QA cache under key `god`). The library is `library/<skill>/skill.json` + `v<N>.js` files; subscriptions and per-bot memory are JSON files; derived views are folds over the journal, replayed at boot.
+- **Crash-only** for what is persisted (journal, library, bot JSON): it is written when it changes; the God snapshot is saved 250 ms after any `god.*` event and on stop, and restored at boot before D-09 recovery.
 - **`main.ts` is the ONLY composition root** ([eden/src/main.ts](eden/src/main.ts)): it imports everything and wires it with plain constructor args (no DI container, no singletons).
 
 The **dependency law** is enforced by dependency-cruiser ([eden/.dependency-cruiser.cjs](eden/.dependency-cruiser.cjs),
@@ -333,7 +333,7 @@ run by `npm run check`) — imports run **strictly downward**, an upward import 
 
 - **The journal is the source of truth** (P4 — *if it didn't journal, it didn't happen*). Append-only SQLite; every event carries `actor` + a `refs` causality column. **Adding a kind = one registry row** in [journal/kinds.ts](eden/src/journal/kinds.ts) (the S1 `JournalKind` union; `types/JournalEvent.kind` is `string` so `types/` imports nothing).
 - **Backpressure: instrument and wait** (D-07): synchronous WAL writes (`synchronous=NORMAL`), made safe by **never journaling the hot stream — pulses are in-memory counters** (R44). The v1 event-loop lag monitor is ported as the backpressure canary ([journal/lag-monitor.ts](eden/src/journal/lag-monitor.ts), `system.loop-lag` on `max ≥ 1000 ms`). `vitalsIntervalSeconds=10`.
-- **Derived state, not duplicate state** ([eden/src/views/](eden/src/views/)): skill stats, dossier competence, relations, the trade ledger, the rollout index — folds over journal events, rebuildable by replay (`npm run rebuild-stats` must equal the live fold) but not replayed at boot. Writers append facts; readers fold. (Relations are *also* stored, clamped ±100, in `bots/<name>.json` by `VillagerMemory`.)
+- **Derived state, not duplicate state** ([eden/src/views/](eden/src/views/)): skill stats, dossier competence, relations, the trade ledger, the rollout index — folds over journal events, rebuilt by replay at boot (B3.9) and then folded live (`npm run rebuild-stats` must equal the live fold). Writers append facts; readers fold. (Relations are *also* stored, clamped ±100, in `bots/<name>.json` by `VillagerMemory`.)
 - **Admin API now, website later** (owner #9): localhost HTTP + a WebSocket journal stream on **port 8770**. The future website must be a **pure consumer** of these routes; a needed feature is an API gap to fix here, not website code. Mutating verbs (`prompt`, `pause`, `quarantine`) journal `actor` BEFORE acting. LLM prompt bodies stay OUT of the journal; `debugPrompts:true` writes per-call transcript files (`.eden-data/llm/*.json`) referenced from the `llm.call` event.
 
 ### Config, ports, identity

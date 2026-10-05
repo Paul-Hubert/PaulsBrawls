@@ -62,6 +62,14 @@ export class Journal implements IJournal {
       CREATE INDEX IF NOT EXISTS idx_journal_run       ON journal(json_extract(refs, '$.runId'));
       CREATE INDEX IF NOT EXISTS idx_journal_rollout   ON journal(json_extract(refs, '$.rolloutId'));
       CREATE INDEX IF NOT EXISTS idx_journal_skill     ON journal(json_extract(refs, '$.skill'));
+      -- B3.9 (bug #15): crash-only working-state snapshots (one row per owner, e.g. 'god'). The journal stays
+      -- the history; a snapshot is the latest live state of a RAM-held owner, restored at boot. Same file,
+      -- same writer object — SQLite remains the single store (D-03).
+      CREATE TABLE IF NOT EXISTS snapshots (
+        key   TEXT PRIMARY KEY,
+        at    INTEGER NOT NULL,
+        value TEXT NOT NULL
+      );
     `);
     this.insertStmt = this.db.prepare(
       'INSERT INTO journal (id, at, actor, kind, payload, refs) VALUES (?, ?, ?, ?, ?, ?)',
@@ -126,6 +134,24 @@ export class Journal implements IJournal {
   subscribe(listener: JournalListener): Unsubscribe {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** B3.9: replace the snapshot stored under `key` (an owner's whole working state, JSON). */
+  putSnapshot(key: string, value: object): void {
+    this.db
+      .prepare('INSERT INTO snapshots (key, at, value) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET at = excluded.at, value = excluded.value')
+      .run(key, Date.now(), JSON.stringify(value));
+  }
+
+  /** B3.9: the snapshot stored under `key`, or undefined (none yet, or unreadable — never throws). */
+  getSnapshot<T>(key: string): { at: number; value: T } | undefined {
+    const row = this.db.prepare('SELECT at, value FROM snapshots WHERE key = ?').get(key) as { at: number; value: string } | undefined;
+    if (!row) return undefined;
+    try {
+      return { at: row.at, value: JSON.parse(row.value) as T };
+    } catch {
+      return undefined;
+    }
   }
 
   /** Total rows in the journal table. */

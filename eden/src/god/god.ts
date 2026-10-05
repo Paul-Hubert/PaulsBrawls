@@ -35,6 +35,47 @@ export interface GodState {
   directivesOpen?: Directive[];
 }
 
+/** B3.9 — the persisted form of {@link GodState} (Maps as entry arrays; the critic queue is transient). */
+export interface GodStateSnapshot {
+  version: 1;
+  ledger: TaskLedger;
+  /** Tasks not in `ledger.open` but still in the task map (normally none). */
+  extraTasks: Task[];
+  dossiers: Dossier[];
+  rollouts: Rollout[];
+  directivesOpen: Directive[];
+}
+
+/** B3.9 — snapshot God's working state (a deep JSON copy; safe to serialize). */
+export function serializeGodState(state: GodState): GodStateSnapshot {
+  const openIds = new Set(state.ledger.open.map((t) => t.id));
+  return JSON.parse(JSON.stringify({
+    version: 1,
+    ledger: state.ledger,
+    extraTasks: [...state.tasks.values()].filter((t) => !openIds.has(t.id)),
+    dossiers: [...state.dossiers.values()],
+    rollouts: [...state.rollouts.values()],
+    directivesOpen: state.directivesOpen ?? [],
+  })) as GodStateSnapshot;
+}
+
+/**
+ * B3.9 — restore a snapshot INTO the live state object (every desk holds a reference to it, so it is mutated in
+ * place, never replaced). Open tasks are the same objects in `ledger.open` and the task map, as at runtime.
+ */
+export function hydrateGodState(state: GodState, snap: GodStateSnapshot): void {
+  state.ledger.open = snap.ledger.open;
+  state.ledger.completed = snap.ledger.completed;
+  state.ledger.failed = snap.ledger.failed;
+  state.tasks.clear();
+  for (const t of [...snap.ledger.open, ...snap.extraTasks]) state.tasks.set(t.id, t);
+  state.dossiers.clear();
+  for (const d of snap.dossiers) state.dossiers.set(d.villager, d);
+  state.rollouts.clear();
+  for (const r of snap.rollouts) state.rollouts.set(r.id, r);
+  state.directivesOpen = snap.directivesOpen;
+}
+
 /** The result of routing a verdict — what the rollout loop needs to decide revise-or-stop. */
 export interface RouteOutcome {
   verdictId: string;

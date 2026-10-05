@@ -53,7 +53,7 @@ main.ts is the only composition root; anything not constructed there does not ru
 boot, however well it is tested. Wired since 4a8081f: trade (TradeBook → SettlementClient), the subscription
 tools, conversations (say/tell/start_conversation → ConversationBook, D-18), the skill tripwire, the describer, GodBody (embodied verdicts + Orchestrator.intervene), anchors + verifyHashes, DriveTracker (behavior.drives). Not wired:
 god.authoring/gamemode (combineDesks was removed, D-19), and the item-received / block-broken-nearby / run-finished
-events (chat, entity-spotted, night/day and inbox are live since D-17). SQLite holds only the journal; God state is RAM-only.
+events (chat, entity-spotted, night/day and inbox are live since D-17). SQLite holds the journal + God's working-state snapshot (B3.9).
 Full list with citations: docs/system/VERIFICATION-NOTES.md §6. Wiring one of these is a
 main.ts change. Update that list and the root CLAUDE.md §"Designed vs wired" with it (S8).
 

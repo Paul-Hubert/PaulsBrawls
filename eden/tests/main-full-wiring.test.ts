@@ -267,3 +267,64 @@ test('wiring (B3.6): a tampered skill file is quarantined at the next boot (veri
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// B3.9 (bug #15): God state was RAM-only, derived views were not replayed at boot, and D-09 recovery ran on an
+// always-empty state. Two boots on one data dir prove all three.
+test('B3.9: God state survives a reboot, an in-flight rollout is abandoned + re-enqueued, view stats are replayed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eden-godstate-'));
+  const dataDir = join(dir, '.eden-data');
+  const cfg = writeConfig(dir);
+  try {
+    const first = await start(cfg, { dataDir, spawnBots: false, enableGod: true });
+    const god = first.god!;
+    god.addTask({ id: 'task-pain', goal: 'cuire du pain', assignee: 'Firmin', successCriteria: 'avoir 3 bread', context: '', maxRetries: 4 });
+    const rollout = god.openRollout('task-pain'); // in flight when the host goes down
+    god.dossierFor('Firmin').notes.push('apprend vite');
+    first.journal.append('villager:Firmin', 'skill.run', {
+      runId: 'r1', skill: 'go-to', version: 1, villager: 'Firmin', args: {}, outcome: { ok: true, value: {} },
+      startedAt: 0, durationMs: 5, pulses: 1, deepestDepth: 0, callTree: [],
+      worldBefore: { biome: 'x', time: 0, position: [0, 0, 0], health: 20, hunger: 20, equipment: [], inventory: [], nearbyEntities: [], nearbyBlocks: [], knownChests: [] },
+      worldAfter: { biome: 'x', time: 0, position: [0, 0, 0], health: 20, hunger: 20, equipment: [], inventory: [], nearbyEntities: [], nearbyBlocks: [], knownChests: [] },
+    } as never);
+    const runsBefore = (await getJson(first.adminPort, '/skills/go-to')).body.stats.runs;
+    await first.stop(); // flushes the snapshot
+
+    const second = await start(cfg, { dataDir, spawnBots: false, enableGod: true });
+    try {
+      const tasks = (await getJson(second.adminPort, '/tasks')).body;
+      assert.deepEqual(tasks.open.map((t: any) => t.id), ['task-pain'], 'the open task survived');
+      const abandoned = second.journal.query({ kinds: ['god.rollout-abandoned'] });
+      assert.equal(abandoned.length, 1, 'D-09 now has something to recover');
+      assert.equal(abandoned[0]!.refs.rolloutId, rollout.id);
+      assert.equal(second.god!.state.tasks.get('task-pain')!.currentRolloutId, undefined, 'the pointer is cleared for re-assignment');
+      assert.deepEqual(second.god!.dossierFor('Firmin').notes, ['apprend vite'], 'the dossier survived');
+      const runsAfter = (await getJson(second.adminPort, '/skills/go-to')).body.stats.runs;
+      assert.equal(runsBefore, 1);
+      assert.equal(runsAfter, 1, 'the skill stats were replayed from the journal');
+    } finally {
+      await second.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('B3.9: a God snapshot from another world is not restored (R32)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eden-godworld-'));
+  const dataDir = join(dir, '.eden-data');
+  try {
+    const first = await start(writeConfig(dir), { dataDir, spawnBots: false, enableGod: true });
+    first.god!.addTask({ id: 'task-x', goal: 'g', successCriteria: 's', context: '', maxRetries: 1 });
+    await first.stop();
+    const cfg2 = join(dir, 'eden2.json');
+    writeFileSync(cfg2, JSON.stringify({ minecraft: { host: 'other-host', version: '1.21.1' }, villagers: [{ name: 'Firmin', role: 'farmer' }], god: { name: 'Dieu' }, admin: { port: 0 } }));
+    const second = await start(cfg2, { dataDir, spawnBots: false, enableGod: true });
+    try {
+      assert.equal(second.god!.state.ledger.open.length, 0, 'a different world restores nothing');
+    } finally {
+      await second.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

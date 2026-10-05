@@ -109,3 +109,24 @@ test('appending an unregistered kind throws (S1 guard)', (t) => {
     /unregistered kind/,
   );
 });
+
+// B3.9: the snapshots table — one row per owner, replaced on put, unreadable rows read as absent.
+test('B3.9: putSnapshot/getSnapshot round-trip and replace in place', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eden-snap-'));
+  const j = new Journal(join(dir, 'eden.db'));
+  try {
+    assert.equal(j.getSnapshot('god'), undefined);
+    j.putSnapshot('god', { n: 1 });
+    j.putSnapshot('god', { n: 2 });
+    assert.deepEqual(j.getSnapshot<{ n: number }>('god')?.value, { n: 2 });
+    assert.equal(j.count(), 0, 'snapshots are not journal events');
+  } finally {
+    j.close();
+  }
+  const reopened = new Journal(join(dir, 'eden.db'));
+  try {
+    assert.deepEqual(reopened.getSnapshot<{ n: number }>('god')?.value, { n: 2 }, 'it survives a reopen');
+  } finally {
+    reopened.close();
+  }
+});
