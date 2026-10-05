@@ -886,7 +886,6 @@ export const STOCK_SKILLS: StockSkill[] = [
   ...DIVINE,
 ];
 
-/** Seed all stock skills into the library at `active` (idempotent-ish: re-seeding appends versions). */
 /** Outcome of a boot seed (bug #12): which stock skills got a new version, and which were left alone because a
  *  villager's admitted override is live (the caller logs those — the stock change is not applied over them). */
 export interface StockSeedReport {

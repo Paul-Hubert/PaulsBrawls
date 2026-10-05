@@ -11,7 +11,7 @@
 // reached through an INJECTED callback (the exact decoupling M5's SubscriptionRouter uses via WakeupFn),
 // so drives stay self-contained, M5's emitter registry + the frozen union are untouched, and every M5
 // test stays green. main.ts ticks one tracker per villager off the same 30 s host clock that drives M5's
-// tick-30s, and wires the wake-up to a brain deliberation on the conversation lane.
+// tick-30s, and wires the wake-up to a brain deliberation on the idle lane (main.ts wireDrives).
 //
 // villagers/ may import journal/llm/render/config/types (downward) — never god/ or social/. This module
 // needs none of them: it is pure decay arithmetic with an injected sink.

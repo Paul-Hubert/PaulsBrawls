@@ -307,7 +307,8 @@ export class SkillEngine {
 
     // R25: when the op'd avatar (divine runner) runs a MORTAL skill — a demo or a trial of
     // villager-authored code — intercept its chat and drop `/`-commands for the run's duration
-    // (only divine code may speak commands on an op'd bot). Villagers are never op'd (first layer).
+    // (only divine code may speak commands on an op'd bot). Scenario villagers ARE op'd on join (Eden needs
+    // /spreadplayers, /clear, /give) — the tier boundary is enforced here in the engine, not by server permissions.
     const removeInterceptor =
       runner.tier === 'divine' && root.manifest.tier === 'mortal' ? installChatInterceptor(bot) : undefined;
 

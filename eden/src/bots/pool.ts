@@ -156,7 +156,7 @@ export class BotPool {
       // an-admin-decision lands in M6; M1 just stamps and shouts.
       logger.warn(
         'bots',
-        `world id changed ${stamp.previous} → ${stamp.worldId} — persisted memories may be from a dead world (R32); quarantine is an M6 admin decision`,
+        `world id changed ${stamp.previous} → ${stamp.worldId} — persisted memories may be from a dead world (R32); no admin route resolves this yet; /villagers restart resets a villager's memory`,
       );
     }
     await this.spawnAll(epoch);

@@ -82,7 +82,7 @@ export function setupProviderEnv(providerName: string): LiveProviderEntry {
   const entry = all[providerName];
   if (!entry) {
     throw new Error(
-      `unknown provider "${providerName}" — known: ${Object.keys(all).join(', ')}. Edit live-tests/providers.json to add it`,
+      `unknown provider "${providerName}" — known: ${Object.keys(all).join(', ')}. Edit eden/providers.json to add it`,
     );
   }
   if (entry.apiKeyEnv && entry.apiKeyEnv !== 'OPENAI_API_KEY') {
