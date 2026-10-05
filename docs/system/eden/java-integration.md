@@ -191,10 +191,66 @@ the proof for resolution and the swap.
 
 `eden/src/main.ts:552-593` builds one `SettlementClient` and a `TradeBook` and injects the book into the
 villager `ToolRegistry`. A villager's `propose_trade` only records an offer and wakes the partner; the
-partner's `answer_trade {accept:true}` walks it to the proposer (R33, the `go-to` skill, aiming within 8
-blocks) and then POSTs here. Eden only lets roster villagers be parties, which covers the "any two online
+partner's `answer_trade {accept:true}` walks it to the proposer (R33, the `go-to` skill, aiming within
+`settlement.reach`, default 8 blocks) and then POSTs here. Eden only lets roster villagers be parties, which covers the "any two online
 players, humans included" gap below from the Eden side (a different local caller is still only stopped by the
 token). Details: [social-and-trade.md](social-and-trade.md).
+
+## Live smoke runbook — the first real `:8767` trade (B4)
+
+Not runnable in CI or in a container without Minecraft: CI proves only the request shape (against `FakeSettlement`).
+This is the checklist for the first run against the real mod. Run it on the dev server (port in
+`run/server.properties`, R28) or on `PaulsBrawlsVanilla`; record the result in `docs/PROGRESS.md`.
+
+**Preconditions**
+
+1. No `./gradlew runServer` holding `:8767` unless it *is* the server under test (R29). Check:
+   `Get-NetTCPConnection -LocalPort 8767` (Windows) / `ss -ltnp | grep 8767`.
+2. The server log shows `Village settlement listener on http://127.0.0.1:8767/trade/execute`. If not: `/village on`;
+   `/village` (bare) prints the listener state.
+3. Token: if `village_config.properties` sets `settlementToken`, export the same value as `EDEN_SETTLEMENT_TOKEN` in
+   the shell that boots Eden. Otherwise the log warns `No settlementToken configured …` — fine on a private box.
+4. Eden's `settlement.maxTradeDistance` equals the mod's `maxTradeDistance` (default 16 both sides), and
+   `settlement.reach` is below it (default 8).
+
+**Step 1 — the listener alone (no Eden).** Two online players (or two connected villager bots) `A` and `B`. Give `A`
+one coin and `B` one bread (`/give A paulsbrawls:coin 1`, `/give B bread 1`), stand them within `maxTradeDistance`,
+then from the server machine:
+
+```powershell
+curl.exe -s -X POST http://127.0.0.1:8767/trade/execute -H "content-type: application/json" `
+  -d '{"botA":"A","botB":"B","aGives":[{"item":"paulsbrawls:coin","count":1}],"bGives":[{"item":"bread","count":1}]}'
+```
+
+Expect `{"ok":true}` and the items swapped (check with `/clear A paulsbrawls:coin 0` and `/clear B bread 0`, which
+count without removing, or over RCON). Repeat once with the players 40 blocks apart → `400` with a distance
+error, inventories unchanged.
+
+**Step 2 — through Eden.** Boot Eden with two roster villagers online (`npx tsx src/main.ts eden.json`, then
+`/villagers start <scenario>`). Give the proposer one coin and the partner one bread as above. Ask the proposer
+through the admin API:
+
+```powershell
+curl.exe -s -X POST http://127.0.0.1:8770/villagers/<A>/prompt -H "content-type: application/json" `
+  -d '{"text":"Propose à <B> un échange : 1 coin contre 1 bread (propose_trade)."}'
+```
+
+Expected journal sequence (`GET /journal?kinds=trade.proposed,trade.settled,trade.failed`):
+`trade.proposed` (actor `villager:<A>`) → the partner wakes (`inbox`/conversation lane) and calls
+`answer_trade {accept:true}` → if they were farther than `settlement.reach` a `skill.run` of `go-to` for `<B>` →
+`trade.settled` with the same `refs.tradeId`. Inventories swapped as in step 1.
+
+**Reading a failure** (the `trade.failed` reason names the cause, S10):
+
+| Reason starts with | Meaning |
+|---|---|
+| `settlement could not reach …` | Nothing on `:8767` — listener off, or the wrong process holds the port (R29). |
+| `settlement HTTP 401` | Token mismatch between `settlementToken` and `EDEN_SETTLEMENT_TOKEN`. |
+| `settlement HTTP 400: … missing botA` | Body shape drift — should be impossible (pinned by tests); file a bug. |
+| `settlement HTTP 400: … are too far apart` | The walk ended outside the mod's `maxTradeDistance`: lower `settlement.reach` or check the two `maxTradeDistance` values match. |
+| `settlement HTTP 400: … is not online` / item shortfall | A party lacked the items at settlement time — the mod re-validates on the main thread; inventories untouched. |
+| `partenaire "<B>" hors de portée …` | The R33 walk failed (go-to error or proposer offline); nothing was POSTed. |
+| `hôte redémarré` | Eden restarted with the offer open (B4); nothing moved. |
 
 ## `/village` (`VillageCommand.java`)
 
