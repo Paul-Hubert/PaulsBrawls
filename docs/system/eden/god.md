@@ -10,7 +10,7 @@ verified_at: 4a8081f
 
 # Eden God — desks, body and the refinement loop
 
-**TL;DR.** Eden's village God is three LLM "desks" over one shared in-memory `GodState`: the **critic** (judges one skill run → `Verdict`, strong tier, forced `verdict` tool), the **curriculum** (proposes tasks, sole writer of the task ledger, strong tier + fast-tier QA cache), and the **orchestrator** (turns tasks into `Directive`s delivered to villager inboxes, fast tier). `GodService` owns rollouts, the critic queue and verdict routing into the skill library. The `RolloutCoordinator` in `main.ts` drives task → directive → villager deliberation → critic → route → revise/close. Several documented features (`combineDesks`, embodied verdicts, divine intervention, verdict batching, dawn trigger, daily budget reset, plea tickets) exist as code or config but are **not wired in production** (tripwire tickets are, since B3.3) — see Gotchas.
+**TL;DR.** Eden's village God is three LLM "desks" over one shared in-memory `GodState`: the **critic** (judges one skill run → `Verdict`, strong tier, forced `verdict` tool), the **curriculum** (proposes tasks, sole writer of the task ledger, strong tier + fast-tier QA cache), and the **orchestrator** (turns tasks into `Directive`s delivered to villager inboxes, fast tier). `GodService` owns rollouts, the critic queue and verdict routing into the skill library. The `RolloutCoordinator` in `main.ts` drives task → directive → villager deliberation → critic → route → revise/close. Several documented features (`combineDesks`, verdict batching, dawn trigger, daily budget reset, plea tickets) exist as code or config but are **not wired in production** (tripwire tickets, embodied verdicts and divine intervention are, since B3.3/B3.5) — see Gotchas.
 
 ## Where things live
 
@@ -82,7 +82,7 @@ Config keys (`eden/src/config.ts:51-64`, defaults `:90-109`, parsing `:240-277`)
 | `god.budget.perDesk.<critic\|curriculum\|orchestrator>.dailyTokens` | `null` | `BudgetTracker` cap; non-number → `null` (uncapped) (`eden/src/config.ts:255-259`) |
 | `god.budget.degradeOnBreach` | `true` | passed to all three desks |
 | `god.combineDesks` | `false` | **parsed but never read** — no combined mode exists |
-| `god.embodiedVerdicts` | `true` | passed to a `GodBody` that is constructed and discarded (`eden/src/main.ts:570`) — no effect |
+| `god.embodiedVerdicts` | `true` | gates `GodBody.deliverVerdict` — on, the coordinator's notable verdicts (admit/quarantine) are also delivered in person (B3.5) |
 | `god.authoring` | `"villager"` | parsed (`eden/src/config.ts:260`), never read by `src/` |
 | `god.gamemode` | `"creative"` | not read by `god/` (see bots docs) |
 | `god.godPrompt` (scenario) | unset | appended to **every** desk's system prompt as `\n\n## Scenario instructions\n<gp>` (`eden/src/main.ts:558-561`); also flips the curriculum's warm-up text (`hasMissionDirective`) |
@@ -195,14 +195,22 @@ Directives are data ("what and why"; brain decides how); call `directive` once p
 ## "Interventions teach" — what code enforces
 
 - Enforced: the critic's `voidDivineOverreach` rail (`eden/src/god/critic.ts:259-263`) whenever `divineAssisted` is true; the coordinator passes `orchestrator.wasDivinelyAssisted(task.id)` (`eden/src/main.ts:975`) and clears it on every rollout exit.
-- Not reachable in production: the flag is only set by `Orchestrator.intervene`, which nothing calls, and `GodBody` does not implement the `DivineActor.runAction` method `intervene` requires. So the rail is tested (`tests/god-critic.test.ts`, `tests/god-orchestrator.test.ts`) but dormant live.
+- Live since B3.5: `wireGod` passes the `GodBody` to the `Orchestrator` (`body`), which then offers an **`intervene`** tool
+  next to `directive` (`{villager, action ∈ summon-creature|set-weather|give-items|fly-to|appear-near|gesture, args,
+  reason}`); a call runs `intervene(...)` with the dispatched task's id, so the flag is set. `GodBody.runAction` refuses
+  any other action (`INTERVENTION_ACTIONS` — `smite`, `teleport-entity`, `vanish` act on villagers or end a
+  manifestation). Over budget (D-13 degrade) intervene calls are dropped. The prompt names the tool and its cost.
 - Note the rail voids **any** success on a flagged task, not only successes "achieved by" the intervention.
 
 ## The divine body (`eden/src/god/body.ts`)
 
 - Runner identity: `{name: <god.name>, role:'god', tier:'divine'}` (`eden/src/god/body.ts:38`). Methods `appearNear(villager)`, `vanish()`, `gesture(type)` run the divine stock skills `appear-near`, `vanish`, `gesture` through `SkillEngine.run` (each a journaled `skill.run`), returning `report.outcome.ok`; any throw → `false` (never throws, `:75-83`).
 - `deliverVerdict({villager, verdict, rolloutId?})` (`:61-72`): no-op returning `false` if `embodiedVerdicts` is false; else appear-near then gesture `nod` (success) / `swing` (failure); journals `god.appearance {villager, action:'verdict', ok}` (actor `god:body`).
-- **Wiring:** `void new GodBody({...})` (`eden/src/main.ts:570`) — the instance is discarded; `deliverVerdict` is never called in production.
+- `runAction(action, args)` (B3.5): the `DivineActor` surface — one stage-setting divine skill from
+  `INTERVENTION_ACTIONS`, else `false` without running anything. `runDivine` now also treats a skill that returns
+  `{ok:false}` as a failure.
+- **Wiring (B3.5):** `wireGod` keeps the instance: it is the orchestrator's `body`, and the `RolloutCoordinator` calls
+  `deliverVerdict` (fire-and-forget) after a **notable** verdict — an admission or a quarantine.
 
 Divine stock skills (`eden/src/skills/exemplars/index.ts:821-839`), all implemented as `bot.chat('/…')` commands (need op) except `gesture`/`fly-to`:
 
@@ -329,8 +337,9 @@ Payload types: `eden/src/journal/kinds.ts:141-167`.
 ## Gotchas & known issues
 
 - `god.combineDesks` and `god.authoring` are parsed config keys with **no code consumer**.
-- `GodBody` is built and discarded (`eden/src/main.ts:570`): `embodiedVerdicts` has no effect; `deliverVerdict`'s `nod` gesture is a no-op skill anyway.
-- `Orchestrator.intervene` needs a `DivineActor {runAction}`; `GodBody` has no `runAction` and nothing calls `intervene` — the divine-overreach rail is dormant live.
+- ~~`GodBody` is built and discarded; `nod` is a no-op; `intervene` is never called~~ **Wired (B3.5).** The divine-assist
+  flag lasts the whole rollout (cleared on every rollout exit), so after an intervention no success counts for that
+  rollout — by design (03), but costly; the prompt says so.
 - `CriticDesk.judgeBatch`, `Curriculum.decompose`, `cleanUpTasks`, `Orchestrator.expireStale`, `reportToGod` have no production callers; `criticQueue` grows forever (never drained).
 - ~~No `tripwire` ticket is ever filed~~ **Wired (B3.3):** `main.ts` passes `onTripwire` → `makeTripwireHandler` (B3.3): it files a `tripwire` critic ticket, the critic judges the last failing run against a synthetic "is this skill broken?" task, and `GodService.routeTripwireVerdict` journals `god.verdict` and applies only a `quarantine` (reason `tripwire: <critique>`, actor `god:critic`) — never admit/archive. No `plea`/`second-opinion` tickets yet.
 - Brain `report_to_god` texts are returned in `DeliberationResult.reportsToGod` and ignored by the coordinator.

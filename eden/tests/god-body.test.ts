@@ -76,3 +76,29 @@ test('M3-5: appearNear / gesture / vanish are best-effort booleans (avatar up)',
   // appear-near drove a /tp through the avatar's chat.
   assert.ok(h.avatar!.sentChat.some((m) => m.startsWith('/tp')));
 });
+
+// B3.5 — GodBody.runAction (the orchestrator's DivineActor): stage-setting divine skills only.
+test('B3.5: runAction runs a stage-setting divine skill and refuses anything else', async () => {
+  const h = harness();
+  assert.equal(await h.body.runAction('gesture', { type: 'nod' }), true); // FakeBot has no swingArm; nod degrades without bot.look
+  assert.equal(await h.body.runAction('smite', { target: 'Firmin' }), false, 'smite acts ON a villager — not stage-setting');
+  assert.equal(await h.body.runAction('vanish', {}), false);
+  const ran = h.journal.query({ kinds: ['skill.run'] }).map((e) => (e.payload as { skill: string }).skill);
+  assert.deepEqual(ran, ['gesture'], 'a refused action never reaches the engine');
+});
+
+test('B3.5: gesture nod and sneak are real moves (they were silent no-ops)', async () => {
+  const avatar = new FakeBot({ username: 'Dieu' });
+  const moves: string[] = [];
+  Object.assign(avatar, {
+    look: async (yaw: number, pitch: number) => { moves.push(`look ${pitch}`); void yaw; },
+    setControlState: (c: string, on: boolean) => { moves.push(`${c} ${on}`); },
+  });
+  (avatar.entity as unknown as { yaw: number; pitch: number }).yaw = 1;
+  (avatar.entity as unknown as { yaw: number; pitch: number }).pitch = 0;
+  const h = harness({ avatar });
+  assert.equal(await h.body.gesture('nod'), true);
+  assert.equal(await h.body.gesture('sneak'), true);
+  assert.equal(await h.body.gesture('cartwheel'), false, 'an unknown gesture is reported, not a silent ok');
+  assert.deepEqual(moves, ['look -0.6', 'look 0', 'sneak true', 'sneak false']);
+});

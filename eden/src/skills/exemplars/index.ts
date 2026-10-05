@@ -826,7 +826,18 @@ const DIVINE: StockSkill[] = [
   divine('vanish', 'renvoyer l’avatar à son point de stationnement', obj({ x: N, y: N, z: N }), obj({ ok: { type: 'boolean' } }), ['body'],
     `async function vanish(bot, { x = 0, y = 200, z = 0 }, ctx) { bot.chat('/tp ' + bot.username + ' ' + x + ' ' + y + ' ' + z); return { ok: true }; }`),
   divine('gesture', 'jouer un geste corporel (swing/jump/sneak/nod)', obj({ type: S }, ['type']), obj({ ok: { type: 'boolean' } }), ['body'],
-    `async function gesture(bot, { type }, ctx) { if (type === 'swing') bot.swingArm(); else if (type === 'jump') { bot.setControlState('jump', true); await new Promise((r) => setTimeout(r, 200)); bot.setControlState('jump', false); } return { ok: true }; }`),
+    // B3.5: nod (look down then back up) and sneak (crouch briefly) used to fall through as silent no-ops.
+    `async function gesture(bot, { type }, ctx) {
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  if (type === 'swing') bot.swingArm();
+  else if (type === 'jump') { bot.setControlState('jump', true); await pause(200); bot.setControlState('jump', false); }
+  else if (type === 'sneak') { bot.setControlState('sneak', true); await pause(400); bot.setControlState('sneak', false); }
+  else if (type === 'nod') {
+    const yaw = bot.entity.yaw || 0, pitch = bot.entity.pitch || 0;
+    if (bot.look) { await bot.look(yaw, -0.6, true); await pause(200); await bot.look(yaw, pitch, true); }
+  } else return { ok: false, error: 'geste inconnu: ' + type };
+  return { ok: true };
+}`),
   divine('fly-to', 'voler (mode créatif) vers une position', obj({ x: N, y: N, z: N }, ['x', 'y', 'z']), obj({ arrived: { type: 'boolean' } }), ['movement'],
     `async function flyTo(bot, { x, y, z }, ctx) { await bot.creative.flyTo(new ctx.Vec3(x, y, z)); return { arrived: true }; }`),
   divine('summon-creature', 'invoquer une créature', obj({ entity: S, x: N, y: N, z: N, count: N }, ['entity', 'x', 'y', 'z']), obj({ summoned: N }), ['spawn'],

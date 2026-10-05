@@ -49,7 +49,7 @@ import {
   TradeLedgerView,
   RolloutsView,
 } from './views/index';
-import type { Bot, Conversant, Inbox, InboxMessage, MemoryWriter, RunReport, Snapshot, SkillStats, Task, TaskLedger, Vec3Like } from './types/index';
+import type { Bot, Conversant, Inbox, InboxMessage, MemoryWriter, RunReport, Snapshot, SkillStats, Task, TaskLedger, Vec3Like, Verdict } from './types/index';
 
 /** Options for {@link start}. */
 export interface EdenHostOptions {
@@ -686,12 +686,14 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   const curriculum = new Curriculum({ state: god.state, journal, client, scheduler, embeddings, library, hasMissionDirective: gp !== undefined, tier: config.god.desks.curriculum.model, fastTier: 'fast', budget, degradeOnBreach: config.god.budget.degradeOnBreach, ...(curriculumPrompt ? { systemPrompt: curriculumPrompt } : {}) });
   // Re-wire God to delegate ledger writes to Curriculum (S2). The option is private; assign it once here.
   (god as unknown as { ledger: Curriculum }).ledger = curriculum;
-  const orchestrator = new Orchestrator({ state: god.state, journal, client, scheduler, inboxes, tier: config.god.desks.orchestrator.model, budget, degradeOnBreach: config.god.budget.degradeOnBreach, ...(orchestratorPrompt ? { systemPrompt: orchestratorPrompt } : {}) });
+  // The body (theatrics with teeth, never a dependency, 03 §The body). B3.5: it is KEPT — the orchestrator's
+  // `intervene` tool stages the world through it, and the coordinator delivers notable verdicts in person when
+  // `embodiedVerdicts` is on. A disconnected avatar just makes those best-effort calls return false.
+  const body = new GodBody({ engine, journal, avatarName: config.god.name, embodiedVerdicts: config.god.embodiedVerdicts });
+  const orchestrator = new Orchestrator({ state: god.state, journal, client, scheduler, inboxes, body, tier: config.god.desks.orchestrator.model, budget, degradeOnBreach: config.god.budget.degradeOnBreach, ...(orchestratorPrompt ? { systemPrompt: orchestratorPrompt } : {}) });
   const critic = new CriticDesk({ client, scheduler, journal, tier: config.god.desks.critic.model, budget, degradeOnBreach: config.god.budget.degradeOnBreach, batchMax: 3, ...(criticPrompt ? { systemPrompt: criticPrompt } : {}) });
   tripwireRef.current = makeTripwireHandler({ god, critic, library, threshold: config.skills.autoQuarantineAfter });
 
-  // The body (theatrics, never a dependency) — built so divine stage-setting has a runner (M3-5).
-  void new GodBody({ engine, journal, avatarName: config.god.name, embodiedVerdicts: config.god.embodiedVerdicts });
 
   const roster = new Map<string, RosterEntry>(config.villagers.map((v) => [v.name, { name: v.name, role: v.role, persona: `Tu es ${v.name}, ${v.role} du village. Tu parles français.` }]));
   // P2b: the always-in-prompt teaching set — the exemplar mortal stock skills' working NAMED-function
@@ -725,7 +727,7 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
         };
       }
     : undefined;
-  const coordinator = new RolloutCoordinator({ god, curriculum, orchestrator, critic, brain, library, inboxes, roster, exemplars, primitives, retriever, memoryFor, strongInputTokenBudget: config.llm.providers.strong.inputTokenBudget, ...(snapshotFor ? { snapshotFor } : {}) });
+  const coordinator = new RolloutCoordinator({ god, curriculum, orchestrator, critic, brain, library, inboxes, roster, body, exemplars, primitives, retriever, memoryFor, strongInputTokenBudget: config.llm.providers.strong.inputTokenBudget, ...(snapshotFor ? { snapshotFor } : {}) });
 
   // ── M5 reactivity — assemble per-villager EventRouter + SubscriptionRouter so a SEEDED reflex (e.g. a
   //    guard's hurt→defend-self) fires within a tick of the signal, ZERO tokens, BEFORE the LLM could
@@ -989,6 +991,8 @@ export interface RolloutCoordinatorOptions {
    *  relevant past entries for the task goal (proactive recall, 04 §Memory). OPTIONAL — tests without a
    *  memory simply get `[]` (no §6 injection, same as before). */
   memoryFor?: (villager: string) => VillagerMemory | undefined;
+  /** B3.5: delivers notable verdicts in person (GodBody; a no-op when embodiedVerdicts is off). Optional. */
+  body?: { deliverVerdict(opts: { villager: string; verdict: Verdict; rolloutId?: string }): Promise<boolean> };
   /** The STRONG tier's inputTokenBudget, resolved from providers.json via config. The authoring/revision
    *  rollout runs on the strong tier (D-13); its context-pack ceiling MUST match the configured strong
    *  model, not a hardcoded constant — a small-context preset (e.g. the `local` 32k) would otherwise
@@ -1141,6 +1145,11 @@ export class RolloutCoordinator {
         divineAssisted: this.o.orchestrator.wasDivinelyAssisted(task.id),
       });
       const route = await this.o.god.routeVerdict(verdict, { rolloutId: rollout.id, draft: delib.draft, task });
+      // B3.5: a NOTABLE verdict (an admission, or a quarantine) is also delivered in person — fire-and-forget;
+      // the inbox already carried it, so the loop never waits on the avatar (theatrics, never a dependency).
+      if (this.o.body && (route.admitted || verdict.libraryAction === 'quarantine')) {
+        void this.o.body.deliverVerdict({ villager, verdict, rolloutId: rollout.id }).catch(() => false);
+      }
       if (route.rolloutClosed) {
         this.o.orchestrator.closeDirectivesForTask(task.id, 'completed');
         this.o.orchestrator.clearDivineAssist(task.id);

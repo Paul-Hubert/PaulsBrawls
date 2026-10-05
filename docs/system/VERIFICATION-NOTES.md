@@ -131,8 +131,8 @@ Citations are `path:line` at `4a8081f`.
 | Claim | Code reality |
 |---|---|
 | `combineDesks` cheap mode | Parsed, never read. Same for `god.authoring` and `god.gamemode`. |
-| `embodiedVerdicts`: the avatar delivers critiques | `GodBody` instance discarded (`eden/src/main.ts:570`); `gesture` nod/sneak are no-ops. |
-| "Interventions teach"; the critic voids divine-assisted success | The rail exists, but `intervene` is never called and `GodBody` lacks `runAction`. |
+| `embodiedVerdicts`: the avatar delivers critiques | ~~`GodBody` instance discarded; `gesture` nod/sneak are no-ops.~~ **Wired (B3.5):** the coordinator delivers admissions and quarantines in person (fire-and-forget); nod/sneak move. |
+| "Interventions teach"; the critic voids divine-assisted success | ~~`intervene` is never called; `GodBody` lacks `runAction`.~~ **Wired (B3.5):** the orchestrator's `intervene` tool (offered with a body) runs a stage-setting divine skill and flags the task; the critic's rail voids its successes for that rollout. |
 | QA cache persisted; warm-up is config | In-memory array; hardcoded `WARMUP_COMPLETED=8`. |
 | Curriculum triggers (dawn, decompose…) | Only `idle` in production. |
 | Daily caps reset at dawn; a breach warns | `resetDay()` never called; no breach journal. |

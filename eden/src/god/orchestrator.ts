@@ -58,6 +58,8 @@ export interface OrchestratorOptions {
   interruptCooldownMs?: number;
   /** D-13 safety valve: when over-budget, dispatch only `interrupt`-priority directives (M4-4). */
   budget?: BudgetTracker;
+  /** B3.5: the avatar (GodBody) — when present the dispatch also offers the `intervene` tool. */
+  body?: DivineActor;
   degradeOnBreach?: boolean;
   now?: () => number;
 }
@@ -80,6 +82,25 @@ const DIRECTIVE_TOOL: LlmToolDef = {
         taskRef: { type: 'string', description: 'optionnel: l’id de la tâche' },
       },
       required: ['to', 'goal', 'reason', 'priority'],
+    },
+  },
+};
+
+/** B3.5 — offered only when the host gave the desk a body. Stage-setting through the avatar; see the doctrine. */
+const INTERVENE_TOOL: LlmToolDef = {
+  type: 'function',
+  function: {
+    name: 'intervene',
+    description: 'Intervention divine de mise en scène via l’avatar (jamais faire la tâche du villageois) : invoquer des monstres d’entraînement, changer la météo, donner des outils de départ, survoler. La tâche concernée ne pourra plus être réussie grâce à cette intervention (le critique annule un tel succès).',
+    parameters: {
+      type: 'object',
+      properties: {
+        villager: { type: 'string', description: 'le villageois pour qui la scène est préparée' },
+        action: { type: 'string', enum: ['summon-creature', 'set-weather', 'give-items', 'fly-to', 'appear-near', 'gesture'] },
+        args: { type: 'object', description: 'les arguments du skill divin (voir son manifeste)' },
+        reason: { type: 'string', description: 'pourquoi cette scène rend la tâche possible' },
+      },
+      required: ['villager', 'action', 'args', 'reason'],
     },
   },
 };
@@ -110,6 +131,7 @@ export class Orchestrator {
   private readonly lastInterruptAt = new Map<string, number>();
   /** Task ids for which a divine intervention staged the world (the critic reads this — D-12). */
   private readonly divineAssistedTasks = new Set<string>();
+  private readonly body?: DivineActor;
 
   constructor(opts: OrchestratorOptions) {
     this.state = opts.state;
@@ -124,6 +146,7 @@ export class Orchestrator {
     this.budget = opts.budget;
     this.degradeOnBreach = opts.degradeOnBreach ?? true;
     this.now = opts.now ?? Date.now;
+    this.body = opts.body;
   }
 
   /**
@@ -143,7 +166,7 @@ export class Orchestrator {
             { role: 'system', content: this.systemPrompt },
             { role: 'user', content: user },
           ],
-          tools: [DIRECTIVE_TOOL],
+          tools: this.body ? [DIRECTIVE_TOOL, INTERVENE_TOOL] : [DIRECTIVE_TOOL],
           tier: this.tier,
           caller: 'god:orchestrator',
         }),
@@ -152,6 +175,17 @@ export class Orchestrator {
 
     const out: Directive[] = [];
     for (const call of result.toolCalls) {
+      if (call.name === 'intervene' && this.body && !this.degraded()) {
+        // B3.5: stage-setting through the avatar; flags divineAssisted on the dispatched task (D-12 rail).
+        const a = call.arguments as Record<string, unknown>;
+        const villager = typeof a['villager'] === 'string' ? a['villager'] : opts.task?.assignee;
+        const action = typeof a['action'] === 'string' ? a['action'] : '';
+        if (villager && action) {
+          const args = a['args'] && typeof a['args'] === 'object' ? (a['args'] as object) : {};
+          await this.intervene({ villager, action, args, ...(opts.task ? { taskId: opts.task.id } : {}) }, this.body);
+        }
+        continue;
+      }
       if (call.name !== 'directive') continue;
       const a = call.arguments as Record<string, unknown>;
       const to = typeof a['to'] === 'string' ? a['to'] : undefined;

@@ -98,7 +98,7 @@ chat command and returns immediately — **no confirmation** that the command su
 |---|---|---|---|---|
 | `appear-near` | `villager` req | `{ok}` | `bot.chat('/tp ' + bot.username + ' ' + villager)` | body |
 | `vanish` | `x=0,y=200,z=0` | `{ok}` | `/tp <self> x y z` (parking spot default 0,200,0) | body |
-| `gesture` | `type` req | `{ok}` | `swing` → `bot.swingArm()`; `jump` → jump control 200 ms; any other type is a no-op | body |
+| `gesture` | `type` req | `{ok}` | `swing` → `bot.swingArm()`; `jump` → jump control 200 ms; `sneak` → sneak control 400 ms; `nod` → `bot.look` down then back (skipped if the bot has no `look`); any other type → `{ok:false, error:'geste inconnu: <type>'}` (B3.5) | body |
 | `fly-to` | `x,y,z` req | `{arrived}` | `await bot.creative.flyTo(new ctx.Vec3(x,y,z))` | movement |
 | `summon-creature` | `entity,x,y,z` req, `count=1` | `{summoned}` | `/summon <entity> x y z` × count | spawn |
 | `smite` | `x,y,z` req | `{ok}` | `/summon lightning_bolt x y z` | punish |
@@ -233,7 +233,7 @@ stops on the first dig error.
   [bots-and-hardening.md](bots-and-hardening.md#signals-edensrcbotssignalsts)).
 - **kill-mob** targets the first matching entity, not the nearest; **defend-self**'s chosen hostile may thus
   differ from the one `kill-mob` attacks.
-- **gesture** advertises `sneak/nod` in its summary but only `swing` and `jump` do anything.
+- ~~**gesture** only does `swing` and `jump`~~ — `sneak` and `nod` are real moves since B3.5.
 - **fly-to** needs creative mode; `god.gamemode` (`'creative'` default, `eden/src/config.ts:92`) is parsed but not
   consumed anywhere in `eden/src`, so nothing puts the avatar in creative.
 - **Divine skills report success unconditionally** — the chat command's server response is never read.

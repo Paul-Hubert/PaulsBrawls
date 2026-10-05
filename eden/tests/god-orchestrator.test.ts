@@ -21,7 +21,7 @@ function emptyState(): GodState {
   return { ledger: { completed: [], failed: [], open: [] } as TaskLedger, dossiers: new Map<string, Dossier>(), criticQueue: [], rollouts: new Map(), tasks: new Map(), directivesOpen: [] };
 }
 
-async function harness(turns: ScriptedTurn[], opts: { now?: () => number; interruptCooldownMs?: number } = {}): Promise<{
+async function harness(turns: ScriptedTurn[], opts: { now?: () => number; interruptCooldownMs?: number; body?: import('../src/god/orchestrator').DivineActor } = {}): Promise<{
   orch: Orchestrator;
   state: GodState;
   journal: MemoryJournal;
@@ -42,6 +42,7 @@ async function harness(turns: ScriptedTurn[], opts: { now?: () => number; interr
   const ctorOpts: ConstructorParameters<typeof Orchestrator>[0] = { state, journal, client, scheduler, inboxes };
   if (opts.now) ctorOpts.now = opts.now;
   if (opts.interruptCooldownMs !== undefined) ctorOpts.interruptCooldownMs = opts.interruptCooldownMs;
+  if (opts.body) ctorOpts.body = opts.body;
   const orch = new Orchestrator(ctorOpts);
   return { orch, state, journal, inboxes, llm, close: () => llm.close() };
 }
@@ -277,5 +278,33 @@ test('M4-2 (closeDirectivesForTask): a completed task closes its open directive(
     assert.equal(closed[0]!.refs.directiveId, d.id);
   } finally {
     await h.close();
+  }
+});
+
+// B3.5 — with a body, dispatch also offers `intervene`; an intervene call stages through the avatar and flags
+// the dispatched task divinely assisted (the critic's D-12 voidDivineOverreach rail then applies).
+test('B3.5: dispatch offers intervene only with a body; an intervene call runs the action and flags the task', async () => {
+  const actions: Array<{ action: string; args: object }> = [];
+  const body = { runAction: async (action: string, args: object) => { actions.push({ action, args }); return true; } };
+  const h = await harness([{ toolCalls: [
+    { name: 'intervene', arguments: { villager: 'Firmin', action: 'give-items', args: { villager: 'Firmin', items: [{ name: 'wooden_axe', count: 1 }] }, reason: 'il n’a pas de hache' } },
+    { name: 'directive', arguments: { to: 'Firmin', goal: 'couper 3 bûches', reason: 'bois', priority: 'normal' } },
+  ] }], { body });
+  try {
+    const out = await h.orch.dispatch({ task: task(), trigger: 'new-task' });
+    assert.equal(out.length, 1, 'the directive still lands');
+    assert.deepEqual(actions.map((a) => a.action), ['give-items']);
+    assert.equal(h.orch.wasDivinelyAssisted('task-1'), true);
+    const sent = h.llm.requests[0]!.body.tools.map((t: { function: { name: string } }) => t.function.name);
+    assert.deepEqual(sent, ['directive', 'intervene']);
+  } finally {
+    await h.close();
+  }
+  const bare = await harness([{ toolCalls: [{ name: 'directive', arguments: { to: 'Firmin', goal: 'g', reason: 'r', priority: 'normal' } }] }]);
+  try {
+    await bare.orch.dispatch({ task: task(), trigger: 'new-task' });
+    assert.deepEqual(bare.llm.requests[0]!.body.tools.map((t: { function: { name: string } }) => t.function.name), ['directive'], 'no body → no intervene tool');
+  } finally {
+    await bare.close();
   }
 });

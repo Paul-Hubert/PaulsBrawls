@@ -24,6 +24,13 @@ export interface GodBodyOptions {
   now?: () => number;
 }
 
+/**
+ * B3.5 — the divine skills an orchestrator intervention may run (stage-setting only: summon training mobs, set the
+ * weather, hand out starter items, fly over, appear, gesture). `smite` and `teleport-entity` act ON villagers and
+ * `vanish` ends a manifestation — none of those sets a stage, so `runAction` refuses them.
+ */
+export const INTERVENTION_ACTIONS: readonly string[] = ['summon-creature', 'set-weather', 'give-items', 'fly-to', 'appear-near', 'gesture'];
+
 /** Drives the avatar through the divine stock skills. Best-effort; the loop never depends on it. */
 export class GodBody {
   private readonly engine: SkillEngine;
@@ -54,6 +61,15 @@ export class GodBody {
   }
 
   /**
+   * Orchestrator intervention (B3.5) — the {@link DivineActor} surface: run one stage-setting divine skill. An
+   * action outside {@link INTERVENTION_ACTIONS} is refused (false, nothing runs); a down avatar is false too.
+   */
+  runAction(action: string, args: object): Promise<boolean> {
+    if (!INTERVENTION_ACTIONS.includes(action)) return Promise.resolve(false);
+    return this.runDivine(action, args);
+  }
+
+  /**
    * Deliver a verdict in person — gated on embodiedVerdicts (theatrics-never-a-dependency). Manifests
    * near the villager and gestures (nod on success, swing on failure). Journals one god.appearance with
    * ok:false when the avatar is down, so the miss is observable; never throws.
@@ -75,7 +91,8 @@ export class GodBody {
   private async runDivine(name: string, args: object): Promise<boolean> {
     try {
       const report = await this.engine.run(name, args, this.runner, {});
-      return report.outcome.ok;
+      // A divine skill that ran but reports {ok:false} (e.g. an unknown gesture) did not do its job either.
+      return report.outcome.ok && (report.outcome.value as { ok?: unknown } | undefined)?.ok !== false;
     } catch {
       // Avatar disconnected / not found / pre-execution error — theatrics fail softly (loop carries on).
       return false;

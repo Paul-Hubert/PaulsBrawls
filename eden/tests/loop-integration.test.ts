@@ -62,6 +62,8 @@ interface Wiring {
 interface WireOpts {
   withRetriever?: boolean;
   exemplars?: Array<{ name: string; code: string }>;
+  /** B3.5: a body the coordinator delivers notable verdicts through. */
+  body?: { deliverVerdict(opts: { villager: string; verdict: import('../src/types/index').Verdict; rolloutId?: string }): Promise<boolean> };
 }
 
 async function wire(villagers: string[], turns: ScriptedTurn[], wopts: WireOpts = {}): Promise<Wiring> {
@@ -97,6 +99,7 @@ async function wire(villagers: string[], turns: ScriptedTurn[], wopts: WireOpts 
     god, curriculum, orchestrator, critic, brain, library, inboxes, roster,
     ...(wopts.withRetriever ? { retriever } : {}),
     ...(wopts.exemplars ? { exemplars: wopts.exemplars } : {}),
+    ...(wopts.body ? { body: wopts.body } : {}),
   });
   return { coordinator, curriculum, orchestrator, god, library, retriever, journal, llm, close: () => llm.close() };
 }
@@ -411,5 +414,23 @@ test('★ R61 (reactive path): a reactive wake-up pre-loads retrieved skills for
     assert.match(cap, /- defend-self —/, 'the relevant skill for the trigger is pre-loaded');
   } finally {
     await llm.close();
+  }
+});
+
+test('★ B3.5: an admission is also delivered in person through the body (fire-and-forget)', async () => {
+  const delivered: Array<{ villager: string; action: string }> = [];
+  const body = { deliverVerdict: async (o: { villager: string; verdict: { libraryAction: string } }) => { delivered.push({ villager: o.villager, action: o.verdict.libraryAction }); return true; } };
+  const w = await wire(['Firmin'], [
+    { toolCalls: [{ name: 'propose_task', arguments: { goal: 'collect 3 oak logs', successCriteria: 'have 3 oak_log', check: { item: 'oak_log', count: 3 }, assignee: 'Firmin' } }] },
+    { toolCalls: [{ name: 'directive', arguments: { to: 'Firmin', goal: 'collect 3 oak logs', reason: 'r', priority: 'normal' } }] },
+    ...convergeTurns('collect-oak-logs'),
+  ], { body });
+  try {
+    const outcome = await w.coordinator.runOnce({ trigger: 'idle', villager: 'Firmin' });
+    assert.equal(outcome!.converged, true);
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(delivered, [{ villager: 'Firmin', action: 'admit' }]);
+  } finally {
+    await w.close();
   }
 });
