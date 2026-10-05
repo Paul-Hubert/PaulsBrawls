@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 
 import { FakeBot } from './fakes/fake-bot';
 import { ScriptedLlm } from './fakes/scripted-llm';
+import { holdEventLoopPerTest } from './fakes/keep-alive';
+
+// R73: several tests await promises that only unref'd timers resolve — keep the loop alive per test.
+holdEventLoopPerTest();
 
 // Deterministic under parallel load (was a wall-clock-window flake): instead of sampling a fixed
 // 90 ms window and counting ticks — which a saturated event loop can starve below the bar — we wait

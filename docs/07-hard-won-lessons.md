@@ -862,6 +862,21 @@ channel to act on the difference. Residual gap: if the acquire-task is itself bl
 seeds — a truly bankrupt farm), the chain still needs an external seed source (grass drops, a chest, trade);
 the dedup bounds the thrash but does not manufacture the resource.
 
+**R73 — an awaited promise that only an `unref()`'d timer can resolve lets the event loop empty: node:test
+cancels the test (and every test after it in the file), and a CLI process would simply exit mid-await.**
+Found 2026-10-05 (docs/22 phase A): 28 tests in `fakes`, `skills-engine`, `llm-scheduler` and `skills-exemplars`
+were reported *cancelled* — `cancelledByParent`, "Promise resolution is still pending but the event loop has
+already resolved" — deterministically on Node 22, even run alone. Cause: production code unrefs its timers on
+purpose (the engine's wall/stall/heartbeat/sleep timers, the scheduler's cooldown re-drain at
+`src/llm/scheduler.ts:190-191`) and FakeBot does the same (`startPathUpdates`, `activateBlock`), so a test awaiting
+only those timers leaves no ref'd handle; Node 22's runner then declares the loop finished. Node 24's runner keeps
+the loop alive, so the same files pass there — a version-dependent green is not a green. Rule: the unrefs stay
+(a real host must not be held open by a skill's timer — a live host is kept alive by its sockets); whoever awaits
+such a promise outside a live host owns a ref'd handle for the duration. Tests do this with
+`holdEventLoopPerTest()` (`tests/fakes/keep-alive.ts`): a per-test ref'd `setTimeout` bounded at 30 s, so a test
+that truly never settles is still cancelled visibly instead of hanging the run. Production exposure: any CLI that
+runs a skill or an enqueue without a bot connection (none does today) must do the same.
+
 ## Reading failures (the debugging playbook, preserved)
 
 - `act … FAILED after 0ms` → perception/availability check failed (thing absent or

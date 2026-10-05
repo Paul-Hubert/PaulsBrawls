@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { LlmScheduler, BudgetTracker, RateCappedError } from '../src/llm/scheduler';
+import { holdEventLoopPerTest } from './fakes/keep-alive';
+
+// R73: several tests await promises that only unref'd timers resolve — keep the loop alive per test.
+holdEventLoopPerTest();
 
 /** A controllable async task: resolves only when release() is called. */
 function gate(): { run: () => Promise<string>; release: (v?: string) => void; started: () => boolean } {

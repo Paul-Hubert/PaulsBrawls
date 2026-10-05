@@ -11,6 +11,10 @@ import { SkillEngine } from '../src/skills/engine';
 import { compile } from '../src/skills/instrument';
 import { STOCK_SKILLS, seedStockSkills } from '../src/skills/exemplars/index';
 import type { RunnerRef } from '../src/types/index';
+import { holdEventLoopPerTest } from './fakes/keep-alive';
+
+// R73: several tests await promises that only unref'd timers resolve — keep the loop alive per test.
+holdEventLoopPerTest();
 
 const MORTAL: RunnerRef = { name: 'Firmin', role: 'farmer', tier: 'mortal' };
 
