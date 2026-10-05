@@ -189,17 +189,18 @@ export class SkillLibrary {
     this.persist(name);
   }
 
-  /** Quarantine a version (God/admin/tripwire/boot hash-mismatch). Defaults to the live version. */
-  quarantine(name: string, reason: string, version?: number): SkillVersion | undefined {
+  /** Quarantine a version (God/admin/tripwire/boot hash-mismatch). Defaults to the live version. Journals ONE
+   *  `skill.quarantine` row, as `actor`, BEFORE the status changes (05) — an unknown skill journals nothing. */
+  quarantine(name: string, reason: string, version?: number, actor = 'engine'): SkillVersion | undefined {
     const rec = version === undefined ? (this.liveRecord(name) ?? this.newestNonArchived(name)) : this.find(name, version);
     if (!rec) return undefined;
-    rec.version.status = 'quarantined';
-    delete rec.version.probationRunsLeft;
-    this.persist(name);
-    this.journal.append('engine', 'skill.quarantine', { name, version: rec.version.version, reason }, {
+    this.journal.append(actor, 'skill.quarantine', { name, version: rec.version.version, reason }, {
       skill: name,
       skillVersion: rec.version.version,
     });
+    rec.version.status = 'quarantined';
+    delete rec.version.probationRunsLeft;
+    this.persist(name);
     return rec.version;
   }
 

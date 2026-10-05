@@ -85,7 +85,7 @@ When God is not wired (`enableGod` false, e.g. CI): `/skills`, `/verdicts` (jour
 |---|---|---|---|---|
 | `/pause` | — | admin · `system.config-warning` · `{message:"admin: pause LLM scheduling"}` | `200 {paused:true}` | `503 {error:"pause control not wired"}` |
 | `/resume` | — | admin · `system.config-warning` · `{message:"admin: resume LLM scheduling"}` | `200 {paused:false}` | `503 {error:"resume control not wired"}` |
-| `/skills/:name/quarantine` | `{ reason?: string }` (default `"admin kill switch"`) | admin · `skill.quarantine` · `{name, version:-1, reason}`, refs `{skill}` | `200 {quarantined:<name>}` | `503` not wired; `404 {error:"no skill <n>"}` (journal row already written) |
+| `/skills/:name/quarantine` | `{ reason?: string }` (default `"admin kill switch"`) | admin · `skill.quarantine` · `{name, version, reason:"admin: <reason>"}`, refs `{skill, skillVersion}` — ONE row, written by the library before it mutates (the admin passes its actor) | `200 {quarantined:<name>}` | `503` not wired; `404 {error:"no skill <n>"}` (no row) |
 | `/villagers/:name/prompt` | `{ text?: string, from?: string }` | `player:<from>` or `admin` · `inbox.delivered` · `{to, from: from｜'admin', kind:'tell'}` | `200 {delivered:<name>}` | `503` not wired; `404` if villager unknown (checked BEFORE journaling) |
 | `/scenario/start` | `{ name: string, x?: number, z?: number }` (x/z default 0) | admin · `scenario.start` · `{name, cx, cz}` | `200 {ok:true, message, botNames}` | `400 {error:"name is required"}` (not journaled); `404 {ok:false, message}` on launcher refusal; `503` not wired |
 | `/scenario/restart` | same | admin · `scenario.restart` · `{name, cx, cz}` | `200 {ok:true, message, botNames}` | same as start |
@@ -146,8 +146,9 @@ reply and shows `[villagers] <message>` in chat. `edenAdminUrl` defaults to `htt
 - `GET /journal` without `limit` returns the whole table.
 - `/status` `currentRuns`, `budgetSpend`, `budgetCap`, `budgetHistory` are hardcoded zeros/empty; `totalBots` counts
   the avatar.
-- `POST /skills/:name/quarantine` journals before knowing whether the skill exists (a 404 still leaves a row), and
-  the library journals a second `skill.quarantine`.
+- ~~`POST /skills/:name/quarantine` journals before knowing whether the skill exists, and the library journals a
+  second `skill.quarantine`~~ **Fixed (bug #17):** `onQuarantine(name, reason, actor)` → `library.quarantine(…, actor)`
+  journals one row as `admin`, before the status change; an unknown skill writes nothing.
 - `POST /villagers/:name/prompt` double-journals `inbox.delivered`; the website always sends `from:'admin'`
   (`api.js` `prompt`), so dashboard prompts are journaled as actor `player:admin`, not `admin`.
 - `POST /scenario/start` journals `scenario.start` even when the launcher then refuses (e.g. wrong scenario name),

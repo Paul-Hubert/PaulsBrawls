@@ -191,16 +191,15 @@ test('POST /pause and /resume gate LLM scheduling and journal actor:admin BEFORE
   assert.equal(acts[1], 'resumed');
 });
 
-test('POST /skills/:name/quarantine journals actor:admin BEFORE quarantining', async (t) => {
+// Bug #17: the admin used to journal its own skill.quarantine {version:-1} and the library a second one, so every
+// admin quarantine showed twice. Now the admin hands its actor to the callee, which journals ONCE before acting.
+test('POST /skills/:name/quarantine hands actor:admin to the callee and journals nothing itself', async (t) => {
   const journal = new MemoryJournal();
-  const quarantined: string[] = [];
+  const quarantined: Array<{ name: string; actor: string }> = [];
   const admin = new AdminServer({
     ...baseDeps(journal),
-    onQuarantine: (name: string) => {
-      // Assert the admin journal entry already exists when the action fires (journaled BEFORE).
-      const pre = journal.events.find((e) => e.actor === 'admin' && e.kind === 'skill.quarantine' && (e.payload as any).name === name);
-      assert.ok(pre, 'admin journaled skill.quarantine BEFORE the action ran');
-      quarantined.push(name);
+    onQuarantine: (name: string, _reason: string, actor: string) => {
+      quarantined.push({ name, actor });
       return true;
     },
   });
@@ -209,7 +208,8 @@ test('POST /skills/:name/quarantine journals actor:admin BEFORE quarantining', a
 
   const r = await post(`http://127.0.0.1:${port}/skills/mine/quarantine`, { reason: 'kill switch' });
   assert.equal(r.status, 200);
-  assert.deepEqual(quarantined, ['mine']);
+  assert.deepEqual(quarantined, [{ name: 'mine', actor: 'admin' }]);
+  assert.equal(journal.events.filter((e) => e.kind === 'skill.quarantine').length, 0, 'the admin itself appends no row');
 });
 
 test('POST /villagers/:name/prompt journals inbox.delivered BEFORE delivery, zero engine machinery', async (t) => {

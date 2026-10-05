@@ -70,7 +70,7 @@ export interface AdminServerOptions {
   /** Lift the gate. */
   onResume?: () => void;
   /** Quarantine a skill (admin kill switch); return false if no such skill. */
-  onQuarantine?: (name: string, reason: string) => boolean;
+  onQuarantine?: (name: string, reason: string, actor: string) => boolean;
   /** Inject a `tell` into a villager's inbox; return false if no such villager. */
   onPrompt?: (name: string, msg: { text: string; from?: string }) => boolean;
 
@@ -239,9 +239,9 @@ export class AdminServer {
       if (!this.o.onQuarantine) return send(res, 503, { error: 'quarantine control not wired' });
       const body = await readBody(req);
       const reason = typeof body.reason === 'string' ? body.reason : 'admin kill switch';
-      // Journal BEFORE acting (05) — the admin poke shows in the history it renders.
-      this.journal.append('admin', 'skill.quarantine', { name: quarantine, version: -1, reason }, { skill: quarantine });
-      const ok = this.o.onQuarantine(quarantine, reason);
+      // The library journals ONE skill.quarantine (actor admin, the real version) BEFORE it mutates (05); the
+      // admin used to journal its own version:-1 row too, so every quarantine showed twice (bug #17).
+      const ok = this.o.onQuarantine(quarantine, reason, 'admin');
       return ok ? send(res, 200, { quarantined: quarantine }) : send(res, 404, { error: `no skill ${quarantine}` });
     }
 

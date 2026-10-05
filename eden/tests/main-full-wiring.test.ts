@@ -149,3 +149,16 @@ test('bug #12: a second boot on the same data dir seeds NO new stock versions an
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('bug #17: an admin quarantine journals exactly ONE skill.quarantine (actor admin, the real version); an unknown skill none', async (t) => {
+  const { host } = await bootGod(t);
+  const ok = await postJson(host.adminPort, '/skills/go-to/quarantine', { reason: 'test' });
+  assert.equal(ok.status, 200);
+  const rows = (await getJson(host.adminPort, '/journal?kinds=skill.quarantine')).body.events;
+  assert.equal(rows.length, 1, 'one row per quarantine');
+  assert.equal(rows[0].actor, 'admin');
+  assert.ok(rows[0].payload.version >= 1, 'the row names the version that was quarantined');
+  const missing = await postJson(host.adminPort, '/skills/nope/quarantine', { reason: 'test' });
+  assert.equal(missing.status, 404);
+  assert.equal((await getJson(host.adminPort, '/journal?kinds=skill.quarantine')).body.events.length, 1, 'a 404 leaves no row');
+});

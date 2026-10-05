@@ -391,7 +391,7 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
     onPause: wiring ? () => wiring.scheduler.pause() : undefined,
     onResume: wiring ? () => wiring.scheduler.resume() : undefined,
     onQuarantine: wiring
-      ? (name, reason) => wiring.library.quarantine(name, `admin: ${reason}`) !== undefined
+      ? (name, reason, actor) => wiring.library.quarantine(name, `admin: ${reason}`, undefined, actor) !== undefined
       : undefined,
     onPrompt: wiring
       ? (name, msg) => {
