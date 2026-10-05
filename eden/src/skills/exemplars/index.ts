@@ -878,9 +878,18 @@ export const STOCK_SKILLS: StockSkill[] = [
 ];
 
 /** Seed all stock skills into the library at `active` (idempotent-ish: re-seeding appends versions). */
-export function seedStockSkills(library: SkillLibrary): void {
+/** Outcome of a boot seed (bug #12): which stock skills got a new version, and which were left alone because a
+ *  villager's admitted override is live (the caller logs those — the stock change is not applied over them). */
+export interface StockSeedReport {
+  seeded: string[];
+  unchanged: number;
+  overridden: string[];
+}
+
+export function seedStockSkills(library: SkillLibrary): StockSeedReport {
+  const report: StockSeedReport = { seeded: [], unchanged: 0, overridden: [] };
   for (const s of STOCK_SKILLS) {
-    library.seedStock(
+    const r = library.seedStockIfChanged(
       {
         name: s.name,
         summary: s.summary,
@@ -894,5 +903,9 @@ export function seedStockSkills(library: SkillLibrary): void {
       },
       'active',
     );
+    if (r === 'seeded') report.seeded.push(s.name);
+    else if (r === 'unchanged') report.unchanged++;
+    else report.overridden.push(s.name);
   }
+  return report;
 }

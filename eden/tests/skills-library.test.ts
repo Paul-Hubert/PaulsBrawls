@@ -170,3 +170,30 @@ test('bug #13: upsertDraft rejects names that are not a safe directory name, wri
   // Ordinary names (incl. accents, digits, - and _) stay valid.
   assert.equal(library.upsertDraft(draft({ name: 'récolter-blé_2' })).version, 1);
 });
+
+// Bug #12: stock skills were re-seeded as a NEW version on every boot (37 versions + 37 skill.draft rows each
+// time), and the fresh `active` stock version shadowed any admitted villager override of a stock name.
+test('bug #12: seedStockIfChanged appends only when the stock code/manifest changed', () => {
+  const { library, journal } = lib();
+  const stock = draft({ name: 'go-to', author: { kind: 'stock' } });
+  assert.equal(library.seedStockIfChanged(stock), 'seeded');
+  assert.equal(library.seedStockIfChanged(stock), 'unchanged');
+  assert.equal(library.seedStockIfChanged({ ...stock, summary: stock.summary }), 'unchanged');
+  assert.equal(library.versionCount('go-to'), 1);
+  assert.equal(library.seedStockIfChanged({ ...stock, code: stock.code + '\n// v2' }), 'seeded', 'changed code → a new version');
+  assert.equal(library.seedStockIfChanged({ ...stock, summary: 'nouveau résumé', code: stock.code + '\n// v2' }), 'seeded', 'changed manifest → a new version');
+  assert.equal(library.versionCount('go-to'), 3);
+  assert.equal(journal.query({ kinds: ['skill.draft'] }).length, 3);
+  assert.equal(library.activeVersion('go-to')?.version, 3);
+});
+
+test('bug #12: a changed stock skill is NOT seeded over an admitted villager override', () => {
+  const { library } = lib();
+  const stock = draft({ name: 'go-to', author: { kind: 'stock' } });
+  library.seedStockIfChanged(stock);
+  const mine = library.upsertDraft(draft({ name: 'go-to', code: 'async function goTo(bot, a, c) { return { arrived: true }; }' }));
+  library.admit('go-to', mine.version, { rolloutId: 'r1', verdictId: 'v1' } as never);
+  assert.equal(library.seedStockIfChanged({ ...stock, code: stock.code + '\n// v2' }), 'overridden');
+  assert.equal(library.activeVersion('go-to')?.version, mine.version, 'the admitted override stays the live version');
+  assert.equal(library.versionCount('go-to'), 2);
+});

@@ -13,14 +13,14 @@ verified_at: 4a8081f
 **TL;DR.** `STOCK_SKILLS` (`eden/src/skills/exemplars/index.ts:843-876`) bundles **37** skills: 28
 `mortal` (movement, mining, crafting, chests, farming/bread economy, reflexes) and 9 `divine` avatar powers
 (server commands via chat). `seedStockSkills` (`:879-896`) seeds every one straight into `active` with
-author `{kind:'stock'}` on **every boot** (`eden/src/main.ts:524`). Seven mortal skills are flagged
+author `{kind:'stock'}` at boot — only when changed (bug #12, see below). Seven mortal skills are flagged
 `exemplar: true` and ride as full code in every authoring prompt. They are ordinary library skills:
 JS strings compiled by the engine, receiving only `(bot, args, ctx)`.
 
 ## How stock skills are used
 
-- **Seeding:** `library.seedStock(input, 'active')` → `upsertDraft` + status `active` (no probation, D-12).
-  Re-seeding appends a new version each boot (see [skills-library.md](skills-library.md#gotchas--known-issues)).
+- **Seeding:** `library.seedStockIfChanged(input, 'active')` → `unchanged` (same code hash + seed manifest as the newest stock version), `overridden` (a newer live non-stock version — left alone and logged), or `seedStock` → `upsertDraft` + status `active` (no probation, D-12).
+  An unchanged stock skill gets no new version (see [skills-library.md](skills-library.md#gotchas--known-issues)).
 - **Exemplars (full code in prompts):** `go-to`, `mine-block`, `find-block`, `collect-blocks`,
   `craft-item`, `use-chest`, `deposit` (`eden/src/main.ts:583`). Test pins 5–7 exemplars, all mortal, each ≤ 60
   lines (`eden/tests/skills-exemplars.test.ts:41-48`).
@@ -237,7 +237,7 @@ stops on the first dig error.
 - **fly-to** needs creative mode; `god.gamemode` (`'creative'` default, `eden/src/config.ts:92`) is parsed but not
   consumed anywhere in `eden/src`, so nothing puts the avatar in creative.
 - **Divine skills report success unconditionally** — the chat command's server response is never read.
-- **Re-seed on every boot** appends a new version of all 37 skills (see skills-library gotchas).
+- ~~**Re-seed on every boot**~~ **Fixed (bug #12):** a boot appends a version only for stock skills whose code or manifest changed (see skills-library gotchas).
 - Several skills dereference `bot.entity.position` without a null check (go-to, defend-self, flee-to-safety,
   tend-bread-farm via callees) and throw `TypeError` on a dead/disconnected body.
 

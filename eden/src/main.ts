@@ -525,9 +525,13 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   const library = new SkillLibrary({ dataDir, journal, probationRuns: config.skills.probationRuns });
   // P2a: seed the stock skills (Voyager primitives — go-to/mine-block/collect-blocks/…) into the library
   // at `active` (curated review IS their probation, D-12). Without this the library boots EMPTY:
-  // search_skills returns nothing and a villager has nothing to compose. seedStock appends a version, so
-  // a re-seed on a populated library is harmless (the active version is just re-asserted).
-  seedStockSkills(library);
+  // search_skills returns nothing and a villager has nothing to compose. Bug #12: only CHANGED stock gets a new
+  // version, and never over a villager's admitted override of a stock name.
+  const seed = seedStockSkills(library);
+  if (seed.seeded.length > 0) logger.info('skills', `stock: seeded ${seed.seeded.length} new/changed skill version(s) (${seed.unchanged} unchanged)`);
+  if (seed.overridden.length > 0) {
+    logger.warn('skills', `stock: kept the admitted override of ${seed.overridden.join(', ')} — the newer stock code was NOT seeded over it`);
+  }
   const grants = new AllGranted();
   const engine = new SkillEngine({
     library, journal, grants,

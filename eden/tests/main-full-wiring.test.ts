@@ -128,3 +128,24 @@ test('wiring: the villager subscription tools reach the live SubscriptionStore (
   const firmin = (await getJson(host.adminPort, '/villagers/Firmin')).body;
   assert.equal(firmin.subscriptions.length, 1);
 });
+
+test('bug #12: a second boot on the same data dir seeds NO new stock versions and no skill.draft rows', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eden-reseed-'));
+  const dataDir = join(dir, '.eden-data');
+  const cfg = writeConfig(dir);
+  try {
+    const first = await start(cfg, { dataDir, spawnBots: false, enableGod: true });
+    const drafts1 = first.journal.query({ kinds: ['skill.draft'] }).length;
+    const goTo1 = (await getJson(first.adminPort, '/skills/go-to')).body.versions.length;
+    await first.stop();
+    const second = await start(cfg, { dataDir, spawnBots: false, enableGod: true });
+    const drafts2 = second.journal.query({ kinds: ['skill.draft'] }).length;
+    const goTo2 = (await getJson(second.adminPort, '/skills/go-to')).body.versions.length;
+    await second.stop();
+    assert.ok(drafts1 > 0, 'the first boot seeded the stock library');
+    assert.equal(drafts2, drafts1, 'the second boot journaled no new skill.draft');
+    assert.equal(goTo2, goTo1, 'no new go-to version on the second boot');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

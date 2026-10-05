@@ -56,7 +56,7 @@ The library writes **no SQLite table of its own**. The only table in `eden.db` i
 
 | Kind | Payload (`eden/src/journal/kinds.ts:99-106`) | Actor | Emitted by |
 |---|---|---|---|
-| `skill.draft` | `{name, version, author, tier, lines}` | `villager:<name>` / `god:authoring` / `engine` (stock) | `upsertDraft` (`eden/src/skills/library.ts:119-125`) — also every stock re-seed |
+| `skill.draft` | `{name, version, author, tier, lines}` | `villager:<name>` / `god:authoring` / `engine` (stock) | `upsertDraft` (`eden/src/skills/library.ts:119-125`) — also a stock seed that changed (bug #12) |
 | `skill.admit` | `{name, version, provenance?}` | `god:critic` | `admit` (`eden/src/skills/library.ts:147-152`), `unquarantine` (no provenance, `eden/src/skills/library.ts:196-199`) |
 | `skill.quarantine` | `{name, version, reason}` | always `engine` | `quarantine` (`eden/src/skills/library.ts:178-181`) |
 | `skill.archive` | `{name, version}` | `god:critic` | `archive` (`eden/src/skills/library.ts:219`) |
@@ -271,11 +271,12 @@ quarantines on mismatch with reason `code hash mismatch at boot — file tampere
 
 ## Gotchas & known issues
 
-- **Stock skills are re-seeded on every boot.** `seedStockSkills` (`eden/src/main.ts:524`) calls `seedStock` →
-  `upsertDraft`, which always appends a new version. After N boots each stock skill has ≥ N versions on
-  disk and N `skill.draft` journal rows (actor `engine`). The comment "a re-seed … is harmless" is only
-  true for unchanged stock code; it also means a **villager's admitted override of a stock name is
-  shadowed again at the next boot** (the fresh stock version is higher-numbered and `active`).
+- ~~**Stock skills are re-seeded on every boot.**~~ **Fixed (bug #12):** `seedStockSkills` calls
+  `seedStockIfChanged` per stock skill. It returns `unchanged` (nothing written or journaled) when the newest
+  stock-authored version has the same code hash and the same seed manifest (`summary, params, returns, tags,
+  tier, exemplar` — not `description`); `overridden` when a live non-stock version is newer than that stock
+  version (the admitted override stays live; `main.ts` logs a warning naming it); else it appends via
+  `seedStock` and returns `seeded`. `seedStockSkills` returns `{seeded, unchanged, overridden}`.
 - **Overriding a stock name breaks composition until graduation.** If a villager's draft of e.g. `go-to`
   is admitted, it becomes the highest live version in `active-probation`; every `ctx.skills.run('go-to')`
   (used by `craft-item`, `use-chest`, `till-block`, …) then throws `ProbationError` until 3 clean root runs.

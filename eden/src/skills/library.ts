@@ -137,6 +137,26 @@ export class SkillLibrary {
     return rec.version;
   }
 
+  /**
+   * Bug #12 — boot-time stock seeding. Appends a version ONLY when the stock code or seed manifest differs
+   * from the newest stock-authored version, and never over an admitted override (a live non-stock version
+   * newer than that stock version) — re-seeding used to append 37 versions + 37 `skill.draft` rows per boot
+   * and re-shadow every admitted villager rewrite of a stock name.
+   */
+  seedStockIfChanged(input: DraftInput, status: 'active' | 'active-probation' = 'active'): 'seeded' | 'unchanged' | 'overridden' {
+    const records = this.skills.get(input.name)?.records ?? [];
+    const lastStock = [...records].reverse().find((r) => r.version.author.kind === 'stock');
+    if (lastStock && lastStock.version.codeHash === sha256(input.code) && sameSeed(lastStock.manifest, this.buildManifest(input))) {
+      return 'unchanged';
+    }
+    const live = this.liveRecord(input.name);
+    if (live && live.version.author.kind !== 'stock' && (!lastStock || live.version.version > lastStock.version.version)) {
+      return 'overridden';
+    }
+    this.seedStock(input, status);
+    return 'seeded';
+  }
+
   // ── D-12 status machine (only the engine + God move these) ───────────────
   /** Admit a draft → active-probation (D-12), stamping provenance. The passing direction is gated. */
   admit(name: string, version: number, provenance: Provenance): SkillVersion {
@@ -392,6 +412,13 @@ export class SkillLibrary {
       }
     }
   }
+}
+
+/** The seed-relevant manifest fields (not `description`, which the describer may rewrite after admission). */
+function sameSeed(a: SkillManifest, b: SkillManifest): boolean {
+  const pick = (m: SkillManifest): string =>
+    JSON.stringify([m.summary, m.params, m.returns, m.tags, m.tier, m.exemplar]);
+  return pick(a) === pick(b);
 }
 
 /** A skill name that cannot be used as its `library/<name>/` directory (bug #13 — path traversal). */
