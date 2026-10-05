@@ -213,7 +213,7 @@ have no block → `everyone` only. Seeded count per villager: 5 (everyone), guar
 `EdenEvent` union (`eden/src/villagers/drives.ts:7-14`).
 
 Config gate `behavior.drives` (default `false`). When it is true and the host has a bot pool, `wireGod` calls
-`wireDrives` (`eden/src/main.ts:884-893`, `:1016-1036`, B3.7): one enabled `DriveTracker` per villager, ticked by the same 30 s host clock as
+`wireDrives` (`eden/src/main.ts:884-893`, `:1016-1036`, B3.7): one enabled `DriveTracker` per villager, ticked — **only while that villager's bot is connected** (`isConnected`, review fix: offline villagers used to tire and wake) — by the same 30 s host clock as
 `tick-30s` (76 ticks ≈ 38 min to fire). A crossing wakes the villager once, on the `idle` lane, through the reactive
 wake-up with trigger `besoin: fatigue|solitude` and a French hint (rest: go home; social: `start_conversation`/`tell`).
 Restoration listens to the journal: a `chat.heard` by the villager restores `social` to 100; a successful `skill.run`

@@ -89,3 +89,15 @@ test('B3.7: wireDrives fires one wake-up per depleted drive; journal facts resto
   assert.equal(drives.snapshot('Alban')!.rest, 20, 'a go-home that had no home to go to restores nothing');
   assert.equal(drives.snapshot('Nobody'), undefined);
 });
+
+// Review fix: drives decayed and woke villagers that were not connected (Eden boots, nobody runs /villagers start
+// for ~38 min → 20 deliberations against a default snapshot, and the latches stay spent once they connect).
+test('drives neither decay nor wake while the villager is offline', () => {
+  const journal = new DrivesJournal();
+  const woke: string[] = [];
+  const online = new Set<string>(['Firmin']);
+  const drives = wireDrives({ villagers: ['Firmin', 'Alban'], journal, isConnected: (v) => online.has(v), wakeup: (kind, v) => woke.push(`${v}:${kind}`) });
+  for (let i = 0; i < 80; i++) drives.tick();
+  assert.deepEqual(woke.sort(), ['Firmin:lonely', 'Firmin:tired']);
+  assert.deepEqual(drives.snapshot('Alban'), { rest: 100, social: 100 }, 'an offline villager does not tire');
+});

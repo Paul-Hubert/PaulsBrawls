@@ -173,7 +173,7 @@ Driven by [docs/22-rework-followup-prompt.md](../22-rework-followup-prompt.md); 
 | `run_skill` has a `wait` arg | Params: `name, args, timeoutMs?`. |
 | Villagers author their own subscriptions via `subscribe` | ~~The three subscription tools were stubs in the live host (`ToolRegistry` built before the store).~~ **Fixed:** `wireGod` builds the `SubscriptionStore` first and passes it as `subscriptions`; pinned through the composition root by `tests/main-full-wiring.test.ts`. |
 | Subscriptions auto-disable on skill quarantine | `setEnabled` has no caller. |
-| Drives tick per villager | ~~`DriveTracker` never constructed; `behavior.drives` unused.~~ **Wired (B3.7):** with `behavior.drives:true` and a pool, `wireDrives` ticks one tracker per villager on the 30 s clock; journal facts (`chat.heard`, a successful `go-home`) restore them. |
+| Drives tick per villager | ~~`DriveTracker` never constructed; `behavior.drives` unused.~~ **Wired (B3.7):** with `behavior.drives:true` and a pool, `wireDrives` ticks one tracker per *connected* villager on the 30 s clock; journal facts (`chat.heard`, a successful `go-home`) restore them. |
 | R32 world-stamp → admin `wipe|migrate` | No admin route; `resolveQuarantine` is never called. |
 | Relations are journal-derived only | Stored in `bots/<name>.json` (clamped ±100); a separate unclamped `RelationsView` fold also exists. |
 | `roles.json`: a duplicate role spec is skipped | It **replaces** (`eden/src/villagers/role-defaults.ts:78-82`). |

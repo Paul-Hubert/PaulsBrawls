@@ -887,6 +887,7 @@ function wireGod(args: {
       drives = wireDrives({
         villagers: config.villagers.map((v) => v.name),
         journal,
+        isConnected: (villager) => pool.bot(villager) !== undefined,
         wakeup: (kind, villager) => {
           void wakeup({ villager, triggers: [`besoin: ${kind === 'tired' ? 'fatigue' : 'solitude'}`], hints: [DRIVE_HINT[kind]], lane: 'idle' });
         },
@@ -1019,6 +1020,8 @@ export function wireDrives(deps: {
   villagers: string[];
   journal: { subscribe(fn: (e: { kind: string; actor: string; payload: unknown }) => void): unknown };
   wakeup: (kind: DriveKind, villager: string) => void;
+  /** Only a connected villager's drives decay (review fix: offline villagers used to tire and wake). Default: all. */
+  isConnected?: (villager: string) => boolean;
 }): Drives {
   const trackers = new Map(deps.villagers.map((v) => [v, new DriveTracker({ villager: v, enabled: true, wakeup: deps.wakeup })]));
   deps.journal.subscribe((e) => {
@@ -1031,7 +1034,7 @@ export function wireDrives(deps: {
   });
   return {
     tick: () => {
-      for (const t of trackers.values()) t.tick();
+      for (const [v, t] of trackers) if (deps.isConnected?.(v) ?? true) t.tick();
     },
     snapshot: (villager) => trackers.get(villager)?.snapshot(),
   };
