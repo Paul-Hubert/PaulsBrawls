@@ -1,8 +1,10 @@
 // Trade (layer 3, social/) — typed offer objects negotiated inside a conversation, settled via the Java
 // mod (04 §Trade). Two pieces:
 //   • SettlementClient — POSTs a typed offer to {settlement.url} (default 127.0.0.1:8767/trade/execute,
-//     the mod's VillageHttpListener). `coin` resolves to `paulsbrawls:coin` so Gibber is the village
-//     currency for free. The mod re-validates + swaps inventories ATOMICALLY on the main thread — so a
+//     the mod's VillageHttpListener). The wire body is the JAVA contract `{botA, botB, aGives, bGives}`
+//     (VillageHttpListener.TradeRequest), mapped from the offer by toSettlementRequest — NOT the offer's
+//     own `from/to/give/want` names (Gson would leave the Java fields null → 400 `missing botA`).
+//     `coin` resolves to `paulsbrawls:coin` so Gibber is the village currency for free. The mod re-validates + swaps inventories ATOMICALLY on the main thread — so a
 //     non-2xx (or a network error) means NOTHING swapped (inventories untouched). Journals trade.settled
 //     on 2xx, trade.failed otherwise (the cause named — S10).
 //   • TradeService — orchestrates one trade: R33 walk-then-talk recovery (an out-of-range partner is
@@ -32,6 +34,28 @@ export interface TradeOffer {
   to: string;
   give: TradeItem[];
   want: TradeItem[];
+}
+
+/**
+ * The exact JSON body the Java listener parses (`VillageHttpListener.TradeRequest`): `botA` gives
+ * `aGives` to `botB`, who gives `bGives` back. Field names are the wire contract — renaming one makes
+ * every settlement a 400. Pinned by tests/social-trade.test.ts.
+ */
+export interface SettlementRequest {
+  botA: string;
+  botB: string;
+  aGives: TradeItem[];
+  bGives: TradeItem[];
+}
+
+/** Map a typed offer to the Java wire body: from→botA, to→botB, give→aGives, want→bGives; coin → paulsbrawls:coin. */
+export function toSettlementRequest(offer: TradeOffer): SettlementRequest {
+  return {
+    botA: offer.from,
+    botB: offer.to,
+    aGives: offer.give.map(resolveItem),
+    bGives: offer.want.map(resolveItem),
+  };
 }
 
 /** The settlement outcome — ok on a 2xx swap, else a named failure (the inventories are untouched). */
@@ -71,12 +95,7 @@ export class SettlementClient {
    * otherwise. NEVER throws into the flow — a network/HTTP error is a SettlementResult{ok:false}.
    */
   async settle(tradeId: string, offer: TradeOffer): Promise<SettlementResult> {
-    const body = {
-      from: offer.from,
-      to: offer.to,
-      give: offer.give.map(resolveItem),
-      want: offer.want.map(resolveItem),
-    };
+    const body = toSettlementRequest(offer);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {

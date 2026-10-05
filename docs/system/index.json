@@ -38,7 +38,7 @@
         "How to navigate this corpus",
         "Related"
       ],
-      "bytes": 9626
+      "bytes": 9649
     },
     {
       "id": "readme",
@@ -104,7 +104,7 @@
         "6. Eden",
         "Related"
       ],
-      "bytes": 19913
+      "bytes": 20330
     },
     {
       "id": "aigod.actions-and-trades",
@@ -821,6 +821,7 @@
       "sources": [
         "src/main/java/com/paul/brawl/VillageHttpListener.java",
         "src/main/java/com/paul/brawl/TradeMath.java",
+        "eden/tests/fakes/fake-settlement.ts",
         "src/main/java/com/paul/brawl/VillageConfig.java",
         "src/main/java/com/paul/brawl/VillageCommand.java",
         "src/main/java/com/paul/brawl/VillagersCommand.java",
@@ -849,7 +850,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 21405
+      "bytes": 21686
     },
     {
       "id": "eden.journal-and-views",
@@ -914,7 +915,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 17915
+      "bytes": 17916
     },
     {
       "id": "eden.llm-and-scheduling",
@@ -1234,6 +1235,7 @@
       "sources": [
         "eden/src/social/conversation.ts",
         "eden/src/social/trade.ts",
+        "eden/tests/fakes/fake-settlement.ts",
         "eden/src/types/social.ts",
         "eden/src/types/memory.ts",
         "eden/src/villagers/memory.ts",
@@ -1260,7 +1262,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 13394
+      "bytes": 14946
     },
     {
       "id": "eden.skills.stock",
@@ -1615,7 +1617,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 11327
+      "bytes": 11356
     },
     {
       "id": "platform.build-and-runtime",

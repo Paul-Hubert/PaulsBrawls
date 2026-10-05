@@ -70,7 +70,7 @@ constructed or not called** by the production composition root. Agents should tr
 
 | Feature | Reality in code | Where |
 |---|---|---|
-| Eden trade settlement → `:8767` | `SettlementClient` is built then discarded; `TradeService`/`Conversation` never constructed; and the JSON shapes **don't match** (Eden sends `{from,to,give,want}`, Java requires `{botA,botB,aGives,bGives}` → HTTP 400). | [eden/social-and-trade.md](eden/social-and-trade.md) |
+| Eden trade settlement → `:8767` | `SettlementClient` is built then discarded; `TradeService`/`Conversation` never constructed; the JSON shape now matches (`{botA,botB,aGives,bGives}` via `toSettlementRequest`; it used to send `{from,to,give,want}` → HTTP 400, bug #1, fixed). | [eden/social-and-trade.md](eden/social-and-trade.md) |
 | Villager social tools (`say`, `tell`, trade…) | Not in the 11-tool registry. | [eden/villager-runtime.md](eden/villager-runtime.md) |
 | Most villager events (chat, entity-spotted, night-falls, new-day, inbox…) | The live signal bus forwards only health/death/hurt; plus a 30 s tick. Half of `roles.json` is inert. | [eden/villager-runtime.md](eden/villager-runtime.md) |
 | God body delivering verdicts, divine interventions | `GodBody` instance discarded; `intervene` never called. | [eden/god.md](eden/god.md) |

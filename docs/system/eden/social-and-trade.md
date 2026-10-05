@@ -4,13 +4,13 @@ title: Eden social layer — bot conversations, typed-offer trade and settlement
 system: eden
 summary: Eden's Conversation engine (turn cap, deadline, chat mirror gate), TradeService/SettlementClient contract with the Java :8767 listener, and the relation/trade views they feed.
 tags: [eden, social, conversation, chat, mirror, earshot, relations, trade, settlement, 8767, coin, paulsbrawls:coin, gibber, TradeLedgerView, RelationsView]
-sources: [eden/src/social/conversation.ts, eden/src/social/trade.ts, eden/src/types/social.ts, eden/src/types/memory.ts, eden/src/villagers/memory.ts, eden/src/villagers/tools.ts, eden/src/views/index.ts, eden/src/journal/kinds.ts, eden/src/main.ts, eden/src/config.ts, eden/src/admin/server.ts, src/main/java/com/paul/brawl/VillageHttpListener.java, src/main/java/com/paul/brawl/VillageConfig.java, eden/tests/social-conversation.test.ts, eden/tests/social-trade.test.ts]
+sources: [eden/src/social/conversation.ts, eden/src/social/trade.ts, eden/tests/fakes/fake-settlement.ts, eden/src/types/social.ts, eden/src/types/memory.ts, eden/src/villagers/memory.ts, eden/src/villagers/tools.ts, eden/src/views/index.ts, eden/src/journal/kinds.ts, eden/src/main.ts, eden/src/config.ts, eden/src/admin/server.ts, src/main/java/com/paul/brawl/VillageHttpListener.java, src/main/java/com/paul/brawl/VillageConfig.java, eden/tests/social-conversation.test.ts, eden/tests/social-trade.test.ts]
 verified_at: 4a8081f
 ---
 
 # Eden social layer — conversations, trade, settlement
 
-**TL;DR.** `eden/src/social/` holds two engines: `Conversation` (bot↔bot alternating turns, hard cap 12 turns, 30 s per-turn deadline, game-chat mirror only when a player is in earshot and at most once per 4 s per speaker, structured leave → relation + memory) and `TradeService`/`SettlementClient` (typed offers, R33 walk-then-talk, POST to `settlement.url` default `http://127.0.0.1:8767/trade/execute`, `coin` → `paulsbrawls:coin`). Both are fully tested on fakes but **not reachable in production**: no villager tool starts a conversation or a trade, and `main.ts` constructs a `SettlementClient` only to discard it. Additionally, the JSON body `SettlementClient` sends (`from/to/give/want`) **does not match** what the Java listener parses (`botA/botB/aGives/bGives`), so a live settlement would be rejected with HTTP 400 `missing botA`.
+**TL;DR.** `eden/src/social/` holds two engines: `Conversation` (bot↔bot alternating turns, hard cap 12 turns, 30 s per-turn deadline, game-chat mirror only when a player is in earshot and at most once per 4 s per speaker, structured leave → relation + memory) and `TradeService`/`SettlementClient` (typed offers, R33 walk-then-talk, POST to `settlement.url` default `http://127.0.0.1:8767/trade/execute`, `coin` → `paulsbrawls:coin`). Both are fully tested on fakes but **not reachable in production**: no villager tool starts a conversation or a trade, and `main.ts` constructs a `SettlementClient` only to discard it. The settlement body now matches the Java listener's contract (`{botA, botB, aGives, bGives}`, mapped by `toSettlementRequest`); it used to send `from/to/give/want`, which the listener rejected with HTTP 400 `missing botA` (bug #1, fixed — see "Contract" under *The Java side it targets* below).
 
 ## Layering
 
@@ -72,24 +72,26 @@ interface Conversant {                                                        //
 
 ### Types
 ```ts
-interface TradeOffer { from: string; to: string; give: TradeItem[]; want: TradeItem[] } // :30
-interface SettlementResult { ok: boolean; reason?: string }                             // :38
-interface ReachStrategy { inRange(): boolean; walkTo(): Promise<void> }                  // :117
+interface TradeOffer { from: string; to: string; give: TradeItem[]; want: TradeItem[] } // :32
+interface SettlementRequest { botA: string; botB: string; aGives: TradeItem[]; bGives: TradeItem[] } // :44 — the Java wire body
+function toSettlementRequest(offer: TradeOffer): SettlementRequest                     // :52
+interface SettlementResult { ok: boolean; reason?: string }                             // :62
+interface ReachStrategy { inRange(): boolean; walkTo(): Promise<void> }                  // :136
 ```
 
-### `TradeService.propose(offer)` (`:149-171`)
+### `TradeService.propose(offer)` (`:168-189`)
 1. `tradeId = ulid()`.
 2. R33 walk-then-talk (only if a `reach` strategy was injected): if `!inRange()`, `await walkTo()`; if still out of range → journal `trade.proposed` then `trade.failed {reason: 'partenaire "<to>" hors de portée (impossible de l\'atteindre) — échange annulé (R33)'}` and return `{ok:false}` without contacting settlement.
 3. Journal `trade.proposed {id, from, to, give, want}` (actor `villager:<from>`, refs `{tradeId}`).
 4. `settlement.settle(tradeId, offer)`.
 
-### `SettlementClient.settle(tradeId, offer)` (`:73-108`)
+### `SettlementClient.settle(tradeId, offer)` (`:97-128`)
 | Aspect | Value |
 |---|---|
 | URL | `opts.url` = `config.settlement.url`, default `http://127.0.0.1:8767/trade/execute` (`eden/src/config.ts:127`) |
 | Method / headers | `POST`, `content-type: application/json`, no auth |
-| Body sent | `{from, to, give: TradeItem[], want: TradeItem[]}` with each `item === 'coin'` rewritten to `paulsbrawls:coin` (`resolveItem`, `:174-176`; `COIN_ITEM`, `:27`) |
-| Timeout | `10_000` ms via `AbortController` (`:66`) |
+| Body sent | `toSettlementRequest(offer)` (`:52-59`) = `{botA: from, botB: to, aGives: give, bGives: want}`, each `item === 'coin'` rewritten to `paulsbrawls:coin` (`resolveItem`, `:193-195`; `COIN_ITEM`, `:29`). The offer itself is not mutated. |
+| Timeout | `10_000` ms via `AbortController` (`:90`, `:99-100`) |
 | Retries | none |
 | 2xx | journal `trade.settled {id, from, to, give, want}` (original, un-aliased items) → `{ok:true}` |
 | non-2xx | journal `trade.failed {id, from, to, reason:"settlement HTTP <status>: <body ≤160 chars>"}` → `{ok:false, reason}` |
@@ -103,19 +105,23 @@ interface ReachStrategy { inRange(): boolean; walkTo(): Promise<void> }         
 - Validation + swap run atomically in one main-thread task: both players must be online, in the same dimension and within `maxTradeDistance` (16 blocks); lines are summed per item and each total must be held in the giver's 36 main/hotbar slots; the real stacks move (components kept) and overflow drops at the receiver's feet. Success → 200 `{"ok":true}`; failure → 400 `{"ok":false,"error":"…"}` (`:172`). Details: [java-integration.md](java-integration.md).
 - Item resolution: no namespace → `minecraft:<n>`, falling back to `paulsbrawls:<n>` (`:271-282`) — so bare `coin` would already work; Eden's explicit `paulsbrawls:coin` also resolves.
 
-> **Contract mismatch.** Eden sends `from/to/give/want`; Java reads `botA/botB/aGives/bGives`. Gson leaves the Java fields `null`, `validateShape` returns `missing botA`, and every Eden settlement would fail with `trade.failed {reason:"settlement HTTP 400: {\"ok\":false,\"error\":\"missing botA\"}"}`. The mapping that would work: `botA=from, botB=to, aGives=give, bGives=want`. Tests use a fake settlement server, so CI does not catch this (`eden/tests/social-trade.test.ts`).
+> **Contract (bug #1, fixed).** Eden used to send `from/to/give/want`; Gson left the Java fields `null`, `validateShape` returned `missing botA`, and every settlement failed with `settlement HTTP 400: {"ok":false,"error":"missing botA"}`. The client now maps `from→botA, to→botB, give→aGives, want→bGives` (`toSettlementRequest`), with no Java change. Two guards keep it pinned:
+> - `eden/tests/social-trade.test.ts` (`bug #1 (Java contract)` tests) `deepEqual`s the exact POST body against the Java field names and checks that only those four keys are sent.
+> - `FakeSettlement` (`eden/tests/fakes/fake-settlement.ts`) now ports `VillageHttpListener.validateShape`: same checks (incl. the case-insensitive `botA`/`botB` comparison), same order, same error strings (≤ 6 lines per side, count 1..512). It answers 400 `{ok:false, error}` like the mod, so every happy-path test fails if the body drifts again.
+>
+> Only the **shape** is proven in CI. Item resolution, online checks and the swap itself still need a live `:8767` smoke run (R29).
 
 ## Production wiring status
 
 | Piece | State | Evidence |
 |---|---|---|
-| `SettlementClient` | constructed with `config.settlement.url` and immediately discarded (`void new …`) | `eden/src/main.ts:577` |
+| `SettlementClient` | body now matches the Java contract, but the client is constructed with `config.settlement.url` and immediately discarded (`void new …`) | `eden/src/main.ts:577` |
 | `TradeService` | never constructed outside tests | grep: only `social/trade.ts` |
 | `Conversation` | never constructed outside tests | grep: only `social/conversation.ts` |
 | Villager social tools (`say`, `tell`, `start_conversation`, `leave_conversation`, trade) | **absent** — the registry has `search_skills, read_skill, write_skill, run_skill, report_to_god, done, remember, recall, subscribe, unsubscribe, list_subscriptions` | `eden/src/villagers/tools.ts:82-154` |
 | Admin "tell" | `POST /villagers/:name/prompt` (`eden/src/admin/server.ts:248`) delivers `{from:'villager', kind:'tell', payload:{text, from}}` to a villager inbox — not a conversation | `eden/src/main.ts:393-402` |
 
-Consequently no `conversation.*`, `chat.*` or `trade.*` events are produced by a live Eden host at this commit.
+Consequently no `conversation.*`, `chat.*` or `trade.*` events are produced by a live Eden host at this commit. Fixing the body shape (bug #1) made settlement *callable*; it is still not *called*.
 
 ## Views fed by social events (`eden/src/views/index.ts`)
 
@@ -132,18 +138,18 @@ Journal payload types: `eden/src/journal/kinds.ts:176-202` (`chat.said`, `chat.h
 
 1. Add villager tools in `eden/src/villagers/tools.ts` (e.g. `start_conversation`, `propose_trade`) — but `villagers/` may not import `social/`; the construction must happen in `main.ts` and be injected (as with `memoryFor`).
 2. In `main.ts`, keep the `SettlementClient` instance, build `Conversant`s from `VillagerMemory` + a bot-backed `sayInGame`/`playerInEarshot`, and a `ReachStrategy` that runs the `go-to` skill via `SkillEngine`.
-3. Fix the body mapping to the Java `botA/botB/aGives/bGives` contract (or change the Java side) before relying on settlement.
+3. ~~Fix the body mapping to the Java contract~~ — done (`toSettlementRequest`). Before trusting it in production, run one live `:8767` smoke trade (two online villagers, a `coin` line).
 4. Expose `views.tradeLedger` / `views.relations` through admin accessors if the website needs them.
 
 ## Gotchas & known issues
 
-- Settlement JSON field names mismatch the Java listener (always HTTP 400 `missing botA`).
+- ~~Settlement JSON field names mismatch the Java listener~~ — fixed. The body is `{botA, botB, aGives, bGives}`, pinned by tests and by a fake that runs the Java shape check. Java-side bug #2 (duplicate item lines each validated against the whole inventory) is fixed too: the listener sums lines per item before validating — see [java-integration.md](java-integration.md).
 - Social engines are dead code in production (no tools, discarded client).
 - `partner-gone` end reason is declared but never emitted.
 - A `deadline` end leaves the speaker's `speak()` promise running (not cancelled).
 - Mirror rate-limit state is per `Conversation` instance, so two concurrent conversations can each mirror the same speaker.
 - `RelationsView` (unclamped, journal-derived) and `VillagerMemory` relations (clamped ±100, JSON-persisted) can diverge; only the leaver's relation moves.
-- `trade.settled` journals the original (`coin`) items, not the resolved `paulsbrawls:coin` actually sent.
+- `trade.settled` journals the original (`coin`) items and the offer's `from/to/give/want` names, not the resolved `paulsbrawls:coin` / `botA…bGives` wire body actually sent.
 - Port 8767 is shared with `./gradlew runServer`'s dev server (R29 per comments, `eden/src/social/trade.ts:16-17`): whichever JVM binds first wins.
 
 ## Related

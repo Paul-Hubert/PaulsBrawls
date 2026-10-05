@@ -9,8 +9,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { MemoryJournal } from './fakes/memory-journal';
-import { FakeSettlement } from './fakes/fake-settlement';
-import { SettlementClient, TradeService } from '../src/social/trade';
+import { FakeSettlement, validateShape } from './fakes/fake-settlement';
+import { SettlementClient, TradeService, toSettlementRequest } from '../src/social/trade';
 
 test('M6-3 (happy path): a trade settles against the fake settlement server — proposed→settled', async () => {
   const journal = new MemoryJournal();
@@ -49,10 +49,49 @@ test('M6-3 (coin alias): `coin` resolves to paulsbrawls:coin in the settlement P
     want: [{ item: 'bread', count: 2 }],
   });
 
-  const body = server.requests[0]!.body as { give: Array<{ item: string }>; want: Array<{ item: string }> };
-  assert.equal(body.give[0]!.item, 'paulsbrawls:coin', 'coin → paulsbrawls:coin at settlement');
-  assert.equal(body.want[0]!.item, 'bread', 'a normal item is left untouched');
+  const body = server.requests[0]!.body as { aGives: Array<{ item: string }>; bGives: Array<{ item: string }> };
+  assert.equal(body.aGives[0]!.item, 'paulsbrawls:coin', 'coin → paulsbrawls:coin at settlement');
+  assert.equal(body.bGives[0]!.item, 'bread', 'a normal item is left untouched');
   await server.close();
+});
+
+// Bug #1 (docs/system/VERIFICATION-NOTES.md): Eden used to POST {from,to,give,want}, which Gson leaves as
+// null Java fields → every settlement was a 400 `missing botA`. Pin the EXACT wire body against the Java
+// field names in VillageHttpListener.TradeRequest (botA/botB/aGives/bGives; ItemSpec = {item, count}).
+test('bug #1 (Java contract): the settlement POST body is exactly {botA, botB, aGives, bGives}', async () => {
+  const journal = new MemoryJournal();
+  const server = await FakeSettlement.start();
+  const settlement = new SettlementClient({ url: server.url, journal });
+  const trade = new TradeService({ journal, settlement });
+
+  const result = await trade.propose({
+    from: 'Firmin',
+    to: 'Pilou',
+    give: [{ item: 'coin', count: 3 }, { item: 'oak_log', count: 8 }],
+    want: [{ item: 'bread', count: 2 }],
+  });
+
+  assert.equal(result.ok, true, 'the Java-shaped body passes the listener\'s shape check');
+  assert.equal(server.requests.length, 1);
+  assert.equal(server.requests[0]!.url, '/trade/execute');
+  assert.deepEqual(server.requests[0]!.body, {
+    botA: 'Firmin',
+    botB: 'Pilou',
+    aGives: [{ item: 'paulsbrawls:coin', count: 3 }, { item: 'oak_log', count: 8 }],
+    bGives: [{ item: 'bread', count: 2 }],
+  }, 'from→botA, to→botB, give→aGives, want→bGives — no other keys');
+  await server.close();
+});
+
+test('bug #1 (Java contract): toSettlementRequest maps the offer and never leaks the offer field names', () => {
+  const offer = { from: 'Firmin', to: 'Pilou', give: [{ item: 'coin', count: 1 }], want: [] };
+  const body = toSettlementRequest(offer);
+  assert.deepEqual(Object.keys(body).sort(), ['aGives', 'bGives', 'botA', 'botB']);
+  assert.deepEqual(body, { botA: 'Firmin', botB: 'Pilou', aGives: [{ item: 'paulsbrawls:coin', count: 1 }], bGives: [] });
+  assert.deepEqual(offer.give, [{ item: 'coin', count: 1 }], 'the offer itself is not mutated by the coin alias');
+  assert.equal(validateShape(body), null, 'passes the Java shape check (one-sided gifts are allowed)');
+  // The pre-fix shape is exactly what the Java listener rejected.
+  assert.equal(validateShape({ from: 'Firmin', to: 'Pilou', give: [], want: [] }), 'missing botA');
 });
 
 test('M6-3 (failed settlement): a non-2xx response → trade.failed; no trade.settled (inventories untouched)', async () => {
