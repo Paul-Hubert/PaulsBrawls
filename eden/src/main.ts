@@ -1240,6 +1240,48 @@ export function installProcessGuards(journal: JournalAppender): () => void {
   };
 }
 
+/** The slice of `process` the shutdown handlers use — injectable so a test never signals the real runner. */
+export interface SignalTarget {
+  on(signal: 'SIGINT' | 'SIGTERM', listener: () => void): unknown;
+  removeListener(signal: 'SIGINT' | 'SIGTERM', listener: () => void): unknown;
+}
+
+/**
+ * Bug #17: a real boot had no SIGINT/SIGTERM handler, so Ctrl-C (or pm2/systemd stop) killed the host with the
+ * bots still logged in, the journal unclosed and the admin port held until the OS reaped it. The first signal
+ * runs `stop()` (village loop → launcher → pool → admin → journal) once; a second signal while that is still
+ * running forces `exit(1)`, so a wedged stop can always be interrupted. Returns a detacher.
+ */
+export function installShutdownHandlers(
+  stop: () => Promise<void>,
+  target: SignalTarget = process,
+  exit: (code: number) => void = (code) => process.exit(code),
+): () => void {
+  let stopping = false;
+  const onSignal = (): void => {
+    if (stopping) {
+      logger.warn('engine', 'second shutdown signal while stopping — forcing exit');
+      exit(1);
+      return;
+    }
+    stopping = true;
+    logger.info('engine', 'shutdown signal — stopping the host (signal again to force)');
+    stop().then(
+      () => exit(0),
+      (e: unknown) => {
+        logger.error('engine', `shutdown failed: ${e instanceof Error ? e.message : String(e)}`);
+        exit(1);
+      },
+    );
+  };
+  target.on('SIGINT', onSignal);
+  target.on('SIGTERM', onSignal);
+  return (): void => {
+    target.removeListener('SIGINT', onSignal);
+    target.removeListener('SIGTERM', onSignal);
+  };
+}
+
 // Run directly: `tsx src/main.ts [path/to/eden.json]`.
 const invokedDirectly =
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
@@ -1247,7 +1289,9 @@ if (invokedDirectly) {
   const configPath = process.argv[2] ?? 'eden.json';
   // A real boot connects the bots AND installs the host crash guards (Blocker Z); CI/tests call
   // start() directly with both defaults false, so no global process handler leaks into the runner.
-  start(configPath, { spawnBots: true, installProcessGuards: true }).catch((err: unknown) => {
+  start(configPath, { spawnBots: true, installProcessGuards: true }).then((host) => {
+    installShutdownHandlers(() => host.stop());
+  }).catch((err: unknown) => {
     logger.error('engine', `boot FAILED: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
     process.exitCode = 1;
   });

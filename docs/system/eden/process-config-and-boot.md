@@ -98,8 +98,10 @@ pathfinder goal) would otherwise kill the whole host.
 
 Order: remove process guards → `villageLoop.stop()` → clear 30 s reactivity tick → `reactivity.detach()` →
 `await launcher.stop()` → `pool.stop()` → `lag.stop()` → `await admin.stop()` (terminates WS clients) →
-`journal.close()`. There is no SIGINT/SIGTERM handler in `main.ts`; a killed process relies on crash-only
-persistence (synchronous journal writes, JSON files written on change).
+`journal.close()`. A direct boot (`tsx src/main.ts`) installs `installShutdownHandlers` (bug #17): the first
+SIGINT/SIGTERM runs `host.stop()` once and then exits 0 (1 if stop throws); a second signal while stopping forces
+`exit(1)`. `start()` itself installs nothing (tests never get a signal handler). A SIGKILL still relies on
+crash-only persistence (synchronous journal writes, JSON files written on change).
 
 ## `VillageLoop` — the production pump (`eden/src/main.ts:1061-1136`)
 
