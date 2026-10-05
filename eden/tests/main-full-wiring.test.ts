@@ -174,3 +174,38 @@ test('bug #17: a refused /scenario/start 404s WITHOUT journaling scenario.start'
   assert.match(r.body.message, /no village configured/);
   assert.equal((await getJson(host.adminPort, '/journal?kinds=scenario.start,scenario.restart')).body.events.length, 0);
 });
+
+// Bug #16: /villagers restart deleted bots/<n>.json, but the live VillagerMemory still held the old life in RAM and
+// re-wrote the file on its next write; self-authored subscriptions survived too. Driven through start() with a real
+// (never-connecting) pool so the launcher's restart path is the production one.
+test('bug #16: /scenario/restart forgets live memory and self-authored subscriptions (role defaults stay)', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'eden-restart-'));
+  const cfg = join(dir, 'eden.json');
+  writeFileSync(cfg, JSON.stringify({
+    minecraft: { host: '127.0.0.1', port: 1, version: '1.21.1' }, // nothing listens: the pool never connects
+    villagers: [{ name: 'Firmin', role: 'farmer' }],
+    god: { name: 'Dieu' },
+    admin: { port: 0 },
+  }));
+  const host = await start(cfg, { dataDir: join(dir, '.eden-data'), spawnBots: true, serveWeb: false });
+  t.after(async () => {
+    await host.stop();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.ok(host.tools);
+  await host.tools.dispatch(call('remember', { text: 'le puits est au nord' }), FIRMIN);
+  await host.tools.dispatch(call('subscribe', { on: 'hurt', handler: { kind: 'deliberate', hint: 'fuis' } }), FIRMIN);
+  const subsBefore = (await getJson(host.adminPort, '/villagers/Firmin')).body.subscriptions.length;
+
+  const r = await postJson(host.adminPort, '/scenario/restart', { name: 'whatever', x: 0, z: 0 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+
+  const recalled = await host.tools.dispatch(call('recall', { query: 'puits' }), FIRMIN);
+  assert.doesNotMatch(recalled.content, /puits/, 'the live memory forgot the old life');
+  const subsAfter = (await getJson(host.adminPort, '/villagers/Firmin')).body.subscriptions.length;
+  assert.equal(subsAfter, subsBefore - 1, 'the self-authored subscription is gone; role defaults remain');
+  // The next memory write starts a fresh file instead of resurrecting the old one.
+  await host.tools.dispatch(call('remember', { text: 'nouvelle vie' }), FIRMIN);
+  const after = await host.tools.dispatch(call('recall', { query: 'puits vie' }), FIRMIN);
+  assert.doesNotMatch(after.content, /puits/);
+});

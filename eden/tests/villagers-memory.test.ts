@@ -321,3 +321,31 @@ test('M6-1 (summarizer): an empty eviction batch returns null without an LLM cal
     await llm.close();
   }
 });
+
+test('bug #16: reset() forgets the live life, and a summary already in flight does not write it back', async () => {
+  const journal = new MemoryJournal();
+  const dir = tmp();
+  const llm = await ScriptedLlm.start([
+    { content: JSON.stringify({ summary: 'ancienne vie', lessons: ['ancienne leçon'] }), finishReason: 'stop' },
+  ]);
+  const client = new LlmClient({
+    providers: new ProviderRegistry({
+      strong: { baseUrl: llm.url, model: 'scripted', inputTokenBudget: 48000 },
+      fast: { baseUrl: llm.url, model: 'scripted', inputTokenBudget: 16000 },
+    }),
+    journal,
+  });
+  const mem = new VillagerMemory({
+    villager: 'Firmin', dataDir: dir, journal, worldId: 'w1',
+    windowMax: 4, evictBatch: 2, archiveMax: 2000, summarizer: new MemorySummarizer(client),
+  });
+  for (let i = 0; i < 5; i++) mem.remember({ kind: 'event', text: `action ${i}` });
+  mem.moveRelation('Alban', 10, 'ami');
+  mem.reset(); // the summarization scheduled by the eviction is still in flight
+  await mem.flushSummary();
+  assert.deepEqual(mem.all(), []);
+  assert.deepEqual(mem.archive(), []);
+  assert.deepEqual(mem.relations(), []);
+  assert.equal(mem.lifeSummary(), '', 'the in-flight summary of the old life was dropped');
+  await llm.close();
+});

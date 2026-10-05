@@ -109,6 +109,8 @@ export class VillagerMemory implements MemoryWriter {
   private quarantine: PersistedMemory | null = null;
   // Pending summarization work — flushSummary() awaits it (off the hot path).
   private pendingSummary: Promise<void> = Promise.resolve();
+  // Bumped by reset(): a summarization that started before a reset must not write the old life back.
+  private generation = 0;
 
   constructor(opts: VillagerMemoryOptions) {
     this.villager = opts.villager;
@@ -243,6 +245,20 @@ export class VillagerMemory implements MemoryWriter {
     this.persist(); // re-stamp with the current world id + the resolved state
   }
 
+  /**
+   * Bug #16 — forget everything (the in-game `/villagers restart`). The launcher deletes `bots/<name>.json`, but
+   * this live instance held the old window/archive/relations in RAM and re-wrote them on the next memory write.
+   * Clears the RAM state and any R32 quarantine; does not write (the next remember() persists a fresh file).
+   */
+  reset(): void {
+    this.generation++;
+    this.window = [];
+    this.archiveStore = [];
+    this.relationMap = new Map();
+    this.summary = '';
+    this.quarantine = null;
+  }
+
   // ── summarization (off the hot path; flushSummary awaits the pending work) ───────────────────────
   /** Await any in-flight eviction summarization (tests + graceful shutdown). */
   async flushSummary(): Promise<void> {
@@ -269,10 +285,12 @@ export class VillagerMemory implements MemoryWriter {
   private scheduleSummary(evicted: MemoryEntry[]): void {
     if (!this.summarizer) return;
     const prev = this.summary;
+    const gen = this.generation;
     this.pendingSummary = this.pendingSummary
       .then(async () => {
         const result = await this.summarizer!.summarize(this.villager, prev, evicted);
         if (!result) return; // a bad reply degrades silently (best-effort, like describe.ts)
+        if (gen !== this.generation) return; // reset() ran meanwhile — this summary belongs to the old life
         this.summary = result.summary || prev;
         // Apply importance bumps + tag enrichment to the just-evicted (archived) entries by index.
         for (const [key, bump] of Object.entries(result.importanceBumps ?? {})) {

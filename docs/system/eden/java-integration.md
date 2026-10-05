@@ -248,7 +248,7 @@ Eden's side (`eden/src/admin/server.ts:268-291`, `eden/src/village-launch.ts`):
 | Route | Eden behaviour | Status / body |
 |---|---|---|
 | `POST /scenario/start` | journal `scenario.start`, `VillageLauncher.start` — **does not load a scenario file**; if Eden booted a named scenario, `name` must equal it (a direct-`villagers` boot accepts any name), otherwise `booted scenario is "<x>", not "<name>" — runtime scenario switching needs a reboot`; starts the boot pool; idempotent (`village already running`) | 200 / 404 `{ok,message,botNames?}`; 400 `{error:"name is required"}`; 503 if not wired |
-| `POST /scenario/restart` | journal `scenario.restart`, stop village loop + pool, delete `<dataDir>/bots/<villager>.json` for each villager, start again with `/clear` | same |
+| `POST /scenario/restart` | journal `scenario.restart`, stop village loop + pool, delete `<dataDir>/bots/<villager>.json` and reset the live memory + self-authored subscriptions for each villager, start again with `/clear` | same |
 | `POST /scenario/stop` | stop village loop + pool | 200 / 500 `{ok,message}` |
 
 After a (re)start, each villager bot, ~1500 ms after spawning, **itself** chats

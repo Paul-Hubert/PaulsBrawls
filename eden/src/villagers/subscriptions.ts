@@ -103,6 +103,14 @@ export class SubscriptionStore {
     return true;
   }
 
+  /** Bug #16 — the restart wipe: remove every subscription the villager authored itself (`source:'self'`),
+   *  keeping the role defaults (config data, not the villager's history). Journals each removal. */
+  removeSelfAuthored(villager: string): number {
+    const mine = this.list(villager).filter((s) => s.source === 'self');
+    for (const s of mine) this.remove(s.id);
+    return mine.length;
+  }
+
   /** Enable/disable without removing — the quarantine auto-disable path (04) + admin toggles. */
   setEnabled(id: string, enabled: boolean): void {
     const sub = this.byId.get(id);

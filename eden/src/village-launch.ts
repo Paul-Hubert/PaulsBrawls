@@ -50,6 +50,9 @@ export interface VillageLauncherDeps {
   scenarioName: string | undefined;
   dataDir: string;
   journal: JournalAppender;
+  /** Bug #16 — forget a villager's live state on restart (main.ts: memory reset + self-authored subscriptions).
+   *  Deleting `bots/<name>.json` alone was undone by the live memory re-writing it. */
+  resetVillager?: (name: string) => void;
   /**
    * Delay (ms) before firing setup commands after a bot spawns. Default 1500 ms — gives the Java
    * op-on-join handler time to op the bot before it runs /spreadplayers and /give. Tests set 0.
@@ -99,6 +102,7 @@ export class VillageLauncher {
     if (this.running) this.deps.pool!.stop();
     for (const v of this.deps.villagers) {
       rmSync(join(this.deps.dataDir, 'bots', `${v.name}.json`), { force: true });
+      this.deps.resetVillager?.(v.name);
     }
     this.arm(cx, cz, true);
     this.running = true;

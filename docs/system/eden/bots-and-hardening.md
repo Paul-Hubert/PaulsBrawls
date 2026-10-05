@@ -94,7 +94,7 @@ checkTimeoutInterval: 90_000, plugins: { pathfinder } })` (`eden/src/bots/pool.t
 | death | journal `world.death {name, cause?}` from the packet's `message` (string, or JSON of an object) — R27 authoritative cause | `eden/src/bots/pool.ts:229-238, 333-339` |
 | reconnect | backoff `[1000, 2000, 5000, 10000, 30000]` ms indexed by attempts (clamped to 30 s), **no attempt limit**, timer `unref`'d, reset to 0 on spawn | `eden/src/bots/pool.ts:25, 241-251` |
 | vitals | every `vitalsIntervalMs`, for each **connected** bot journal `vitals {name, health (?? 0), food (?? 0), position [rounded x,y,z] or [0,0,0], held (heldItem.name ?? null), currentRun}` | `eden/src/bots/pool.ts:254-274` |
-| `stop()` | `stopping=true`; clear vitals; cancel reconnect timers; `bot.quit('pool shutdown')` (best-effort); all records disconnected | `eden/src/bots/pool.ts:277-293` |
+| `stop()` | `stopping=true`; bump the login epoch (R74); clear vitals; cancel reconnect timers; `bot.quit('pool shutdown')` (best-effort); all records disconnected | `eden/src/bots/pool.ts:277-293` |
 
 Reason formatting (`formatEndReason`/`reasonText`, `eden/src/bots/pool.ts:302-330`): `end` → text or `'end'`; `kicked` →
 `'kicked: <text>'`. Text extraction handles strings, JSON strings, and chat components (`text`, `value`,

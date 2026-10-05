@@ -273,7 +273,7 @@ throws on missing file / bad JSON; unknown keys are ignored silently. `applyScen
 |---|---|
 | `start(name, cx, cz)` | Guard: no pool → `{ok:false, 'no village configured — set "scenario" (or villagers) in eden.json and reboot'}`; booted scenario ≠ `name` → `{ok:false, 'booted scenario is "<s>", not "<name>" — runtime scenario switching needs a reboot'}`. Already running → `{ok:true,'village already running'}`. Else arm `{cx,cz,clear:false}`, `void pool.start()`, return `{ok:true, 'village started (N villager(s))', botNames}`. |
 | `stop()` | No pool or not running → `{ok:true,'no village running'}`; else `pool.stop()`, disarm, `{ok:true,'village stopped'}`. |
-| `restart(name, cx, cz)` | Guard as start; stop pool if running; `rmSync(<dataDir>/bots/<v>.json)` for every villager; arm `{cx,cz,clear:true}`; `void pool.start()`; `'village restarted (N villager(s))'`. |
+| `restart(name, cx, cz)` | Guard as start; stop pool if running; `rmSync(<dataDir>/bots/<v>.json)` + `resetVillager(v)` for every villager; arm `{cx,cz,clear:true}`; `void pool.start()`; `'village restarted (N villager(s))'`. |
 | `onSpawn(name, bot)` | Skip if disarmed, the avatar, unknown, or already set up this (re)start. After `spawnDelayMs` (1500 ms default) the bot chats `/spreadplayers <cx> <cz> 2 10 false <name>`, then `/clear <name>` (restart only), then `/give <name> <id> <count>` per item. Requires the bot to be op'd (Java op-on-join). |
 
 The scenario guard is skipped when `scenarioName` is undefined (inline `villagers` config): any name is accepted.
@@ -312,10 +312,13 @@ prefix `WARN ` / `ERROR `. ESLint `no-console: error` everywhere except `src/log
 ## Gotchas & known issues
 
 - Scenario personas never reach prompts: the roster persona is hardcoded (`eden/src/main.ts:579`).
-- `/villagers restart` deletes `bots/<name>.json`, but the live `VillagerMemory` objects keep their window in RAM
-  and rewrite the file on the next `persist()`; `subscriptions/<name>.json` is not touched. Memory is not reset
-  while the host runs.
-- `redactSecrets` masks `inputTokenBudget` and `apiKeyEnv` in the `system.boot` snapshot (over-broad regex).
+- ~~`/villagers restart` deletes `bots/<name>.json`, but the live `VillagerMemory` keeps its window in RAM and
+  rewrites the file~~ **Fixed (bug #16):** after deleting the file the launcher calls `resetVillager(name)`, which
+  `main.ts` wires to `VillagerMemory.reset()` (clears window, archive, relations, summary, R32 quarantine; an
+  in-flight summary of the old life is dropped) and `SubscriptionStore.removeSelfAuthored(name)` (self-authored
+  subscriptions go; role defaults and God-wired ones stay). Pinned through `start()` in
+  `tests/main-full-wiring.test.ts`.
+- ~~`redactSecrets` masks `inputTokenBudget` and `apiKeyEnv`~~ Fixed (bug #17), see above.
 - Views are only fed live; after a restart their in-memory aggregates start empty until new events arrive (the
   admin stats and `/rollouts` forget history). Use `npm run rebuild-stats` for the full fold.
 - `GodService` is constructed without a describer and its ledger is injected by a cast

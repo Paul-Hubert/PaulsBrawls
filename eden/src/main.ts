@@ -244,6 +244,14 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
     scenarioName: config.scenario,
     dataDir,
     journal,
+    ...(wiring
+      ? {
+          resetVillager: (name: string) => {
+            wiring.memories.get(name)?.reset();
+            wiring.store.removeSelfAuthored(name);
+          },
+        }
+      : {}),
   });
   launcherRef.current = launcher;
 
