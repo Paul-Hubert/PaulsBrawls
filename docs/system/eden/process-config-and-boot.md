@@ -222,6 +222,8 @@ default, not the preset.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `settlement.url` | string | `'http://127.0.0.1:8767/trade/execute'` | Java settlement listener. |
+| `settlement.reach` | number | `8` | R33: on accept the partner walks until the bots are this close. Must be > 0 and < `maxTradeDistance`, or `parseConfig` throws (B4). |
+| `settlement.maxTradeDistance` | number | `16` | Must equal the mod's `maxTradeDistance` (`village_config.properties`); Eden cannot read that file. Only used to validate `reach`. |
 | `admin.port` | number | `8770` | `0` = ephemeral (tests). |
 | `journal.vitalsIntervalSeconds` | number | `10` | Alias `vitalsIntervalSec`. Warns if `< 5`. |
 | `journal.debugPrompts` | boolean | `false` | Write `.eden-data/llm/<callId>.json` per LLM call. |

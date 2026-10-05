@@ -60,6 +60,21 @@ test('B3.8: god.combineDesks is no longer a config key — it warns and is dropp
   assert.equal('combineDesks' in config.god, false);
 });
 
+// B4: the R33 trade reach was a hard-coded 8 in main.ts; the mod's maxTradeDistance is configurable.
+test('B4: settlement.reach must be positive and strictly below settlement.maxTradeDistance', () => {
+  const ok = minimal();
+  ok['settlement'] = { reach: 10, maxTradeDistance: 24 };
+  const { config, warnings } = parseConfig(ok);
+  assert.equal(config.settlement.reach, 10);
+  assert.equal(config.settlement.maxTradeDistance, 24);
+  assert.deepEqual(warnings, []);
+  for (const bad of [{ reach: 16 }, { reach: 20, maxTradeDistance: 16 }, { reach: 0 }, { reach: -3 }, { reach: 6, maxTradeDistance: 6 }]) {
+    const raw = minimal();
+    raw['settlement'] = bad;
+    assert.throws(() => parseConfig(raw), /settlement\.reach/, JSON.stringify(bad));
+  }
+});
+
 test('adopts a known alias and warns (R22)', () => {
   const raw = minimal();
   raw['llm'] = { maxConcurrency: 5, perVillagerCooldownSec: 30 };
@@ -156,7 +171,8 @@ test('golden: a fully-defaulted validated config object', () => {
       probationRuns: 3,
       autoQuarantineAfter: 5,
     },
-    settlement: { url: 'http://127.0.0.1:8767/trade/execute' },
+    // B4: reach + maxTradeDistance are new keys (the golden grows deliberately).
+    settlement: { url: 'http://127.0.0.1:8767/trade/execute', reach: 8, maxTradeDistance: 16 },
     admin: { port: 8770 },
     journal: { vitalsIntervalSeconds: 10, debugPrompts: false, retentionDays: 7 },
   });

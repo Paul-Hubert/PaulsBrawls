@@ -645,8 +645,9 @@ function wireGod(args: {
   // Set once the reactive wake-up exists (live pool only); until then an offer still lands in the inbox.
   let wakeForTrade: ((villager: string, line: string) => void) | undefined;
   // R33 walk-then-talk: on accept, the partner walks to the proposer with the go-to library skill. The mod
-  // refuses parties farther apart than its maxTradeDistance (default 16), so aim well inside it.
-  const TRADE_REACH = 8;
+  // refuses parties farther apart than its maxTradeDistance, so aim inside it: settlement.reach (default 8) is
+  // validated < settlement.maxTradeDistance (the mod's value, default 16) by the config loader (B4).
+  const TRADE_REACH = config.settlement.reach;
   const reachFor = args.pool
     ? (offer: TradeOffer): ReachStrategy => {
         const pos = (name: string) => args.pool!.bot(name)?.entity?.position;

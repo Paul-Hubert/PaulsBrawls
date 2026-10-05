@@ -105,7 +105,7 @@ const TOKEN_HEADER = 'X-Village-Token'                                          
 ### Wiring (`eden/src/main.ts:552-593`)
 - `SettlementClient({url: config.settlement.url, journal, token: process.env.EDEN_SETTLEMENT_TOKEN})` (`:556`).
 - `isVillager` = the `config.villagers` names.
-- `reachFor` (live pool only): `inRange` = both bots' positions within `TRADE_REACH = 8` blocks (the mod refuses beyond its `maxTradeDistance`, default 16); `walkTo` = `engine.run('go-to', {x,y,z of the proposer, range: 3}, <partner, mortal>)`. Throws if the proposer is offline → the trade fails with that cause.
+- `reachFor` (live pool only): `inRange` = both bots' positions within `config.settlement.reach` blocks (default 8; validated < `settlement.maxTradeDistance`, which mirrors the mod's `maxTradeDistance`, default 16 — B4); `walkTo` = `engine.run('go-to', {x,y,z of the proposer, range: 3}, <partner, mortal>)`. Throws if the proposer is offline → the trade fails with that cause.
 - `notify`: always delivers an inbox `tell` `{text}`; an `'offer'` also wakes the partner on the `conversation` lane (`wakeForTrade`, `:708` — live pool only) with the hint "réponds à l'offre d'échange avec answer_trade"; an `'outcome'` is written to the proposer's memory as a `trade` entry instead (no LLM call).
 
 ### `TradeService` (`:151-197`)
@@ -188,7 +188,7 @@ Journal payload types: `eden/src/journal/kinds.ts:176-202` (`chat.said`, `chat.h
 - ~~`Conversation` is dead code in production~~ — wired (D-18). Trade is live.
 - ~~Pending offers are RAM-only: a host restart leaves `trade.proposed` with no close event~~ **Fixed (B4):** the offers stay RAM-only, but `TradeBook.closeOrphans()` closes each orphan at boot as `trade.failed {reason:"hôte redémarré"}`. A villager whose offer was closed this way is not told.
 - If the mod has a `settlementToken` but `EDEN_SETTLEMENT_TOKEN` is unset or different, every accepted trade fails with `settlement HTTP 401`.
-- `TRADE_REACH` (8) is a constant, not read from the mod: if the mod's `maxTradeDistance` is lowered below 8, an "in range" pair can still be refused.
+- ~~`TRADE_REACH` (8) is a constant~~ **Fixed (B4):** it is `settlement.reach`, validated against `settlement.maxTradeDistance`. That key is a hand-kept copy of the mod's `maxTradeDistance`: lowering the mod's value without lowering Eden's still lets an "in range" pair be refused.
 - `partner-gone` end reason is declared but never emitted.
 - A `deadline` end leaves the speaker's `speak()` promise running (not cancelled).
 - Mirror rate-limit state is per `Conversation` instance, so two concurrent conversations can each mirror the same speaker.

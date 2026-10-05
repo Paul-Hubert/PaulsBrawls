@@ -77,7 +77,10 @@ export interface EdenConfig {
     probationRuns: number;
     autoQuarantineAfter: number;
   };
-  settlement: { url: string };
+  /** `reach` (R33): the accepting partner walks until the two bots are this close. It must stay strictly below
+   *  `maxTradeDistance`, which mirrors the mod's `maxTradeDistance` in village_config.properties (default 16) —
+   *  Eden cannot read the mod's file, so keep the two equal by hand. */
+  settlement: { url: string; reach: number; maxTradeDistance: number };
   admin: { port: number };
   journal: { vitalsIntervalSeconds: number; debugPrompts: boolean; retentionDays: number };
 }
@@ -124,7 +127,7 @@ export const DEFAULT_CONFIG: Omit<EdenConfig, 'villagers'> = {
     probationRuns: 3,
     autoQuarantineAfter: 5,
   },
-  settlement: { url: 'http://127.0.0.1:8767/trade/execute' },
+  settlement: { url: 'http://127.0.0.1:8767/trade/execute', reach: 8, maxTradeDistance: 16 },
   admin: { port: 8770 },
   journal: {
     vitalsIntervalSeconds: 10,
@@ -320,8 +323,19 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
 
   // settlement / admin
   const set = isObj(raw['settlement']) ? raw['settlement'] : {};
-  warnUnknown('settlement', set, ['url'], warnings);
-  const settlement = { url: str(set, 'url', d.settlement.url) };
+  warnUnknown('settlement', set, ['url', 'reach', 'maxTradeDistance'], warnings);
+  const settlement = {
+    url: str(set, 'url', d.settlement.url),
+    reach: num(set, 'reach', d.settlement.reach),
+    maxTradeDistance: num(set, 'maxTradeDistance', d.settlement.maxTradeDistance),
+  };
+  // B4: an "in range" pair the mod still refuses would fail every trade after the walk.
+  if (!(settlement.reach > 0 && settlement.reach < settlement.maxTradeDistance)) {
+    throw new Error(
+      `config: settlement.reach=${settlement.reach} must be > 0 and < settlement.maxTradeDistance=${settlement.maxTradeDistance} ` +
+        "(the mod's maxTradeDistance; it refuses parties farther apart)",
+    );
+  }
 
   const adm = isObj(raw['admin']) ? raw['admin'] : {};
   warnUnknown('admin', adm, ['port'], warnings);

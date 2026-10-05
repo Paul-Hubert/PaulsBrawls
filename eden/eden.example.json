@@ -62,7 +62,9 @@
 
   // The mod's optional settlementToken is NOT set here (secrets are env-only): export EDEN_SETTLEMENT_TOKEN
   // (or put it in api-keys.env) with the same value as settlementToken in village_config.properties.
-  "settlement": { "url": "http://127.0.0.1:8767/trade/execute" },
+  // reach: on accept, the partner walks until the two bots are this close (R33). It must stay below
+  // maxTradeDistance, which must equal the mod's maxTradeDistance (village_config.properties, default 16).
+  "settlement": { "url": "http://127.0.0.1:8767/trade/execute", "reach": 8, "maxTradeDistance": 16 },
 
   "admin": { "port": 8770 },
 
