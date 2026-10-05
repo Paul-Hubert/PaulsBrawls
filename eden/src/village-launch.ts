@@ -139,6 +139,12 @@ export class VillageLauncher {
 
   // ── Private helpers ──────────────────────────────────────────────────────────
 
+  /** Why `start`/`restart` of `name` would be refused, or undefined if it would proceed. The admin asks this
+   *  BEFORE journaling, so a refused request leaves no `scenario.start` row (bug #17). */
+  refusal(name: string): string | undefined {
+    return this.guard(name)?.message;
+  }
+
   /** Reject when there's no village to launch or the requested name doesn't match the booted scenario. */
   private guard(name: string): VillageResult | undefined {
     if (!this.deps.pool) {

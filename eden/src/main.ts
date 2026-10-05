@@ -415,6 +415,7 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
       villageLoop?.stop();
       return launcher.stop();
     },
+    scenarioRefusal: (name) => launcher.refusal(name),
     onScenarioRestart: async (name, cx, cz) => {
       villageLoop?.stop();
       const r = await launcher.restart(name, cx, cz);

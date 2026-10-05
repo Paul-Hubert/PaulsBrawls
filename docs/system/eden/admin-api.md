@@ -87,7 +87,7 @@ When God is not wired (`enableGod` false, e.g. CI): `/skills`, `/verdicts` (jour
 | `/resume` | — | admin · `system.config-warning` · `{message:"admin: resume LLM scheduling"}` | `200 {paused:false}` | `503 {error:"resume control not wired"}` |
 | `/skills/:name/quarantine` | `{ reason?: string }` (default `"admin kill switch"`) | admin · `skill.quarantine` · `{name, version, reason:"admin: <reason>"}`, refs `{skill, skillVersion}` — ONE row, written by the library before it mutates (the admin passes its actor) | `200 {quarantined:<name>}` | `503` not wired; `404 {error:"no skill <n>"}` (no row) |
 | `/villagers/:name/prompt` | `{ text?: string, from?: string }` | `player:<from>` (or `admin` when `from` is absent or `'admin'`) · `inbox.delivered` · `{to, from:'villager', kind:'tell'}` — ONE row, written by the inbox before delivery (the admin passes its actor) | `200 {delivered:<name>}` | `503` not wired; `404` if villager unknown (checked BEFORE journaling) |
-| `/scenario/start` | `{ name: string, x?: number, z?: number }` (x/z default 0) | admin · `scenario.start` · `{name, cx, cz}` | `200 {ok:true, message, botNames}` | `400 {error:"name is required"}` (not journaled); `404 {ok:false, message}` on launcher refusal; `503` not wired |
+| `/scenario/start` | `{ name: string, x?: number, z?: number }` (x/z default 0) | admin · `scenario.start` · `{name, cx, cz}` | `200 {ok:true, message, botNames}` | `400 {error:"name is required"}` (not journaled); `404 {ok:false, message}` on launcher refusal — checked via `scenarioRefusal` BEFORE journaling, so no row; `503` not wired |
 | `/scenario/restart` | same | admin · `scenario.restart` · `{name, cx, cz}` | `200 {ok:true, message, botNames}` | same as start |
 | `/scenario/stop` | ignored | admin · `scenario.stop` · `{}` | `200 {ok:true, message}` | `500` if `ok:false`; `503` not wired |
 | other POST | — | — | — | `404 {error:"no route <path>"}` |
@@ -152,8 +152,9 @@ reply and shows `[villagers] <message>` in chat. `edenAdminUrl` defaults to `htt
 - ~~`POST /villagers/:name/prompt` double-journals `inbox.delivered`, and dashboard prompts (`from:'admin'`) are
   journaled as `player:admin`~~ **Fixed (bug #17):** `onPrompt(name, msg, actor)` → `inbox.deliver(m, actor)` journals
   one row; `from:'admin'` maps to actor `admin`.
-- `POST /scenario/start` journals `scenario.start` even when the launcher then refuses (e.g. wrong scenario name),
-  and reports refusals as HTTP 404.
+- ~~`POST /scenario/start` journals `scenario.start` even when the launcher then refuses~~ **Fixed (bug #17):** the
+  admin asks `scenarioRefusal(name)` (`VillageLauncher.refusal`) first and 404s a refusal without a row. Refusals are
+  still HTTP 404.
 - Subscriptions' `fired` count is always 0; skill `history` and per-version `runs` are always empty/0.
 - There is no admin route for the R32 memory-quarantine `wipe|migrate` decision that memory warnings refer to.
 

@@ -165,3 +165,12 @@ test('bug #17: an admin quarantine journals exactly ONE skill.quarantine (actor 
   assert.equal(missing.status, 404);
   assert.equal((await getJson(host.adminPort, '/journal?kinds=skill.quarantine')).body.events.length, 1, 'a 404 leaves no row');
 });
+
+test('bug #17: a refused /scenario/start 404s WITHOUT journaling scenario.start', async (t) => {
+  const { host } = await bootGod(t); // no pool (spawnBots false) → the launcher refuses every start
+  const r = await postJson(host.adminPort, '/scenario/start', { name: 'farming-hamlet', x: 0, z: 0 });
+  assert.equal(r.status, 404);
+  assert.equal(r.body.ok, false);
+  assert.match(r.body.message, /no village configured/);
+  assert.equal((await getJson(host.adminPort, '/journal?kinds=scenario.start,scenario.restart')).body.events.length, 0);
+});

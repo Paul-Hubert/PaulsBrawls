@@ -81,6 +81,8 @@ export interface AdminServerOptions {
   onScenarioStop?: () => Promise<{ ok: boolean; message: string }>;
   /** Wipe bot state then reconnect scenario bots with a fresh loadout. */
   onScenarioRestart?: (name: string, cx: number, cz: number) => Promise<{ ok: boolean; message: string; botNames?: string[] }>;
+  /** Why a start/restart of `name` would be refused (undefined = it would proceed). Checked BEFORE journaling. */
+  scenarioRefusal?: (name: string) => string | undefined;
 }
 
 /** The complete admin surface (05). Pure consumer — deleting it must break nothing. */
@@ -275,6 +277,10 @@ export class AdminServer {
     const cx = typeof body['x'] === 'number' ? body['x'] : 0;
     const cz = typeof body['z'] === 'number' ? body['z'] : 0;
     if (!name) return send(res, 400, { error: 'name is required' });
+    // Refuse BEFORE journaling (bug #17): a wrong scenario name used to leave a scenario.start row for a start
+    // that never happened.
+    const refusal = this.o.scenarioRefusal?.(name);
+    if (refusal !== undefined) return send(res, 404, { ok: false, message: refusal });
     // Journal BEFORE acting (05/S2) — the admin poke shows in the history it renders.
     if (action === 'start') {
       this.journal.append('admin', 'scenario.start', { name, cx, cz }, {});
