@@ -226,7 +226,7 @@ The curriculum hides divine skills from its coverage list (`eden/src/god/curricu
 1. Journal `god.verdict {ticketId, success, libraryAction, score, critique}` with refs `{rolloutId, taskId, skill, skillVersion, verdictId}` (actor `god:critic`).
 2. Library action on the **current status** of `name@version`:
    - `admit` + `quarantined` → `library.unquarantine` (R37 → active-probation), `admitted=true`.
-   - `admit` + `draft` → `library.admit(...,{rolloutId, verdictId})`, `admitted=true`, then optional DescriptionPass (**no `describer` is wired in `eden/src/main.ts:555`, so admission keeps the author's summary**).
+   - `admit` + `draft` → `library.admit(...,{rolloutId, verdictId})`, `admitted=true`, then the DescriptionPass (`describer: new DescriptionPass(client)` in `wireGod`, B3.4 — it rewrites `description` and may propose `summary`/`tags` from the final code; it never throws).
    - `admit` on an already active/active-probation version → no-op, `admitted=false`.
    - `quarantine` → `library.quarantine(name, critique, version)`; `archive` → `library.archive`; `keep-draft`/`none` → nothing.
 3. Deliver `{from:'god', kind:'critique', payload:{critique, success, praise}}` to the assignee's inbox and update the dossier (per manifest tag `runs/successes`; `recentVerdicts` capped at 20).

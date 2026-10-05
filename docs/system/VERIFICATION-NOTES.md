@@ -124,7 +124,7 @@ Citations are `path:line` at `4a8081f`.
 | Manifest-sanity step at write time | `write_skill` checks only the line cap and compile. |
 | Probation = N critic re-judged runs | Counts clean root runs; failures don't reset it. |
 | `autoQuarantineAfter` tripwire files critic tickets | ~~`onTripwire` is never passed, so it is inert.~~ **Wired (B3.3):** `main.ts` passes `onTripwire` → `makeTripwireHandler` (B3.3): it files a `tripwire` critic ticket, the critic judges the last failing run against a synthetic "is this skill broken?" task, and `GodService.routeTripwireVerdict` journals `god.verdict` and applies only a `quarantine` (reason `tripwire: <critique>`, actor `god:critic`) — never admit/archive. Pinned by `eden/tests/god-tripwire.test.ts`. |
-| Descriptions are LLM-generated at admission | No describer is wired (`eden/src/main.ts:555`); the author's summary stays. |
+| Descriptions are LLM-generated at admission | ~~No describer is wired.~~ **Wired (B3.4):** `GodService` gets `describer: new DescriptionPass(client)` (fast tier); a failed call falls back to a code-derived line. Pinned through `start()`. |
 | `verifyHashes` runs at boot; anchors snap `home`/`chest` hints | Neither is called. `home`/`chest` are not accepted config keys (`eden/src/config.ts:223`). |
 
 ### God

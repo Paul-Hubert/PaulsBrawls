@@ -321,7 +321,7 @@ prefix `WARN ` / `ERROR `. ESLint `no-console: error` everywhere except `src/log
 - ~~`redactSecrets` masks `inputTokenBudget` and `apiKeyEnv`~~ Fixed (bug #17), see above.
 - Views are only fed live; after a restart their in-memory aggregates start empty until new events arrive (the
   admin stats and `/rollouts` forget history). Use `npm run rebuild-stats` for the full fold.
-- `GodService` is constructed without a describer and its ledger is injected by a cast
+- `GodService` gets a `DescriptionPass` describer (B3.4); its ledger is injected by a cast
   (`(god as unknown as { ledger: Curriculum }).ledger = curriculum`, line 565).
 - D-09 recovery runs on an always-empty in-memory `GodState` at a real boot (no rehydration).
 - `eden.example.json` comment says `scenarios/<name>.json` is gitignored; it is not (four scenarios are tracked).

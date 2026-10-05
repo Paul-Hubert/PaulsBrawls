@@ -226,3 +226,23 @@ test('wiring (D-18): tell delivers to the partner inbox; say/start_conversation 
   const conv = await host.tools.dispatch(call('start_conversation', { with: 'Alban', topic: 'blé' }), FIRMIN);
   assert.match(conv.content, /pas connecté/);
 });
+
+// B3.4: GodService got no describer, so admitted skills kept the author's summary as their description. Through
+// start() (the test config's provider has no endpoint, so the pass takes its code-derived fallback).
+test('wiring (B3.4): admitting a draft runs the description pass on the final code', async (t) => {
+  const { host } = await bootGod(t);
+  assert.ok(host.tools && host.god);
+  const code = 'async function cueillir(bot, args, ctx) { return { ok: true }; }';
+  const w = await host.tools.dispatch(call('write_skill', { name: 'cueillir', summary: 'résumé de l’auteur', params: { type: 'object', properties: {} }, returns: { type: 'object', properties: {} }, code }), FIRMIN);
+  assert.ok(w.authored, w.content);
+  const before = (await getJson(host.adminPort, '/skills/cueillir')).body;
+  assert.equal(before.description, 'résumé de l’auteur', 'a draft carries the author summary');
+  await host.god.routeVerdict(
+    { ticketId: 't', success: true, critique: 'ok', libraryAction: 'admit' },
+    { rolloutId: 'r-none', draft: w.authored!, task: { id: 'task-x', goal: 'g', successCriteria: 's', context: '', maxRetries: 1 } },
+  );
+  const after = (await getJson(host.adminPort, '/skills/cueillir')).body;
+  assert.equal(after.status, 'active-probation');
+  assert.notEqual(after.description, 'résumé de l’auteur', 'the description now comes from the code');
+  assert.match(after.description, /cueillir/);
+});

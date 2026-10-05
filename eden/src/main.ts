@@ -20,6 +20,7 @@ import { SkillLibrary, AllGranted, renderSignature } from './skills/library';
 import { SkillEngine } from './skills/engine';
 import { SkillRetriever } from './skills/retrieve';
 import { STOCK_SKILLS, seedStockSkills } from './skills/exemplars/index';
+import { DescriptionPass } from './skills/describe';
 import { LlmClient, ProviderRegistry } from './llm/client';
 import { LlmScheduler, BudgetTracker } from './llm/scheduler';
 import { EmbeddingsService, localBackend } from './llm/embeddings';
@@ -672,7 +673,9 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   const builder = new ContextPackBuilder({ journal });
   const brain = new Brain({ builder, tools, scheduler, client, journal });
 
-  const god = new GodService({ journal, library, inboxes });
+  // B3.4: on admission a fast-tier DescriptionPass rewrites the manifest description from the FINAL code (02
+  // §Description-from-code); it never throws (a bad reply falls back to a code-derived line).
+  const god = new GodService({ journal, library, inboxes, describer: new DescriptionPass(client) });
   // When a scenario supplies a godPrompt, append it to every desk's base system prompt so God knows the
   // mission, what to teach, and any standing constraints — without touching the .md files (S6).
   const gp = config.god.godPrompt;

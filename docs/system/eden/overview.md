@@ -129,8 +129,7 @@ and (only with a bot pool) role-default seeding + `VillagerReactivity`.
 
 Built and unit-tested but **not constructed by the host** (grep of `src/` for their constructors finds only
 tests): `social/conversation.ts` (`Conversation`), trade services in `social/trade.ts`, `villagers/drives.ts`
-(`behavior.drives` has no effect), `bots/anchors.ts` (`AnchorService`), `skills/describe.ts` (`DescriptionPass`
-— `GodService` is built without a `describer`, `eden/src/main.ts:555`). `GodBody` and `SettlementClient` are
+(`behavior.drives` has no effect), `bots/anchors.ts` (`AnchorService`) (`DescriptionPass` is wired since B3.4). `GodBody` and `SettlementClient` are
 constructed with `void new …` and the instances dropped (`eden/src/main.ts:570`, `eden/src/main.ts:577`).
 
 ## A village day at a glance

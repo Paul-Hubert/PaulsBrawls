@@ -203,9 +203,9 @@ A villager may write a draft under a **stock skill's name**; it becomes `vN+1` o
 - Result applied via `library.applyDescription` (`eden/src/skills/library.ts:204-211`), which mutates that version's
   manifest and persists.
 
-> ⚠ In the running host `GodService` is built **without** a `describer` (`eden/src/main.ts:555`:
-> `new GodService({ journal, library, inboxes })`), so `runDescriptionPass` returns immediately
-> (`eden/src/god/god.ts:273-275`). Admitted skills keep `description === summary` (the author's own words).
+> Wired since B3.4: `wireGod` builds `new GodService({ journal, library, inboxes, describer: new DescriptionPass(client) })`,
+> so an admission rewrites `description` from the final code (fast tier). With no reachable provider the pass falls back
+> to `Skill "<name>". <first code line>`.
 
 ## Retrieval (`SkillRetriever.search`)
 
@@ -282,7 +282,7 @@ quarantines on mismatch with reason `code hash mismatch at boot — file tampere
 - **Probation never resets on failure** — a failing run neither decrements nor resets
   `probationRunsLeft` (`eden/src/skills/library.ts:160`); graduation is purely "3 clean root runs ever".
 - ~~**Tripwire is inert**~~ — wired (B3.3); a streak quarantines only if the critic says so.
-- **Description pass is not wired** (no `describer`) — `description` stays equal to the author summary.
+- ~~**Description pass is not wired**~~ — wired (B3.4).
 - **`verifyHashes` is never invoked** at boot despite docs saying it is.
 - ~~**Skill names are used unsanitized as directory names**~~ **Fixed (bug #13):** `upsertDraft` calls
   `assertSkillName` first, which throws `InvalidSkillNameError` (`invalid skill name "<n>": <reason> — use
