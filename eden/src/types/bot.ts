@@ -139,6 +139,8 @@ export interface Bot extends EmitterLike {
   /** Public chat. The chat interceptor wraps this to drop `/`-commands on mortal runs (R25). */
   chat(message: string): void;
   closeWindow(window: BotWindow): void;
+  /** Real mineflayer calls `point.floored()`: pass a real Vec3 (`ctx.Vec3` in skills, the vec3 package in host code),
+   *  never a plain {x,y,z} — the narrowed type cannot say so (types/ imports nothing). */
   blockAt(point: Vec3Like): BotBlock | null;
   /** Open the container at `block` (a chest/barrel) — used by useChest/deposit/withdraw. */
   openContainer(block: BotBlock): Promise<BotContainer>;

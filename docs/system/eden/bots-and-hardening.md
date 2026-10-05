@@ -241,7 +241,7 @@ pulses are a different mechanism (engine-side bot listeners, see [skills-engine.
 villager `ANCHOR_SETTLE_MS = 10 s` later (`:1195`) (after the launcher's `/spreadplayers` at +1.5 s), skipped if the bot reconnected
 or left meanwhile; the result lands in an in-memory map. `wireGod` gets `homeOf(name)`, and `VillagerReactivity`'s
 `scopeFor` exposes `{ home: {x,y,z} | undefined }` so a skill handler may template `$home.x/y/z` — the `everyone`
-`night-falls → go-home` reflex does (`eden/roles.json:26`). Only a live run proves the heal (it needs a real world); the
+`night-falls → go-home` reflex does (`eden/roles.json:26`). The scan passes real `Vec3`s to `bot.blockAt` (review fix: plain `{x,y,z}` throws `pos.floored is not a function` on real mineflayer, so every live heal used to fail and `$home.*` never resolved; pinned by a test bot that rejects plain objects). Only a live run proves the heal (it needs a real world); the
 templating is pinned by `eden/tests/villagers-host-events.test.ts`. A `/villagers restart` deletes the persisted
 anchors with `bots/<name>.json`, so the next spawn re-discovers them.
 

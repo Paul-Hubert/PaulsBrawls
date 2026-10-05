@@ -75,3 +75,21 @@ test('an unrecoverable anchor produces ONE loud warning, not an error loop', (t)
   // Exactly one warning per unrecoverable anchor — never a loop.
   assert.equal(warnings.length, 1, 'one warn for chest — bounded, loud, once');
 });
+
+// Review fix: real mineflayer's bot.blockAt calls pos.floored() (prismarine-world worldsync), so a plain {x,y,z}
+// throws "pos.floored is not a function" and every live heal failed. This bot rejects plain objects like the real one.
+class RealishBot extends FakeBot {
+  override blockAt(pos: Parameters<FakeBot['blockAt']>[0]) {
+    if (typeof (pos as { floored?: unknown }).floored !== 'function') throw new TypeError('pos.floored is not a function');
+    return super.blockAt(pos);
+  }
+}
+
+test('heal passes real Vec3s to bot.blockAt (as mineflayer requires)', (t) => {
+  const bot = new RealishBot({ position: { x: 0, y: 64, z: 0 } });
+  bot.setBlock({ x: 0, y: 64, z: 0 }, 'grass_block');
+  bot.setBlock({ x: 3, y: 64, z: 0 }, 'chest');
+  const anchors = new AnchorService(tmp(t), { searchRadius: 8 }).heal('Firmin', bot, {});
+  assert.deepEqual(anchors.home, [0, 65, 0]);
+  assert.deepEqual(anchors.chest, [3, 64, 0]);
+});

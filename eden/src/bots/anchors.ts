@@ -3,11 +3,13 @@
 // as the nearest chest/trapped_chest/barrel. Discovered positions persist and are reused on
 // subsequent boots; an unrecoverable anchor produces exactly ONE loud warning, never an error loop.
 //
-// Layer 1: imports types + logger + node:fs only (the dependency law). Operates over the narrowed
+// Layer 1: imports types + logger + node:fs + the vec3 package only (the dependency law). Operates over the narrowed
 // Bot seam (blockAt), so it is testable on FakeBot with a hand-built world fixture.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+import { Vec3 } from 'vec3';
 
 import type { Bot, Vec3Like } from '../types/index';
 import { logger } from '../logger';
@@ -133,7 +135,7 @@ export class AnchorService {
     for (let dx = -r; dx <= r; dx++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dz = -r; dz <= r; dz++) {
-          const pos = { x: cx + dx, y: cy + dy, z: cz + dz };
+          const pos = new Vec3(cx + dx, cy + dy, cz + dz);
           const block = bot.blockAt(pos);
           if (!block || !CONTAINERS.has(block.name)) continue;
           const dist = dx * dx + dy * dy + dz * dz;
@@ -148,12 +150,13 @@ export class AnchorService {
   }
 
   private isContainer(bot: Bot, pos: Coord): boolean {
-    const block = bot.blockAt({ x: pos[0], y: pos[1], z: pos[2] });
+    const block = bot.blockAt(new Vec3(pos[0], pos[1], pos[2]));
     return block !== null && CONTAINERS.has(block.name);
   }
 
+  // Real mineflayer's blockAt calls pos.floored() — a plain {x,y,z} throws (Blocker Z, engine.ts). Always a Vec3.
   private solid(bot: Bot, pos: Vec3Like): boolean {
-    const block = bot.blockAt(pos);
+    const block = bot.blockAt(new Vec3(pos.x, pos.y, pos.z));
     return block !== null && !PASSABLE.has(block.name);
   }
 
