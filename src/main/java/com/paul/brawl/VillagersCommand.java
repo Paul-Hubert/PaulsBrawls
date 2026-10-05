@@ -132,7 +132,8 @@ public class VillagersCommand {
             .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
             .build();
 
-        sendWithRetry(req, MAX_RETRIES)
+        // Bug #16: restart wipes villager state on Eden, so it is only re-sent when the connection was refused.
+        sendWithRetry(req, MAX_RETRIES, EdenRetry.isIdempotent(action))
             .handle((resp, ex) -> {
                 if (ex != null) {
                     reportUnreachable(source, ex);
@@ -170,7 +171,7 @@ public class VillagersCommand {
             .POST(HttpRequest.BodyPublishers.noBody())
             .build();
 
-        sendWithRetry(req, MAX_RETRIES)
+        sendWithRetry(req, MAX_RETRIES, true) // stop is idempotent
             .handle((resp, ex) -> {
                 activeScenarioBots.clear();
                 if (ex != null) {
@@ -206,8 +207,11 @@ public class VillagersCommand {
      * <p>Fully async — the delay runs on a {@link CompletableFuture#delayedExecutor} thread,
      * never the server thread. The returned future completes exceptionally with the LAST
      * failure only if every attempt fails.
+     *
+     * <p>Bug #16: a non-{@code idempotent} request (restart) is re-sent only after a refused
+     * connection — a timeout or a closed socket may mean Eden is already executing it.
      */
-    private static CompletableFuture<HttpResponse<String>> sendWithRetry(HttpRequest req, int retriesLeft) {
+    private static CompletableFuture<HttpResponse<String>> sendWithRetry(HttpRequest req, int retriesLeft, boolean idempotent) {
         final int attempt = MAX_RETRIES - retriesLeft + 1; // 1-based attempt number for logging
         return HTTP.sendAsync(req, HttpResponse.BodyHandlers.ofString())
             .handle((resp, ex) -> {
@@ -218,21 +222,16 @@ public class VillagersCommand {
                     }
                     return CompletableFuture.completedFuture(resp);
                 }
-                if (retriesLeft > 0 && isTransient(ex)) {
+                if (retriesLeft > 0 && EdenRetry.shouldRetry(idempotent, rootCause(ex))) {
                     LOGGER.info("VillagersCommand: transient failure on attempt {}/{} ({}); retrying {} in {}ms",
                         attempt, MAX_RETRIES + 1, describeChain(ex), req.uri(), RETRY_DELAY_MS);
                     Executor delayed = CompletableFuture.delayedExecutor(RETRY_DELAY_MS, TimeUnit.MILLISECONDS);
-                    return CompletableFuture.supplyAsync(() -> sendWithRetry(req, retriesLeft - 1), delayed)
+                    return CompletableFuture.supplyAsync(() -> sendWithRetry(req, retriesLeft - 1, idempotent), delayed)
                         .thenCompose(f -> f);
                 }
                 return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
             })
             .thenCompose(f -> f);
-    }
-
-    /** A transient failure worth retrying: any IOException (ConnectException is a subclass). */
-    private static boolean isTransient(Throwable ex) {
-        return rootCause(ex) instanceof IOException;
     }
 
     /**

@@ -238,8 +238,10 @@ Response handling (`postScenario`, `:118-163`; `stopScenario`, `:165-193`):
   `botNames` is an array → `activeScenarioBots` is **cleared and replaced** with those names. Feedback
   `[villagers] <message>`; unparseable → `[villagers] Eden error (HTTP <code>)`.
 - stop: `activeScenarioBots.clear()` first (even on failure), feedback `[villagers] <message>`, or `[villagers] stopped` / `stopped (HTTP <code>)` when the body has no `message` / is unparseable.
-- Retry (`sendWithRetry`, `:210-231`): up to `MAX_RETRIES = 3` extra attempts, `RETRY_DELAY_MS = 750`,
-  on any `IOException` root cause (includes `ConnectException` and `HttpTimeoutException`). After
+- Retry (`sendWithRetry`): up to `MAX_RETRIES = 3` extra attempts, `RETRY_DELAY_MS = 750`, when
+  `EdenRetry.shouldRetry(idempotent, rootCause)` allows it (bug #16, `EdenRetryTest`): `start` and `stop` retry any
+  `IOException` root cause (incl. `ConnectException`, `HttpTimeoutException`); `restart` — not idempotent, it wipes bot
+  state — retries only a `ConnectException` (the request never arrived). After
   exhaustion: `ConnectException` → `[villagers] Eden n'est pas démarré (ou démarre encore) sur <url>.`;
   other → `[villagers] Eden redémarre — réessaie dans un instant.` (`:243-256`).
 
@@ -294,8 +296,8 @@ dedicated server (the entrypoint does not run on an integrated server).
 - `botA`/`botB` naming the same player is rejected both case-insensitively and by comparing the resolved
   player entities, whatever `PlayerManager.getPlayer(String)`'s case sensitivity.
 - `/village status|pause|resume` only speak to the deprecated v1 process.
-- `/villagers` retries on `HttpTimeoutException` too, so a slow `restart` (non-idempotent: wipes bot state)
-  can be re-sent.
+- ~~`/villagers` retries a timed-out `restart`~~ **Fixed (bug #16):** a `restart` is re-sent only after a refused
+  connection.
 - Race: `activeScenarioBots` is filled from the HTTP response, while Eden starts the pool asynchronously
   before replying; a bot that joins before the response is processed is not op'd and its
   `/spreadplayers`/`/give` fail.

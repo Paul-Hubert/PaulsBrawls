@@ -109,7 +109,7 @@ Handler semantics (wired in `main.ts`):
 
 `VillagersCommand.postScenario` POSTs `{"name":<word>,"x":<int>,"z":<int>}` (the player's position) to
 `<edenAdminUrl>/scenario/<start|restart>`; `stopScenario` POSTs an empty body to `/scenario/stop`; 10 s timeout,
-retried (`src/main/java/com/paul/brawl/VillagersCommand.java:118-192`). It reads `ok`, `message`, `botNames` from the
+retried on I/O failures — `restart` only on a refused connection (bug #16, `EdenRetry`). It reads `ok`, `message`, `botNames` from the
 reply and shows `[villagers] <message>` in chat. `edenAdminUrl` defaults to `http://127.0.0.1:8770`
 (`VillageConfig.java:40`). Command syntax/permissions: [java-integration.md](java-integration.md).
 
