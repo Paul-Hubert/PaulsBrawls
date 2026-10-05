@@ -61,10 +61,14 @@ UUID keys are skipped on load (`:36-43`).
 ```
 player = server.getPlayerManager().getPlayer(uuid)      // online only
 if player == null: log "player is null"; return
+if !player.isAlive(): return                            // death screen: paid at AFTER_RESPAWN instead
 total = global[total_revenue]; paid = player_data[uuid] (0 if new)
 owed = GibberMath.owed(total, paid)                     // max(0, total - paid), no overflow
 if owed == 0: return
+before = inventory.count(coin)
 insert owed coins as max-size stacks with PlayerInventory.insertStack, stopping when one does not fit
+  (or when the count stops rising — creative mode voids a stack that does not fit and reports success)
+inserted = GibberMath.landed(before, inventory.count(coin), owed)   // the measured rise, capped at owed
 if inserted > 0: player_data[uuid] = GibberMath.paidAfter(paid, inserted) // credit ONLY what landed (bug #10)
 if inserted < owed: log "<name>: inventory full, <n> of <owed> coin(s) still owed"
 ```
@@ -73,6 +77,8 @@ if inserted < owed: log "<name>: inventory full, <n> of <owed> coin(s) still owe
 
 Consequences that follow directly from this code:
 
+- **Dead players** are skipped (coins would go into the corpse's emptied inventory and be lost on respawn); the
+  `ServerPlayerEvents.AFTER_RESPAWN` hook pays their backlog on respawn (review fix).
 - **Offline players** are never iterated; their gap simply grows and is paid in full at their next join
   (the `JOIN` hook, `RevenueManager.java:19-26`).
 - **New players receive the entire historical `total_revenue`** on first join (their paid value starts at 0).
@@ -143,9 +149,8 @@ makes coin usable as the village currency.
 - ~~**Full inventory** loses coins; stacks above 99; negative `/gib`; integer overflow~~ **Fixed (bug #10):** payouts
   insert max-size stacks and credit only what landed (the rest stays owed); `/gib` takes `≥ 1` and `/gib_salary`
   `≥ 0`; the total and paid markers saturate at `Integer.MAX_VALUE` (`GibberMath`, `GibberMathTest`). The inventory
-  side (`insertStack`) needs an in-game check.
-  > ⚠ Unverified: exact vanilla 1.21.1 `PlayerInventory.insertStack` semantics (the code relies on it shrinking the
-  > stack to the part that did not fit) — the Minecraft sources are not in the repo.
+  side needs an in-game check. Credit is the measured rise in the coin count, so it does not depend on `insertStack`'s
+  leftover (which lies in creative mode: a full inventory voids the stack and reports success).
 - **New-player windfall** (owner decision, unchanged): first join pays the whole historical total — intended
   "everyone is equal" semantics, but it also showers every new bot account.
 - `salary_per_day` defaults to 0 — CLAUDE.md's description implies a working default salary; out of

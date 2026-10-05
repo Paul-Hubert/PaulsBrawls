@@ -28,4 +28,13 @@ class GibberMathTest {
         assertEquals(15, GibberMath.owed(100, paid));
         assertEquals(60, GibberMath.paidAfter(60, -3));
     }
+
+    @Test
+    void landedIsMeasuredFromTheInventoryNotTheLeftover() {
+        // Review fix: creative insertStack voids what does not fit and reports success — the count does not rise.
+        assertEquals(0, GibberMath.landed(64, 64, 40), "voided by a full creative inventory: nothing landed");
+        assertEquals(25, GibberMath.landed(10, 35, 40));
+        assertEquals(40, GibberMath.landed(0, 99, 40), "never more than was offered (a pickup in between)");
+        assertEquals(0, GibberMath.landed(50, 20, 40), "never negative");
+    }
 }

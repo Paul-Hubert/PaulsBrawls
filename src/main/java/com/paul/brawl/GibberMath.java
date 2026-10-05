@@ -22,6 +22,14 @@ public final class GibberMath {
         return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, d));
     }
 
+    /**
+     * Coins that really landed: the rise in the player's coin count, capped at what was offered. Measured, not taken
+     * from {@code insertStack}'s leftover — in creative mode a full inventory "accepts" a stack by voiding it.
+     */
+    public static int landed(int coinsBefore, int coinsAfter, int offered) {
+        return Math.max(0, Math.min(offered, coinsAfter - coinsBefore));
+    }
+
     /** The paid-out value to store after {@code inserted} coins actually reached the inventory. */
     public static int paidAfter(int paid, int inserted) {
         return addToTotal(paid, Math.max(0, inserted));
