@@ -4,7 +4,11 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
 
 import com.google.gson.Gson;
@@ -34,12 +38,20 @@ import org.slf4j.LoggerFactory;
  *   "aGives": [{ "item": "carrot", "count": 32 }],
  *   "bGives": [{ "item": "oak_planks", "count": 8 }] }</pre>
  *
- * <p>Validation and the swap both run on the MAIN server thread via
- * {@link MinecraftServer#submit}; the HTTP thread blocks on the future
+ * <p>Validation and the swap both run in ONE task on the MAIN server thread
+ * via {@link MinecraftServer#submit}; the HTTP thread blocks on the future
  * (~1 tick). Items without a namespace resolve as {@code minecraft:},
  * falling back to {@code paulsbrawls:} (so plain "coin" works).
  *
- * <p>Same security posture as the Node bridge: bound to 127.0.0.1, no auth.
+ * <p>Lines naming the same item are summed per side before validation, so a
+ * party can never be asked for more than it holds ({@link TradeMath}). Only
+ * the 36 main/hotbar slots count — worn armour and the offhand are never
+ * traded. The real stacks are moved (split), so damage, enchantments and
+ * custom names survive the trade.
+ *
+ * <p>Bound to 127.0.0.1. The parties must share a dimension and stand within
+ * {@link VillageConfig#maxTradeDistance}; if {@link VillageConfig#settlementToken}
+ * is set, requests must carry it in {@value #TOKEN_HEADER}.
  */
 public final class VillageHttpListener {
 
@@ -48,6 +60,7 @@ public final class VillageHttpListener {
     private static final int MAX_BODY_BYTES = 64 * 1024;
     private static final int MAX_OFFER_LINES = 6;
     private static final int MAX_STACK_COUNT = 512;
+    static final String TOKEN_HEADER = "X-Village-Token";
 
     private static HttpServer server;
 
@@ -99,6 +112,9 @@ public final class VillageHttpListener {
         }));
         server.start();
         LOGGER.info("Village settlement listener on http://127.0.0.1:{}/trade/execute", port);
+        if (VillageConfig.INSTANCE.settlementToken.isBlank()) {
+            LOGGER.info("No settlementToken configured — any local process can settle village trades.");
+        }
     }
 
     public static synchronized void stop() {
@@ -118,6 +134,10 @@ public final class VillageHttpListener {
         try (exchange) {
             if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
                 respond(exchange, 405, TradeResult.fail("POST only"));
+                return;
+            }
+            if (!tokenMatches(exchange.getRequestHeaders().getFirst(TOKEN_HEADER))) {
+                respond(exchange, 401, TradeResult.fail("bad or missing " + TOKEN_HEADER));
                 return;
             }
             byte[] body = exchange.getRequestBody().readNBytes(MAX_BODY_BYTES + 1);
@@ -157,7 +177,7 @@ public final class VillageHttpListener {
         if (request == null) return "empty request";
         if (request.botA == null || request.botA.isBlank()) return "missing botA";
         if (request.botB == null || request.botB.isBlank()) return "missing botB";
-        if (request.botA.equals(request.botB)) return "botA and botB are the same";
+        if (request.botA.equalsIgnoreCase(request.botB)) return "botA and botB are the same";
         if (request.aGives == null || request.bGives == null) return "missing aGives/bGives";
         if (request.aGives.isEmpty() && request.bGives.isEmpty()) return "nothing to trade";
         if (request.aGives.size() > MAX_OFFER_LINES || request.bGives.size() > MAX_OFFER_LINES) {
@@ -180,6 +200,15 @@ public final class VillageHttpListener {
         return null;
     }
 
+    private static boolean tokenMatches(String presented) {
+        String expected = VillageConfig.INSTANCE.settlementToken;
+        if (expected == null || expected.isBlank()) return true;
+        if (presented == null) return false;
+        return MessageDigest.isEqual(
+            expected.getBytes(StandardCharsets.UTF_8),
+            presented.trim().getBytes(StandardCharsets.UTF_8));
+    }
+
     // -- main-thread trade logic ------------------------------------------------
 
     private static TradeResult executeTrade(MinecraftServer mc, TradeRequest request) {
@@ -187,85 +216,104 @@ public final class VillageHttpListener {
         ServerPlayerEntity b = mc.getPlayerManager().getPlayer(request.botB);
         if (a == null) return TradeResult.fail(request.botA + " is not online");
         if (b == null) return TradeResult.fail(request.botB + " is not online");
+        if (a == b) return TradeResult.fail("botA and botB are the same");
 
-        // Resolve + validate EVERYTHING before mutating anything.
-        for (ItemSpec spec : request.aGives) {
-            Item item = resolveItem(spec.item);
-            if (item == null) return TradeResult.fail("unknown item: " + spec.item);
-            if (countItems(a, item) < spec.count) {
-                return TradeResult.fail(request.botA + " does not have " + spec.count + "x " + spec.item);
-            }
+        if (a.getServerWorld() != b.getServerWorld()) {
+            return TradeResult.fail(request.botA + " and " + request.botB + " are not in the same dimension");
         }
-        for (ItemSpec spec : request.bGives) {
-            Item item = resolveItem(spec.item);
-            if (item == null) return TradeResult.fail("unknown item: " + spec.item);
-            if (countItems(b, item) < spec.count) {
-                return TradeResult.fail(request.botB + " does not have " + spec.count + "x " + spec.item);
-            }
+        double maxDistance = VillageConfig.INSTANCE.maxTradeDistance;
+        if (maxDistance > 0 && a.squaredDistanceTo(b) > maxDistance * maxDistance) {
+            return TradeResult.fail(String.format(java.util.Locale.ROOT, "%s and %s are too far apart (%.1f > %.1f blocks)",
+                request.botA, request.botB, Math.sqrt(a.squaredDistanceTo(b)), maxDistance));
         }
 
-        // Swap. We're on the main thread and validated above, so this cannot
-        // half-fail; overflow that doesn't fit the receiver's inventory drops
-        // at their feet (still theirs to pick up).
-        for (ItemSpec spec : request.aGives) {
-            Item item = resolveItem(spec.item);
-            removeItems(a, item, spec.count);
-            addItems(b, item, spec.count);
+        // Resolve + sum EVERYTHING per item before mutating anything: two lines
+        // of {coin,10} must be checked as 20 coins, not twice as 10.
+        Map<Item, Integer> aTotals = new LinkedHashMap<>();
+        Map<Item, Integer> bTotals = new LinkedHashMap<>();
+        String problem = aggregate(request.aGives, aTotals);
+        if (problem == null) problem = aggregate(request.bGives, bTotals);
+        if (problem != null) return TradeResult.fail(problem);
+
+        Item aShort = TradeMath.firstShortfall(aTotals, item -> countItems(a, item));
+        if (aShort != null) {
+            return TradeResult.fail(request.botA + " does not have " + aTotals.get(aShort) + "x " + Registries.ITEM.getId(aShort));
         }
-        for (ItemSpec spec : request.bGives) {
-            Item item = resolveItem(spec.item);
-            removeItems(b, item, spec.count);
-            addItems(a, item, spec.count);
+        Item bShort = TradeMath.firstShortfall(bTotals, item -> countItems(b, item));
+        if (bShort != null) {
+            return TradeResult.fail(request.botB + " does not have " + bTotals.get(bShort) + "x " + Registries.ITEM.getId(bShort));
         }
+
+        // Swap. Same main-thread task as the validation above, so nothing can
+        // change the inventories in between and this cannot half-fail. Both
+        // sides are extracted BEFORE either receives, so a party never hands
+        // over stacks it was just given. Overflow that doesn't fit the
+        // receiver's inventory drops at their feet (still theirs to pick up).
+        List<ItemStack> toB = extract(a, aTotals);
+        List<ItemStack> toA = extract(b, bTotals);
+        for (ItemStack stack : toB) b.getInventory().offerOrDrop(stack);
+        for (ItemStack stack : toA) a.getInventory().offerOrDrop(stack);
         a.currentScreenHandler.sendContentUpdates();
         b.currentScreenHandler.sendContentUpdates();
         return TradeResult.success();
     }
 
+    /** Resolves each line and sums it into {@code totals}; returns an error or {@code null}. */
+    private static String aggregate(List<ItemSpec> specs, Map<Item, Integer> totals) {
+        for (ItemSpec spec : specs) {
+            Item item = resolveItem(spec.item);
+            if (item == null) return "unknown item: " + spec.item;
+            TradeMath.addLine(totals, item, spec.count);
+        }
+        return null;
+    }
+
     private static Item resolveItem(String name) {
         String n = name.trim().toLowerCase();
-        Identifier id = n.contains(":") ? Identifier.tryParse(n) : Identifier.of("minecraft", n);
+        boolean namespaced = n.contains(":");
+        Identifier id = Identifier.tryParse(namespaced ? n : "minecraft:" + n);
         Item item = id != null ? Registries.ITEM.get(id) : Items.AIR;
-        if (item == Items.AIR && !n.contains(":")) {
+        if (item == Items.AIR && !namespaced) {
             // Mod items — notably the Gibber currency, paulsbrawls:coin.
-            item = Registries.ITEM.get(Identifier.of("paulsbrawls", n));
+            Identifier modId = Identifier.tryParse("paulsbrawls:" + n);
+            if (modId != null) item = Registries.ITEM.get(modId);
         }
         return item == Items.AIR ? null : item;
     }
 
+    /** Main + hotbar only (36 slots) — armour and offhand are never traded. */
     private static int countItems(ServerPlayerEntity player, Item item) {
         int total = 0;
-        var inventory = player.getInventory();
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
+        for (ItemStack stack : player.getInventory().main) {
             if (!stack.isEmpty() && stack.isOf(item)) total += stack.getCount();
         }
         return total;
     }
 
-    private static void removeItems(ServerPlayerEntity player, Item item, int count) {
-        int remaining = count;
-        var inventory = player.getInventory();
-        for (int i = 0; i < inventory.size() && remaining > 0; i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (stack.isEmpty() || !stack.isOf(item)) continue;
-            int take = Math.min(remaining, stack.getCount());
-            stack.decrement(take);
-            remaining -= take;
-        }
-    }
-
-    private static void addItems(ServerPlayerEntity player, Item item, int count) {
-        int remaining = count;
-        int maxPerStack = Math.max(1, item.getDefaultStack().getMaxCount());
-        while (remaining > 0) {
-            int n = Math.min(remaining, maxPerStack);
-            ItemStack stack = new ItemStack(item, n);
-            if (!player.getInventory().insertStack(stack) && !stack.isEmpty()) {
-                player.dropItem(stack, false);
+    /**
+     * Splits exactly the validated totals out of the player's main inventory,
+     * keeping each stack's components (damage, enchantments, custom name).
+     */
+    private static List<ItemStack> extract(ServerPlayerEntity player, Map<Item, Integer> totals) {
+        List<ItemStack> extracted = new ArrayList<>();
+        var main = player.getInventory().main;
+        for (var entry : totals.entrySet()) {
+            int[] available = new int[main.size()];
+            for (int i = 0; i < available.length; i++) {
+                ItemStack stack = main.get(i);
+                available[i] = !stack.isEmpty() && stack.isOf(entry.getKey()) ? stack.getCount() : 0;
             }
-            remaining -= n;
+            int[] takes = TradeMath.planTakes(available, entry.getValue());
+            if (takes == null) {
+                // Unreachable: validated against the same slots in this same task.
+                throw new IllegalStateException("inventory of " + player.getName().getString() + " changed mid-settlement");
+            }
+            for (int i = 0; i < takes.length; i++) {
+                if (takes[i] > 0) extracted.add(main.get(i).split(takes[i]));
+            }
         }
+        player.getInventory().markDirty();
+        return extracted;
     }
 
     private static void respond(HttpExchange exchange, int status, TradeResult result) throws IOException {

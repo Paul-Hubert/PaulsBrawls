@@ -52,7 +52,7 @@ runtime order.
 | c | `ChatBotActions.register()` | `/block <x> <y> <z>` (perm 2, places stone), `/construction` (perm 2, sets build origin + clears build memory) (`ChatBotActions.java:162-194`) |
 | d | `ImageReceiver.commonRegister()` | `PayloadTypeRegistry.playC2S()` for `ImagePayload` id `screenshot:image` (`ImageReceiver.java:14-16`, `ImagePayload.java:11-13`) |
 | e | `ImageReceiver.register()` | `ServerPlayNetworking.registerGlobalReceiver(ImagePayload.ID, …)` → `ChatBot.sendImageChatRequest` (`ImageReceiver.java:18-26`) |
-| f | `TradeOffers.register()` | `/accept` (no `.requires` → perm 0) (`TradeOffers.java:97-107`) |
+| f | `TradeOffers.register()` | `/accept` (no `.requires` → perm 0) (`TradeOffers.java:120-130`) |
 | g | `LLMCommand.register()` | `/llm …` incl. `/llm bridge …` (perm 2) (`LLMCommand.java:22-25`) |
 | h | `MCPCommand.register()` | `/mcp` and `/mcp status` (no requirement), `/mcp reload` (perm 2) (`MCPCommand.java:30-50`) |
 

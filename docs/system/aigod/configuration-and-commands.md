@@ -130,7 +130,7 @@ Status line format: `BridgeConfig{enabled=…, url=…, bot=…, appear=[1.0..6.
 
 Note `/pray stop` is a literal branch: praying the single word "stop" is impossible.
 
-### `/accept` (`TradeOffers.java:97-107`)
+### `/accept` (`TradeOffers.java:120-130`)
 
 `/accept` — no `requires` → perm 0. Executes the caller's pending trade. Details:
 [actions-and-trades.md](actions-and-trades.md) (section "Trades").

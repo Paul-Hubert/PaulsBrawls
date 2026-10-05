@@ -44,8 +44,8 @@ They copy the remapped jar into the paths set by `mods_folder` / `client_mods_fo
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
-The Java side has no tests. `ci.yml` runs `./gradlew test` + `jacocoTestReport` but no test sources exist —
-those steps are effectively no-ops/will fail on a clean checkout.
+The Java side has one JUnit 5 suite, `src/test/java/com/paul/brawl/TradeMathTest.java`, which covers the Minecraft-free
+trade arithmetic in `TradeMath` (`./gradlew test`). `jacocoTestReport` still fails, because Jacoco isn't applied.
 
 ### Eden — the AI Village brain (Node)
 
@@ -362,7 +362,7 @@ architecture.
 ### Coexistence & decommission
 
 - **v1 and Eden may run side-by-side** until parity sign-off (the soak). They must **never share a bot username** (R12) and must bind distinct ports (Eden 8770; v1 8765/8766; shared 8767). The cut-over + non-destructive decommission checklist is [docs/17-parity-signoff.md §5](docs/17-parity-signoff.md). What Eden does NOT replace: the Java mod (settlement, Gibber, CTF, AI-God), op-on-join, and the unified bridge/MCP that drives the Java AI-God's avatar.
-- **CI uploads to GitHub Releases on push to `main`/`master`** ([.github/workflows/ci.yml](.github/workflows/ci.yml)). The mod's `test` job still calls `./gradlew test` + `jacocoTestReport` though no tests exist and Jacoco isn't applied — both fail until tests are added or the steps are removed. The Eden CI ([eden-ci.yml](.github/workflows/eden-ci.yml)) is the one that actually gates Eden work.
+- **CI uploads to GitHub Releases on push to `main`/`master`** ([.github/workflows/ci.yml](.github/workflows/ci.yml)). The mod's `test` job calls `./gradlew test` (now runs `TradeMathTest`) + `jacocoTestReport`, which fails because Jacoco isn't applied. The Eden CI ([eden-ci.yml](.github/workflows/eden-ci.yml)) is the one that actually gates Eden work.
 
 ## Reference docs
 

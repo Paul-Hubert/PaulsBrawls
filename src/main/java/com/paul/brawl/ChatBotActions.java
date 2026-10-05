@@ -67,7 +67,7 @@ public class ChatBotActions {
             return error;
         }
 
-        var message = "God has offered you a trade: \n You receive " + giveAmount + " " + giveItemName + " for " + takeAmount + " " + takeItemName;
+        var message = "God has offered you a trade: \n You receive " + giveAmount + " " + giveItemName + " for " + takeAmount + " " + takeItemName + "\n Type /accept within " + (TradeOffers.OFFER_TTL_MILLIS / 60_000) + " minutes.";
         ChatPrinter.sendMessage(player, message);
 
         return "God offered a trade to the player: God gives "

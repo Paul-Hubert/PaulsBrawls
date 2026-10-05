@@ -98,10 +98,10 @@ interface ReachStrategy { inRange(): boolean; walkTo(): Promise<void> }         
 | Throws? | never |
 
 ### The Java side it targets (`src/main/java/com/paul/brawl/VillageHttpListener.java`)
-- Bound to `127.0.0.1:<VillageConfig.listenerPort>` (default `8767`, `VillageConfig.java:31`), context `/trade/execute` (`:94`), enabled by `VillageConfig.enabled` (default `true`, `VillageConfig.java:28`); no auth.
-- Expected body (`TradeRequest`, `:63-68`): `{"botA": "...", "botB": "...", "aGives": [{"item","count"}], "bGives": [{"item","count"}]}`. Limits: body ≤ 64 KiB, ≤ 6 lines per side, count 1..512 (`:47-50`). Shape errors → HTTP 400 `{ok:false, error}`, e.g. `missing botA` (`:158`).
-- Validation + swap run atomically on the server main thread; both players must be online and hold the items; overflow drops at the receiver's feet. Success → 200 `{"ok":true}`; failure → 400 `{"ok":false,"error":"…"}` (`:152`).
-- Item resolution: no namespace → `minecraft:<n>`, falling back to `paulsbrawls:<n>` (`:225-233`) — so bare `coin` would already work; Eden's explicit `paulsbrawls:coin` also resolves.
+- Bound to `127.0.0.1:<VillageConfig.listenerPort>` (default `8767`, `VillageConfig.java:31`), context `/trade/execute` (`:107`), enabled by `VillageConfig.enabled` (default `true`, `VillageConfig.java:28`); auth only if `VillageConfig.settlementToken` is set (`X-Village-Token` header — Eden does not send it).
+- Expected body (`TradeRequest`, `:76-81`): `{"botA": "...", "botB": "...", "aGives": [{"item","count"}], "bGives": [{"item","count"}]}`. Limits: body ≤ 64 KiB, ≤ 6 lines per side, count 1..512 per line (`:60-62`). Shape errors → HTTP 400 `{ok:false, error}`, e.g. `missing botA` (`:178`).
+- Validation + swap run atomically in one main-thread task: both players must be online, in the same dimension and within `maxTradeDistance` (16 blocks); lines are summed per item and each total must be held in the giver's 36 main/hotbar slots; the real stacks move (components kept) and overflow drops at the receiver's feet. Success → 200 `{"ok":true}`; failure → 400 `{"ok":false,"error":"…"}` (`:172`). Details: [java-integration.md](java-integration.md).
+- Item resolution: no namespace → `minecraft:<n>`, falling back to `paulsbrawls:<n>` (`:271-282`) — so bare `coin` would already work; Eden's explicit `paulsbrawls:coin` also resolves.
 
 > **Contract mismatch.** Eden sends `from/to/give/want`; Java reads `botA/botB/aGives/bGives`. Gson leaves the Java fields `null`, `validateShape` returns `missing botA`, and every Eden settlement would fail with `trade.failed {reason:"settlement HTTP 400: {\"ok\":false,\"error\":\"missing botA\"}"}`. The mapping that would work: `botA=from, botB=to, aGives=give, bGives=want`. Tests use a fake settlement server, so CI does not catch this (`eden/tests/social-trade.test.ts`).
 

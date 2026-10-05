@@ -30,6 +30,19 @@ public class VillageConfig {
     /** Port for the localhost-only settlement listener (POST /trade/execute). */
     public int listenerPort = 8767;
 
+    /**
+     * Max distance in blocks between the two settlement parties (same dimension
+     * required). {@code <= 0} disables the distance check.
+     */
+    public double maxTradeDistance = 16.0;
+
+    /**
+     * Shared secret for the settlement listener. When non-blank, every
+     * POST /trade/execute must carry it in the {@code X-Village-Token} header.
+     * Blank (the default) keeps the loopback-only, no-auth posture.
+     */
+    public String settlementToken = "";
+
     /** Admin API of the Node village process (npm run village). */
     public String nodeAdminUrl = "http://127.0.0.1:8766";
 
@@ -47,6 +60,8 @@ public class VillageConfig {
         Properties p = new Properties();
         p.setProperty("enabled",        Boolean.toString(enabled));
         p.setProperty("listenerPort",   Integer.toString(listenerPort));
+        p.setProperty("maxTradeDistance", Double.toString(maxTradeDistance));
+        p.setProperty("settlementToken",  settlementToken);
         p.setProperty("nodeAdminUrl",   nodeAdminUrl);
         p.setProperty("edenAvatarName", edenAvatarName);
         p.setProperty("edenAdminUrl",   edenAdminUrl);
@@ -68,6 +83,8 @@ public class VillageConfig {
         }
         enabled        = parseBool(p.getProperty("enabled"), enabled);
         listenerPort   = parseInt(p.getProperty("listenerPort"), listenerPort);
+        maxTradeDistance = parseDouble(p.getProperty("maxTradeDistance"), maxTradeDistance);
+        settlementToken  = p.getProperty("settlementToken", settlementToken).trim();
         nodeAdminUrl   = p.getProperty("nodeAdminUrl",   nodeAdminUrl);
         edenAvatarName = p.getProperty("edenAvatarName", edenAvatarName);
         edenAdminUrl   = p.getProperty("edenAdminUrl",   edenAdminUrl);
@@ -76,6 +93,8 @@ public class VillageConfig {
     public String describe() {
         return "VillageConfig{enabled=" + enabled
             + ", listenerPort=" + listenerPort
+            + ", maxTradeDistance=" + maxTradeDistance
+            + ", settlementToken=" + (settlementToken.isBlank() ? "unset" : "set")
             + ", nodeAdminUrl=" + nodeAdminUrl
             + ", edenAvatarName=" + edenAvatarName
             + ", edenAdminUrl=" + edenAdminUrl
@@ -85,6 +104,12 @@ public class VillageConfig {
     private static boolean parseBool(String s, boolean fallback) {
         if (s == null) return fallback;
         return Boolean.parseBoolean(s.trim());
+    }
+
+    private static double parseDouble(String s, double fallback) {
+        if (s == null) return fallback;
+        try { return Double.parseDouble(s.trim()); }
+        catch (NumberFormatException e) { return fallback; }
     }
 
     private static int parseInt(String s, int fallback) {

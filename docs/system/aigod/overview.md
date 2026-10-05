@@ -140,7 +140,7 @@ assembly `ChatBot.java:400-425`; context hop `ChatBot.java:496-520`; callback `C
 | "Started with the avatar" flag | `ChatBot.sessionBound` (`ChatBot.java:96`) | Set at each user entry point (godBot only) | No |
 | Pending `Wait` deferral | `ChatBot.pendingDeferrals` (`ChatBot.java:109`) | At most one per player per bot | No |
 | Avatar lock, manifested flag, watchdog | `GodSessionManager` statics (`GodSessionManager.java:30-36`) | Global, single owner | No |
-| Pending trade offer | `TradeOffers.offers: HashMap<UUID, TradeOffer>` (`TradeOffers.java:91`) | One per player, no expiry | No |
+| Pending trade offer | `TradeOffers.offers: HashMap<UUID, TradeOffer>` (`TradeOffers.java:114`) | One per player, expires after 5 min | No |
 | `/construction` pivot | `Raycaster.lastPos: HashMap<UUID, BlockPos>` (`Raycaster.java:21`) | Per player | No |
 | Server chat/game log | `ChatMessageHistory.messageHistory` (40 lines, `ChatMessageHistory.java:14`) | Global | No |
 | Runtime prompt override | `ChatBot.prompt` (set by `/prompt <text>`, `ChatCommand.java:123-124`) | Both bots | No |
