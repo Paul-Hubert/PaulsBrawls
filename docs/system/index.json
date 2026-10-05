@@ -38,7 +38,7 @@
         "How to navigate this corpus",
         "Related"
       ],
-      "bytes": 9649
+      "bytes": 9476
     },
     {
       "id": "readme",
@@ -104,7 +104,7 @@
         "6. Eden",
         "Related"
       ],
-      "bytes": 20330
+      "bytes": 20896
     },
     {
       "id": "aigod.actions-and-trades",
@@ -850,7 +850,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 21686
+      "bytes": 22289
     },
     {
       "id": "eden.journal-and-views",
@@ -915,7 +915,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 17916
+      "bytes": 18030
     },
     {
       "id": "eden.llm-and-scheduling",
@@ -1024,7 +1024,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 16375
+      "bytes": 16487
     },
     {
       "id": "eden.process-config-and-boot",
@@ -1093,7 +1093,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 24835
+      "bytes": 24979
     },
     {
       "id": "eden.skills.engine",
@@ -1262,7 +1262,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 14946
+      "bytes": 19206
     },
     {
       "id": "eden.skills.stock",
@@ -1566,7 +1566,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 30863
+      "bytes": 31176
     },
     {
       "id": "gibber.money-system",
@@ -1617,7 +1617,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 11356
+      "bytes": 11374
     },
     {
       "id": "platform.build-and-runtime",
@@ -1838,7 +1838,7 @@
         "Login names (must be pairwise distinct)",
         "Related"
       ],
-      "bytes": 9938
+      "bytes": 10279
     }
   ]
 }

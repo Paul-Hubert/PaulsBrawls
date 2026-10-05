@@ -12,10 +12,14 @@
 // and retrieve episodic memory (04 §Memory). M5 wired subscribe/unsubscribe/list_subscriptions to the
 // real SubscriptionStore. The tools degrade gracefully (honest "(non câblé)" strings) when a store is not
 // wired, so M3/M4 tests that don't wire reactivity/memory keep the registry constructible.
+//
+// Trade (04 §Brain, Social): propose_trade / answer_trade / list_trades reach social/'s TradeBook only
+// through the types/ TradeDesk seam (layer-3 actors never import each other). Consent is the book's job:
+// propose_trade only puts an offer on the table; items move when the PARTNER answers accept:true.
 
 import type { IJournal } from '../journal/journal';
 import type { LlmToolCall, LlmToolDef } from '../llm/client';
-import type { EventType, Filter, JsonSchema, RunnerRef, RunReport, SubscriptionHandler } from '../types/index';
+import type { EventType, Filter, JsonSchema, RunnerRef, RunReport, SubscriptionHandler, TradeDesk, TradeItem } from '../types/index';
 import { SkillLibrary } from '../skills/library';
 import { SkillEngine } from '../skills/engine';
 import { SkillRetriever } from '../skills/retrieve';
@@ -68,6 +72,9 @@ export interface ToolRegistryOptions {
    *  injects into social/ via the MemoryWriter seam, so a conversation's leave-headline and a `remember`
    *  tool call land in one store (one writer, S2). */
   memoryFor?: (villager: string) => VillagerMemory | undefined;
+  /** The trade book behind propose_trade/answer_trade/list_trades (main.ts wires social/'s TradeBook).
+   *  Optional so tests that don't wire trade keep honest "(échange non câblé)" stubs. */
+  trade?: TradeDesk;
 }
 
 const SCHEMA_OBJECT = { type: 'object' } as const;
@@ -152,6 +159,21 @@ export class ToolRegistry {
         required: ['id'],
       }),
       def('list_subscriptions', 'Liste tes abonnements (id, évènement, action, filtre).', { type: 'object', properties: {} }),
+      def('propose_trade', "Propose un échange à un autre villageois : tu donnes `give`, tu demandes `want`. Rien ne bouge tant qu'il n'accepte pas (answer_trade). L'offre expire après quelques minutes. « coin » = la pièce du village.", {
+        type: 'object',
+        properties: {
+          to: { type: 'string', description: 'le nom du villageois partenaire' },
+          give: { type: 'array', items: TRADE_ITEM, description: 'ce que tu donnes (peut être vide)' },
+          want: { type: 'array', items: TRADE_ITEM, description: 'ce que tu demandes en retour (peut être vide)' },
+        },
+        required: ['to', 'give', 'want'],
+      }),
+      def('answer_trade', "Réponds à une offre d'échange qu'on t'a faite : accept true l'exécute (vous devez être proches; tu marches vers l'autre si besoin), false la refuse. Le proposeur peut aussi retirer sa propre offre avec accept false.", {
+        type: 'object',
+        properties: { id: { type: 'string', description: "l'id de l'offre" }, accept: { type: 'boolean' } },
+        required: ['id', 'accept'],
+      }),
+      def('list_trades', "Liste les offres d'échange en attente que tu as faites ou reçues.", { type: 'object', properties: {} }),
     ];
   }
 
@@ -182,6 +204,12 @@ export class ToolRegistry {
           return this.unsubscribe(a, ctx);
         case 'list_subscriptions':
           return this.listSubscriptions(ctx);
+        case 'propose_trade':
+          return this.proposeTrade(a, ctx);
+        case 'answer_trade':
+          return await this.answerTrade(a, ctx);
+        case 'list_trades':
+          return this.listTrades(ctx);
         default:
           return { content: `Erreur: outil inconnu "${callMsg.name}" (unknown tool).`, ok: false };
       }
@@ -335,6 +363,48 @@ export class ToolRegistry {
     return { content: lines.join('\n') };
   }
 
+  // ── Trade: propose_trade / answer_trade / list_trades (04 §Brain, Social) ─────────────────────────
+  private proposeTrade(a: Record<string, unknown>, ctx: ToolContext): ToolOutcome {
+    const desk = this.opts.trade;
+    if (!desk) return { content: '(échange non câblé — offre ignorée)', ok: false };
+    const to = String(a['to'] ?? '').trim();
+    if (!to) return { content: 'Erreur: propose_trade requiert "to".', ok: false };
+    const give = toTradeItems(a['give']);
+    const want = toTradeItems(a['want']);
+    if (!give || !want) return { content: 'Erreur: give et want doivent être des listes de { item, count }.', ok: false };
+    const r = desk.propose({ from: ctx.villager, to, give, want });
+    if (!r.ok) return { content: `Offre refusée: ${r.reason}`, ok: false };
+    return { content: `Offre ${r.trade.id} envoyée à ${to}. Rien ne bouge tant qu'il n'a pas accepté.` };
+  }
+
+  private async answerTrade(a: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome> {
+    const desk = this.opts.trade;
+    if (!desk) return { content: '(échange non câblé)', ok: false };
+    const id = String(a['id'] ?? '').trim();
+    if (!id) return { content: 'Erreur: answer_trade requiert "id".', ok: false };
+    if (typeof a['accept'] !== 'boolean') return { content: 'Erreur: answer_trade requiert "accept" (true ou false).', ok: false };
+    const accept = a['accept'];
+    const r = await desk.answer(id, ctx.villager, accept);
+    if (!accept) return r.ok ? { content: `Offre ${id} refusée.` } : { content: `Erreur: ${r.reason}`, ok: false };
+    // An accepted trade that failed to settle is still a well-formed call: report the cause (nothing moved).
+    return { content: r.ok ? `Échange ${id} conclu : les inventaires ont été échangés.` : `Échange ${id} non réglé (rien n'a bougé): ${r.reason}` };
+  }
+
+  private listTrades(ctx: ToolContext): ToolOutcome {
+    const desk = this.opts.trade;
+    if (!desk) return { content: '(échange non câblé — aucune offre)' };
+    const trades = desk.pendingFor(ctx.villager);
+    if (trades.length === 0) return { content: "Aucune offre d'échange en attente." };
+    const fmt = (items: TradeItem[]): string => (items.length === 0 ? 'rien' : items.map((i) => `${i.count} ${i.item}`).join(', '));
+    const lines = trades.map(({ id, offer, expiresAt }) => {
+      const until = new Date(expiresAt).toISOString().slice(11, 16);
+      return offer.from === ctx.villager
+        ? `${id} — envoyée à ${offer.to}: tu donnes ${fmt(offer.give)} contre ${fmt(offer.want)} (expire ${until} UTC)`
+        : `${id} — reçue de ${offer.from}: il donne ${fmt(offer.give)} contre ${fmt(offer.want)} (expire ${until} UTC)`;
+    });
+    return { content: lines.join('\n') };
+  }
+
   /** Minimal stats fold from skill.run events (the views/ module formalizes this in M7). */
   private foldStats(name: string): { runs: number; successes: number; failures: number; lastOutcomes: string[] } {
     const events = this.opts.journal.query({ kinds: ['skill.run'], ref: name }).filter((e) => e.refs.skill === name);
@@ -350,6 +420,21 @@ export class ToolRegistry {
     });
     return { runs: events.length, successes, failures, lastOutcomes };
   }
+}
+
+const TRADE_ITEM = {
+  type: 'object',
+  properties: { item: { type: 'string', description: "nom d'item Minecraft (ex. bread, oak_log) ou « coin »" }, count: { type: 'integer', minimum: 1 } },
+  required: ['item', 'count'],
+} as const;
+
+/** Coerce a tool arg into TradeItem[] (shape only — the book validates names/counts). undefined if not a list. */
+function toTradeItems(v: unknown): TradeItem[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  return v.map((raw) => {
+    const o = (raw ?? {}) as Record<string, unknown>;
+    return { item: String(o['item'] ?? '').trim(), count: typeof o['count'] === 'number' ? o['count'] : Number.NaN };
+  });
 }
 
 function def(name: string, description: string, parameters: object): LlmToolDef {

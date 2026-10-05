@@ -70,8 +70,7 @@ constructed or not called** by the production composition root. Agents should tr
 
 | Feature | Reality in code | Where |
 |---|---|---|
-| Eden trade settlement → `:8767` | `SettlementClient` is built then discarded; `TradeService`/`Conversation` never constructed; the JSON shape now matches (`{botA,botB,aGives,bGives}` via `toSettlementRequest`; it used to send `{from,to,give,want}` → HTTP 400, bug #1, fixed). | [eden/social-and-trade.md](eden/social-and-trade.md) |
-| Villager social tools (`say`, `tell`, trade…) | Not in the 11-tool registry. | [eden/villager-runtime.md](eden/villager-runtime.md) |
+| Villager speech tools (`say`, `tell`, conversations) | Not in the tool registry; `Conversation` is never constructed. (Trade **is** wired: `propose_trade`/`answer_trade` → `:8767`, bug #1 fixed.) | [eden/social-and-trade.md](eden/social-and-trade.md) |
 | Most villager events (chat, entity-spotted, night-falls, new-day, inbox…) | The live signal bus forwards only health/death/hurt; plus a 30 s tick. Half of `roles.json` is inert. | [eden/villager-runtime.md](eden/villager-runtime.md) |
 | God body delivering verdicts, divine interventions | `GodBody` instance discarded; `intervene` never called. | [eden/god.md](eden/god.md) |
 | Critic tripwire tickets, description pass, anchors, drives, `combineDesks`, daily-cap reset, D-09 recovery | Unwired / no-op in production. | [eden/god.md](eden/god.md), [eden/skills-library.md](eden/skills-library.md) |
@@ -79,7 +78,7 @@ constructed or not called** by the production composition root. Agents should tr
 | Client `/prove` | Mis-wired command tree; cannot execute. | [aigod/images-and-client.md](aigod/images-and-client.md) |
 
 What **is** live in Eden: the bot pool, stock skills, the skill engine with its watchdogs, villager deliberation with
-the 11 tools, subscriptions → reflex skills / deliberation on the events that do fire, the curriculum (idle trigger) →
+the 14 tools (incl. consent-based trade settled on `:8767`), subscriptions → reflex skills / deliberation on the events that do fire, the curriculum (idle trigger) →
 orchestrator directive → villager rollout → critic verdict → library admission loop, the journal, derived views, and
 the admin API.
 

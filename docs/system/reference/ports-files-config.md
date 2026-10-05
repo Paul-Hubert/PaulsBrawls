@@ -134,6 +134,7 @@ lost on restart. See [eden/journal-and-views.md](../eden/journal-and-views.md).
 | `ANTHROPIC_API_KEY` | Java `LLMConfig.java:177` | Anthropic provider key fallback |
 | `<preset>.apiKeyEnv` (e.g. `DEEPSEEK_API_KEY`) | Eden boot | **Required** when the chosen preset names one; boot throws (R56) without it |
 | `EDEN_LIVE_RUNDIR`, `EDEN_LIVE_PROVIDER` | Eden live-test child process | Set by the parent harness |
+| `EDEN_SETTLEMENT_TOKEN` | Eden boot (`eden/src/main.ts:556`) | Sent as `X-Village-Token` on every `:8767` settlement POST. Must equal the mod's `settlementToken` in `village_config.properties` when that is set; unset/empty → no header (the mod's default). Can live in `api-keys.env` (loaded at boot when eden.json names a `provider`). |
 
 ## Login names (must be pairwise distinct)
 

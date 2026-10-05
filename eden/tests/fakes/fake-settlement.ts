@@ -15,6 +15,8 @@ import type { AddressInfo } from 'node:net';
 export interface SettlementRequest {
   url: string | undefined;
   body: unknown;
+  /** Request headers (lower-cased by node) — lets tests assert the X-Village-Token header. */
+  headers: Record<string, string | string[] | undefined>;
 }
 
 export class FakeSettlement {
@@ -77,7 +79,7 @@ export class FakeSettlement {
     req.on('data', (c) => (body += c));
     req.on('end', () => {
       const parsed: unknown = body ? JSON.parse(body) : {};
-      this.requests.push({ url: req.url, body: parsed });
+      this.requests.push({ url: req.url, body: parsed, headers: req.headers });
       const problem = validateShape(parsed);
       if (problem !== null) {
         res.writeHead(400, { 'content-type': 'application/json' });

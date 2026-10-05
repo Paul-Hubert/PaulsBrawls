@@ -10,7 +10,7 @@ verified_at: 4a8081f
 
 # Eden social layer — conversations, trade, settlement
 
-**TL;DR.** `eden/src/social/` holds two engines: `Conversation` (bot↔bot alternating turns, hard cap 12 turns, 30 s per-turn deadline, game-chat mirror only when a player is in earshot and at most once per 4 s per speaker, structured leave → relation + memory) and `TradeService`/`SettlementClient` (typed offers, R33 walk-then-talk, POST to `settlement.url` default `http://127.0.0.1:8767/trade/execute`, `coin` → `paulsbrawls:coin`). Both are fully tested on fakes but **not reachable in production**: no villager tool starts a conversation or a trade, and `main.ts` constructs a `SettlementClient` only to discard it. The settlement body now matches the Java listener's contract (`{botA, botB, aGives, bGives}`, mapped by `toSettlementRequest`); it used to send `from/to/give/want`, which the listener rejected with HTTP 400 `missing botA` (bug #1, fixed — see "Contract" under *The Java side it targets* below).
+**TL;DR.** `eden/src/social/` holds two engines: `Conversation` (bot↔bot alternating turns, hard cap 12 turns, 30 s per-turn deadline, game-chat mirror only when a player is in earshot and at most once per 4 s per speaker, structured leave → relation + memory) and trade. **Trade is wired**: villagers get three tools — `propose_trade`, `answer_trade`, `list_trades` — backed by a `TradeBook` that adds consent (an offer moves nothing until the *partner* accepts; offers expire after 5 min; only roster villagers can be parties). An accept runs `TradeService` (R33 walk-then-talk via the `go-to` skill) then `SettlementClient` POSTs `{botA, botB, aGives, bGives}` to `settlement.url` (default `http://127.0.0.1:8767/trade/execute`, `coin` → `paulsbrawls:coin`, `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when set). `Conversation` is still **not reachable in production**: no `say`/`tell`/`start_conversation` tools.
 
 ## Layering
 
@@ -72,26 +72,53 @@ interface Conversant {                                                        //
 
 ### Types
 ```ts
-interface TradeOffer { from: string; to: string; give: TradeItem[]; want: TradeItem[] } // :32
-interface SettlementRequest { botA: string; botB: string; aGives: TradeItem[]; bGives: TradeItem[] } // :44 — the Java wire body
-function toSettlementRequest(offer: TradeOffer): SettlementRequest                     // :52
-interface SettlementResult { ok: boolean; reason?: string }                             // :62
-interface ReachStrategy { inRange(): boolean; walkTo(): Promise<void> }                  // :136
+// eden/src/types/social.ts (layer 0, so villagers/tools.ts can reach trade without importing social/)
+interface TradeOffer { from: string; to: string; give: TradeItem[]; want: TradeItem[] }
+interface SettlementResult { ok: boolean; reason?: string }
+interface PendingTrade { id: string; offer: TradeOffer; expiresAt: number }
+interface TradeDesk {                       // the seam the villager tools get; TradeBook implements it
+  propose(offer): {ok:true, trade: PendingTrade} | {ok:false, reason: string};
+  answer(id, by, accept): Promise<SettlementResult>;
+  pendingFor(villager): PendingTrade[];
+}
+// eden/src/social/trade.ts (re-exports TradeOffer / SettlementResult / PendingTrade)
+interface SettlementRequest { botA: string; botB: string; aGives: TradeItem[]; bGives: TradeItem[] } // :47 — the Java wire body
+function toSettlementRequest(offer: TradeOffer): SettlementRequest                     // :55
+interface ReachStrategy { inRange(): boolean; walkTo(): Promise<void> }
+const TOKEN_HEADER = 'X-Village-Token'                                                  // :37
 ```
 
-### `TradeService.propose(offer)` (`:168-189`)
-1. `tradeId = ulid()`.
-2. R33 walk-then-talk (only if a `reach` strategy was injected): if `!inRange()`, `await walkTo()`; if still out of range → journal `trade.proposed` then `trade.failed {reason: 'partenaire "<to>" hors de portée (impossible de l\'atteindre) — échange annulé (R33)'}` and return `{ok:false}` without contacting settlement.
-3. Journal `trade.proposed {id, from, to, give, want}` (actor `villager:<from>`, refs `{tradeId}`).
-4. `settlement.settle(tradeId, offer)`.
+### `TradeBook` — consent (`:224-324`)
+| Method | Behaviour |
+|---|---|
+| `propose(offer)` (`:234`) | Expire stale offers, then validate (`:309-323`): both parties are roster villagers (`isVillager` — a human would otherwise be swappable, the Java listener can't tell), not the same name (case-insensitive), ≤ 6 lines per side, not both empty, each `item` non-blank, each `count` an integer 1..512 (the Java caps, so a bad offer fails *before* the partner says yes), and the proposer has < 3 offers open. On success: store it with `expiresAt = now + ttlMs` (default 5 min), journal `trade.proposed`, `notify(to, "<from> te propose un échange (id …) …", 'offer')`. Nothing is POSTed. |
+| `answer(id, by, accept)` (`:254`) | Unknown/expired id → `{ok:false}`. Only the partner (`to`) may accept; the partner may decline; the proposer may withdraw (`accept:false`). Anyone else, or the proposer accepting, → `{ok:false, reason:"seul <to> peut …"}` and the offer stays open. The offer is removed **before** settling, so two concurrent accepts settle once. Decline/withdraw → `trade.failed {reason:"refusée par <to>" / "retirée par <from>"}` and `{ok:true}`. Accept → `new TradeService({reach: reachFor(offer)}).settleProposed(id, offer)`, then `notify(from, <outcome>, 'outcome')`. |
+| `pendingFor(villager)` | Live offers the villager made or received. |
+| expiry (`sweep`, `:294`) | Lazy, on every call: an expired offer is dropped and journaled `trade.failed {reason:"expirée sans réponse de <to>"}`. Offers live in RAM only — a host restart forgets them (nothing had moved). |
 
-### `SettlementClient.settle(tradeId, offer)` (`:97-128`)
+### Villager tools (`eden/src/villagers/tools.ts`)
+- `propose_trade {to, give:[{item,count}], want:[…]}` — proposes **as the acting villager** (`from = ctx.villager`, never an argument).
+- `answer_trade {id, accept:boolean}` — an accepted trade that fails to settle is reported with its cause ("rien n'a bougé").
+- `list_trades {}` — the villager's open offers with their expiry.
+- Without a wired desk the three return honest `(échange non câblé…)` stubs.
+
+### Wiring (`eden/src/main.ts:552-593`)
+- `SettlementClient({url: config.settlement.url, journal, token: process.env.EDEN_SETTLEMENT_TOKEN})` (`:556`).
+- `isVillager` = the `config.villagers` names.
+- `reachFor` (live pool only): `inRange` = both bots' positions within `TRADE_REACH = 8` blocks (the mod refuses beyond its `maxTradeDistance`, default 16); `walkTo` = `engine.run('go-to', {x,y,z of the proposer, range: 3}, <partner, mortal>)`. Throws if the proposer is offline → the trade fails with that cause.
+- `notify`: always delivers an inbox `tell` `{text}`; an `'offer'` also wakes the partner on the `conversation` lane (`wakeForTrade`, `:708` — live pool only) with the hint "réponds à l'offre d'échange avec answer_trade"; an `'outcome'` is written to the proposer's memory as a `trade` entry instead (no LLM call).
+
+### `TradeService` (`:151-197`)
+- `propose(offer)` — `tradeId = ulid()`, journal `trade.proposed {id, from, to, give, want}` (actor `villager:<from>`, refs `{tradeId}`), then `settleProposed`. Settles immediately with no consent step; villagers go through `TradeBook` instead.
+- `settleProposed(tradeId, offer)` (`:180`) — R33 walk-then-talk (only if a `reach` strategy was injected): if `!inRange()`, `await walkTo()` (a throw is caught and named in the reason); if still out of range → `trade.failed {reason: 'partenaire "<to>" hors de portée (impossible de l\'atteindre[ (<error>)]) — échange annulé (R33)'}` and `{ok:false}` without contacting settlement. Otherwise `settlement.settle(tradeId, offer)`.
+
+### `SettlementClient.settle(tradeId, offer)` (`:97-129`)
 | Aspect | Value |
 |---|---|
 | URL | `opts.url` = `config.settlement.url`, default `http://127.0.0.1:8767/trade/execute` (`eden/src/config.ts:127`) |
-| Method / headers | `POST`, `content-type: application/json`, no auth |
-| Body sent | `toSettlementRequest(offer)` (`:52-59`) = `{botA: from, botB: to, aGives: give, bGives: want}`, each `item === 'coin'` rewritten to `paulsbrawls:coin` (`resolveItem`, `:193-195`; `COIN_ITEM`, `:29`). The offer itself is not mutated. |
-| Timeout | `10_000` ms via `AbortController` (`:90`, `:99-100`) |
+| Method / headers | `POST`, `content-type: application/json`; plus `X-Village-Token: <token>` when `opts.token` is non-empty (`:104`) — main.ts passes `process.env.EDEN_SETTLEMENT_TOKEN` |
+| Body sent | `toSettlementRequest(offer)` (`:55-62`) = `{botA: from, botB: to, aGives: give, bGives: want}`, each `item === 'coin'` rewritten to `paulsbrawls:coin` (`resolveItem`, `:332-334`; `COIN_ITEM`, `:40`). The offer itself is not mutated. |
+| Timeout | `10_000` ms via `AbortController` (`:100`) |
 | Retries | none |
 | 2xx | journal `trade.settled {id, from, to, give, want}` (original, un-aliased items) → `{ok:true}` |
 | non-2xx | journal `trade.failed {id, from, to, reason:"settlement HTTP <status>: <body ≤160 chars>"}` → `{ok:false, reason}` |
@@ -100,7 +127,7 @@ interface ReachStrategy { inRange(): boolean; walkTo(): Promise<void> }         
 | Throws? | never |
 
 ### The Java side it targets (`src/main/java/com/paul/brawl/VillageHttpListener.java`)
-- Bound to `127.0.0.1:<VillageConfig.listenerPort>` (default `8767`, `VillageConfig.java:31`), context `/trade/execute` (`:107`), enabled by `VillageConfig.enabled` (default `true`, `VillageConfig.java:28`); auth only if `VillageConfig.settlementToken` is set (`X-Village-Token` header — Eden does not send it).
+- Bound to `127.0.0.1:<VillageConfig.listenerPort>` (default `8767`, `VillageConfig.java:31`), context `/trade/execute` (`:107`), enabled by `VillageConfig.enabled` (default `true`, `VillageConfig.java:28`); auth only if `VillageConfig.settlementToken` is set (`X-Village-Token` header — Eden sends it when `EDEN_SETTLEMENT_TOKEN` holds the same value).
 - Expected body (`TradeRequest`, `:76-81`): `{"botA": "...", "botB": "...", "aGives": [{"item","count"}], "bGives": [{"item","count"}]}`. Limits: body ≤ 64 KiB, ≤ 6 lines per side, count 1..512 per line (`:60-62`). Shape errors → HTTP 400 `{ok:false, error}`, e.g. `missing botA` (`:178`).
 - Validation + swap run atomically in one main-thread task: both players must be online, in the same dimension and within `maxTradeDistance` (16 blocks); lines are summed per item and each total must be held in the giver's 36 main/hotbar slots; the real stacks move (components kept) and overflow drops at the receiver's feet. Success → 200 `{"ok":true}`; failure → 400 `{"ok":false,"error":"…"}` (`:172`). Details: [java-integration.md](java-integration.md).
 - Item resolution: no namespace → `minecraft:<n>`, falling back to `paulsbrawls:<n>` (`:271-282`) — so bare `coin` would already work; Eden's explicit `paulsbrawls:coin` also resolves.
@@ -109,19 +136,20 @@ interface ReachStrategy { inRange(): boolean; walkTo(): Promise<void> }         
 > - `eden/tests/social-trade.test.ts` (`bug #1 (Java contract)` tests) `deepEqual`s the exact POST body against the Java field names and checks that only those four keys are sent.
 > - `FakeSettlement` (`eden/tests/fakes/fake-settlement.ts`) now ports `VillageHttpListener.validateShape`: same checks (incl. the case-insensitive `botA`/`botB` comparison), same order, same error strings (≤ 6 lines per side, count 1..512). It answers 400 `{ok:false, error}` like the mod, so every happy-path test fails if the body drifts again.
 >
-> Only the **shape** is proven in CI. Item resolution, online checks and the swap itself still need a live `:8767` smoke run (R29).
+> Only the **shape** (and the token header) is proven in CI. Item resolution, online/distance checks and the swap itself still need a live `:8767` smoke run (R29).
 
 ## Production wiring status
 
 | Piece | State | Evidence |
 |---|---|---|
-| `SettlementClient` | body now matches the Java contract, but the client is constructed with `config.settlement.url` and immediately discarded (`void new …`) | `eden/src/main.ts:577` |
-| `TradeService` | never constructed outside tests | grep: only `social/trade.ts` |
+| `SettlementClient` | **wired** — one instance, token from `EDEN_SETTLEMENT_TOKEN` | `eden/src/main.ts:556` |
+| `TradeBook` / `TradeService` | **wired** — the book is injected into `ToolRegistry` as `trade`; a `TradeService` is built per accepted offer with that offer's `ReachStrategy` | `eden/src/main.ts:581-593` |
+| Trade tools | `propose_trade`, `answer_trade`, `list_trades` | `eden/src/villagers/tools.ts:162-176`, `:367-406` |
 | `Conversation` | never constructed outside tests | grep: only `social/conversation.ts` |
-| Villager social tools (`say`, `tell`, `start_conversation`, `leave_conversation`, trade) | **absent** — the registry has `search_skills, read_skill, write_skill, run_skill, report_to_god, done, remember, recall, subscribe, unsubscribe, list_subscriptions` | `eden/src/villagers/tools.ts:82-154` |
-| Admin "tell" | `POST /villagers/:name/prompt` (`eden/src/admin/server.ts:248`) delivers `{from:'villager', kind:'tell', payload:{text, from}}` to a villager inbox — not a conversation | `eden/src/main.ts:393-402` |
+| Villager speech tools (`say`, `tell`, `start_conversation`, `leave_conversation`) | **absent** | `eden/src/villagers/tools.ts` |
+| Admin "tell" | `POST /villagers/:name/prompt` (`eden/src/admin/server.ts:248`) delivers `{from:'villager', kind:'tell', payload:{text, from}}` to a villager inbox — not a conversation | `eden/src/main.ts` `onPrompt` |
 
-Consequently no `conversation.*`, `chat.*` or `trade.*` events are produced by a live Eden host at this commit. Fixing the body shape (bug #1) made settlement *callable*; it is still not *called*.
+So a live host now produces `trade.*` events (when villagers choose to trade) but still no `conversation.*` or `chat.*` events. Negotiation happens through the offer itself (propose → accept/decline, or a new counter-offer), not through a conversation.
 
 ## Views fed by social events (`eden/src/views/index.ts`)
 
@@ -136,15 +164,18 @@ Journal payload types: `eden/src/journal/kinds.ts:176-202` (`chat.said`, `chat.h
 
 ## How to extend (wiring the layer for real)
 
-1. Add villager tools in `eden/src/villagers/tools.ts` (e.g. `start_conversation`, `propose_trade`) — but `villagers/` may not import `social/`; the construction must happen in `main.ts` and be injected (as with `memoryFor`).
-2. In `main.ts`, keep the `SettlementClient` instance, build `Conversant`s from `VillagerMemory` + a bot-backed `sayInGame`/`playerInEarshot`, and a `ReachStrategy` that runs the `go-to` skill via `SkillEngine`.
-3. ~~Fix the body mapping to the Java contract~~ — done (`toSettlementRequest`). Before trusting it in production, run one live `:8767` smoke trade (two online villagers, a `coin` line).
+1. ~~Trade tools + `SettlementClient`/`TradeService` wiring~~ — done (`TradeBook` behind the `types/` `TradeDesk` seam, as with `memoryFor`). Before trusting it in production, run one live `:8767` smoke trade (two online villagers, a `coin` line).
+2. Conversations: add `start_conversation`/`say`/`leave_conversation` tools the same way (a `types/` seam injected from `main.ts`), building `Conversant`s from `VillagerMemory` + a bot-backed `sayInGame`/`playerInEarshot`.
+3. ~~Fix the body mapping to the Java contract~~ — done (`toSettlementRequest`).
 4. Expose `views.tradeLedger` / `views.relations` through admin accessors if the website needs them.
 
 ## Gotchas & known issues
 
 - ~~Settlement JSON field names mismatch the Java listener~~ — fixed. The body is `{botA, botB, aGives, bGives}`, pinned by tests and by a fake that runs the Java shape check. Java-side bug #2 (duplicate item lines each validated against the whole inventory) is fixed too: the listener sums lines per item before validating — see [java-integration.md](java-integration.md).
-- Social engines are dead code in production (no tools, discarded client).
+- `Conversation` is dead code in production (no speech tools). Trade is live.
+- Pending offers are RAM-only: a host restart forgets them (journaled `trade.proposed` with no close event; nothing moved).
+- If the mod has a `settlementToken` but `EDEN_SETTLEMENT_TOKEN` is unset or different, every accepted trade fails with `settlement HTTP 401`.
+- `TRADE_REACH` (8) is a constant, not read from the mod: if the mod's `maxTradeDistance` is lowered below 8, an "in range" pair can still be refused.
 - `partner-gone` end reason is declared but never emitted.
 - A `deadline` end leaves the speaker's `speak()` promise running (not cancelled).
 - Mirror rate-limit state is per `Conversation` instance, so two concurrent conversations can each mirror the same speaker.

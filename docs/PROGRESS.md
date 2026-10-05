@@ -1503,6 +1503,31 @@ surprises. Newest first.
   composition root (an option that existed on the type but never appeared at the `new ToolRegistry({…})` call
   site). Green module tests ≠ wired.
 
+## 2026-10-05 — villager trade wired to the :8767 settlement listener (D-16) + settlement token
+- Done:
+  - **Trade is wired.** `main.ts` keeps one `SettlementClient` (it used to be `void new …`) and builds a
+    `TradeBook` (social/trade.ts) injected into `ToolRegistry` as `trade`. Three villager tools:
+    `propose_trade {to, give, want}`, `answer_trade {id, accept}`, `list_trades`. They reach the book through
+    the new `TradeDesk` seam in `types/social.ts` (`TradeOffer`/`SettlementResult`/`PendingTrade` moved there;
+    social/trade.ts re-exports them). An offer wakes the partner on the conversation lane (the reactive
+    `wakeup`, live pool only) and lands in its inbox; the partner's accept runs `TradeService.settleProposed`
+    (R33: walk to the proposer with `go-to`, aiming within 8 blocks — the mod refuses beyond its
+    `maxTradeDistance`, default 16) and the POST. Outcomes go to the proposer's memory as a `trade` entry.
+  - **Settlement token.** `SettlementClient` sends `X-Village-Token` when given a token; `main.ts` reads it from
+    `EDEN_SETTLEMENT_TOKEN` (env-only, like the LLM key). Matches the mod's optional `settlementToken`.
+  - `TradeService.propose` split into propose (journal) + `settleProposed` (reach + settle); a throwing
+    `walkTo` is now caught and named in the failure reason instead of escaping.
+  - Tests: +11 (token header on/off, propose-without-settle, partner-only accept, decline/withdraw, expiry,
+    double-accept race, validation incl. a non-villager partner, R33 on accept + a throwing walk, the tool
+    round-trip, unwired stubs); golden tool list updated. `FakeSettlement` records request headers.
+- Decisions (D#/R# if any): **D-16** (docs/04 §The brain) — a trade moves nothing until the partner accepts;
+  only roster villagers trade; offers expire after 5 min, max 3 open per proposer; decline/withdraw/expiry
+  close as `trade.failed` (no new journal kind, S1).
+- Next: one live `:8767` smoke trade (two online villagers, a `coin` line) — CI proves the body, header and
+  consent flow on fakes only. Conversations (`say`/`tell`/`start_conversation`) are still unwired.
+- Surprises: `TradeService.propose` settled with no consent step, so wiring it straight to a tool would have
+  let any villager take another's items — the mod swaps whatever it is asked to.
+
 ## Template
 ## YYYY-MM-DD — <milestone/topic>
 - Done:

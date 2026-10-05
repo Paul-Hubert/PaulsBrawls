@@ -118,9 +118,9 @@ A rollout replay is `GET /journal?ref=<rolloutId>` ([admin-api.md](admin-api.md)
 | `conversation.started` | `{ id, initiator, partner, topic? }` | `eden/src/social/conversation.ts:109` |
 | `conversation.turn` | `{ id, speaker, turn }` | `eden/src/social/conversation.ts:140` |
 | `conversation.ended` | `{ id, by, reason:'left'｜'turn-cap'｜'deadline'｜'partner-gone', opinion?, headline? }` | `eden/src/social/conversation.ts:154` |
-| `trade.proposed` | `{ id, from, to, give:TradeItem[], want:TradeItem[] }` | `eden/src/social/trade.ts:176`, `:184` · villager:<from> |
+| `trade.proposed` | `{ id, from, to, give:TradeItem[], want:TradeItem[] }` | `eden/src/social/trade.ts:169` (TradeService), `:241` (TradeBook) · villager:<from> |
 | `trade.settled` | same as proposed | `eden/src/social/trade.ts:114` · villager:<from> |
-| `trade.failed` | `{ id, from, to, reason }` | `eden/src/social/trade.ts:131`, `:179` · villager:<from> |
+| `trade.failed` | `{ id, from, to, reason }` — settlement failure, R33 unreachable, or a declined/withdrawn/expired offer | `eden/src/social/trade.ts:131`, `:191`, `:306` · villager:<from> |
 | `subscription.created` | `{ id, villager, on, handler:'skill'｜'deliberate', source }` | `eden/src/villagers/subscriptions.ts:85` · villager:<n> |
 | `subscription.removed` | `{ id, villager }` | `eden/src/villagers/subscriptions.ts:102` · villager:<n> |
 | `subscription.fired` | `{ id, villager, on, outcome:'skill'｜'deliberate', target }` | `eden/src/villagers/events.ts:390` · villager:<n> |

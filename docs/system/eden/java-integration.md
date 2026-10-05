@@ -16,7 +16,8 @@ two nearby online players on the main thread; (2) `/village` (config + listener 
 start|stop|restart` which drives Eden's admin API on `:8770`; (4) op-on-join for `LLMBot`, `Dieu` and the
 current scenario's villagers. The Eden `SettlementClient` now sends the listener's own shape
 `{botA,botB,aGives,bGives}` (it used to send `{from,to,give,want}` → 400 `missing botA`, bug #1, fixed),
-but in the current Eden build the client is still constructed and never called.
+and it is now **called**: villagers trade through `propose_trade`/`answer_trade`, and an accepted offer is
+POSTed here (with `X-Village-Token` when `EDEN_SETTLEMENT_TOKEN` is set).
 
 ## Components at a glance
 
@@ -163,9 +164,10 @@ The coin is the village currency simply because `paulsbrawls:coin` resolves here
 | Aspect | Eden code |
 |---|---|
 | URL | `settlement.url`, default `http://127.0.0.1:8767/trade/execute` (`eden/src/config.ts:127`, `eden/eden.example.json:64`) |
-| Method / headers | `POST`, `content-type: application/json` (`eden/src/social/trade.ts:102-107`) |
-| **Body sent** | `{ botA, botB, aGives: TradeItem[], bGives: TradeItem[] }` built by `toSettlementRequest` with `coin` → `paulsbrawls:coin` (`eden/src/social/trade.ts:44-59`, `:193-195`) |
-| Timeout | `AbortController`, 10 000 ms default (`eden/src/social/trade.ts:90`, `:99-100`) |
+| Method / headers | `POST`, `content-type: application/json`, plus `X-Village-Token` when a token is configured (`eden/src/social/trade.ts:102-107`) |
+| Token | `process.env.EDEN_SETTLEMENT_TOKEN` (`eden/src/main.ts:556`) — a secret, so env-only like the LLM key; unset/empty → no header |
+| **Body sent** | `{ botA, botB, aGives: TradeItem[], bGives: TradeItem[] }` built by `toSettlementRequest` with `coin` → `paulsbrawls:coin` (`eden/src/social/trade.ts:47-62`, `:332-334`) |
+| Timeout | `AbortController`, 10 000 ms default (`eden/src/social/trade.ts:89`, `:100`) |
 | Success | any 2xx → journal `trade.settled` (`eden/src/social/trade.ts:114-117`) |
 | Failure | non-2xx → `trade.failed` with reason `settlement HTTP <status>: <first 160 chars>`; network/timeout → `settlement could not reach …` / `settlement timed out after …` (`eden/src/social/trade.ts:108-124`) |
 
@@ -185,11 +187,14 @@ body. Now `eden/tests/social-trade.test.ts` pins the exact body (`deepEqual` aga
 happy-path test. Java was not changed. Only the shape is covered by CI; a live `:8767` smoke run is still
 the proof for resolution and the swap.
 
-### The client is not wired
+### Who calls it
 
-`eden/src/main.ts:577` does `void new SettlementClient({ url: config.settlement.url, journal });` — the
-instance is discarded. `TradeService` is never constructed anywhere in `eden/src` (only in tests), so no
-production code path reaches the listener today. See [social-and-trade.md](social-and-trade.md).
+`eden/src/main.ts:552-593` builds one `SettlementClient` and a `TradeBook` and injects the book into the
+villager `ToolRegistry`. A villager's `propose_trade` only records an offer and wakes the partner; the
+partner's `answer_trade {accept:true}` walks it to the proposer (R33, the `go-to` skill, aiming within 8
+blocks) and then POSTs here. Eden only lets roster villagers be parties, which covers the "any two online
+players, humans included" gap below from the Eden side (a different local caller is still only stopped by the
+token). Details: [social-and-trade.md](social-and-trade.md).
 
 ## `/village` (`VillageCommand.java`)
 
@@ -270,7 +275,7 @@ dedicated server (the entrypoint does not run on an integrated server).
 
 ## Gotchas & known issues
 
-- ~~**Shape mismatch** with Eden's `SettlementClient`~~ — fixed Eden-side (see above). The client is still unused.
+- ~~**Shape mismatch** with Eden's `SettlementClient`~~ — fixed Eden-side (see above). The client is wired (villager trade tools).
 - **Fixed — item duplication** (VERIFICATION-NOTES bug #2): lines are now summed per item before validation,
   and validation, removal and delivery share one main-thread task and the same per-item totals.
 - **Fixed — item data**: the real stacks are split out and moved, so enchantments, custom names (e.g. CTF
@@ -282,8 +287,8 @@ dedicated server (the entrypoint does not run on an integrated server).
   silently deleted. Delivery now uses `offerOrDrop`, which drops every leftover.
 - **Who can trade**: the parties must share a dimension and stand within `maxTradeDistance` (16 blocks by
   default). They can still be *any* two online players, humans included — the listener cannot tell a bot
-  from a human. Setting `settlementToken` limits callers to processes that know the secret; Eden's
-  `SettlementClient` does not send the header yet, so only set it once the caller does.
+  from a human. Setting `settlementToken` limits callers to processes that know the secret; Eden sends it
+  from `EDEN_SETTLEMENT_TOKEN`, so set both to the same value (a mismatch makes every Eden trade a 401).
 - Eden aborts after 10 s; a swap that completes on the Java side after the abort is journaled by Eden as
   `trade.failed`.
 - `botA`/`botB` naming the same player is rejected both case-insensitively and by comparing the resolved

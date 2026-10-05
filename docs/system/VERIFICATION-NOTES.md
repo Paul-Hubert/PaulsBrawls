@@ -14,7 +14,7 @@ verified_at: 4a8081f
 (1) every claim in the existing docs that the code contradicts and (2) the bugs and sharp edges found along the way,
 ranked. The biggest themes:
 - Several Eden features documented as live are **constructed in tests only**.
-- The Eden→Java **trade settlement is never called**: the client is not wired. The JSON shape mismatch (bug #1) is now fixed Eden-side.
+- The Eden→Java **trade settlement** was never called and sent the wrong JSON shape (bug #1). Both are fixed: villagers trade through `propose_trade`/`answer_trade`, and the body matches the listener.
 - The CI workflows **don't exist in the repo**.
 - A handful of Java exploits let players **duplicate items or coins** (the two trade paths, #2 and #3, are fixed).
 
@@ -24,7 +24,7 @@ Citations are `path:line` at `4a8081f`.
 
 | # | Sev | Area | Finding | Evidence |
 |---|---|---|---|---|
-| 1 | High | Eden ↔ Java | ~~**Settlement contract mismatch.** Eden POSTs `{from,to,give,want}`; the Java listener requires `{botA,botB,aGives,bGives}` and answers 400 `missing botA`.~~ **Shape fixed Eden-side.** `toSettlementRequest` maps `from→botA, to→botB, give→aGives, want→bGives` (coin → `paulsbrawls:coin` kept), with no Java change. A test pins the exact body, and `FakeSettlement` now runs the Java shape check (incl. the case-insensitive same-party check). **Still open:** the client is never wired (`void new SettlementClient`), `TradeService` is never constructed, and villagers have no trade tool. | `eden/src/social/trade.ts:44-59,98`, `eden/tests/social-trade.test.ts`, `VillageHttpListener.java:76-81,176-181`, `eden/src/main.ts:577` |
+| 1 | ~~High~~ Fixed | Eden ↔ Java | ~~**Settlement contract mismatch.** Eden POSTs `{from,to,give,want}`; the Java listener requires `{botA,botB,aGives,bGives}` and answers 400 `missing botA`. The client is never wired, and `TradeService` is never constructed.~~ **Fixed.** Shape: `toSettlementRequest` maps `from→botA, to→botB, give→aGives, want→bGives` (coin → `paulsbrawls:coin`), pinned by a test and by `FakeSettlement` running the Java shape check (incl. the case-insensitive same-party check). Wiring: `main.ts` builds one `SettlementClient` (sending `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when set) and a `TradeBook` injected into the villager tools `propose_trade`/`answer_trade`/`list_trades`; an offer settles only when the partner accepts, only between roster villagers, after an R33 walk. **Still open:** no live `:8767` smoke trade yet; `Conversation` is still unwired. | `eden/src/social/trade.ts`, `eden/src/villagers/tools.ts`, `eden/src/main.ts:552-593`, `VillageHttpListener.java:76-81,176-181`, [eden/social-and-trade.md](eden/social-and-trade.md) |
 | 2 | ~~High~~ Fixed | Java settlement | ~~**Item duplication.** Duplicate item lines are each validated against the whole inventory: with 15 coins, two lines of 10 pass, 15 are removed and 20 created.~~ **Fixed:** lines are summed per item before validation, and validation and removal use the same totals in one main-thread task. The real stacks now move (damage, enchantments and names survive). Only the 36 main/hotbar slots count (no armour or offhand). Partial-insert overflow, which was silently deleted, now drops. The parties must share a dimension and be within `maxTradeDistance` (16). An optional `settlementToken` header check exists, off by default. **Still open:** any two nearby online players, humans included, can be swapped by a local caller unless the token is set. | [eden/java-integration.md](eden/java-integration.md), `VillageHttpListener.java:214-317`, `TradeMath.java` |
 | 3 | ~~High~~ Fixed | AI God trades | ~~**Negative `Trade.takeAmount` duplicates items** on `/accept`.~~ **Fixed:** both amounts must be 1–512. This is checked at tool execution, in `updateOffer` and again on `/accept`, and `planTakes` rejects a non-positive need. Items are matched by registry item, not display name. Offers expire after 5 minutes. | [aigod/actions-and-trades.md](aigod/actions-and-trades.md), `TradeOffers.java:56-159` |
 | 4 | High | Eden tests | `npm test` / `npm run check` **fail on a clean checkout**: `tests/live-tests-catalogue.test.ts` loads the gitignored `eden/providers.json`. | [eden/testing-eval-live.md](eden/testing-eval-live.md) |
@@ -96,7 +96,7 @@ Citations are `path:line` at `4a8081f`.
 
 | Claim | Code reality |
 |---|---|
-| "Trade settles via `SettlementClient` POST to :8767" | Never wired (bug #1). The body shape now matches the listener. |
+| "Trade settles via `SettlementClient` POST to :8767" | ~~Never wired (bug #1).~~ Wired: an offer accepted through `answer_trade` is POSTed with the listener's body shape (and the token header when set). |
 | `/village status|pause|resume` controls the village | Targets the **legacy v1** admin on :8766; Eden is controlled by `/villagers start|stop|restart` (missing from CLAUDE.md's command list) and `POST /pause|/resume` on :8770. |
 | `VillagersCommand` loads `eden/scenarios/<name>.json` | Eden loads nothing on that call; `name` must equal the scenario Eden booted with, or 404 (`eden/src/village-launch.ts:143-152`). |
 | `VillageConfig` can be tuned "without a restart" | Read once at class init; written only by `/village on|off`. |
@@ -146,7 +146,7 @@ Citations are `path:line` at `4a8081f`.
 |---|---|
 | Event payload shapes (docs/04) | Differ: `byEntity`, not `attacker`; chat uses `player`/`villager`; etc. (`eden/src/types/events.ts:8-22`). |
 | Edge events with hysteresis fire live | The live signal adapter forwards only health/death/hurt, plus a 30 s tick. Chat, entity-spotted, night-falls, new-day and inbox **never fire**. |
-| Villager tools include `say`, `tell`, conversations, trade | Exactly 11 tools: search_skills, read_skill, write_skill, run_skill, report_to_god, done, remember, recall, subscribe, unsubscribe, list_subscriptions. |
+| Villager tools include `say`, `tell`, conversations, trade | 14 tools: search_skills, read_skill, write_skill, run_skill, report_to_god, done, remember, recall, subscribe, unsubscribe, list_subscriptions, and the trade tools propose_trade, answer_trade, list_trades. No `say`/`tell`/conversation tools. |
 | `report_to_god` reaches critic/orchestrator queues | Result discarded. |
 | Context pack carries recent events, mood, standing orders, config persona | §5 is always empty. The persona is hardcoded `Tu es ${name}, ${role} du village. Tu parles français.` (`eden/src/main.ts:579`). |
 | `run_skill` has a `wait` arg | Params: `name, args, timeoutMs?`. |

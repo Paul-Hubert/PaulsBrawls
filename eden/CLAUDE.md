@@ -4,7 +4,7 @@ Eden is the from-scratch rewrite of this repo's AI Village: ten villager bots + 
 God (LLM: critic / curriculum / orchestrator desks + an avatar) acting through ONE
 shared, God-owned library of typed, composable skills, admitted only after God judges
 a real run a success. One Node process (D-01). The Java mod keeps only server-authority
-duties: the trade-settlement listener on :8767 (Eden does not call it yet), Gibber coins,
+duties: the trade-settlement listener on :8767 (accepted villager trades POST there), Gibber coins,
 op-on-join (LLMBot, Dieu and active scenario villagers), and `/villagers start|stop|restart`,
 which drives this process's admin API on :8770.
 
@@ -40,14 +40,16 @@ which drives this process's admin API on :8770.
   tests/live-tests-catalogue.test.ts loads it.
 - npm run eval      # dry run only: builds + validates 4 scenarios, connects to nothing
 - Smoke against the dev server on port 25599 (read run/server.properties — R28).
-- Settlement (once wired) needs :8767 — stop ./gradlew runServer first (it steals it — R29).
+- Settlement needs :8767 — stop ./gradlew runServer first (it steals it — R29). If the mod has a
+  settlementToken, export the same value as EDEN_SETTLEMENT_TOKEN (or put it in api-keys.env, which is
+  loaded when eden.json names a provider).
 - Boot: start.ps1 (= npx tsx src/main.ts eden.json). The pm2 supervision of D-08 is not
   in the repo (ecosystem.config.cjs is gitignored and absent).
 
 ## Designed ≠ wired
 main.ts is the only composition root; anything not constructed there does not run in a real
-boot, however well it is tested. Not wired as of 4a8081f: social/ (Conversation, TradeService,
-SettlementClient — its body now matches the Java listener, but nothing calls it), GodBody / embodiedVerdicts,
+boot, however well it is tested. Not wired as of 4a8081f: social/'s Conversation (trade IS wired:
+propose_trade/answer_trade → TradeBook → SettlementClient), GodBody / embodiedVerdicts,
 Orchestrator.intervene, the skill tripwire (no onTripwire), the describer, anchors + verifyHashes,
 DriveTracker, combineDesks, the villager subscription tools (stubs), and every villager event
 except health/death/hurt + a 30 s tick. SQLite holds only the journal; God state is RAM-only.

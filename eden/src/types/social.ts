@@ -53,3 +53,41 @@ export interface Conversant {
   /** True iff a (human) player is within earshot — the mirror gate (04: mirror only then). */
   playerInEarshot(): boolean;
 }
+
+/** A typed two-sided offer: `from` gives `give`, wants `want` from `to`. Never free text (re-validatable). */
+export interface TradeOffer {
+  from: string;
+  to: string;
+  give: TradeItem[];
+  want: TradeItem[];
+}
+
+/** A settlement outcome — ok on a 2xx swap, else a named failure (the inventories are untouched). */
+export interface SettlementResult {
+  ok: boolean;
+  /** The cause when !ok (HTTP status / network error / re-validation reject / declined / expired) — S10. */
+  reason?: string;
+}
+
+/** An offer waiting for its partner's answer (TradeBook, social/trade.ts). */
+export interface PendingTrade {
+  id: string;
+  offer: TradeOffer;
+  /** Epoch ms after which the offer can no longer be accepted. */
+  expiresAt: number;
+}
+
+/**
+ * What a villager's trade tools may do — the seam that lets villagers/tools.ts reach social/'s TradeBook
+ * without importing social/ (layer-3 actors never import each other). main.ts injects the concrete book.
+ * Consent is built in: `propose` only puts an offer on the table; nothing moves until the PARTNER
+ * `answer`s with accept=true. Neither method throws — every refusal is a named {ok:false, reason}.
+ */
+export interface TradeDesk {
+  /** Validate + record an offer and notify the partner. Returns the pending offer, or why it was refused. */
+  propose(offer: TradeOffer): { ok: true; trade: PendingTrade } | { ok: false; reason: string };
+  /** The partner (`by`) accepts (→ R33 reach + settlement) or declines a pending offer. */
+  answer(id: string, by: string, accept: boolean): Promise<SettlementResult>;
+  /** Live (unexpired) offers `villager` made or received. */
+  pendingFor(villager: string): PendingTrade[];
+}

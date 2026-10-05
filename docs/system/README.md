@@ -71,7 +71,7 @@ corpus can be served to AI agents through an MCP server (one document = one reso
 | [eden/bots-and-hardening.md](eden/bots-and-hardening.md) | Bot pool, plugins, signals, anchors, hardening, renderer |
 | [eden/god.md](eden/god.md) | Critic, curriculum and orchestrator desks, the body, the refinement loop |
 | [eden/llm-and-scheduling.md](eden/llm-and-scheduling.md) | LLM client, provider presets, scheduler lanes, budgets, embeddings |
-| [eden/villager-runtime.md](eden/villager-runtime.md) | Events, subscriptions, roles, the brain and its 11 tools, context pack |
+| [eden/villager-runtime.md](eden/villager-runtime.md) | Events, subscriptions, roles, the brain and its 14 tools, context pack |
 | [eden/villager-memory.md](eden/villager-memory.md) | Memory window and archive, retrieval scoring, world-stamp quarantine |
 | [eden/social-and-trade.md](eden/social-and-trade.md) | Conversations, typed trade, the settlement client |
 | [eden/journal-and-views.md](eden/journal-and-views.md) | SQLite journal, every journal kind, lag monitor, derived views |

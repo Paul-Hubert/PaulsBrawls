@@ -48,7 +48,7 @@ villager shares the avatar's name (`eden/src/config.ts:379-388`).
 
 ```
              Java mod (Fabric, PaulsBrawls server)
-   /villagers start|stop|restart ──HTTP POST──┐            ┌── POST /trade/execute (:8767)  [SettlementClient — constructed but unused, see Gotchas]
+   /villagers start|stop|restart ──HTTP POST──┐            ┌── POST /trade/execute (:8767)  [SettlementClient — via the villager trade tools]
                                               v            │
  ┌──────────────────────── one Node process (tsx src/main.ts) ─────────────────────────┐
  │ AdminServer 127.0.0.1:8770  (REST + WS /journal/stream + static website/)            │
@@ -124,7 +124,7 @@ reactive wake-up closure) lives in `main.ts`. Full treatment: [types-and-contrac
 `BudgetTracker`, `EmbeddingsService(localBackend())`, `SkillLibrary` (+ `seedStockSkills`), `AllGranted`,
 `SkillEngine`, `SkillRetriever`, `MemorySummarizer`, one `VillagerMemory` per villager, `ToolRegistry`,
 `ContextPackBuilder`, `Brain`, one `VillagerInbox` per villager, `GodService`, `Curriculum`, `Orchestrator`,
-`CriticDesk`, a discarded `GodBody`, a discarded `SettlementClient`, `RolloutCoordinator`, `SubscriptionStore`,
+`CriticDesk`, a discarded `GodBody`, a `SettlementClient` + `TradeBook` (injected into `ToolRegistry`), `RolloutCoordinator`, `SubscriptionStore`,
 and (only with a bot pool) role-default seeding + `VillagerReactivity`.
 
 Built and unit-tested but **not constructed by the host** (grep of `src/` for their constructors finds only
@@ -167,8 +167,9 @@ constructed with `void new …` and the instances dropped (`eden/src/main.ts:570
   `eden/src/config.ts:340`), and setting it in `eden.json` only draws an unknown-key warning (`eden/src/config.ts:333`).
 - `GodState` is in-memory only; nothing rehydrates tasks from the journal at boot, so the D-09 boot recovery
   (`wiring.god.recoverRollouts()`, `eden/src/main.ts:228-231`) iterates an empty task map on a real boot.
-- Trade/conversation/drives/anchors are not wired (see above), so `trade.*`, `conversation.*`, `chat.*` kinds are
-  never emitted by a production host, and the trade-ledger and relations views stay empty.
+- Conversation/drives/anchors are not wired (see above), so `conversation.*` and `chat.*` kinds are never emitted
+  by a production host and the relations view stays empty. Trade is wired: `trade.*` events (and the trade
+  ledger) appear once villagers use `propose_trade`/`answer_trade`.
 - `BotPool` is built without `currentRunOf`, so every `vitals.currentRun` is `null` (`eden/src/bots/pool.ts:271`).
 
 ## Related

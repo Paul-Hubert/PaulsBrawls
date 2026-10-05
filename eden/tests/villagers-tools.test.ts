@@ -14,7 +14,7 @@ import { ToolRegistry, type ToolContext } from '../src/villagers/tools';
 import { SubscriptionStore } from '../src/villagers/subscriptions';
 import { VillagerMemory } from '../src/villagers/memory';
 import type { LlmToolCall } from '../src/llm/client';
-import type { RunnerRef } from '../src/types/index';
+import type { PendingTrade, RunnerRef, TradeDesk, TradeOffer } from '../src/types/index';
 
 const RUNNER: RunnerRef = { name: 'Firmin', role: 'farmer', tier: 'mortal' };
 
@@ -44,14 +44,18 @@ const CTX = (over: Partial<ToolContext> = {}): ToolContext => ({ villager: 'Firm
 
 const OBJ = { type: 'object', properties: {} };
 
-test('M3-2 (golden schemas): the villager tool surface is exactly the M3+M5 set', () => {
+test('M3-2 (golden schemas): the villager tool surface is exactly the M3+M5+trade set', () => {
   const { tools } = harness();
   const names = tools.definitions().map((d) => d.function.name).sort();
   // M5 added `unsubscribe` (the plan §4 M5-2 lists subscribe/unsubscribe/list_subscriptions) and wired
   // subscribe/list_subscriptions to the real store (no longer stubs) — an intentional schema change.
+  // The trade tools (propose_trade/answer_trade/list_trades, 04 §Brain Social) wire social/'s TradeBook.
   assert.deepEqual(names, [
+    'answer_trade',
     'done',
     'list_subscriptions',
+    'list_trades',
+    'propose_trade',
     'read_skill',
     'recall',
     'remember',
@@ -318,4 +322,63 @@ test('M3-2: list_subscriptions renders the filter + the disabled marker', async 
   assert.match(out.content, /entity-spotted/);
   assert.match(out.content, /filtre/i, 'the filter is rendered');
   assert.match(out.content, /désactivé/i, 'the disabled marker is rendered');
+});
+
+// ── Trade tools: propose_trade / answer_trade / list_trades reach the TradeDesk seam (04 §Brain Social) ──
+
+function fakeDesk() {
+  const proposed: TradeOffer[] = [];
+  const answers: Array<{ id: string; by: string; accept: boolean }> = [];
+  const desk: TradeDesk = {
+    propose: (offer) => {
+      proposed.push(offer);
+      if (offer.to === 'Steve') return { ok: false, reason: '"Steve" n’est pas un villageois' };
+      return { ok: true, trade: { id: 'T1', offer, expiresAt: Date.UTC(2026, 0, 1, 12, 30) } };
+    },
+    answer: async (id, by, accept) => {
+      answers.push({ id, by, accept });
+      return id === 'T1' ? { ok: true } : { ok: false, reason: 'aucune offre' };
+    },
+    pendingFor: (v): PendingTrade[] =>
+      v === 'Firmin'
+        ? [{ id: 'T1', offer: { from: 'Pilou', to: 'Firmin', give: [{ item: 'coin', count: 3 }], want: [] }, expiresAt: Date.UTC(2026, 0, 1, 12, 30) }]
+        : [],
+  };
+  return { desk, proposed, answers };
+}
+
+test('trade tools: propose_trade proposes AS the acting villager; answer_trade/list_trades go through the desk', async () => {
+  const { library, engine, retriever, journal } = harness();
+  const { desk, proposed, answers } = fakeDesk();
+  const wired = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: 400, trade: desk });
+
+  const p = await wired.dispatch(call('propose_trade', { to: 'Pilou', give: [{ item: 'coin', count: 3 }], want: [{ item: 'bread', count: 2 }] }), CTX());
+  assert.notEqual(p.ok, false);
+  assert.match(p.content, /T1/);
+  assert.deepEqual(proposed[0], { from: 'Firmin', to: 'Pilou', give: [{ item: 'coin', count: 3 }], want: [{ item: 'bread', count: 2 }] });
+
+  const refused = await wired.dispatch(call('propose_trade', { to: 'Steve', give: [], want: [{ item: 'coin', count: 1 }] }), CTX());
+  assert.equal(refused.ok, false);
+  assert.match(refused.content, /pas un villageois/);
+
+  const acc = await wired.dispatch(call('answer_trade', { id: 'T1', accept: true }), CTX());
+  assert.match(acc.content, /conclu/);
+  assert.deepEqual(answers[0], { id: 'T1', by: 'Firmin', accept: true });
+  const dec = await wired.dispatch(call('answer_trade', { id: 'nope', accept: false }), CTX());
+  assert.equal(dec.ok, false);
+
+  const list = await wired.dispatch(call('list_trades', {}), CTX());
+  assert.match(list.content, /T1 — reçue de Pilou: il donne 3 coin contre rien \(expire 12:30 UTC\)/);
+});
+
+test('trade tools: malformed args are usage errors; an unwired desk is an honest stub', async () => {
+  const { tools, library, engine, retriever, journal } = harness();
+  const { desk } = fakeDesk();
+  const wired = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: 400, trade: desk });
+  assert.equal((await wired.dispatch(call('propose_trade', { to: 'Pilou', give: 'coin', want: [] }), CTX())).ok, false);
+  assert.equal((await wired.dispatch(call('propose_trade', { give: [], want: [] }), CTX())).ok, false);
+  assert.equal((await wired.dispatch(call('answer_trade', { id: 'T1' }), CTX())).ok, false, 'accept must be a boolean');
+  const stub = await tools.dispatch(call('propose_trade', { to: 'Pilou', give: [], want: [] }), CTX());
+  assert.equal(stub.ok, false);
+  assert.match(stub.content, /non câblé/);
 });

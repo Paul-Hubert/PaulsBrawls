@@ -30,7 +30,7 @@ import { VillagerInbox } from './villagers/inbox';
 import { SubscriptionStore, type FilterContext } from './villagers/subscriptions';
 import { loadRoles, seedRoleDefaults } from './villagers/role-defaults';
 import { VillagerReactivity } from './villagers/reactivity';
-import type { WakeupFn } from './villagers/events';
+import type { WakeupRequest } from './villagers/events';
 import { GodService } from './god/god';
 import { Curriculum, loadCurriculumPrompt, type CurriculumTrigger } from './god/curriculum';
 import { Orchestrator, loadOrchestratorPrompt, type DispatchTrigger } from './god/orchestrator';
@@ -38,7 +38,7 @@ import { CriticDesk, loadCriticPrompt } from './god/critic';
 import { GodBody } from './god/body';
 import { VillagerMemory } from './villagers/memory';
 import { MemorySummarizer } from './villagers/memory-summarizer';
-import { SettlementClient } from './social/trade';
+import { SettlementClient, TradeBook, type ReachStrategy, type TradeOffer } from './social/trade';
 import {
   SkillStatsView,
   CompetenceView,
@@ -547,11 +547,53 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   );
   const memoryFor = (name: string): VillagerMemory | undefined => memories.get(name);
 
-  const tools = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: config.skills.maxSkillLines, memoryFor });
+  const inboxes = new Map<string, Inbox>(config.villagers.map((v) => [v.name, new VillagerInbox(v.name, journal)]));
+
+  // ── Trade (04 §Trade) — the SettlementClient POSTs typed offers to the mod's :8767 listener
+  //    (coin→paulsbrawls:coin; R29: needs :8767 free of the dev server). The token, if the mod has one, is a
+  //    secret, so it comes from the env, never eden.json. TradeBook adds consent on top: propose_trade only
+  //    puts an offer on the table; the partner's answer_trade(accept) settles it. Only roster villagers trade. ──
+  const settlement = new SettlementClient({ url: config.settlement.url, journal, token: process.env.EDEN_SETTLEMENT_TOKEN });
+  const villagerNames = new Set(config.villagers.map((v) => v.name));
+  const roleOf = (name: string): string => config.villagers.find((v) => v.name === name)?.role ?? 'villager';
+  // Set once the reactive wake-up exists (live pool only); until then an offer still lands in the inbox.
+  let wakeForTrade: ((villager: string, line: string) => void) | undefined;
+  // R33 walk-then-talk: on accept, the partner walks to the proposer with the go-to library skill. The mod
+  // refuses parties farther apart than its maxTradeDistance (default 16), so aim well inside it.
+  const TRADE_REACH = 8;
+  const reachFor = args.pool
+    ? (offer: TradeOffer): ReachStrategy => {
+        const pos = (name: string) => args.pool!.bot(name)?.entity?.position;
+        return {
+          inRange: () => {
+            const a = pos(offer.from);
+            const b = pos(offer.to);
+            return !!a && !!b && Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= TRADE_REACH;
+          },
+          walkTo: async () => {
+            const target = pos(offer.from);
+            if (!target) throw new Error(`${offer.from} n'est pas connecté`);
+            await engine.run('go-to', { x: Math.round(target.x), y: Math.round(target.y), z: Math.round(target.z), range: 3 }, { name: offer.to, role: roleOf(offer.to), tier: 'mortal' });
+          },
+        };
+      }
+    : undefined;
+  const tradeBook = new TradeBook({
+    journal,
+    settlement,
+    isVillager: (name) => villagerNames.has(name),
+    ...(reachFor ? { reachFor } : {}),
+    notify: (to, line, kind) => {
+      inboxes.get(to)?.deliver({ from: 'villager', kind: 'tell', payload: { text: line }, at: Date.now() });
+      if (kind === 'offer') wakeForTrade?.(to, line);
+      else memories.get(to)?.remember({ kind: 'trade', text: line, tags: ['échange'] });
+    },
+  });
+
+  const tools = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: config.skills.maxSkillLines, memoryFor, trade: tradeBook });
   const builder = new ContextPackBuilder({ journal });
   const brain = new Brain({ builder, tools, scheduler, client, journal });
 
-  const inboxes = new Map<string, Inbox>(config.villagers.map((v) => [v.name, new VillagerInbox(v.name, journal)]));
   const god = new GodService({ journal, library, inboxes });
   // When a scenario supplies a godPrompt, append it to every desk's base system prompt so God knows the
   // mission, what to teach, and any standing constraints — without touching the .md files (S6).
@@ -568,13 +610,6 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
 
   // The body (theatrics, never a dependency) — built so divine stage-setting has a runner (M3-5).
   void new GodBody({ engine, journal, avatarName: config.god.name, embodiedVerdicts: config.god.embodiedVerdicts });
-
-  // The SettlementClient for trade (POSTs typed offers to settlement.url; coin→paulsbrawls:coin). Conversation/
-  //    trade SERVICES are constructed per-interaction with bot-backed sinks (Conversant/ReachStrategy) at run
-  //    time — those need a live bot, so they're created lazily in the (real-boot) flow, not here. Wired from
-  //    config (R29: needs :8767, free of the dev server); constructed here so a boot fails fast if the url is
-  //    malformed. The per-villager memories above are stable singletons the admin + the refinement loop read.
-  void new SettlementClient({ url: config.settlement.url, journal });
 
   const roster = new Map<string, RosterEntry>(config.villagers.map((v) => [v.name, { name: v.name, role: v.role, persona: `Tu es ${v.name}, ${v.role} du village. Tu parles français.` }]));
   // P2b: the always-in-prompt teaching set — the exemplar mortal stock skills' working NAMED-function
@@ -630,7 +665,8 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
     // system.error): a best-effort reaction failing must not fail a run (the zero-token skill reflexes are
     // the load-bearing path). Reactive wake-ups ride the FAST tier (D-13: the strong tier's budget is for
     // novelty, not reflexes). It does NOT drain the inbox (the rollout coordinator owns directive draining).
-    const wakeup: WakeupFn = async (req) => {
+    // The request's `event` is unused here, so trade offers can wake a villager without inventing one.
+    const wakeup = async (req: Omit<WakeupRequest, 'event'>): Promise<void> => {
       const entry = roster.get(req.villager);
       try {
         // R61: pre-load the top-k relevant existing skills. This path is FAST-tier with
@@ -667,6 +703,10 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
       } catch (e) {
         logger.warn('villagers', `reactive wake-up for ${req.villager} failed: ${e instanceof Error ? e.message : String(e)}`);
       }
+    };
+    // A trade offer wakes its partner on the conversation lane so it can answer_trade before expiry.
+    wakeForTrade = (villager, line) => {
+      void wakeup({ villager, triggers: [line], hints: ["réponds à l'offre d'échange avec answer_trade"], lane: 'conversation' });
     };
 
     // Live world facts the FilterEvaluator reads (P5: data in). Read off the live bot (not the

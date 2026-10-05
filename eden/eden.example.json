@@ -61,6 +61,8 @@
     "autoQuarantineAfter": 5        // consecutive-failure tripwire that files a critic ticket
   },
 
+  // The mod's optional settlementToken is NOT set here (secrets are env-only): export EDEN_SETTLEMENT_TOKEN
+  // (or put it in api-keys.env) with the same value as settlementToken in village_config.properties.
   "settlement": { "url": "http://127.0.0.1:8767/trade/execute" },
 
   "admin": { "port": 8770 },

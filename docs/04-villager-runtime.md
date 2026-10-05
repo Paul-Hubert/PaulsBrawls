@@ -139,7 +139,7 @@ bespoke action tools.
 |---|---|
 | Skills | `search_skills`, `read_skill`, `write_skill`, `run_skill` ([02 §Retrieval](02-skill-system.md#retrieval--prompting)) — mortal tier only: divine skills are invisible and unrunnable for villagers ([02 §Tiers](02-skill-system.md#tiers-mortal-and-divine)) |
 | Reactivity | `subscribe`, `unsubscribe`, `list_subscriptions` |
-| Social | `say` (French), `tell`, `start_conversation`, `leave_conversation`, trade tools (typed offers; settlement unchanged from v1) |
+| Social | `say` (French), `tell`, `start_conversation`, `leave_conversation` *(not built yet)*; trade: `propose_trade {to, give, want}`, `answer_trade {id, accept}`, `list_trades` (typed offers, consent per D-16; settlement unchanged from v1) |
 | Memory | `remember`, `recall` |
 | God | `report_to_god(text)` — progress, objections, pleas; lands in the critic/orchestrator queues |
 | Control | `done(summary, mood?)` |
@@ -148,6 +148,20 @@ Direct micro-action tools (`go_to`, `dig`, …) **do not exist** — movement an
 happen through `run_skill` on library skills. This forces the library to stay the
 single vocabulary of action (P2) and makes every world effect a journaled,
 criticizable run.
+
+### Decision D-16: a trade moves nothing until the partner accepts
+
+`propose_trade` only puts a typed offer on the table (`TradeBook`, social/trade.ts): it journals
+`trade.proposed` and wakes the partner on the conversation lane. The **partner's** `answer_trade {accept:true}`
+is what settles it (R33 walk to the proposer, then the `:8767` POST). The proposer may withdraw; nobody else can
+answer. Offers expire after 5 minutes; a proposer has at most 3 open; only roster villagers can be parties.
+
+*Chosen over* letting `propose_trade` settle at once: the mod swaps two inventories atomically on request, so a
+one-sided tool would let any villager take another's items. *Chosen over* negotiating inside a `Conversation`:
+conversations aren't wired yet, and the offer object already carries everything settlement needs; a refusal plus
+a new offer is the counter-offer. Declines, withdrawals and expiries close the ledger entry as `trade.failed`
+with the reason (inventories untouched — the existing kind's meaning), so no new journal kind (S1).
+The villager reaches the book through the `TradeDesk` seam in `types/social.ts` (villagers/ never imports social/).
 
 **Conversations** keep v1's design wholesale (it worked): in-process inboxes,
 turn-taking with deadlines and caps, chat mirrored to the game only when a player

@@ -74,13 +74,14 @@ post-provider), `journal`, `coordinator?` and `god?` (present only when God is w
 `EmbeddingsService({ backend: localBackend() })` → `SkillLibrary({ dataDir, journal, probationRuns })` →
 `seedStockSkills(library)` → `AllGranted` → `SkillEngine({ runDefaultTimeoutMs, stallSeconds, maxCallDepth,
 autoQuarantineAfter, resolveBot: pool.bot })` → `SkillRetriever` → `MemorySummarizer(client)` → `VillagerMemory`
-per villager → `ToolRegistry({ maxSkillLines, memoryFor })` → `ContextPackBuilder` → `Brain` → `VillagerInbox` per
-villager → `GodService({ journal, library, inboxes })` → desk prompts (if `god.godPrompt`, appended as
+per villager → `VillagerInbox` per villager → `SettlementClient({ url, journal, token: $EDEN_SETTLEMENT_TOKEN })` →
+`TradeBook({ isVillager, reachFor (pool only), notify })` → `ToolRegistry({ maxSkillLines, memoryFor, trade })` →
+`ContextPackBuilder` → `Brain` → `GodService({ journal, library, inboxes })` → desk prompts (if `god.godPrompt`, appended as
 `\n\n## Scenario instructions\n<godPrompt>` to each desk's `.md` prompt) → `Curriculum` (then force-assigned as
 `god.ledger`, line 565) → `Orchestrator` → `CriticDesk({ batchMax: 3 })` → `void new GodBody(...)` →
-`void new SettlementClient(...)` → roster map → exemplars (mortal stock skills with `exemplar`) → primitives
+roster map → exemplars (mortal stock skills with `exemplar`) → primitives
 (mortal non-exemplar stock skills as one-liners) → `snapshotFor` (live position/health/food/inventory only) →
-`RolloutCoordinator` → `SubscriptionStore` → (pool only) `seedRoleDefaults` per villager, reactive `wakeup`
+`RolloutCoordinator` → `SubscriptionStore` → (pool only) `seedRoleDefaults` per villager, reactive `wakeup` (also wired as the trade-offer wake-up)
 closure (fast tier, k=8 skills, 5 memories), `vitalsFor`, `VillagerReactivity`.
 
 ## Process guards (`installProcessGuards`, `eden/src/main.ts:1169-1186`)
