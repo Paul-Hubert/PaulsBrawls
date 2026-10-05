@@ -10,7 +10,7 @@ verified_at: 4a8081f
 
 # Eden social layer — conversations, trade, settlement
 
-**TL;DR.** `eden/src/social/` holds two engines: `Conversation` (bot↔bot alternating turns, hard cap 12 turns, 30 s per-turn deadline, game-chat mirror only when a player is in earshot and at most once per 4 s per speaker, structured leave → relation + memory) and trade. **Trade is wired**: villagers get three tools — `propose_trade`, `answer_trade`, `list_trades` — backed by a `TradeBook` that adds consent (an offer moves nothing until the *partner* accepts; offers expire after 5 min; only roster villagers can be parties). An accept runs `TradeService` (R33 walk-then-talk via the `go-to` skill) then `SettlementClient` POSTs `{botA, botB, aGives, bGives}` to `settlement.url` (default `http://127.0.0.1:8767/trade/execute`, `coin` → `paulsbrawls:coin`, `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when set). `Conversation` is still **not reachable in production**: no `say`/`tell`/`start_conversation` tools.
+**TL;DR.** `eden/src/social/` holds two engines: `Conversation` (bot↔bot alternating turns, hard cap 12 turns, 30 s per-turn deadline, game-chat mirror only when a player is in earshot and at most once per 4 s per speaker, structured leave → relation + memory) and trade. **Trade is wired**: villagers get three tools — `propose_trade`, `answer_trade`, `list_trades` — backed by a `TradeBook` that adds consent (an offer moves nothing until the *partner* accepts; offers expire after 5 min; only roster villagers can be parties). An accept runs `TradeService` (R33 walk-then-talk via the `go-to` skill) then `SettlementClient` POSTs `{botA, botB, aGives, bGives}` to `settlement.url` (default `http://127.0.0.1:8767/trade/execute`, `coin` → `paulsbrawls:coin`, `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when set). **Conversations are wired too (D-18):** `say`, `tell` and `start_conversation` reach a `ConversationBook` through the `types/` `ConversationDesk` seam; a conversation runs in the background with fast-tier turns (`villagers/conversation-turn.ts`).
 
 ## Layering
 
@@ -145,11 +145,23 @@ const TOKEN_HEADER = 'X-Village-Token'                                          
 | `SettlementClient` | **wired** — one instance, token from `EDEN_SETTLEMENT_TOKEN` | `eden/src/main.ts:556` |
 | `TradeBook` / `TradeService` | **wired** — the book is injected into `ToolRegistry` as `trade`; a `TradeService` is built per accepted offer with that offer's `ReachStrategy` | `eden/src/main.ts:581-593` |
 | Trade tools | `propose_trade`, `answer_trade`, `list_trades` | `eden/src/villagers/tools.ts:162-176`, `:367-406` |
-| `Conversation` | never constructed outside tests | grep: only `social/conversation.ts` |
-| Villager speech tools (`say`, `tell`, `start_conversation`, `leave_conversation`) | **absent** | `eden/src/villagers/tools.ts` |
-| Admin "tell" | `POST /villagers/:name/prompt` (`eden/src/admin/server.ts:248`) delivers `{from:'villager', kind:'tell', payload:{text, from}}` to a villager inbox — not a conversation | `eden/src/main.ts` `onPrompt` |
+| `ConversationBook` | **wired** — injected into `ToolRegistry` as `conversations`; conversants come from the live pool (offline = refused), memories from `VillagerMemory`, turns from `ConversationTurner` | `eden/src/main.ts` (`wireGod`) |
+| Speech tools | `say {text}`, `tell {to, text}`, `start_conversation {with, topic}`; `leave_conversation` is the turn's `{"leave"}` reply | `eden/src/villagers/tools.ts` |
+| Admin "tell" | `POST /villagers/:name/prompt` delivers `{from:'villager', kind:'tell', payload:{text, from}}` to a villager inbox — it raises the `inbox` event (D-17), not a conversation | `eden/src/main.ts` `onPrompt` |
 
-So a live host now produces `trade.*` events (when villagers choose to trade) but still no `conversation.*` or `chat.*` events. Negotiation happens through the offer itself (propose → accept/decline, or a new counter-offer), not through a conversation.
+A live host produces `trade.*`, `chat.said`/`chat.heard` and `conversation.*` events. Negotiation still happens through
+the offer itself (propose → accept/decline, or a new counter-offer), not inside a conversation (D-18).
+
+### `ConversationBook` (D-18)
+
+| Method | Refusals (French, read by the villager) | Effect |
+|---|---|---|
+| `say(v, text)` | empty; `<v> n'est pas connecté`; `tu viens de parler — attends un peu` (< 4 s) | journal `chat.said {from:v, to:'*', text}`; `sayInGame(text)` (a leading `/` stripped — villagers are op'd) |
+| `tell(from, to, text)` | empty; to self; `<to> n'est pas un villageois` | journal `chat.said {from, to, text}`; `deliverTell` → inbox `tell` `{text, from}` as actor `villager:<from>` (raises D-17 `inbox`) |
+| `start(a, b, topic)` | self; not a villager; either side already talking; `trop de conversations en cours (max 2)`; either offline; `trop loin` (> 16 blocks) | a `Conversation` (8 turns, 60 s/turn) with `speakerFor` turns and nearby villagers as eavesdroppers; runs detached; both sides are freed when it ends; a throw journals `system.error` |
+
+Every spoken line is trimmed to one line of ≤ 280 characters. Each `Conversation` turn now receives the transcript so
+far (`SpeakFn(transcript)`, types moved to `types/social.ts`).
 
 ## Views fed by social events (`eden/src/views/index.ts`)
 
@@ -165,14 +177,15 @@ Journal payload types: `eden/src/journal/kinds.ts:176-202` (`chat.said`, `chat.h
 ## How to extend (wiring the layer for real)
 
 1. ~~Trade tools + `SettlementClient`/`TradeService` wiring~~ — done (`TradeBook` behind the `types/` `TradeDesk` seam, as with `memoryFor`). Before trusting it in production, run one live `:8767` smoke trade (two online villagers, a `coin` line).
-2. Conversations: add `start_conversation`/`say`/`leave_conversation` tools the same way (a `types/` seam injected from `main.ts`), building `Conversant`s from `VillagerMemory` + a bot-backed `sayInGame`/`playerInEarshot`.
+2. ~~Conversations~~ — done (D-18, `ConversationBook` behind `ConversationDesk`). Before trusting it, run one live
+   conversation between two online villagers (only a live run proves the mirror gate and the turn latency).
 3. ~~Fix the body mapping to the Java contract~~ — done (`toSettlementRequest`).
 4. Expose `views.tradeLedger` / `views.relations` through admin accessors if the website needs them.
 
 ## Gotchas & known issues
 
 - ~~Settlement JSON field names mismatch the Java listener~~ — fixed. The body is `{botA, botB, aGives, bGives}`, pinned by tests and by a fake that runs the Java shape check. Java-side bug #2 (duplicate item lines each validated against the whole inventory) is fixed too: the listener sums lines per item before validating — see [java-integration.md](java-integration.md).
-- `Conversation` is dead code in production (no speech tools). Trade is live.
+- ~~`Conversation` is dead code in production~~ — wired (D-18). Trade is live.
 - Pending offers are RAM-only: a host restart forgets them (journaled `trade.proposed` with no close event; nothing moved).
 - If the mod has a `settlementToken` but `EDEN_SETTLEMENT_TOKEN` is unset or different, every accepted trade fails with `settlement HTTP 401`.
 - `TRADE_REACH` (8) is a constant, not read from the mod: if the mod's `maxTradeDistance` is lowered below 8, an "in range" pair can still be refused.

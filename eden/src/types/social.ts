@@ -91,3 +91,41 @@ export interface TradeDesk {
   /** Live (unexpired) offers `villager` made or received. */
   pendingFor(villager: string): PendingTrade[];
 }
+
+// ── Conversations (D-18). The speak-turn types live here so villagers/ can implement a turn generator and
+//    social/ can run the conversation without either importing the other. ──
+
+/** The structured `leave_conversation` payload — moves relations + seeds a headline memory (04). */
+export interface LeaveDecision {
+  /** Relation delta toward the other party (signed). */
+  opinion: number;
+  /** The short relation note (replaces the prior note). */
+  note: string;
+  /** The headline — seeded as a HIGH-importance social memory for BOTH parties (04). */
+  headline: string;
+}
+
+/** What a participant's turn produces: a line to say, or a decision to leave. */
+export type SpeakResult = { say: string } | { leave: LeaveDecision };
+
+/** One line already said in a conversation (what the next speaker reads). */
+export interface TranscriptLine {
+  from: string;
+  text: string;
+}
+
+/** Asks a participant for its next turn, given everything said so far. The conversation enforces the deadline. */
+export type SpeakFn = (transcript: readonly TranscriptLine[]) => Promise<SpeakResult>;
+
+/**
+ * What a villager's speech tools may do — the seam that lets villagers/tools.ts reach social/'s ConversationBook
+ * (D-18). Neither method throws: a refusal is a named {ok:false, reason} in French (it is read by the villager).
+ */
+export interface ConversationDesk {
+  /** Say a line aloud in the game chat (public; heard by whoever is near). */
+  say(villager: string, text: string): { ok: true } | { ok: false; reason: string };
+  /** Send a private line to another villager's inbox (it wakes them — D-17). */
+  tell(from: string, to: string, text: string): { ok: true } | { ok: false; reason: string };
+  /** Open a turn-taking conversation with a nearby villager; it runs in the background. */
+  start(initiator: string, partner: string, topic: string): { ok: true; id: string } | { ok: false; reason: string };
+}

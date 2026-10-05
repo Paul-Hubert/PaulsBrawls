@@ -142,6 +142,23 @@ trade-specific hint. An `inbox` wake-up shows the pending messages (`peek`) but 
 *Chosen over* firing `inbox` on every delivery (double work on every directive) and over adding a mineflayer-style
 emitter to the inbox (the inbox is layer 3, the adapter layer 1 — the host closure is the seam).
 
+### Decision D-18: conversations are talk, trade stays standalone
+
+Three speech tools reach social/'s `ConversationBook` through the `types/` `ConversationDesk` seam: `say {text}`
+(public game chat, a leading `/` stripped because villagers are op'd, ≥ 4 s apart), `tell {to, text}` (a private
+line into another villager's inbox — it raises that villager's `inbox` event, D-17) and `start_conversation {with,
+topic}` (a nearby villager, ≤ 16 blocks, both online, neither already talking; at most 2 conversations at once; it
+runs in the background and the tool returns at once). Each turn is one fast-tier LLM call on the `conversation`
+lane (`villagers/conversation-turn.ts`), given the persona, the topic, a few recollections and the transcript; it
+answers strict JSON `{"say"}` or `{"leave": {opinion, note, headline}}`. **`leave_conversation` is that structured
+reply, not a tool.** Conversations default to 8 turns and a 60 s per-turn deadline (a turn waits out the
+per-villager LLM cooldown first).
+
+**Trade stays standalone (D-16):** offers are not negotiated inside a conversation. A conversation may lead a
+villager to call `propose_trade` in its next deliberation; the offer object already carries everything settlement
+needs. *Chosen over* conversation-embedded offers because a turn generator that can move items would bypass the
+consent step D-16 exists for, and because the conversation turns run on the cheap fast tier without tools.
+
 ## The brain
 
 One deliberation = one LLM conversation: context pack → assistant turns with tool
@@ -154,7 +171,7 @@ bespoke action tools.
 |---|---|
 | Skills | `search_skills`, `read_skill`, `write_skill`, `run_skill` ([02 §Retrieval](02-skill-system.md#retrieval--prompting)) — mortal tier only: divine skills are invisible and unrunnable for villagers ([02 §Tiers](02-skill-system.md#tiers-mortal-and-divine)) |
 | Reactivity | `subscribe`, `unsubscribe`, `list_subscriptions` |
-| Social | `say` (French), `tell`, `start_conversation`, `leave_conversation` *(not built yet)*; trade: `propose_trade {to, give, want}`, `answer_trade {id, accept}`, `list_trades` (typed offers, consent per D-16; settlement unchanged from v1) |
+| Social | `say` (French), `tell`, `start_conversation` (D-18; `leave_conversation` is the conversation turn's structured reply, not a tool); trade: `propose_trade {to, give, want}`, `answer_trade {id, accept}`, `list_trades` (typed offers, consent per D-16; settlement unchanged from v1) |
 | Memory | `remember`, `recall` |
 | God | `report_to_god(text)` — progress, objections, pleas; lands in the critic/orchestrator queues |
 | Control | `done(summary, mood?)` |

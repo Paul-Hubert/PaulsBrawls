@@ -50,8 +50,8 @@ which drives this process's admin API on :8770.
 
 ## Designed ≠ wired
 main.ts is the only composition root; anything not constructed there does not run in a real
-boot, however well it is tested. Not wired as of 4a8081f: social/'s Conversation (trade IS wired:
-propose_trade/answer_trade → TradeBook → SettlementClient), GodBody / embodiedVerdicts,
+boot, however well it is tested. Wired since 4a8081f: trade (TradeBook → SettlementClient), the subscription
+tools, conversations (say/tell/start_conversation → ConversationBook, D-18). Not wired: GodBody / embodiedVerdicts,
 Orchestrator.intervene, the skill tripwire (no onTripwire), the describer, anchors + verifyHashes,
 DriveTracker, combineDesks, and the item-received / block-broken-nearby / run-finished
 events (chat, entity-spotted, night/day and inbox are live since D-17). SQLite holds only the journal; God state is RAM-only.

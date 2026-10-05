@@ -19,7 +19,7 @@
 
 import type { IJournal } from '../journal/journal';
 import type { LlmToolCall, LlmToolDef } from '../llm/client';
-import type { EventType, Filter, JsonSchema, RunnerRef, RunReport, SubscriptionHandler, TradeDesk, TradeItem } from '../types/index';
+import type { ConversationDesk, EventType, Filter, JsonSchema, RunnerRef, RunReport, SubscriptionHandler, TradeDesk, TradeItem } from '../types/index';
 import { SkillLibrary } from '../skills/library';
 import { SkillEngine } from '../skills/engine';
 import { SkillRetriever } from '../skills/retrieve';
@@ -75,6 +75,9 @@ export interface ToolRegistryOptions {
   /** The trade book behind propose_trade/answer_trade/list_trades (main.ts wires social/'s TradeBook).
    *  Optional so tests that don't wire trade keep honest "(échange non câblé)" stubs. */
   trade?: TradeDesk;
+  /** D-18: the conversation book behind say/tell/start_conversation (main.ts wires social/'s ConversationBook).
+   *  Optional so tests that don't wire it keep honest "(conversation non câblée)" stubs. */
+  conversations?: ConversationDesk;
 }
 
 const SCHEMA_OBJECT = { type: 'object' } as const;
@@ -174,6 +177,22 @@ export class ToolRegistry {
         required: ['id', 'accept'],
       }),
       def('list_trades', "Liste les offres d'échange en attente que tu as faites ou reçues.", { type: 'object', properties: {} }),
+      // D-18 — speech. leave_conversation is not a tool: a conversation turn ends it with a structured reply.
+      def('say', 'Dis une phrase à voix haute dans le chat du jeu (en français) ; les joueurs et villageois proches l’entendent.', {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text'],
+      }),
+      def('tell', 'Envoie un message privé à un autre villageois (il le reçoit dans sa boîte et peut te répondre).', {
+        type: 'object',
+        properties: { to: { type: 'string', description: 'le nom du villageois' }, text: { type: 'string' } },
+        required: ['to', 'text'],
+      }),
+      def('start_conversation', 'Engage une vraie conversation (à tour de rôle) avec un villageois proche sur un sujet ; elle se déroule ensuite d’elle-même et chacun s’en souviendra.', {
+        type: 'object',
+        properties: { with: { type: 'string', description: 'le nom du villageois (à moins de 16 blocs)' }, topic: { type: 'string' } },
+        required: ['with', 'topic'],
+      }),
     ];
   }
 
@@ -210,6 +229,12 @@ export class ToolRegistry {
           return await this.answerTrade(a, ctx);
         case 'list_trades':
           return this.listTrades(ctx);
+        case 'say':
+          return this.say(a, ctx);
+        case 'tell':
+          return this.tell(a, ctx);
+        case 'start_conversation':
+          return this.startConversation(a, ctx);
         default:
           return { content: `Erreur: outil inconnu "${callMsg.name}" (unknown tool).`, ok: false };
       }
@@ -361,6 +386,34 @@ export class ToolRegistry {
       return `${s.id} — quand "${s.on}"${filter} → ${describeHandler(s.handler)}${off}`;
     });
     return { content: lines.join('\n') };
+  }
+
+  // ── Speech: say / tell / start_conversation (D-18) ─────────────────────────────────────────────────
+  private say(a: Record<string, unknown>, ctx: ToolContext): ToolOutcome {
+    const desk = this.opts.conversations;
+    if (!desk) return { content: '(conversation non câblée — rien n’a été dit)', ok: false };
+    const r = desk.say(ctx.villager, String(a['text'] ?? ''));
+    return r.ok ? { content: 'Dit.' } : { content: `Non dit : ${r.reason}.`, ok: false };
+  }
+
+  private tell(a: Record<string, unknown>, ctx: ToolContext): ToolOutcome {
+    const desk = this.opts.conversations;
+    if (!desk) return { content: '(conversation non câblée — message non envoyé)', ok: false };
+    const to = String(a['to'] ?? '').trim();
+    if (!to) return { content: 'Erreur: tell requiert "to" (le destinataire).', ok: false };
+    const r = desk.tell(ctx.villager, to, String(a['text'] ?? ''));
+    return r.ok ? { content: `Message envoyé à ${to}.` } : { content: `Message non envoyé : ${r.reason}.`, ok: false };
+  }
+
+  private startConversation(a: Record<string, unknown>, ctx: ToolContext): ToolOutcome {
+    const desk = this.opts.conversations;
+    if (!desk) return { content: '(conversation non câblée — aucune conversation ouverte)', ok: false };
+    const partner = String(a['with'] ?? '').trim();
+    if (!partner) return { content: 'Erreur: start_conversation requiert "with" (le villageois).', ok: false };
+    const r = desk.start(ctx.villager, partner, String(a['topic'] ?? ''));
+    return r.ok
+      ? { content: `Conversation engagée avec ${partner} (id ${r.id}) ; elle se poursuit d’elle-même.` }
+      : { content: `Conversation impossible : ${r.reason}.`, ok: false };
   }
 
   // ── Trade: propose_trade / answer_trade / list_trades (04 §Brain, Social) ─────────────────────────

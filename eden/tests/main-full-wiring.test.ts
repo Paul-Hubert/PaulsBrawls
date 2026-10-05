@@ -209,3 +209,20 @@ test('bug #16: /scenario/restart forgets live memory and self-authored subscript
   const after = await host.tools.dispatch(call('recall', { query: 'puits vie' }), FIRMIN);
   assert.doesNotMatch(after.content, /puits/);
 });
+
+// D-18: the speech tools reach social/'s ConversationBook through the composition root. Without a bot pool every
+// villager is offline: a tell still lands in the partner's inbox; say/start_conversation are refused by name.
+test('wiring (D-18): tell delivers to the partner inbox; say/start_conversation refuse an offline villager', async (t) => {
+  const { host } = await bootGod(t);
+  assert.ok(host.tools);
+  const told = await host.tools.dispatch(call('tell', { to: 'Alban', text: 'viens au champ' }), FIRMIN);
+  assert.equal(told.ok, undefined, told.content);
+  assert.equal((await getJson(host.adminPort, '/villagers/Alban')).body.inboxDepth, 1);
+  const rows = (await getJson(host.adminPort, '/journal?kinds=inbox.delivered,chat.said')).body.events;
+  assert.ok(rows.some((e: any) => e.kind === 'chat.said' && e.payload.to === 'Alban'));
+  assert.ok(rows.some((e: any) => e.kind === 'inbox.delivered' && e.actor === 'villager:Firmin'));
+  const said = await host.tools.dispatch(call('say', { text: 'bonjour' }), FIRMIN);
+  assert.match(said.content, /pas connecté/);
+  const conv = await host.tools.dispatch(call('start_conversation', { with: 'Alban', topic: 'blé' }), FIRMIN);
+  assert.match(conv.content, /pas connecté/);
+});

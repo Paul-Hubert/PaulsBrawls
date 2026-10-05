@@ -44,12 +44,14 @@ const CTX = (over: Partial<ToolContext> = {}): ToolContext => ({ villager: 'Firm
 
 const OBJ = { type: 'object', properties: {} };
 
-test('M3-2 (golden schemas): the villager tool surface is exactly the M3+M5+trade set', () => {
+test('M3-2 (golden schemas): the villager tool surface is exactly the M3+M5+trade+speech set', () => {
   const { tools } = harness();
   const names = tools.definitions().map((d) => d.function.name).sort();
   // M5 added `unsubscribe` (the plan §4 M5-2 lists subscribe/unsubscribe/list_subscriptions) and wired
   // subscribe/list_subscriptions to the real store (no longer stubs) — an intentional schema change.
   // The trade tools (propose_trade/answer_trade/list_trades, 04 §Brain Social) wire social/'s TradeBook.
+  // D-18 added the speech tools say/tell/start_conversation (an intentional schema change, S6) — wired to
+  // social/'s ConversationBook through the types/ ConversationDesk seam.
   assert.deepEqual(names, [
     'answer_trade',
     'done',
@@ -61,8 +63,11 @@ test('M3-2 (golden schemas): the villager tool surface is exactly the M3+M5+trad
     'remember',
     'report_to_god',
     'run_skill',
+    'say',
     'search_skills',
+    'start_conversation',
     'subscribe',
+    'tell',
     'unsubscribe',
     'write_skill',
   ]);
@@ -392,4 +397,13 @@ test('bug #13: write_skill with a path-traversal name is a readable tool error, 
   assert.equal(out.ok, false);
   assert.match(out.content, /invalid skill name "\.\.\/\.\.\/escape"/);
   assert.equal(out.authored, undefined);
+});
+
+test('D-18: the speech tools are honest stubs without a ConversationDesk', async () => {
+  const { tools } = harness();
+  for (const [name, args] of [['say', { text: 'x' }], ['tell', { to: 'Pilou', text: 'x' }], ['start_conversation', { with: 'Pilou', topic: 't' }]] as const) {
+    const out = await tools.dispatch(call(name, args), CTX());
+    assert.equal(out.ok, false);
+    assert.match(out.content, /conversation non câblée/);
+  }
 });

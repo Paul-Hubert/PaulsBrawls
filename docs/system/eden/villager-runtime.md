@@ -13,7 +13,7 @@ verified_at: 4a8081f
 **TL;DR.** A villager reacts through a pipeline: mineflayer signals → per-bot signal adapter (`bots/signals.ts`) →
 `EventRouter` (normalizes into the closed `EdenEvent` union, hysteresis in the emitter) → `SubscriptionRouter`
 (declarative AND-filters; outcome = zero-token **skill** run or ONE coalesced **deliberate** wake-up, R36).
-A deliberation is one `Brain.deliberate` call: an 8-section context pack + up to 16 LLM tool turns over **14 tools**
+A deliberation is one `Brain.deliberate` call: an 8-section context pack + up to 16 LLM tool turns over **17 tools**
 (skill tools, memory, subscriptions, trade, `report_to_god`, `done`) — there are **no direct micro-action tools**.
 God talks to a villager only through its `Inbox`. **In a live boot only `hurt`, `health-low`, `died` and `tick-30s`
 actually fire** (see Gotchas) — most role defaults are inert today.
@@ -259,8 +259,10 @@ Exactly 11 (golden test `eden/tests/villagers-tools.test.ts:47`). Descriptions a
 | `list_subscriptions` | — | lines `<id> — quand "<on>" [filtre: …] → <handler> (désactivé)`. |
 
 **No direct micro-action tools** (`go_to`, `dig`, `say`, …) exist — every world effect is a `run_skill` of a library
-skill (`eden/src/villagers/tools.ts:1-4`). There are **no speech tools** (`say`, `tell`, `start_conversation`, `leave_conversation`) despite `docs/04`
-listing them. The **trade tools** exist: `propose_trade {to, give, want}`, `answer_trade {id, accept}` and
+skill (`eden/src/villagers/tools.ts:1-4`) — speech aside: the **speech tools** `say {text}`, `tell {to, text}` and
+`start_conversation {with, topic}` reach social/'s `ConversationBook` through the `types/` `ConversationDesk` seam
+(`conversations` option, D-18; stubs `(conversation non câblée…)` when unwired; `leave_conversation` is a
+conversation turn's structured reply, not a tool). The **trade tools** exist: `propose_trade {to, give, want}`, `answer_trade {id, accept}` and
 `list_trades` reach social/'s `TradeBook` through the `types/` `TradeDesk` seam (`trade` option, wired in
 `main.ts`); see [social-and-trade.md](social-and-trade.md). Trade tools degrade to `(échange non câblé…)` when unwired. Memory/subscription tools degrade to honest stubs (`(mémoire non câblée…)`,
 `(réactivité non câblée…)`) when unwired. Memory is resolved per `ctx.villager` from the shared registry. In the live host

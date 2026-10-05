@@ -15,25 +15,20 @@
 import { monotonicFactory } from 'ulid';
 
 import type { IJournal } from '../journal/journal';
-import type { Conversant, MemoryWriter } from '../types/index';
+import type {
+  Conversant,
+  ConversationDesk,
+  LeaveDecision,
+  MemoryWriter,
+  SpeakFn,
+  SpeakResult,
+  TranscriptLine,
+} from '../types/index';
 
 const ulid = monotonicFactory();
 
-/** The structured `leave_conversation` payload — moves relations + seeds a headline memory (04). */
-export interface LeaveDecision {
-  /** Relation delta toward the other party (signed). */
-  opinion: number;
-  /** The short relation note (replaces the prior note). */
-  note: string;
-  /** The headline — seeded as a HIGH-importance social memory for BOTH parties (04). */
-  headline: string;
-}
-
-/** What a participant's turn produces: a line to say, or a decision to leave. */
-export type SpeakResult = { say: string } | { leave: LeaveDecision };
-
-/** Asks a participant for its next turn. The conversation enforces the per-turn deadline around it. */
-export type SpeakFn = () => Promise<SpeakResult>;
+// The speak-turn types moved to types/social.ts (D-18) so villagers/ can generate turns without importing social/.
+export type { LeaveDecision, SpeakFn, SpeakResult, TranscriptLine };
 
 /** A conversation participant: the types/ Conversant (name + memory + chat sink + earshot) + its turn fn. */
 export interface ConversationParticipant {
@@ -85,6 +80,8 @@ export class Conversation {
 
   /** Last mirror time per speaker name (rate-limit the game-chat mirror). */
   private readonly lastMirror = new Map<string, number>();
+  /** Everything said so far — handed to each speaker's turn (D-18). */
+  private readonly transcript: TranscriptLine[] = [];
 
   constructor(opts: ConversationOptions) {
     this.journal = opts.journal;
@@ -122,7 +119,7 @@ export class Conversation {
     for (let turn = 1; turn <= this.maxTurns; turn++) {
       let result: SpeakResult;
       try {
-        result = await this.withDeadline(speaker.speak());
+        result = await this.withDeadline(speaker.speak([...this.transcript]));
       } catch {
         reason = 'deadline';
         endedBy = speaker;
@@ -166,6 +163,7 @@ export class Conversation {
     const from = speaker.conversant.name;
     const to = listener.conversant.name;
     this.journal.append(this.actor(speaker), 'chat.said', { from, to, text }, refs);
+    this.transcript.push({ from, text });
 
     // The addressee hears it (not an eavesdrop) + remembers it.
     this.hear(listener.conversant.memory, from, text, false);
@@ -222,4 +220,132 @@ export class Conversation {
   private actor(p: ConversationParticipant): string {
     return `villager:${p.conversant.name}`;
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// ConversationBook (D-18) — the live front of the society layer. It answers the villager speech tools through the
+// types/ ConversationDesk seam: `say` (public game chat), `tell` (a private line into another villager's inbox — it
+// wakes them, D-17) and `start` (open a turn-taking Conversation with a nearby villager, run in the background).
+// Bodies, memories and turn generation are INJECTED by main.ts, so social/ still imports no peer.
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+/** Construction deps — every world/brain fact comes in through a function (main.ts wires them). */
+export interface ConversationBookOptions {
+  journal: IJournal;
+  /** True for a roster villager (only villagers converse or receive tells). */
+  isVillager: (name: string) => boolean;
+  /** The conversant for a CONNECTED villager (memory + chat sink + earshot), or undefined when offline. */
+  conversantFor: (name: string) => Conversant | undefined;
+  /** The turn generator for `self` talking to `partner` about `topic` (an LLM turn in production). */
+  speakerFor: (self: string, partner: string, topic: string) => SpeakFn;
+  /** True iff the two villagers are close enough to talk (main.ts: ≤ 16 blocks). */
+  inEarshot: (a: string, b: string) => boolean;
+  /** Deliver a private line into `to`'s inbox (main.ts: an inbox `tell`, which raises the inbox event). */
+  deliverTell: (to: string, from: string, text: string) => void;
+  /** Other villagers near the speaker, who overhear (free memory entries, 04). Optional. */
+  eavesdroppersFor?: (a: string, b: string) => MemoryWriter[];
+  /** Conversations allowed at once, server-wide (each one costs LLM turns). Default 2. */
+  maxConcurrent?: number;
+  /** Turn cap per conversation. Default 8 (cheaper than the engine's 12). */
+  maxTurns?: number;
+  /** Per-turn deadline. Default 60 s (a turn waits for the per-villager LLM cooldown, then the call). */
+  turnDeadlineMs?: number;
+  /** Minimum gap between two `say`s of one villager. Default 4 s. */
+  sayMinIntervalMs?: number;
+  now?: () => number;
+}
+
+const MAX_LINE = 280;
+
+/** The conversation registry + speech tools (D-18). */
+export class ConversationBook implements ConversationDesk {
+  private readonly o: ConversationBookOptions;
+  private readonly now: () => number;
+  /** villager → id of the conversation it is in. */
+  private readonly busy = new Map<string, string>();
+  private readonly lastSay = new Map<string, number>();
+  private running = 0;
+
+  constructor(opts: ConversationBookOptions) {
+    this.o = opts;
+    this.now = opts.now ?? Date.now;
+  }
+
+  say(villager: string, text: string): { ok: true } | { ok: false; reason: string } {
+    const line = clean(text);
+    if (!line) return { ok: false, reason: 'rien à dire (texte vide)' };
+    const me = this.o.conversantFor(villager);
+    if (!me) return { ok: false, reason: `${villager} n'est pas connecté` };
+    const last = this.lastSay.get(villager);
+    const gap = this.o.sayMinIntervalMs ?? 4_000;
+    if (last !== undefined && this.now() - last < gap) return { ok: false, reason: 'tu viens de parler — attends un peu' };
+    this.lastSay.set(villager, this.now());
+    this.o.journal.append(`villager:${villager}`, 'chat.said', { from: villager, to: '*', text: line });
+    me.sayInGame(line);
+    return { ok: true };
+  }
+
+  tell(from: string, to: string, text: string): { ok: true } | { ok: false; reason: string } {
+    const line = clean(text);
+    if (!line) return { ok: false, reason: 'rien à dire (texte vide)' };
+    if (to === from) return { ok: false, reason: 'tu ne peux pas te parler à toi-même' };
+    if (!this.o.isVillager(to)) return { ok: false, reason: `${to} n'est pas un villageois` };
+    this.o.journal.append(`villager:${from}`, 'chat.said', { from, to, text: line });
+    this.o.deliverTell(to, from, line);
+    return { ok: true };
+  }
+
+  start(initiator: string, partner: string, topic: string): { ok: true; id: string } | { ok: false; reason: string } {
+    if (partner === initiator) return { ok: false, reason: 'tu ne peux pas converser avec toi-même' };
+    if (!this.o.isVillager(partner)) return { ok: false, reason: `${partner} n'est pas un villageois` };
+    if (this.busy.has(initiator)) return { ok: false, reason: 'tu es déjà en conversation' };
+    if (this.busy.has(partner)) return { ok: false, reason: `${partner} est déjà en conversation` };
+    const max = this.o.maxConcurrent ?? 2;
+    if (this.running >= max) return { ok: false, reason: `trop de conversations en cours (max ${max}) — réessaie plus tard` };
+    const a = this.o.conversantFor(initiator);
+    const b = this.o.conversantFor(partner);
+    if (!a) return { ok: false, reason: `${initiator} n'est pas connecté` };
+    if (!b) return { ok: false, reason: `${partner} n'est pas connecté` };
+    if (!this.o.inEarshot(initiator, partner)) return { ok: false, reason: `${partner} est trop loin pour converser — approche-toi d'abord` };
+
+    const subject = clean(topic) || '(sans sujet)';
+    const conv = new Conversation({
+      journal: this.o.journal,
+      initiator: { conversant: a, speak: this.o.speakerFor(initiator, partner, subject) },
+      partner: { conversant: b, speak: this.o.speakerFor(partner, initiator, subject) },
+      eavesdroppers: this.o.eavesdroppersFor?.(initiator, partner) ?? [],
+      maxTurns: this.o.maxTurns ?? 8,
+      turnDeadlineMs: this.o.turnDeadlineMs ?? 60_000,
+      topic: subject,
+      ...(this.o.now ? { now: this.o.now } : {}),
+    });
+    const id = conv.conversationId();
+    this.busy.set(initiator, id);
+    this.busy.set(partner, id);
+    this.running++;
+    const done = (): void => {
+      this.busy.delete(initiator);
+      this.busy.delete(partner);
+      this.running--;
+    };
+    // Background: the tool returns at once; the conversation journals itself (started/turn/ended) and feeds memory.
+    void conv.run().then(done, (e: unknown) => {
+      done();
+      this.o.journal.append(`villager:${initiator}`, 'system.error', {
+        message: `conversation ${id} (${initiator}↔${partner}) failed: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    });
+    return { ok: true, id };
+  }
+
+  /** The conversation `villager` is in, if any (admin/tests). */
+  conversationOf(villager: string): string | undefined {
+    return this.busy.get(villager);
+  }
+}
+
+/** Trim + cap a spoken line (one chat message). Leading `/` are stripped: villagers are op'd on join, so a line
+ *  starting with `/` would run as a server command if it reached the game chat. */
+function clean(text: string): string {
+  return String(text ?? '').replace(/\s+/g, ' ').trim().replace(/^\/+/, '').trim().slice(0, MAX_LINE);
 }

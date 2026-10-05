@@ -146,7 +146,7 @@ Citations are `path:line` at `4a8081f`.
 |---|---|
 | Event payload shapes (docs/04) | Differ: `byEntity`, not `attacker`; chat uses `player`/`villager`; etc. (`eden/src/types/events.ts:8-22`). |
 | Edge events with hysteresis fire live | ~~The live signal adapter forwards only health/death/hurt, plus a 30 s tick.~~ **Fixed (B3.1, D-17):** chat (with speaker distance), entity-spotted/-lost (hysteresis 16/24), night-falls/new-day and inbox (on a non-trade `tell`) fire live. item-received / block-broken-nearby / run-finished still have no source. |
-| Villager tools include `say`, `tell`, conversations, trade | 14 tools: search_skills, read_skill, write_skill, run_skill, report_to_god, done, remember, recall, subscribe, unsubscribe, list_subscriptions, and the trade tools propose_trade, answer_trade, list_trades. No `say`/`tell`/conversation tools. |
+| Villager tools include `say`, `tell`, conversations, trade | 17 tools: search_skills, read_skill, write_skill, run_skill, report_to_god, done, remember, recall, subscribe, unsubscribe, list_subscriptions, the trade tools propose_trade, answer_trade, list_trades, and (D-18) the speech tools say, tell, start_conversation. `leave_conversation` is a conversation turn's structured reply, not a tool. |
 | `report_to_god` reaches critic/orchestrator queues | Result discarded. |
 | Context pack carries recent events, mood, standing orders, config persona | §5 is always empty. The persona is hardcoded `Tu es ${name}, ${role} du village. Tu parles français.` (`eden/src/main.ts:579`). |
 | `run_skill` has a `wait` arg | Params: `name, args, timeoutMs?`. |

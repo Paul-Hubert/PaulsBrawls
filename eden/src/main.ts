@@ -39,6 +39,8 @@ import { GodBody } from './god/body';
 import { VillagerMemory } from './villagers/memory';
 import { MemorySummarizer } from './villagers/memory-summarizer';
 import { SettlementClient, TradeBook, type ReachStrategy, type TradeOffer } from './social/trade';
+import { ConversationBook } from './social/conversation';
+import { ConversationTurner } from './villagers/conversation-turn';
 import {
   SkillStatsView,
   CompetenceView,
@@ -46,7 +48,7 @@ import {
   TradeLedgerView,
   RolloutsView,
 } from './views/index';
-import type { Bot, Inbox, InboxMessage, RunReport, Snapshot, SkillStats, Task, TaskLedger } from './types/index';
+import type { Bot, Conversant, Inbox, InboxMessage, MemoryWriter, RunReport, Snapshot, SkillStats, Task, TaskLedger, Vec3Like } from './types/index';
 
 /** Options for {@link start}. */
 export interface EdenHostOptions {
@@ -618,12 +620,52 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
     },
   });
 
+  // ── Conversations (D-18) — say / tell / start_conversation. Bodies come from the live pool (offline = refused),
+  //    memories from the per-villager VillagerMemory (the conversation's MemoryWriter), turns from a fast-tier
+  //    ConversationTurner on the conversation lane. A tell lands in the partner's inbox and wakes it (D-17). ──
+  const EARSHOT = 16;
+  const posOf = (name: string): Vec3Like | undefined => args.pool?.bot(name)?.entity?.position;
+  const near = (a: Vec3Like | undefined, b: Vec3Like | undefined): boolean =>
+    !!a && !!b && Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= EARSHOT;
+  const turner = new ConversationTurner({ client, scheduler, memoryFor });
+  const conversationBook = new ConversationBook({
+    journal,
+    isVillager: (name) => villagerNames.has(name),
+    conversantFor: (name): Conversant | undefined => {
+      const bot = args.pool?.bot(name);
+      const memory = memories.get(name);
+      if (!bot || !memory) return undefined;
+      return {
+        name,
+        memory,
+        // Villagers are op'd: never let a line reach the chat as a `/` command (ConversationBook also strips it).
+        sayInGame: (line) => bot.chat(line.replace(/^\/+/, '')),
+        playerInEarshot: () => {
+          const players = (bot as unknown as { players?: Record<string, { entity?: { position?: Vec3Like } }> }).players ?? {};
+          return Object.entries(players).some(
+            ([p, info]) => p !== name && p !== config.god.name && !villagerNames.has(p) && near(bot.entity?.position, info?.entity?.position),
+          );
+        },
+      };
+    },
+    speakerFor: (self, partner, topic) =>
+      turner.speakFn({ self, partner, topic, persona: `Tu es ${roleOf(self)} du village.` }, `${self}>${partner}@${Date.now()}`),
+    inEarshot: (a, b) => near(posOf(a), posOf(b)),
+    deliverTell: (to, from, text) =>
+      inboxes.get(to)?.deliver({ from: 'villager', kind: 'tell', payload: { text, from }, at: Date.now() }, `villager:${from}`),
+    eavesdroppersFor: (a, b): MemoryWriter[] =>
+      config.villagers
+        .map((v) => v.name)
+        .filter((n) => n !== a && n !== b && near(posOf(n), posOf(a)))
+        .flatMap((n) => (memories.get(n) ? [memories.get(n)!] : [])),
+  });
+
   // The SHARED reactivity store (sole writer of subscription state, S2). Built BEFORE the ToolRegistry so the
   // villager tools subscribe/unsubscribe/list_subscriptions write the same store the routers read — it used
   // to be built after the registry, which left those three tools as "(réactivité non câblée)" stubs.
   const store = new SubscriptionStore({ dataDir, journal });
 
-  const tools = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: config.skills.maxSkillLines, memoryFor, trade: tradeBook, subscriptions: store });
+  const tools = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: config.skills.maxSkillLines, memoryFor, trade: tradeBook, subscriptions: store, conversations: conversationBook });
   const builder = new ContextPackBuilder({ journal });
   const brain = new Brain({ builder, tools, scheduler, client, journal });
 
