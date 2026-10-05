@@ -133,17 +133,18 @@ Used by `/block`, the build bots' textual calls, and `BuildSubAgent` (semantics 
 - `zone = 3`. For each `(i, j)` in `0..2 × 0..2` it scans `k = 2, 1, 0, -1` and offset
   `v = (i-1, k-1, j-1)`, i.e. a 3×3 column footprint from dy=+1 down to dy=-2, and records the **first non-air**
   block per column.
-- Output format (verbatim, including the unbalanced quote/brace):
+- Output format (bug #18 — it used to be unparseable pseudo-JSON with an unbalanced quote and the block's *item* name):
 
 ```
-Surrounding block info : 
+Surrounding block info (offsets from the /construction pivot):
 [
-"{x:-1, y:0, z:-1, block: <state.getBlock().asItem().toString()>,
+{"x":-1,"y":0,"z":-1,"block":"minecraft:grass_block"},
 ...
 ]
 ```
 
-Blocks without an item form (e.g. water) render as the air item. Despite the system-message label ("near the player's
+Built by `BlockInfoJson` (escaped, comma-separated; `BlockInfoJsonTest` parses it with Jackson). `block` is the block's
+registry id (`Registries.BLOCK.getId`), so water is `minecraft:water`, not the air item. Despite the system-message label ("near the player's
 cursor"), it is not the live cursor.
 
 ## Avatar helpers
@@ -234,7 +235,8 @@ Both `/block` and `/construction` call `getPlayer()` and will fail from the cons
   `giveItemStack`, whose result is ignored: whatever doesn't fit a full inventory is lost. `/accept` no longer uses it.
 - Unclamped `Punishment.amount` (mass lightning in one tick) and `Reward.amount`.
 - `changeWeather` duration units and always-success return (see above).
-- `getBlockInfo` output is malformed pseudo-JSON and keyed off `/construction`, not the cursor.
+- ~~`getBlockInfo` output is malformed pseudo-JSON~~ fixed (bug #18); it is still keyed off `/construction`, not the
+  cursor.
 - Dead code: `giveGoodReward`, `giveBadReward`, `giveItemWithCommand`, `stripArguments` (broken).
 - Offers expire after 5 minutes (checked on `/accept`, not proactively) and vanish on restart. The God is not told
   when an offer expires.

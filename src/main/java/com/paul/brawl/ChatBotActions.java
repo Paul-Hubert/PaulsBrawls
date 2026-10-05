@@ -281,17 +281,18 @@ public class ChatBotActions {
     }
 
 
+    /**
+     * The topmost non-air block of each column in a 3×3 area around the admin's {@code /construction} pivot, as
+     * offsets from it. Bug #18: this used to emit unparseable pseudo-JSON; {@link BlockInfoJson} builds a real array
+     * of {@code {"x","y","z","block"}} objects, and the id is the block's registry id (not its item's).
+     */
     public static String getBlockInfo(ServerPlayerEntity player) {
-        StringBuilder sb = new StringBuilder();
-
-        sb.append("Surrounding block info : \n");
-
         BlockPos pos = Raycaster.getLastPos(player.getUuid());
 
         if(pos == null) return "";
-        
+
         var zone = 3;
-        sb.append("[\n");
+        BlockInfoJson json = new BlockInfoJson();
         for(int i = 0; i<zone; i++) {
             for(int j = 0; j<zone; j++) {
                 for(int k = zone-1; k>-zone+1; k--) {
@@ -300,16 +301,13 @@ public class ChatBotActions {
                     BlockState state = player.getWorld().getBlockState(p);
                     if(state.isAir()) {
                         continue;
-                    } else {
-                        var name = state.getBlock().asItem().toString();
-                        sb.append("\"{x:" + v.getX() + ", y:" + v.getY() + ", z:" + v.getZ() + ", block: " + name + ",\n");
-                        break;
                     }
+                    json.add(v.getX(), v.getY(), v.getZ(), Registries.BLOCK.getId(state.getBlock()).toString());
+                    break;
                 }
             }
         }
-        sb.append("]");
-        return sb.toString();
+        return "Surrounding block info (offsets from the /construction pivot):\n" + json.toJson();
     }
 
 
