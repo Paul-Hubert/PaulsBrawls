@@ -18,9 +18,9 @@ export class VillagerInbox implements Inbox {
     private readonly journal: JournalAppender,
   ) {}
 
-  /** Deliver a message (journaled first — 05). */
-  deliver(m: InboxMessage): void {
-    this.journal.append('engine', 'inbox.delivered', { to: this.villager, from: m.from, kind: m.kind }, {});
+  /** Deliver a message (journaled first, ONCE, as `actor` — 05). */
+  deliver(m: InboxMessage, actor = 'engine'): void {
+    this.journal.append(actor, 'inbox.delivered', { to: this.villager, from: m.from, kind: m.kind }, {});
     this.messages.push(m);
   }
 

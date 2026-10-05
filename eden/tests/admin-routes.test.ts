@@ -212,16 +212,15 @@ test('POST /skills/:name/quarantine hands actor:admin to the callee and journals
   assert.equal(journal.events.filter((e) => e.kind === 'skill.quarantine').length, 0, 'the admin itself appends no row');
 });
 
-test('POST /villagers/:name/prompt journals inbox.delivered BEFORE delivery, zero engine machinery', async (t) => {
+// Bug #17: the admin used to journal inbox.delivered AND the inbox a second one. The admin now hands the actor to
+// the callee (the inbox journals once, before delivery) and appends nothing itself.
+test('POST /villagers/:name/prompt hands the actor (player:<from> | admin) to the callee, journals nothing itself', async (t) => {
   const journal = new MemoryJournal();
-  const delivered: Array<{ name: string; text: string; from?: string }> = [];
+  const delivered: Array<{ name: string; text: string; from?: string; actor: string }> = [];
   const admin = new AdminServer({
     ...baseDeps(journal),
-    onPrompt: (name: string, msg: { text: string; from?: string }) => {
-      // The inbox.delivered event must already be in the journal when delivery happens (05).
-      const pre = journal.events.find((e) => e.kind === 'inbox.delivered' && (e.payload as any).to === name && (e.payload as any).kind === 'tell');
-      assert.ok(pre, 'inbox.delivered journaled BEFORE the message is delivered');
-      delivered.push({ name, ...msg });
+    onPrompt: (name: string, msg: { text: string; from?: string }, actor: string) => {
+      delivered.push({ name, ...msg, actor });
       return true;
     },
   });
@@ -230,10 +229,13 @@ test('POST /villagers/:name/prompt journals inbox.delivered BEFORE delivery, zer
 
   const r = await post(`http://127.0.0.1:${port}/villagers/Firmin/prompt`, { text: 'go farm', from: 'paul' });
   assert.equal(r.status, 200);
-  assert.deepEqual(delivered, [{ name: 'Firmin', text: 'go farm', from: 'paul' }]);
-  // actor is player:<from> when a from is supplied (05 audit trail).
-  const ev = journal.events.find((e) => e.kind === 'inbox.delivered' && (e.payload as any).to === 'Firmin');
-  assert.equal(ev!.actor, 'player:paul');
+  // actor is player:<from> when a from is supplied (05 audit trail); the dashboard's from:'admin' is the admin.
+  await post(`http://127.0.0.1:${port}/villagers/Firmin/prompt`, { text: 'repos', from: 'admin' });
+  assert.deepEqual(delivered, [
+    { name: 'Firmin', text: 'go farm', from: 'paul', actor: 'player:paul' },
+    { name: 'Firmin', text: 'repos', from: 'admin', actor: 'admin' },
+  ]);
+  assert.equal(journal.events.filter((e) => e.kind === 'inbox.delivered').length, 0, 'the admin itself appends no row');
 });
 
 test('POST /villagers/:name/prompt 404s an unknown villager and never journals', async (t) => {

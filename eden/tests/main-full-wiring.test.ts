@@ -80,6 +80,9 @@ test('full host boots with God wired but NO Minecraft; the complete admin surfac
   assert.equal(prompt.status, 200);
   const delivered = (await getJson(port, '/journal?kinds=inbox.delivered')).body.events;
   assert.ok(delivered.some((e: any) => e.payload.to === 'Firmin' && e.payload.kind === 'tell'), 'tell journaled');
+  // Bug #17: exactly ONE row per prompt, carrying the speaker as its actor.
+  assert.equal(delivered.length, 1, 'one inbox.delivered per prompt (was two)');
+  assert.equal(delivered[0].actor, 'player:paul');
 });
 
 test('host boots WITHOUT God (default): GETs return empty, control verbs report 503', async (t) => {

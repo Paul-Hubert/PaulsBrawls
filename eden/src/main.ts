@@ -394,12 +394,12 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
       ? (name, reason, actor) => wiring.library.quarantine(name, `admin: ${reason}`, undefined, actor) !== undefined
       : undefined,
     onPrompt: wiring
-      ? (name, msg) => {
+      ? (name, msg, actor) => {
           const inbox = wiring.inboxes.get(name);
           if (!inbox) return false;
-          // The inbox journals inbox.delivered on deliver(); the admin ALSO journaled it actor:player/admin
-          // BEFORE this (05). Deliver the tell — the villager hears it like any other and deliberates.
-          inbox.deliver({ from: 'villager', kind: 'tell', payload: { text: msg.text, from: msg.from }, at: Date.now() });
+          // The inbox journals inbox.delivered ONCE, as the admin's actor, before delivery (05). The villager
+          // hears the tell like any other and deliberates.
+          inbox.deliver({ from: 'villager', kind: 'tell', payload: { text: msg.text, from: msg.from }, at: Date.now() }, actor);
           return true;
         }
       : undefined,

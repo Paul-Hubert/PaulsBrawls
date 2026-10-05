@@ -11,6 +11,8 @@ export interface InboxMessage {
  * Villager — that is what keeps god/ from importing villagers/ (the dependency law).
  */
 export interface Inbox {
-  deliver(m: InboxMessage): void;
+  /** Deliver + journal `inbox.delivered` once, as `actor` (default the engine) — e.g. `player:<name>` for an
+   *  admin/website tell, so the audit row names who spoke without a second row (bug #17). */
+  deliver(m: InboxMessage, actor?: string): void;
   drain(): InboxMessage[];
 }

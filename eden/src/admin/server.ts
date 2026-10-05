@@ -72,7 +72,7 @@ export interface AdminServerOptions {
   /** Quarantine a skill (admin kill switch); return false if no such skill. */
   onQuarantine?: (name: string, reason: string, actor: string) => boolean;
   /** Inject a `tell` into a villager's inbox; return false if no such villager. */
-  onPrompt?: (name: string, msg: { text: string; from?: string }) => boolean;
+  onPrompt?: (name: string, msg: { text: string; from?: string }, actor: string) => boolean;
 
   // ── Scenario control (the /villagers in-game command) ──────────────────────
   /** Load a scenario and connect its bots. cx/cz = player position for spreadplayers. */
@@ -256,9 +256,11 @@ export class AdminServer {
       if (this.o.villager && this.o.villager(prompt) === undefined) {
         return send(res, 404, { error: `no villager ${prompt}` });
       }
-      // Journal inbox.delivered BEFORE delivery (05): actor = player:<from> when named, else admin.
-      this.journal.append(from ? `player:${from}` : 'admin', 'inbox.delivered', { to: prompt, from: from ?? 'admin', kind: 'tell' }, {});
-      const ok = this.o.onPrompt(prompt, { text, from });
+      // The inbox journals inbox.delivered ONCE, BEFORE delivery (05), as this actor: player:<from> when named,
+      // else admin (the dashboard sends from:'admin', which is the admin, not a player). The admin used to
+      // journal its own row too, so every prompt showed twice (bug #17).
+      const actor = from && from !== 'admin' ? `player:${from}` : 'admin';
+      const ok = this.o.onPrompt(prompt, { text, from }, actor);
       return ok ? send(res, 200, { delivered: prompt }) : send(res, 404, { error: `no villager ${prompt}` });
     }
 
