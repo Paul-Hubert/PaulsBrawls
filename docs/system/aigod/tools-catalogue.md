@@ -4,8 +4,8 @@ title: AI God — tools catalogue (ChatBotFunctions + QueryTerrain)
 system: aigod
 summary: Every Java tool the AI God can call - exact name, description, parameters, execution thread, behaviour, return strings, gating - plus JsonSchemaAdapter mapping and name-based dispatch.
 tags: [aigod, tools, function-calling, toolspecification, jsonschema, reward, trade, punishment, appear, vanish, wait, spawncreature, queryterrain, buildplan, listtools, dispatch]
-sources: [src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/QueryTerrain.java, src/main/java/com/paul/brawl/JsonSchemaAdapter.java, src/main/java/com/paul/brawl/OptionalField.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/GodSessionManager.java]
-verified_at: 4a8081f
+sources: [src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/QueryTerrain.java, src/main/java/com/paul/brawl/JsonSchemaAdapter.java, src/main/java/com/paul/brawl/OptionalField.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodClamps.java, src/main/java/com/paul/brawl/ItemIds.java, src/main/java/com/paul/brawl/GodToolGate.java, src/main/java/com/paul/brawl/BuildGuard.java, src/main/java/com/paul/brawl/BuildSubAgent.java, src/main/java/com/paul/brawl/TradeOffers.java]
+verified_at: 98cb908
 ---
 
 # AI God — tools catalogue
@@ -13,9 +13,9 @@ verified_at: 4a8081f
 **TL;DR.** Tools are Jackson-annotated POJOs in `ChatBotFunctions.java` (+ `QueryTerrain.java`). The tool *name* is the
 class simple name; the description comes from `@JsonClassDescription`; every `@JsonPropertyDescription` field is a
 required parameter unless marked `@OptionalField`. Dispatch is a `switch` on the name in `executeFunction`; unknown
-names fall through to `MCPGateway`, else an error string. Tool execution never throws — every path returns a string.
+names fall through to `MCPGateway` (gated on avatar ownership + bridge enabled), else an error string. Tool execution never throws — every path returns a string.
 
-## Attachment matrix (`buildToolSpecs`, `ChatBotFunctions.java:313-340`)
+## Attachment matrix (`buildToolSpecs`, `ChatBotFunctions.java:325-352`)
 
 | Tool | Group flag | godBot | buildBot | Executes on |
 |---|---|---|---|---|
@@ -29,7 +29,7 @@ names fall through to `MCPGateway`, else an error string. Tool execution never t
 | `Wait` | `needsGodTools` | yes | no | worker (pure token) |
 | `QueryTerrain` | `needsGodTools` | yes | no | main thread |
 | `BuildPlan` | `needsBuildPlan` | **no** | yes | worker |
-| MCP tools (kebab-case) | `needsMcpTools` | yes | no | worker → MCP HTTP |
+| MCP tools (kebab-case) | `needsMcpTools` | yes | no | worker → MCP HTTP (refused unless the caller owns the session and the bridge is enabled) |
 | `ListTools` | added if list non-empty | yes | yes | worker |
 
 ## Schema generation (`JsonSchemaAdapter`, `JsonSchemaAdapter.java`)
@@ -56,24 +56,30 @@ Field declaration order from reflection determines property order (JVM-dependent
 
 ## Argument parsing and dispatch
 
-- `parseArgs(req, cls)` (`ChatBotFunctions.java:526-534`): null/blank arguments → `"{}"`; Jackson `MAPPER` with
+- `parseArgs(req, cls)` (`ChatBotFunctions.java:546-554`): null/blank arguments → `"{}"`; Jackson `MAPPER` with
   `FAIL_ON_UNKNOWN_PROPERTIES=false` (`:35-36`). Missing primitive `int` fields default to `0`; missing wrappers to
   `null`. Parse failure throws `RuntimeException("Failed to parse args for <name>: <args>")`.
-- `executeFunction(req, player, chatBot)` (`:412-471`) — `switch (name)`:
+- `executeFunction(req, player, chatBot)` (`:429-490`) — `switch (name)`:
   - `Reward/Trade/Punishment/ChangeWeather/SpawnCreature/QueryTerrain` → `runOnMain(() -> parseArgs(...).execute(player))`
     (parse errors inside `runOnMain` surface as `"Erreur côté serveur lors de l'exécution de cette action."`).
   - `Appear/Vanish/Wait/BuildPlan` → direct `parseArgs(...).execute(player)`.
   - `ListTools` → `new ListTools().execute(chatBot)` (no args parsed).
-  - default → `MCPGateway.INSTANCE.handlesTool(name)` ? `MCPGateway.INSTANCE.execute(req)` : error string
+  - default → if `MCPGateway.INSTANCE.handlesTool(name)`: `GodToolGate.mcpRefusal(BridgeConfig.enabled, isActive(player))`
+    (bug #8) returns `Le corps de Dieu est désactivé par un administrateur — cet outil est indisponible.` or
+    `Le corps de Dieu est occupé avec un autre fidèle — cet outil ne peut pas l'utiliser.`, otherwise
+    `MCPGateway.INSTANCE.execute(req)` (`:464-467`); else error string
     `Unknown tool '<name>'. Pick from the tool specs attached to this request; do not invent names. If you are unsure what you have, call `ListTools` (no arguments) to enumerate the exact set attached to this turn.`
   - Any thrown exception → `"Erreur lors de l'exécution de '<name>': <message or exception class>"`.
-- MCP names are kebab-case and cannot collide with the PascalCase Java names (`:444-446`).
+- MCP names are kebab-case and cannot collide with the PascalCase Java names (`:461-463`).
 - Results are returned to the model as `ToolExecutionResultMessage.from(call, result)` in the same order as the calls
-  (`ChatBot.java:306-308`).
+  (`ChatBot.java:308-310`).
+- `checkForFunctions` calls `GodSessionManager.resetIdleTimer(player)` before and after every dispatch (bug #8,
+  `:371-376`), so a long tool chain no longer trips the owner's idle watchdog.
 
-### Post-dispatch gestures (`fireGestures`, `:506-524`)
+### Post-dispatch gestures (`fireGestures`, `:525-544`)
 
-Only if `GodSessionManager.hasManifested()` (global flag — no ownership check):
+Only if `GodSessionManager.hasManifested()` **and** `GodSessionManager.isActive(player)` (the ownership check was
+added by bug #8, `:527`):
 
 | Tool | Bridge calls |
 |---|---|
@@ -232,7 +238,7 @@ the same batch already ran. A new user message during the wait flushes the resul
 
 ## QueryTerrain
 
-`QueryTerrain.java:43-231`
+`QueryTerrain.java:43-222`
 
 | | |
 |---|---|
@@ -244,19 +250,21 @@ the same batch already ran. A new user message during the wait flushes the resul
 | `centerZ` | integer | optional | `Absolute world Z to center the snapshot on. Omit to center on the praying player.` |
 | `radius` | integer | optional | `Half-width of the sampled area in blocks. Clamped 8..64, default 32. Larger radius covers more area at coarser resolution; the output grid is always 16x16 cells.` |
 
-Algorithm (`:80-211`): constants `GRID=16`, `SHADE=" .:-=+*#%@"`, `DEFAULT_RADIUS=32`, `MIN_RADIUS=8`,
+Algorithm (`:80-202`): constants `GRID=16`, `SHADE=" .:-=+*#%@"`, `DEFAULT_RADIUS=32`, `MIN_RADIUS=8`,
 `MAX_RADIUS=64`, `MAX_CENTER_OFFSET=128`. Center clamped to ±128 of the player; `step = max(1, 2r/16)`; cell
 `(gx,gz)` samples world `(cx - r + gx·step, cz - r + gz·step)`; unloaded chunks → `?` (never loaded); surface Y =
 `getTopY(MOTION_BLOCKING_NO_LEAVES) - 1`; fluid at surface → `~`; else shade index
 `round((y - minY)/max(1,maxY-minY) · 9)`. Slope = gradient of mean E-vs-W column and S-vs-N row heights;
-`< 1.5` → `flat (Δx.x across area)`, else `rising toward <E|SE|S|SW|W|NW|N|NE> (Δx.x)`. Biome from
+`< 1.5` → `flat (Δx.x across area)`, else `rising toward <E|SE|S|SW|W|NW|N|NE> (Δx.x)`; if any edge is fully
+unloaded, `unknown (edge unloaded)`. Biome from
 `world.getBiome(cx, playerY, cz)`. Output: header line, `Biome=… Y range a..b (Δn) playerY=… slope=…`, legend line,
 16 rows of `c ` cells (top row = north). All-unloaded → `QueryTerrain: la zone autour de (cx,cz) n'est pas chargée — recentre plus près du joueur.`
 The map goes to the model only (bug #18 removed the TEMP line-by-line echo into the praying player's chat).
 
 ## BuildPlan (buildBot only)
 
-`ChatBotFunctions.java:205-297` — dispatches parallel `BuildSubAgent`s; full semantics in [building.md](building.md).
+`ChatBotFunctions.java:205-309` — dispatches parallel `BuildSubAgent`s, at most `BuildGuard.MAX_CONCURRENT_SUB_BUILDS = 4`
+server-wide (bug #7, `:253-254`); full semantics in [building.md](building.md).
 
 | | |
 |---|---|
@@ -270,9 +278,10 @@ The map goes to the model only (bug #18 removed the TEMP line-by-line echo into 
 `anchorX`, `anchorY`, `anchorZ` (integer offsets from the `/construction` pivot), `description`, `style`, `size`,
 `purpose` (strings). Error returns: `Aucun point de référence : l'admin doit lancer /construction avant d'utiliser BuildPlan.`,
 `BuildPlan reçu sans aucun sous-build — rien à faire.`, `Erreur interne : buildBot non initialisé. …`,
-`BuildPlan ne contenait que des sous-builds nuls — rien à faire.`; success
-`Plan accepté : <n> sous-construction(s) lancée(s) en parallèle. Chaque sous-agent fera ~6 passes (initiale + refinements).`
-(`1 + DEFAULT_REFINEMENTS.size()` = 1 + 5).
+`BuildPlan ne contenait que des sous-builds nuls — rien à faire.`, and when no slot is free
+`Plan refusé : 4 sous-constructions tournent déjà sur le serveur. Réessaie quand elles auront fini.`; success
+`Plan accepté : <n> sous-construction(s) lancée(s) en parallèle.[ <k> sous-construction(s) non lancée(s) : limite de 4 en parallèle atteinte.] Chaque sous-agent fera ~6 passes (initiale + refinements).`
+(`1 + DEFAULT_REFINEMENTS.size()` = 1 + 5, `BuildSubAgent.java:48-54`).
 
 ## ListTools
 
@@ -291,9 +300,11 @@ attempt (via `MCPGateway.tools()`).
 
 ## Textual placement calls (not tools)
 
-Build bots emit `PlaceBlock`, `PlaceLine`, `PlaceBlocks` as plain text; regexes at `ChatBotFunctions.java:538-567`
+Build bots emit `PlaceBlock`, `PlaceLine`, `PlaceBlocks` as plain text; regexes at `ChatBotFunctions.java:558-587`
 accept ints (incl. negative), whitespace, and block ids quoted with `"`, `'`, backticks, or bare
-(`[A-Za-z][A-Za-z0-9_]*:[A-Za-z][A-Za-z0-9_/]*` + optional `[...]` state). See [building.md](building.md).
+(`[A-Za-z][A-Za-z0-9_]*:[A-Za-z][A-Za-z0-9_/]*` + optional `[...]` state). Each matched call becomes one
+`GodActionQueue` task (bug #7, `:627-668`); a `PlaceLine`/`PlaceBlocks` over `BuildGuard.MAX_BLOCKS_PER_CALL = 128`
+blocks is skipped. See [building.md](building.md).
 
 ## MCP tools
 
@@ -320,8 +331,9 @@ See [mcp-gateway.md](mcp-gateway.md).
   offset clamp.
 - `ChangeWeather` always claims success.
 - ~~`QueryTerrain` spams the player's chat with the grid (TEMP debug).~~ Fixed (bug #18).
-- Gestures fire based on the global manifested flag, not the caller's ownership.
-- `CLAUDE.md` lists `BuildPlan` among the God's tools; it is only attached to `buildBot`.
+- ~~Gestures fire based on the global manifested flag, not the caller's ownership.~~ **Fixed (bug #8):** ownership is
+  checked too.
+- `BuildPlan` is only attached to `buildBot`, never to the `/pray` God (CLAUDE.md now says so).
 
 ## Related
 

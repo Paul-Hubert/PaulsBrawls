@@ -4,8 +4,8 @@ title: AI God — LLMConfig, llm_config.properties, /llm, /pray, /prompt and pro
 system: aigod
 summary: LLMConfig fields, llm_config.properties keys, env vars, every AI God command (/llm, /llm bridge, /pray, /accept, /prompt, /godbody, /block, /construction), prompt.txt loading.
 tags: [aigod, config, llmconfig, llm_config.properties, env, openai_api_key, commands, llm, pray, prompt, godbody, accept, prompt.txt, permissions]
-sources: [src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/LLMCommand.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPCommand.java, src/main/java/com/paul/brawl/Prompts.java, prompt.txt, build_prompt.txt, build.gradle]
-verified_at: 4a8081f
+sources: [src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/LLMCommand.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPCommand.java, src/main/java/com/paul/brawl/Prompts.java, src/main/java/com/paul/brawl/BuildGuard.java, prompt.txt, build_prompt.txt, build.gradle]
+verified_at: 98cb908
 ---
 
 # AI God — configuration and commands
@@ -86,7 +86,7 @@ Root `requires(hasPermissionLevel(2))` (`:24-25`) — every subcommand is perm 2
 | `/llm timeout <5..1800>` | `:61-65`, `:225-233` | Set `timeoutSeconds` | yes | yes |
 | `/llm reload` | `:66-72` | `ChatBot.reloadClients()` + status | — | yes |
 
-`ChatBot.reloadClients()` (`ChatBot.java:176-190`): `LLMConfig.invalidateClient()`, then for both bots cancel all Wait
+`ChatBot.reloadClients()` (`ChatBot.java:178-192`): `LLMConfig.invalidateClient()`, then for both bots cancel all Wait
 deferrals and clear `memories`, `functionCallDepth`, `sessionBound`. It does not touch the avatar session lock.
 
 Status output (`printStatus`, `:235-253`):
@@ -116,8 +116,9 @@ All perm 2, all persist to `bridge_config.properties` via `BridgeConfig.save()` 
 | `/llm bridge spawnmax <1..64>` | `:103-107`, `:157-162` | `spawnCountMax` (`8`) | int range |
 | `/llm bridge idle <5..3600>` | `:108-112`, `:164-173` | `idleTimeoutSeconds` (`90`) | must be `> waitMaxSeconds`, else error `idle timeout must exceed waitMax (<n>s)` |
 
-Status line format: `BridgeConfig{enabled=…, url=…, bot=…, appear=[1.0..6.0], h=[0.0..4.0], wait=[1..30s], spawnMax=8, griefing=false, idle=90s}`
-(`BridgeConfig.java:140-150`).
+Status line format: `BridgeConfig{enabled=…, url=…, bot=…, appear=[1.0..6.0], h=[0.0..4.0], wait=[1..30s], spawnMax=8, rewardMax=64, punishMax=3, spawnOffsetMax=16, griefing=false, idle=90s}`
+(`BridgeConfig.java:151-164`). The bug #6 clamps `rewardMax`, `punishmentMax` and `spawnOffsetMax` have **no** `/llm bridge`
+subcommand: they are set only by editing `bridge_config.properties` (keys of the same names) and restarting.
 
 ## Prayer and trade commands
 
@@ -125,7 +126,7 @@ Status line format: `BridgeConfig{enabled=…, url=…, bot=…, appear=[1.0..6.
 
 | Syntax | Perm | Behaviour |
 |---|---|---|
-| `/pray <text…>` (`MessageArgumentType.message()`, greedy) | 0 | `onChatCommand` (`:87-109`): private echo `<name> : <text>`; `GodSessionManager.claim(player)`; if not owned, private `Dieu : (occupé ailleurs — je t'écoute, mais sans forme.)`; then `ChatBot.godBot.sendChatRequest(text, player)`. Exceptions are logged, not shown. |
+| `/pray <text…>` (`MessageArgumentType.message()`, greedy) | 0 | `onChatCommand` (`:91-113`): private echo `<name> : <text>`; `GodSessionManager.claim(player)`; if not owned, private `Dieu : (occupé ailleurs — je t'écoute, mais sans forme.)`; then `ChatBot.godBot.sendChatRequest(text, player)`. Exceptions are logged, not shown. |
 | `/pray stop` | 0 | If the caller owns the avatar session: `ChatBot.endPrayerSession(player)` + private `Dieu : (la séance est close.)`. Otherwise silently does nothing. Does not clear memory or cancel an in-flight LLM call (its response is then dropped by the session-ended check). |
 
 Note `/pray stop` is a literal branch: praying the single word "stop" is impossible.
@@ -135,11 +136,11 @@ Note `/pray stop` is a literal branch: praying the single word "stop" is impossi
 `/accept` — no `requires` → perm 0. Executes the caller's pending trade. Details:
 [actions-and-trades.md](actions-and-trades.md) (section "Trades").
 
-### `/godbody` (`ChatCommand.java:57-85`)
+### `/godbody` (`ChatCommand.java:57-89`)
 
 | Syntax | Perm | Behaviour (semantics: [god-body.md](god-body.md)) |
 |---|---|---|
-| `/godbody off` | 2 | `GodActionQueue.clear()`, `ChatBotActions.restoreAvatarOnMain(server)`, `GodBody.vanish()`, `GodSessionManager.forceEndSession()`, `BridgeConfig.enabled=false` + save; broadcast-to-ops feedback `Killed god-body: <n> queued action(s) dropped, session released, bridge disabled.` |
+| `/godbody off` | 2 | `GodActionQueue.clear()`, `ChatBotActions.restoreAvatarOnMain(server)`, `BuildGuard.cancelAll()` (bug #7 — running sub-builds stop at their next turn), `GodBody.vanish()`, `GodSessionManager.forceEndSession()`, `BridgeConfig.enabled=false` + save; broadcast-to-ops feedback `Killed god-body: <n> queued action(s) dropped, session released, bridge disabled.` |
 | `/godbody on` | 2 | `BridgeConfig.enabled=true` + save; feedback `Bridge re-enabled.` |
 
 `/godbody off` restores avatar invulnerability directly (bug #5) but does not clear chat memory.
@@ -148,28 +149,29 @@ Note `/pray stop` is a literal branch: praying the single word "stop" is impossi
 
 | Syntax | Perm | Lines | Behaviour |
 |---|---|---|---|
-| `/prompt` | 2 | `ChatCommand.java:135-147` | Re-reads `prompt.txt` and `build_prompt.txt` (`readPrompt()` on both bots) and sends the caller `Hardcoded prompt : <godBot file text>\nCustom Prompt : <override>`. |
-| `/prompt <text…>` | 2 | `ChatCommand.java:115-133` | Sets the runtime override `prompt` on **both** `godBot` and `buildBot` (RAM only, appended after the file text with `"\n"`); replies `Changed prompt <text>`. There is no command to clear it except setting it to something else or restarting. |
-| `/block <x> <y> <z>` | 2 | `ChatBotActions.java:164-179` | Places `minecraft:stone` at the `/construction` pivot + offset. See [building.md](building.md). |
-| `/construction` | 2 | `ChatBotActions.java:181-193` | Sets the build pivot by raycast and clears the caller's `buildBot` memory. See [building.md](building.md). |
+| `/prompt` | 2 | `ChatCommand.java:140-152` | Re-reads `prompt.txt` and `build_prompt.txt` (`readPrompt()` on both bots) and sends the caller `Hardcoded prompt : <godBot file text>\nCustom Prompt : <override>`. |
+| `/prompt <text…>` | 2 | `ChatCommand.java:116-138` | Sets the runtime override `prompt` on **both** `godBot` and `buildBot` (RAM only, appended after the file text with `"\n"`); replies `Changed prompt <text>`. There is no command to clear it except setting it to something else or restarting. |
+| `/block <x> <y> <z>` | 2 | `ChatBotActions.java:193-209` | Places `minecraft:stone` at the `/construction` pivot + offset. See [building.md](building.md). |
+| `/construction` | 2 | `ChatBotActions.java:211-225` | Sets the build pivot by raycast and clears the caller's `buildBot` memory. See [building.md](building.md). |
 
 Both `/prompt` forms reply through `getSource().sendFeedback(…)`, so they work from the console (bug #18; they used to
-call `getSource().getPlayer()` and NPE).
+call `getSource().getPlayer()` and NPE). `/block` and `/construction` use `getPlayerOrThrow()` (bug #18): still
+player-only, but the console now gets a readable error instead of an NPE.
 
-Related commands documented elsewhere: `/mcp`, `/mcp status` (perm 0), `/mcp reload` (perm 2) (`MCPCommand.java:32-49`)
-→ [mcp-gateway.md](mcp-gateway.md); client `/prove`, `/build` → [images-and-client.md](images-and-client.md).
+Related commands documented elsewhere: `/mcp`, `/mcp status` (perm 0), `/mcp reload` (perm 2) (`MCPCommand.java:32-57`; since bug #18 `reload` runs on the LLM worker pool, replies
+`MCP: rechargement en cours…` at once and prints the status when done) → [mcp-gateway.md](mcp-gateway.md); client `/prove`, `/build` → [images-and-client.md](images-and-client.md).
 
 ## prompt.txt loading
 
 - Path: `ChatBot.godBot = new ChatBot("prompt.txt")`, `buildBot = new ChatBot("build_prompt.txt")`
   (`ChatBot.java:132-133`) — relative paths, resolved against the **JVM working directory** (production: the
   `PaulsBrawlsVanilla` server dir; dev: `run/`). Not bundled in the jar.
-- `readPrompt()` (`ChatBot.java:636-642`): `hardcodedPrompt = Files.readString(Path.of(promptPath))`; on `IOException`
+- `readPrompt()` (`ChatBot.java:638-644`): `hardcodedPrompt = Files.readString(Path.of(promptPath))`; on `IOException`
   prints the stack trace and keeps the previous value — `""` at startup. **No fallback prompt**: a missing file means
   an empty persona.
 - Read once in the constructor and on every `/prompt` (no-arg). Also used verbatim as the sub-agent system prompt base
-  by `BuildPlan` (`ChatBotFunctions.java:259-260`).
-- Sent each turn as `SystemMessage(hardcodedPrompt + "\n" + prompt)` (`ChatBot.java:451`).
+  by `BuildPlan` (`ChatBotFunctions.java:262-263`).
+- Sent each turn as `SystemMessage(hardcodedPrompt + "\n" + prompt)` (`ChatBot.java:453`).
 - `Prompts.buildPrompt` / `Prompts.proofPrompt` (`Prompts.java:4-5`) are empty, unused statics.
 
 ### `prompt.txt` content (repo copy, 54 lines, French)
@@ -203,7 +205,7 @@ of Minecraft…") is covered in [building.md](building.md).
 - Every other `/llm` setter wipes **all players' memories** for both bots (and cancels pending Waits) as a side effect.
 - API keys set via `/llm apikey` are stored in plaintext in `llm_config.properties` and take precedence over env vars.
 - `/llm` applies to the *active* provider only; to configure another provider, switch to it first.
-- CLAUDE.md/README list three providers; the code also ships `anthropic`.
+- The root README lists three providers (line 18); the code also ships `anthropic` (CLAUDE.md now lists all four).
 - `/pray` responses in English/other languages are possible — the French persona lives only in `prompt.txt`; a missing
   file silently yields an un-personified assistant.
 

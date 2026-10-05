@@ -4,8 +4,8 @@ title: AI God (Java /pray God) — overview
 system: aigod
 summary: What the Java AI God is, the end-to-end /pray flow, component map, the Java-God vs Eden-Dieu distinction, and where every piece of state lives.
 tags: [aigod, chatbot, pray, langchain4j, overview, god-body, llmbot, dieu, architecture]
-sources: [src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodActionQueue.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPConfig.java, src/main/java/com/paul/brawl/VillageConfig.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/Raycaster.java, src/main/java/com/paul/brawl/ChatMessageHistory.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, eden/eden.example.json, eden/src/config.ts, prompt.txt]
-verified_at: 4a8081f
+sources: [src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/BuildGuard.java, src/main/java/com/paul/brawl/GodToolGate.java, src/client/java/com/paul/brawl/Screenshotter.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodActionQueue.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPConfig.java, src/main/java/com/paul/brawl/VillageConfig.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/Raycaster.java, src/main/java/com/paul/brawl/ChatMessageHistory.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, eden/eden.example.json, eden/src/config.ts, prompt.txt]
+verified_at: 98cb908
 ---
 
 # AI God (Java /pray God) — overview
@@ -18,17 +18,17 @@ This God is **not** Eden's village God (`Dieu` avatar username) — they are sep
 
 ## What it is
 
-- Two `ChatBot` instances are created at server start (`ChatBot.java:131-169`):
+- Two `ChatBot` instances are created at server start (`ChatBot.java:131-171`):
   - `ChatBot.godBot` — reads `prompt.txt`; the `/pray` God. Flags: `hasImage=true`, `needsInfo=true`,
     `needsBuildTools=false`, `needsGodTools=true`, `needsBuildPlan=false`, `needsMcpTools=true`.
-  - `ChatBot.buildBot` — reads `build_prompt.txt`; the `/build` architect. Flags: `hasImage=false`,
+  - `ChatBot.buildBot` — reads `build_prompt.txt`; the `/build` architect. Flags: `hasImage=true` (bug #9; was `false`),
     `needsInfo=false`, `needsBuildTools=true`, `needsGodTools=false`, `needsBuildPlan=true`, `needsMcpTools=false`.
 - `ChatBot.register()` is only called from `ServerEntryPoint.onInitializeServer()` (`ServerEntryPoint.java:32`),
   which is a `DedicatedServerModInitializer`. **The AI God exists only on a dedicated server** — not in
   singleplayer / Open-to-LAN (the client entrypoint never calls it; `ClientEntryPoint.java:9-11`).
 - Provider-agnostic: one shared LangChain4j `ChatModel` built from `LLMConfig` (OpenAI, LM Studio, Ollama, or
   Anthropic) — see [llm-pipeline.md](llm-pipeline.md) and [configuration-and-commands.md](configuration-and-commands.md).
-- Player-facing strings are French; every God chat line is prefixed `"Dieu : "` (`ChatBot.java:627`).
+- Player-facing strings are French; every God chat line is prefixed `"Dieu : "` (`ChatBot.java:629`).
 
 ## The two Gods (do not confuse)
 
@@ -37,12 +37,12 @@ This God is **not** Eden's village God (`Dieu` avatar username) — they are sep
 | Code | `src/main/java/com/paul/brawl/ChatBot*.java` (JVM, Fabric mod) | `eden/src/god/` (Node, separate process) |
 | Trigger | `/pray`, `/prove`, `/build` | Eden's own curriculum/critic/orchestrator loop |
 | LLM lib | LangChain4j 1.0.0 (`build.gradle:40-49`) | Eden's own LLM layer |
-| Avatar Minecraft username | `BridgeConfig.botUsername`, default **`LLMBot`** (`BridgeConfig.java:36`) | **`Dieu`** (`eden/eden.example.json:26`; Java side knows it as `VillageConfig.edenAvatarName = "Dieu"`, `VillageConfig.java:37`) |
+| Avatar Minecraft username | `BridgeConfig.botUsername`, default **`LLMBot`** (`BridgeConfig.java:36`) | **`Dieu`** (`eden/eden.example.json:26`; Java side knows it as `VillageConfig.edenAvatarName = "Dieu"`, `VillageConfig.java:50`) |
 | Avatar driver | Node "unified bridge" at `BridgeConfig.bridgeUrl` (default `http://127.0.0.1:8765`) | Eden's own mineflayer pool |
-| Chat persona prefix | `"Dieu : "` (text only — `ChatBot.java:627`) | n/a |
+| Chat persona prefix | `"Dieu : "` (text only — `ChatBot.java:629`) | n/a |
 
-Eden warns if its god name equals `LLMBot` (`eden/src/config.ts:9`, `:366`). Both avatars are auto-opped on join
-(`ServerEntryPoint.java:61-74`). Naming hazard: the Java God *calls itself* "Dieu" in chat while Eden's avatar
+Eden warns if its god name equals `LLMBot` (`eden/src/config.ts:9`, `:378-379`). Both avatars are auto-opped on join
+(`ServerEntryPoint.java:65-78`). Naming hazard: the Java God *calls itself* "Dieu" in chat while Eden's avatar
 *username* is `Dieu`; a chat log line `Dieu : …` from `ChatPrinter` (Java God, private) is distinct from a public
 chat message *sent by* the player-entity `Dieu` (Eden).
 
@@ -52,7 +52,8 @@ chat message *sent by* the player-entity `Dieu` (Eden).
 |---|---|---|
 | `ChatBot` | `ChatBot.java` | Per-bot state (memory, depth, session-bound flags, Wait deferrals), request assembly, response callback/tool loop, `endPrayerSession`. |
 | `ChatCommand` | `ChatCommand.java` | `/pray`, `/pray stop`, `/godbody on|off`, `/prompt`. |
-| `ChatBotFunctions` | `ChatBotFunctions.java` | Tool POJOs, `buildToolSpecs`, `checkForFunctions` dispatch, `runOnMain`, gestures, textual `PlaceBlock*` regex scanner. |
+| `GodClamps` / `ItemIds` / `GodToolGate` / `BuildGuard` | `GodClamps.java`, `ItemIds.java`, `GodToolGate.java`, `BuildGuard.java` | Minecraft-free limits added by bugs #6/#7/#8: Reward/Punishment/Spawn clamps, item-id parsing, MCP-tool ownership gate, sub-build and per-call block caps. |
+| `ChatBotFunctions` | `ChatBotFunctions.java` | Tool POJOs, `buildToolSpecs`, `checkForFunctions` dispatch, `runOnMain`, gestures, textual `PlaceBlock*` regex scanner (placements queued to the main thread). |
 | `QueryTerrain` | `QueryTerrain.java` | Tool POJO: ASCII relief map. |
 | `JsonSchemaAdapter` / `OptionalField` | `JsonSchemaAdapter.java`, `OptionalField.java` | POJO → LangChain4j `ToolSpecification`. |
 | `ChatBotActions` | `ChatBotActions.java` | World effects (give item, lightning, weather, spawn, block placement, avatar invuln), `/block`, `/construction`. |
@@ -104,8 +105,8 @@ sequenceDiagram
     end
     alt response has tool calls
         W->>Q: runOnMain(Reward/Trade/Punishment/...) (.get 5s each)
-        W->>MCP: execute(kebab-case tool)
-        W->>GB: gestures (if manifested)
+        W->>MCP: execute(kebab-case tool) (only if bridge enabled & owner)
+        W->>GB: gestures (if manifested & owner)
         alt a Wait was called
             W-->>W: GodScheduler defers sendFunctionOutputs N s
         else
@@ -117,19 +118,19 @@ sequenceDiagram
     end
 ```
 
-Step citations: echo + claim `ChatCommand.java:87-109`; entry bookkeeping `ChatBot.java:256-267`; worker
-assembly `ChatBot.java:400-425`; context hop `ChatBot.java:496-520`; callback `ChatBot.java:522-573`; dispatch
-`ChatBotFunctions.java:351-471`; teardown `ChatBot.java:580-587`. Full detail: [llm-pipeline.md](llm-pipeline.md).
+Step citations: echo + claim `ChatCommand.java:91-113`; entry bookkeeping `ChatBot.java:258-269`; worker
+assembly `ChatBot.java:402-427`; context hop `ChatBot.java:498-522`; callback `ChatBot.java:524-575`; dispatch
+`ChatBotFunctions.java:363-490`; teardown `ChatBot.java:582-589`. Full detail: [llm-pipeline.md](llm-pipeline.md).
 
 ### Other entry points into the same pipeline
 
 | Entry | Bot | Notes |
 |---|---|---|
 | `/pray <text>` (perm 0) | `godBot` | Claims avatar; text-only `UserMessage`. |
-| Client `/prove` → `ImagePayload` text `"Prove : …"` | `godBot` (`ChatBot.getCorrectChatBot`, `ChatBot.java:644-651`) | Claims avatar (`ImageReceiver.java:33`); image attached as `ImageContent`. Client command is currently broken — see [images-and-client.md](images-and-client.md). |
-| Client `/build "<text>"` → text `"Build : …"` | `buildBot` | No claim; `hasImage=false` so the screenshot is dropped server-side. |
+| Client `/prove <text>` → `ImagePayload` text `"Prove : …"` | `godBot` (`ChatBot.getCorrectChatBot`, `ChatBot.java:646-653`) | Claims avatar (`ImageReceiver.java:33`); image attached as `ImageContent`. ~~Client command is currently broken~~ **Fixed (bug #9):** `/prove` now runs (`greedyString` argument, `Screenshotter.java:52-53`) — see [images-and-client.md](images-and-client.md). |
+| Client `/build <text>` → text `"Build : …"` | `buildBot` | No claim; ~~`hasImage=false` so the screenshot is dropped server-side~~ **Fixed (bug #9):** `buildBot.hasImage=true`, so the screenshot is attached (`ChatBot.java:135-138`). |
 | `BuildPlan` tool | `BuildSubAgent` instances | Separate memory per sub-agent; see [building.md](building.md). |
-| `Wait` continuation | same bot | `GodScheduler` thread calls `sendFunctionOutputs` (`ChatBot.java:320-336`). |
+| `Wait` continuation | same bot | `GodScheduler` thread calls `sendFunctionOutputs` (`ChatBot.java:322-338`). |
 
 ## Where state lives
 
@@ -143,8 +144,8 @@ assembly `ChatBot.java:400-425`; context hop `ChatBot.java:496-520`; callback `C
 | Pending trade offer | `TradeOffers.offers: HashMap<UUID, TradeOffer>` (`TradeOffers.java:114`) | One per player, expires after 5 min | No |
 | `/construction` pivot | `Raycaster.lastPos: HashMap<UUID, BlockPos>` (`Raycaster.java:21`) | Per player | No |
 | Server chat/game log | `ChatMessageHistory.messageHistory` (40 lines, `ChatMessageHistory.java:14`) | Global | No |
-| Runtime prompt override | `ChatBot.prompt` (set by `/prompt <text>`, `ChatCommand.java:123-124`) | Both bots | No |
-| Base persona | `prompt.txt`, `build_prompt.txt` in the JVM cwd (`ChatBot.java:132-133`, `:636-642`) | Re-read on `/prompt` | File |
+| Runtime prompt override | `ChatBot.prompt` (set by `/prompt <text>`, `ChatCommand.java:127-128`) | Both bots | No |
+| Base persona | `prompt.txt`, `build_prompt.txt` in the JVM cwd (`ChatBot.java:132-133`, `:638-644`) | Re-read on `/prompt` | File |
 | LLM provider settings | `llm_config.properties` in cwd (`LLMConfig.java:29`) | Global | File |
 | Avatar/bridge settings | `bridge_config.properties` in cwd (`BridgeConfig.java:25`) | Global | File |
 | MCP settings | `mcp_config.properties` in cwd (`MCPConfig.java:46`) | Global | File |
@@ -157,9 +158,9 @@ The cwd is the server's working directory (production: the `PaulsBrawlsVanilla` 
 Commands and the `ImagePayload` receiver run on the server thread. All LLM work runs on `llm-worker-N` virtual
 threads from `LLMConfig.sharedExecutor()` (`LLMConfig.java:155-163`). The response callback (`thenAccept`) runs on
 the worker that completed the future, so tool dispatch happens off-thread; world-touching tools hop to the main
-thread through `GodActionQueue.submit(...).get(5, SECONDS)` (`ChatBotFunctions.java:488-498`). Bridge calls
+thread through `GodActionQueue.submit(...).get(5, SECONDS)` (`ChatBotFunctions.java:507-517`). Bridge calls
 (`GodBody.*`) are async HTTP and never touch world state. Never call a queue-and-join from the main thread
-(`collectDynamicContext` guards this explicitly, `ChatBot.java:505-510`).
+(`collectDynamicContext` guards this explicitly, `ChatBot.java:507-512`).
 
 ## Gotchas & known issues
 
@@ -168,9 +169,9 @@ thread through `GodActionQueue.submit(...).get(5, SECONDS)` (`ChatBotFunctions.j
   at 16 000 tokens.
 - `endPrayerSession` does **not** clear memory — the next `/pray` continues the same conversation.
 - The Java God's chat prefix "Dieu" collides visually with Eden's avatar username `Dieu` (see table above).
-- `fireGestures` checks `GodSessionManager.hasManifested()` globally, not ownership — a bodiless player's
-  `Punishment`/`Reward` makes the avatar (manifested for someone else) gesture / look at the bodiless player
-  (`ChatBotFunctions.java:506-524`).
+- ~~`fireGestures` checks `GodSessionManager.hasManifested()` globally, not ownership~~ **Fixed (bug #8):** it now
+  also requires `GodSessionManager.isActive(player)`, so a bodiless player's `Punishment`/`Reward` no longer moves the
+  owner's avatar (`ChatBotFunctions.java:525-527`).
 
 ## Related
 

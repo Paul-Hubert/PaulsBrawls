@@ -4,8 +4,8 @@ title: AI God — world actions (ChatBotActions) and trades (/accept)
 system: aigod
 summary: ChatBotActions world effects (items, lightning, weather, spawns, block placement, getBlockInfo, avatar invulnerability) and the TradeOffers pending-offer + /accept flow.
 tags: [aigod, chatbotactions, tradeoffers, accept, reward, punishment, smite, weather, spawncreature, getblockinfo, avatar, invulnerable, coin]
-sources: [src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/TradeMath.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/ChatPrinter.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/Money.java, src/main/java/com/paul/brawl/Raycaster.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/GodSessionManager.java]
-verified_at: 4a8081f
+sources: [src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/TradeMath.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/ChatPrinter.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/Money.java, src/main/java/com/paul/brawl/Raycaster.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodClamps.java, src/main/java/com/paul/brawl/ItemIds.java, src/main/java/com/paul/brawl/BlockInfoJson.java, src/main/java/com/paul/brawl/ChatCommand.java]
+verified_at: 98cb908
 ---
 
 # AI God — world actions and trades
@@ -19,17 +19,18 @@ matches by registry item. No special coin logic (`paulsbrawls:coin` is just anot
 ## Thread contract
 
 Every method that touches the world assumes the server thread. Callers: `ChatBotFunctions.runOnMain`
-(`ChatBotFunctions.java:488-498`) for `Reward/Trade/Punishment/ChangeWeather/SpawnCreature`, `GodActionQueue.submit`
-for `buffAvatar`/`restoreAvatar`, Brigadier for `/block` & `/construction`, and the build text scanner (see
-[building.md](building.md)).
+(`ChatBotFunctions.java:507-517`) for `Reward/Trade/Punishment/ChangeWeather/SpawnCreature`, `GodActionQueue.submit`
+for `buffAvatar`/`restoreAvatar`, Brigadier for `/block` & `/construction`, and the build text scanner, which since
+bug #7 also queues one `GodActionQueue` task per call line (see [building.md](building.md)). `restoreAvatarOnMain`
+is the one helper called directly from server-thread code that has just cleared the queue.
 
 ## Server handle
 
 | Member | Lines | Notes |
 |---|---|---|
-| `private static volatile MinecraftServer SERVER` | `ChatBotActions.java:47` | Set on `SERVER_STARTED`, nulled on `SERVER_STOPPING` (`ServerEntryPoint.java:46-56`). |
-| `setServer(server)` / `server()` | `:49-50` | Used by off-thread watchdog paths. |
-| `register()` | `:52-54` | Registers `/block` and `/construction` (called from `ChatBot.register`). |
+| `private static volatile MinecraftServer SERVER` | `ChatBotActions.java:51` | Set on `SERVER_STARTED`, nulled on `SERVER_STOPPING` (`ServerEntryPoint.java:46-60`). |
+| `setServer(server)` / `server()` | `:53-54` | Used by off-thread watchdog paths. |
+| `register()` | `:56-58` | Registers `/block` and `/construction` (called from `ChatBot.register`). |
 
 ## Item giving
 
@@ -38,10 +39,10 @@ for `buffAvatar`/`restoreAvatar`, Brigadier for `/block` & `/construction`, and 
 Two parsers (bug #6 fixed — splitting on `:` used to reject both a bare `diamond` and the component syntax the `Reward`
 tool advertises):
 
-- `getItemFromString(String str)` — the **registry item** only (used by `TradeOffers`): `ItemIds.baseId(str)` strips a
+- `getItemFromString(String str)` (`:148-168`) — the **registry item** only (used by `TradeOffers`): `ItemIds.baseId(str)` strips a
   `[components]` / `{nbt}` suffix, lower-cases, defaults the namespace to `minecraft` (unit-tested, `ItemIdsTest`);
   `Identifier.tryParse` → `Registries.ITEM.getOrEmpty(id).orElse(null)`. Blank / invalid → log `Invalid item string`, `null`.
-- `parseItemStack(server, str)` — the **full stack**, parsed exactly like `/give`: `ItemStackArgumentType.itemStack(
+- `parseItemStack(server, str)` (`:109-120`) — the **full stack**, parsed exactly like `/give`: `ItemStackArgumentType.itemStack(
   CommandRegistryAccess.of(server.getRegistryManager(), enabledFeatures)).parse(…)`, then `createStack(1, false)`.
   So `minecraft:enchanted_book[minecraft:enchantments={levels:{…}}]` keeps its components. Syntax error → log, `null`.
   (The component *contents* follow vanilla 1.21.1 `/give` syntax; the tool's example text is the model's guide.)
@@ -50,12 +51,12 @@ tool advertises):
 
 | Method | Lines | Behaviour | Returns |
 |---|---|---|---|
-| `giveItemFromString(player, itemName, amount)` | `ChatBotActions` | `Reward`. `amount < 1` → refused; else clamped to `BridgeConfig.rewardMax` (64) via `GodClamps.rewardAmount`; `parseItemStack`; gives max-size stacks with `offerOrDrop` (what does not fit is dropped at the player's feet). | `"You gave the player a reward: <n> <itemName>[ (limité à <n> sur <asked> demandés)]"` / `"Reward cancelled, amount must be at least 1 (got <a>)."` / `"Reward cancelled, item <itemName> does not exist or is malformed, please try again."` |
-| `giveItem(player, Item, amount)` | `ChatBotActions` | `player.giveItemStack(new ItemStack(item, amount))`. No clamp, no overflow drop. Only `giveGoodReward` (unused) calls it now. | void |
-| `giveItemWithCommand(player, item, amount)` | `:93-103` | Runs `/give <name> <item> <amount>` as server source. **Unused.** | `""` |
-| `giveGoodReward(player)` | `:56-58` | 10 × `Money.MONEY` (`paulsbrawls:coin`, `Money.java:19-23`). **Unused.** | void |
-| `giveBadReward(player)` | `:60-62` | One `smite`. **Unused.** | void |
-| `stripArguments(str, commandName)` | `:110-117` | **Unused and broken**: `split(regex, 1)` always yields one element, so it always returns `null`. | `null` |
+| `giveItemFromString(player, itemName, amount)` | `:89-106` | `Reward`. `amount < 1` → refused; else clamped to `BridgeConfig.rewardMax` (64) via `GodClamps.rewardAmount`; `parseItemStack`; gives max-size stacks with `offerOrDrop` (what does not fit is dropped at the player's feet). | `"You gave the player a reward: <n> <itemName>[ (limité à <n> sur <asked> demandés)]"` / `"Reward cancelled, amount must be at least 1 (got <a>)."` / `"Reward cancelled, item <itemName> does not exist or is malformed, please try again."` |
+| `giveItem(player, Item, amount)` | `:135-137` | `player.giveItemStack(new ItemStack(item, amount))`. No clamp, no overflow drop. Only `giveGoodReward` (unused) calls it now. | void |
+| `giveItemWithCommand(player, item, amount)` | `:122-132` | Runs `/give <name> <item> <amount>` as server source. **Unused.** | `""` |
+| `giveGoodReward(player)` | `:60-62` | 10 × `Money.MONEY` (`paulsbrawls:coin`, `Money.java:19-23`). **Unused.** | void |
+| `giveBadReward(player)` | `:64-66` | One `smite`. **Unused.** | void |
+| `stripArguments(str, commandName)` | `:139-146` | **Unused and broken**: `split(regex, 1)` always yields one element, so it always returns `null`. | `null` |
 
 > `Reward` no longer uses `giveItemStack`: `PlayerInventory.offerOrDrop` drops the overflow, and a non-positive amount is
 > refused before anything is parsed (bug #6).
@@ -64,14 +65,14 @@ tool advertises):
 
 | Method | Lines | Behaviour |
 |---|---|---|
-| `smite(player, int amount)` | `ChatBotActions` | Strikes `GodClamps.punishments(amount, BridgeConfig.punishmentMax)` times (0..3 by default, bug #6). Returns `"God punished the player <n> times.[ (limité à <n> sur <asked> demandés)]"`. |
-| `smite(player)` | `:151-160` | `EntityType.LIGHTNING_BOLT.create(world)`, `refreshPositionAfterTeleport(blockX, blockY, blockZ)` (block corner, not centred), `world.spawnEntity`. Null-safe on player/world. |
+| `smite(player, int amount)` | `:171-178` | Strikes `GodClamps.punishments(amount, BridgeConfig.punishmentMax)` times (0..3 by default, bug #6). Returns `"God punished the player <n> times.[ (limité à <n> sur <asked> demandés)]"`. |
+| `smite(player)` | `:180-189` | `EntityType.LIGHTNING_BOLT.create(world)`, `refreshPositionAfterTeleport(blockX, blockY, blockZ)` (block corner, not centred), `world.spawnEntity`. Null-safe on player/world. |
 
 All bolts of one call spawn in the same tick at the same position.
 
 ## ChangeWeather
 
-`changeWeather(player, weatherType, durationSeconds)`, `ChatBotActions.java:317-327`:
+`changeWeather(player, weatherType, durationSeconds)`, `ChatBotActions.java:347-357`:
 
 - Null player/server → `"Impossible de changer la météo : joueur ou serveur invalide."`
 - Executes `"/weather " + weatherType.toLowerCase() + " " + durationSeconds` via
@@ -87,7 +88,7 @@ All bolts of one call spawn in the same tick at the same position.
 
 ## SpawnCreature — `spawnCreature(player, entityType, count, x, y, z)`
 
-`ChatBotActions.java:336-380`:
+`ChatBotActions.java:366-413`:
 
 1. Player null or world not a `ServerWorld` → `"Impossible de spawner : joueur ou monde invalide."`
 2. Blank `entityType` → `"Spawn annulé : entityType vide."`
@@ -114,18 +115,18 @@ Used by `/block`, the build bots' textual calls, and `BuildSubAgent` (semantics 
 
 | Method | Lines | Behaviour |
 |---|---|---|
-| `placeBlock(player, x, y, z, blockType)` | `:206-213` | Pivot = `Raycaster.getLastPos(uuid)`; no-op if null; `placeBlockAt`. |
-| `placeLine(player, x,y,z, x2,y2,z2, blockType)` | `:197-204` | Same pivot lookup; `placeLineAt`. |
-| `placeBlocks(player, int[] x, int[] y, int[] z, blockType)` | `:215-222` | Same pivot lookup; `placeBlocksAt`. |
-| `placeBlockAt(player, pivot, x, y, z, blockType)` | `:224-228` | `changeBlockAtPos(pivot + (x,y,z))`. |
-| `placeLineAt(...)` | `:230-242` | DDA line: `maxLen = max(1, max(|dx|,|dy|,|dz|))`, `i = 0..maxLen` inclusive, integer division per axis. |
-| `placeBlocksAt(...)` | `:244-249` | Zips the three arrays up to the shortest length. |
-| `changeBlockAtPos(player, blockType, pos)` | `:285-290` | `parseBlockState` then `world.setBlockState(pos, state)` (default flags; no drops, no permission check). |
-| `parseBlockState(player, blockType)` (private) | `:292-314` | `BlockArgumentParser.block(registryWrapper(BLOCK), blockType, false)`; on syntax error, retries with the part before `[` (state dropped); logs warnings; `null` on failure. Accepts full block-state syntax e.g. `minecraft:oak_stairs[facing=east]`. |
+| `placeBlock(player, x, y, z, blockType)` | `:238-245` | Pivot = `Raycaster.getLastPos(uuid)`; no-op if null; `placeBlockAt`. |
+| `placeLine(player, x,y,z, x2,y2,z2, blockType)` | `:229-236` | Same pivot lookup; `placeLineAt`. |
+| `placeBlocks(player, int[] x, int[] y, int[] z, blockType)` | `:247-254` | Same pivot lookup; `placeBlocksAt`. |
+| `placeBlockAt(player, pivot, x, y, z, blockType)` | `:256-260` | `changeBlockAtPos(pivot + (x,y,z))`. |
+| `placeLineAt(...)` | `:262-274` | DDA line: `maxLen = max(1, max(|dx|,|dy|,|dz|))`, `i = 0..maxLen` inclusive, integer division per axis. |
+| `placeBlocksAt(...)` | `:276-281` | Zips the three arrays up to the shortest length. |
+| `changeBlockAtPos(player, blockType, pos)` | `:315-320` | `parseBlockState` then `world.setBlockState(pos, state)` (default flags; no drops, no permission check). |
+| `parseBlockState(player, blockType)` (private) | `:322-344` | `BlockArgumentParser.block(registryWrapper(BLOCK), blockType, false)`; on syntax error, retries with the part before `[` (state dropped); logs warnings; `null` on failure. Accepts full block-state syntax e.g. `minecraft:oak_stairs[facing=east]`. |
 
 ## getBlockInfo
 
-`ChatBotActions.getBlockInfo(player)` (`:252-281`) feeds the 4th system message every godBot turn
+`ChatBotActions.getBlockInfo(player)` (`:289-311`) feeds the 4th system message every godBot turn
 ([llm-pipeline.md](llm-pipeline.md)).
 
 - Center = `Raycaster.getLastPos(player.getUuid())` — the block hit by the player's last `/construction` raycast
@@ -151,10 +152,11 @@ cursor"), it is not the live cursor.
 
 | Method | Lines | Behaviour | Returns |
 |---|---|---|---|
-| `findAvatar(prayingPlayer)` | `:383-389` | Server from the player (or the static `SERVER`), `getPlayerManager().getPlayer(BridgeConfig.botUsername)` (default `LLMBot`). | `ServerPlayerEntity` or `null` |
-| `buffAvatar(prayingPlayer)` | `:396-405` | `bot.setInvulnerable(true)` + `bot.extinguish()`. Called on `Appear` via `GodActionQueue`. | `"Avatar rendu invincible."` / `"Avatar introuvable (pas de buff)."` (logs `buffAvatar: bot '<name>' not found (not joined?)`) |
-| `restoreAvatar(prayingPlayer)` | `:407-412` | `bot.setInvulnerable(false)`. Called on `Vanish` and `endPrayerSession`. | `"Avatar redevenu mortel."` / `"Avatar introuvable."` |
-| `dismissAvatarOnWatchdog(ownerUuid)` | `:418-428` | Off-thread: queues `setInvulnerable(false)` on main thread and calls `GodBody.vanish()` directly. Called by the idle watchdog (`GodSessionManager.java:131`). | void |
+| `findAvatar(prayingPlayer)` | `:416-422` | Server from the player (or the static `SERVER`), `getPlayerManager().getPlayer(BridgeConfig.botUsername)` (default `LLMBot`). | `ServerPlayerEntity` or `null` |
+| `buffAvatar(prayingPlayer)` | `:429-438` | `bot.setInvulnerable(true)` + `bot.extinguish()`. Called on `Appear` via `GodActionQueue`. | `"Avatar rendu invincible."` / `"Avatar introuvable (pas de buff)."` (logs `buffAvatar: bot '<name>' not found (not joined?)`) |
+| `restoreAvatar(prayingPlayer)` | `:440-445` | `bot.setInvulnerable(false)`. Called on `Vanish` and `endPrayerSession`. | `"Avatar redevenu mortel."` / `"Avatar introuvable."` |
+| `restoreAvatarOnMain(server)` | `:454-460` | Bug #5: `setInvulnerable(false)` directly, for server-thread callers that just cleared the queue — `/godbody off` (`ChatCommand.java:67`) and `SERVER_STOPPING` (`ServerEntryPoint.java:55`). An avatar offline at that moment keeps its saved flag. | `"Avatar redevenu mortel."` / `"Avatar introuvable."` / `"Serveur indisponible."` |
+| `dismissAvatarOnWatchdog(ownerUuid)` | `:466-476` | Off-thread: queues `setInvulnerable(false)` on main thread and calls `GodBody.vanish()` directly. Called by the idle watchdog (`GodSessionManager.java:131`). | void |
 
 `setInvulnerable` sets the entity field that Minecraft serializes as the `Invulnerable` NBT tag. Session/lock
 semantics: [god-body.md](god-body.md).
@@ -180,7 +182,7 @@ semantics: [god-body.md](god-body.md).
 1. `verifyItems()` (`:41-54`) resolves both names with `ChatBotActions.getItemFromString`; failure returns
    `"Trade cancelled. <name> was not a correct item. Please try again."` (offer not stored).
 2. Stores the offer, returns `null`.
-3. Caller `ChatBotActions.sendTradeOffer` (`ChatBotActions.java:64-76`) then privately messages the player
+3. Caller `ChatBotActions.sendTradeOffer` (`ChatBotActions.java:68-80`) then privately messages the player
    `"God has offered you a trade: \n You receive <giveAmount> <giveItemName> for <takeAmount> <takeItemName>\n Type /accept within 5 minutes."` and
    returns the model-facing `"God offered a trade to the player: God gives … \nThe player may accept or decline this trade."`.
 
@@ -218,11 +220,13 @@ There is no coin-specific code. The God can trade/reward Gibber coins by naming 
 
 | Command | Perm | Lines | Behaviour |
 |---|---|---|---|
-| `/block <x> <y> <z>` (ints) | 2 | `ChatBotActions.java:164-179` | `placeBlock(player, x, y, z, "minecraft:stone")` — **offsets relative to the player's `/construction` pivot**, no-op if none. |
-| `/construction` | 2 | `ChatBotActions.java:181-193` | `Raycaster.setLastPos(player)` (100-block look raycast; stores hit pos or `null`) and `ChatBot.buildBot.clearMemory(player)`. See [building.md](building.md). |
+| `/block <x> <y> <z>` (ints) | 2 | `ChatBotActions.java:193-209` | `placeBlock(player, x, y, z, "minecraft:stone")` — **offsets relative to the player's `/construction` pivot**, no-op if none. |
+| `/construction` | 2 | `ChatBotActions.java:211-225` | `Raycaster.setLastPos(player)` (100-block look raycast; stores hit pos or `null`) and `ChatBot.buildBot.clearMemory(player)`. See [building.md](building.md). |
 | `/accept` | 0 | `TradeOffers.java:120-130` | See above. |
 
-Both `/block` and `/construction` call `getPlayer()` and will fail from the console.
+~~Both `/block` and `/construction` call `getPlayer()` and will fail from the console.~~ **Fixed (bug #18):** both now
+use `getPlayerOrThrow()`, so the console gets vanilla's readable player-required error instead of an NPE (they still need a
+player).
 
 ## Gotchas & known issues
 
@@ -231,9 +235,13 @@ Both `/block` and `/construction` call `getPlayer()` and will fail from the cons
   tool execution, in `updateOffer` and on `/accept`, and `planTakes` refuses a non-positive need on its own.
 - **Fixed — display-name matching**: the take side now uses `stack.isOf(takeItem)`. Components are still ignored
   for matching, so an enchanted or renamed stack of the right item counts (and can be taken).
-- `giveItem` (`ChatBotActions.java:106-108`, still used by `Reward`) passes one `ItemStack(item, amount)` to
-  `giveItemStack`, whose result is ignored: whatever doesn't fit a full inventory is lost. `/accept` no longer uses it.
-- Unclamped `Punishment.amount` (mass lightning in one tick) and `Reward.amount`.
+- `giveItem` (`ChatBotActions.java:135-137`) passes one `ItemStack(item, amount)` to `giveItemStack`, whose result is
+  ignored: whatever doesn't fit a full inventory is lost. Neither `Reward` (now `giveItemFromString` + `offerOrDrop`)
+  nor `/accept` uses it; only the unused `giveGoodReward` does.
+- ~~Unclamped `Punishment.amount` (mass lightning in one tick) and `Reward.amount`.~~ **Fixed (bug #6):** clamped to
+  `BridgeConfig.punishmentMax` (3) and `rewardMax` (64) via `GodClamps`.
+- A `Trade` offer resolves items with `getItemFromString`, which strips components: an offered
+  `minecraft:enchanted_book[…]` is delivered as a plain book (only `Reward` keeps components).
 - `changeWeather` duration units and always-success return (see above).
 - ~~`getBlockInfo` output is malformed pseudo-JSON~~ fixed (bug #18); it is still keyed off `/construction`, not the
   cursor.
