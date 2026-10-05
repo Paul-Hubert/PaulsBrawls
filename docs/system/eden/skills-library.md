@@ -27,7 +27,7 @@ tier- and grant-filtered, scored `max(embedding cosine, keyword overlap)`, top-8
 | Stock seed | `eden/src/skills/exemplars/index.ts` | `STOCK_SKILLS`, `seedStockSkills` — see [stock-skills.md](stock-skills.md) |
 | Type shapes | `eden/src/types/skill.ts`, `eden/src/types/enums.ts` | `SkillManifest`, `SkillVersion`, `SKILL_STATUSES` |
 | Villager-facing tools (`search_skills`/`read_skill`/`write_skill`/`run_skill`) | `eden/src/villagers/tools.ts:82-115, 194-268` | the only authoring/reading surface for villagers |
-| Verdict → library action | `eden/src/god/god.ts:149-184` | `GodService.routeVerdict` |
+| Verdict → library action | `eden/src/god/god.ts:150-181` | `GodService.routeVerdict` |
 | Wiring | `eden/src/main.ts:519-534, 550, 583-591` | library, seed, engine, retriever, tools, prompt exemplars |
 
 ## On-disk layout
@@ -43,10 +43,10 @@ tier- and grant-filtered, scored `max(embedding cosine, keyword overlap)`, top-8
       skill.json             # the whole SkillRecord, rewritten on every mutation  library.ts:373-378
 ```
 
-- `skill.json` is `JSON.stringify(record, null, 2)` of `{ name, records: [{ version: SkillVersion, manifest: SkillManifest }, …] }` (`library.ts:61-69, 377`). The manifest is stored **per version** (it can evolve across versions).
+- `skill.json` is `JSON.stringify(record, null, 2)` of `{ name, records: [{ version: SkillVersion, manifest: SkillManifest }, …] }` (`eden/src/skills/library.ts:61-69, 377`). The manifest is stored **per version** (it can evolve across versions).
 - `codePath` inside each `SkillVersion` is the path string as joined at write time (relative to the process cwd when `dataDir` is relative).
-- **Boot load** (`library.ts:380-393`): for every top-level directory under `library/`, read `skill.json`; a corrupt JSON is silently skipped (that skill vanishes from the library, its files remain). Directories without `skill.json` are ignored.
-- Live state is persisted files, not event-sourced (S5); the journal is written alongside as history (`library.ts:10-11`).
+- **Boot load** (`eden/src/skills/library.ts:380-393`): for every top-level directory under `library/`, read `skill.json`; a corrupt JSON is silently skipped (that skill vanishes from the library, its files remain). Directories without `skill.json` are ignored.
+- Live state is persisted files, not event-sourced (S5); the journal is written alongside as history (`eden/src/skills/library.ts:10-11`).
 
 ### SQLite involvement
 
@@ -56,10 +56,10 @@ The library writes **no SQLite table of its own**. The only table in `eden.db` i
 
 | Kind | Payload (`eden/src/journal/kinds.ts:99-106`) | Actor | Emitted by |
 |---|---|---|---|
-| `skill.draft` | `{name, version, author, tier, lines}` | `villager:<name>` / `god:authoring` / `engine` (stock) | `upsertDraft` (`library.ts:119-125`) — also every stock re-seed |
-| `skill.admit` | `{name, version, provenance?}` | `god:critic` | `admit` (`library.ts:147-152`), `unquarantine` (no provenance, `library.ts:196-199`) |
-| `skill.quarantine` | `{name, version, reason}` | always `engine` | `quarantine` (`library.ts:178-181`) |
-| `skill.archive` | `{name, version}` | `god:critic` | `archive` (`library.ts:219`) |
+| `skill.draft` | `{name, version, author, tier, lines}` | `villager:<name>` / `god:authoring` / `engine` (stock) | `upsertDraft` (`eden/src/skills/library.ts:119-125`) — also every stock re-seed |
+| `skill.admit` | `{name, version, provenance?}` | `god:critic` | `admit` (`eden/src/skills/library.ts:147-152`), `unquarantine` (no provenance, `eden/src/skills/library.ts:196-199`) |
+| `skill.quarantine` | `{name, version, reason}` | always `engine` | `quarantine` (`eden/src/skills/library.ts:178-181`) |
+| `skill.archive` | `{name, version}` | `god:critic` | `archive` (`eden/src/skills/library.ts:219`) |
 | `skill.run` | full `RunReport` | `villager:<name>` or `god:body` | the engine — see [skills-engine.md](skills-engine.md) |
 | `skill.log` | `{skill, message}` | same as run | `ctx.log` |
 
@@ -70,7 +70,7 @@ Refs carry `skill` + `skillVersion` (and `rolloutId`/`verdictId` for admit). Ski
 
 ## Manifest and version shape
 
-`SkillManifest` (`eden/src/types/skill.ts:19-30`), built by `buildManifest` (`library.ts:301-313`):
+`SkillManifest` (`eden/src/types/skill.ts:19-30`), built by `buildManifest` (`eden/src/skills/library.ts:301-313`):
 
 | Field | Type | Source / default |
 |---|---|---|
@@ -88,7 +88,7 @@ Refs carry `skill` + `skillVersion` (and `rolloutId`/`verdictId` for admit). Ski
 hex of code, library.ts:80-82), status, probationRunsLeft?, author {kind:'god'|'villager'|'stock', name?},
 provenance? {rolloutId, verdictId}, createdAt (ms epoch)`.
 
-### `renderSignature` (`library.ts:396-425`)
+### `renderSignature` (`eden/src/skills/library.ts:396-425`)
 
 `name({k: type, opt?: type, …}) → ret`. A property not in `params.required` gets a `?`. Types come
 from `schema.type`: `array` renders as `<items-type>[]`, a type array joins with `|`, missing type →
@@ -121,21 +121,21 @@ active-probation ──recordProbationRun(ok)×probationRuns──► active
 
 | Transition | Method | Trigger in running code | Threshold / effect |
 |---|---|---|---|
-| (new) → `draft` | `upsertDraft` (`library.ts:102-127`) | `write_skill` tool (`tools.ts:235`) | new version = max existing + 1 (`library.ts:351-353`) |
-| (new) → `active` | `seedStock` (`library.ts:130-137`) | `seedStockSkills` at every boot (`main.ts:524`) | author forced to `{kind:'stock'}` |
-| `draft` → `active-probation` | `admit` (`library.ts:141-154`) | `routeVerdict` when `libraryAction==='admit'` and current status is `draft` (`god.ts:167-174`) | `probationRunsLeft = probationRuns`; stamps `provenance` |
-| `active-probation` → `active` | `recordProbationRun(name, ok)` (`library.ts:157-169`) | engine, after every **root** run whose resolved version is `active-probation` (`engine.ts:421`) | only `ok=true` decrements; at `left <= 0` → `active`, `probationRunsLeft` deleted |
-| any → `quarantined` | `quarantine(name, reason, version?)` (`library.ts:172-183`) | verdict `libraryAction==='quarantine'` (`god.ts:177-178`); admin route (`main.ts:391`); `verifyHashes` | default target = live version, else newest non-archived |
-| `quarantined` → `active-probation` | `unquarantine` (`library.ts:186-201`) | verdict `'admit'` on a quarantined version (`god.ts:167-170`) | **never** straight to `active` (R37/R48); resets `probationRunsLeft` |
-| any → `archived` | `archive` (`library.ts:214-220`) | verdict `libraryAction==='archive'` (`god.ts:179-180`) | invisible to retrieval and default read; file kept |
+| (new) → `draft` | `upsertDraft` (`eden/src/skills/library.ts:102-127`) | `write_skill` tool (`eden/src/villagers/tools.ts:235`) | new version = max existing + 1 (`eden/src/skills/library.ts:351-353`) |
+| (new) → `active` | `seedStock` (`eden/src/skills/library.ts:130-137`) | `seedStockSkills` at every boot (`eden/src/main.ts:524`) | author forced to `{kind:'stock'}` |
+| `draft` → `active-probation` | `admit` (`eden/src/skills/library.ts:141-154`) | `routeVerdict` when `libraryAction==='admit'` and current status is `draft` (`eden/src/god/god.ts:167-174`) | `probationRunsLeft = probationRuns`; stamps `provenance` |
+| `active-probation` → `active` | `recordProbationRun(name, ok)` (`eden/src/skills/library.ts:157-169`) | engine, after every **root** run whose resolved version is `active-probation` (`eden/src/skills/engine.ts:421`) | only `ok=true` decrements; at `left <= 0` → `active`, `probationRunsLeft` deleted |
+| any → `quarantined` | `quarantine(name, reason, version?)` (`eden/src/skills/library.ts:172-183`) | verdict `libraryAction==='quarantine'` (`eden/src/god/god.ts:177-178`); admin route (`eden/src/main.ts:391`); `verifyHashes` | default target = live version, else newest non-archived |
+| `quarantined` → `active-probation` | `unquarantine` (`eden/src/skills/library.ts:186-201`) | verdict `'admit'` on a quarantined version (`eden/src/god/god.ts:167-170`) | **never** straight to `active` (R37/R48); resets `probationRunsLeft` |
+| any → `archived` | `archive` (`eden/src/skills/library.ts:214-220`) | verdict `libraryAction==='archive'` (`eden/src/god/god.ts:179-180`) | invisible to retrieval and default read; file kept |
 
 Constants (`eden/src/config.ts:119-126`, overridable under `skills` in `eden.json`):
 
 | Key | Default | Used by |
 |---|---|---|
-| `skills.probationRuns` | `3` | `SkillLibrary` (`main.ts:519`) |
-| `skills.autoQuarantineAfter` | `5` | engine `FailureTripwire` (`engine.ts:515-531`) |
-| `skills.maxSkillLines` | `400` | `write_skill` (`tools.ts:225-231`) |
+| `skills.probationRuns` | `3` | `SkillLibrary` (`eden/src/main.ts:519`) |
+| `skills.autoQuarantineAfter` | `5` | engine `FailureTripwire` (`eden/src/skills/engine.ts:515-531`) |
+| `skills.maxSkillLines` | `400` | `write_skill` (`eden/src/villagers/tools.ts:225-231`) |
 | `skills.maxCallDepth` | `8` | engine composition |
 | `skills.runDefaultTimeoutMs` | `120000` | engine wall clock |
 | `skills.stallSeconds` | `20` | engine stall detector |
@@ -144,23 +144,23 @@ Constants (`eden/src/config.ts:119-126`, overridable under `skills` in `eden.jso
 
 | Read | Method | Resolves to |
 |---|---|---|
-| Live / runnable | `readRunnable` / `activeVersion` / `liveRecord` (`library.ts:224-244, 319-328`) | **highest version number** with status `active` or `active-probation`. Older `active` versions keep status `active` but are shadowed. |
-| `read_skill` default | `read(name)` (`library.ts:234-238`) | newest **non-archived** version — may be a `draft` or `quarantined` one |
+| Live / runnable | `readRunnable` / `activeVersion` / `liveRecord` (`eden/src/skills/library.ts:224-244, 319-328`) | **highest version number** with status `active` or `active-probation`. Older `active` versions keep status `active` but are shadowed. |
+| `read_skill` default | `read(name)` (`eden/src/skills/library.ts:234-238`) | newest **non-archived** version — may be a `draft` or `quarantined` one |
 | Explicit version | `read(name, v)` / `getVersion` | any version, any status |
-| Retrieval candidates | `liveSkills()` (`library.ts:257-264`) | the live version of every skill |
-| Admin history | `history(name)` (`library.ts:276-284`) | every version newest-first; missing file → `code: ''` |
+| Retrieval candidates | `liveSkills()` (`eden/src/skills/library.ts:257-264`) | the live version of every skill |
+| Admin history | `history(name)` (`eden/src/skills/library.ts:276-284`) | every version newest-first; missing file → `code: ''` |
 
 ### Probation gates composition, not access
 
 An `active-probation` live version is retrievable and directly runnable, but `ctx.skills.run` of it from
-another skill throws `ProbationError` (`engine.ts:342`). Graduation is **run counting, not re-judging**:
-the engine counts clean root runs; there is no critic re-review ticket (comment at `engine.ts:413-420`).
+another skill throws `ProbationError` (`eden/src/skills/engine.ts:342`). Graduation is **run counting, not re-judging**:
+the engine counts clean root runs; there is no critic re-review ticket (comment at `eden/src/skills/engine.ts:413-420`).
 
 ### The failure tripwire (`autoQuarantineAfter`)
 
-`FailureTripwire.recordRun` (`engine.ts:515-531`) counts consecutive failed **root** runs per skill name;
+`FailureTripwire.recordRun` (`eden/src/skills/engine.ts:515-531`) counts consecutive failed **root** runs per skill name;
 on reaching the threshold it resets to 0 and returns `true`, which calls `onTripwire(skill, report)`.
-It **does not quarantine anything itself**, and `main.ts` does not pass `onTripwire` (`main.ts:526-533`),
+It **does not quarantine anything itself**, and `eden/src/main.ts` does not pass `onTripwire` (`eden/src/main.ts:526-533`),
 so in the running host the tripwire currently has no effect. A success resets the counter.
 
 ## Authoring: `write_skill` and friends (villager tools)
@@ -171,10 +171,10 @@ Defined at `eden/src/villagers/tools.ts:82-115`, handled at `:194-268`. Messages
 |---|---|---|
 | `search_skills` | `{query}` | `retriever.search(query, {tier: runner.tier, villager})`, k=8; renders `name — signature — summary` lines; empty → `Aucun skill pertinent trouvé.` |
 | `read_skill` | `{name, version?}` | `library.read`; returns header `skill "<n>" v<k> [<status>]`, signature, `résumé`, `description`, journal-folded stats, last outcomes, full code |
-| `write_skill` | `{name, summary?, params?, returns?, code}` | see caps below; on success `Brouillon "<n>" v<k> créé (statut: draft).` |
-| `run_skill` | `{name, args?, timeoutMs?}` | engine run; inside a rollout, running the rollout's own draft name trials `ctx.draft.version` with `validateReturn: true` (`tools.ts:253-258`) |
+| `write_skill` | `{name, summary, params, returns, code}` (all schema-`required`; the handler still defaults a missing `summary`/`params`/`returns`) | see caps below; on success `Brouillon "<n>" v<k> créé (statut: draft).` |
+| `run_skill` | `{name, args, timeoutMs?}` (`args` schema-`required`, handler defaults it to `{}`) | engine run; inside a rollout, running the rollout's own draft name trials `ctx.draft.version` with `validateReturn: true` (`eden/src/villagers/tools.ts:253-258`) |
 
-`write_skill` checks, in order (`tools.ts:219-243`):
+`write_skill` checks, in order (`eden/src/villagers/tools.ts:219-243`):
 
 1. `name` non-empty after trim, `code` non-empty.
 2. **Size cap (R47):** `code.split('\n').length > maxSkillLines` (400) → rejected with
@@ -187,11 +187,11 @@ A villager may write a draft under a **stock skill's name**; it becomes `vN+1` o
 
 ## Admission and the description pass
 
-`GodService.routeVerdict` (`eden/src/god/god.ts:149-184`) applies the critic's `libraryAction`:
+`GodService.routeVerdict` (`eden/src/god/god.ts:150-181`) applies the critic's `libraryAction`:
 `admit` (draft → `admit()` + description pass; quarantined → `unquarantine()`; already live → no-op),
 `quarantine`, `archive`, or none.
 
-`DescriptionPass.derive(name, code)` (`eden/src/skills/describe.ts:26-52`):
+`DescriptionPass.derive(name, code)` (`eden/src/skills/describe.ts:26-85`):
 
 - One `client.chat` call on tier **`fast`**, caller `god:describe` (default), system prompt asking for
   STRICT JSON `{"description": 3-6 sentences, "summary": one line, "tags": 1-4 lowercase tags}` derived
@@ -201,12 +201,12 @@ A villager may write a draft under a **stock skill's name**; it becomes `vN+1` o
   valid strings (tags filtered to strings).
 - **Never throws.** Fallback = `Skill "<name>". <first non-empty code line>` sliced to 240 chars, leaving
   author summary/tags untouched.
-- Result applied via `library.applyDescription` (`library.ts:204-211`), which mutates that version's
+- Result applied via `library.applyDescription` (`eden/src/skills/library.ts:204-211`), which mutates that version's
   manifest and persists.
 
-> ⚠ In the running host `GodService` is built **without** a `describer` (`main.ts:555`:
+> ⚠ In the running host `GodService` is built **without** a `describer` (`eden/src/main.ts:555`:
 > `new GodService({ journal, library, inboxes })`), so `runDescriptionPass` returns immediately
-> (`god.ts:273-275`). Admitted skills keep `description === summary` (the author's own words).
+> (`eden/src/god/god.ts:273-275`). Admitted skills keep `description === summary` (the author's own words).
 
 ## Retrieval (`SkillRetriever.search`)
 
@@ -220,43 +220,43 @@ A villager may write a draft under a **stock skill's name**; it becomes `vN+1` o
 4. **Text per skill:** `"${summary} ${description} ${tags.join(' ')}"`.
 5. **Embeddings:** one `embeddings.embed([query, ...misses])` call, where *misses* are skills whose cached
    vector is absent or whose text changed (R58 cache, key `name@version`, value `{text, vector}`, FIFO
-   cap **4096**, `retrieve.ts:46-57, 109-116`). The query is embedded on every search.
+   cap **4096**, `eden/src/skills/retrieve.ts:46-57, 109-116`). The query is embedded on every search.
 6. **Score** = `keywordScore(query, text)`; if both a query vector and a skill vector exist,
-   `max(cosine(q, s), keyword)` (`retrieve.ts:92-104`).
-7. Sort by score desc, then name asc; return top `k` (default **8**, `retrieve.ts:39`).
+   `max(cosine(q, s), keyword)` (`eden/src/skills/retrieve.ts:92-104`).
+7. Sort by score desc, then name asc; return top `k` (default **8**, `eden/src/skills/retrieve.ts:39`).
 
 Result rows: `{name, signature, summary, tags, tier, score}`.
 
 Embedding stack (`eden/src/llm/embeddings.ts`): production backend is the in-process
 `localBackend()` = `@xenova/transformers` `Xenova/paraphrase-multilingual-MiniLM-L12-v2`,
-mean-pooled + normalized, lazily imported (`embeddings.ts:130-153`; wired at `main.ts:509-516`).
+mean-pooled + normalized, lazily imported (`eden/src/llm/embeddings.ts:130-153`; wired at `eden/src/main.ts:509-516`).
 `embed` returns `null` when off or degraded; **3 consecutive failures** degrade to keyword-only for the
-rest of the process (R38, `embeddings.ts:44-63`). `keywordScore` = |query∩text tokens| / sqrt(|q|·|d|),
-tokens = lowercase Unicode letter/digit runs of length ≥ 2 (`embeddings.ts:84-100`).
+rest of the process (R38, `eden/src/llm/embeddings.ts:44-63`). `keywordScore` = |query∩text tokens| / sqrt(|q|·|d|),
+tokens = lowercase Unicode letter/digit runs of length ≥ 2 (`eden/src/llm/embeddings.ts:84-100`).
 
 ### What a villager prompt carries (not retrieval, but adjacent)
 
 - **Exemplars (full code, always):** `STOCK_SKILLS.filter(s => s.exemplar && s.tier !== 'divine')` —
-  built statically from the bundled stock list, not from `library.exemplars()` (`main.ts:583`). Currently
+  built statically from the bundled stock list, not from `library.exemplars()` (`eden/src/main.ts:583`). Currently
   **7** skills: `go-to`, `mine-block`, `find-block`, `collect-blocks`, `craft-item`, `use-chest`, `deposit`.
   The test pins 5–7, each ≤ 60 lines, all mortal (`eden/tests/skills-exemplars.test.ts:41-48`).
 - **Primitives palette:** every mortal, non-exemplar stock skill as `name — signature — summary`
-  (`main.ts:589-591`).
+  (`eden/src/main.ts:589-591`).
 - **Retrieved skills:** `search` results as above.
-- `library.exemplars(tier)` (`library.ts:247-254`) exists but has no runtime caller.
+- `library.exemplars(tier)` (`eden/src/skills/library.ts:247-254`) exists but has no runtime caller.
 
 ## Access control: `GrantPolicy`
 
-`interface GrantPolicy { canRetrieve(villager, skill); canRun(villager, skill) }` (`library.ts:21-26`).
-v0 ships only `AllGranted` (both constant `true`, `library.ts:29-36`). Every retrieval and every engine
+`interface GrantPolicy { canRetrieve(villager, skill); canRun(villager, skill) }` (`eden/src/skills/library.ts:21-26`).
+v0 ships only `AllGranted` (both constant `true`, `eden/src/skills/library.ts:29-36`). Every retrieval and every engine
 run/compose passes through it, so an economy policy can be swapped in without engine changes.
 
 ## Integrity: `verifyHashes`
 
-`verifyHashes()` (`library.ts:287-298`) re-hashes every non-archived version whose file exists and
+`verifyHashes()` (`eden/src/skills/library.ts:287-298`) re-hashes every non-archived version whose file exists and
 quarantines on mismatch with reason `code hash mismatch at boot — file tampered or corrupted`. Tested
 (`eden/tests/skills-library.test.ts:133`) but **not called** anywhere in `eden/src/` (no boot call in
-`main.ts`).
+`eden/src/main.ts`).
 
 ## How to extend
 
@@ -264,14 +264,14 @@ quarantines on mismatch with reason `code hash mismatch at boot — file tampere
   `STOCK_SKILLS`; it is seeded `active` on next boot. Keep code a single function expression (see
   [skills-engine.md](skills-engine.md#compilation-pipeline)). Add a FakeBot test in
   `eden/tests/skills-exemplars.test.ts`.
-- **New status / transition:** extend `SKILL_STATUSES` (`enums.ts`) and add a method in `library.ts`
+- **New status / transition:** extend `SKILL_STATUSES` (`eden/src/types/enums.ts`) and add a method in `eden/src/skills/library.ts`
   (the only writer, S2); update `liveRecord` if the status is runnable.
 - **Real grants:** implement `GrantPolicy` and pass it to `SkillEngine` + `SkillRetriever` + `ToolRegistry`
-  at `main.ts:525-534`.
+  at `eden/src/main.ts:525-534`.
 
 ## Gotchas & known issues
 
-- **Stock skills are re-seeded on every boot.** `seedStockSkills` (`main.ts:524`) calls `seedStock` →
+- **Stock skills are re-seeded on every boot.** `seedStockSkills` (`eden/src/main.ts:524`) calls `seedStock` →
   `upsertDraft`, which always appends a new version. After N boots each stock skill has ≥ N versions on
   disk and N `skill.draft` journal rows (actor `engine`). The comment "a re-seed … is harmless" is only
   true for unchanged stock code; it also means a **villager's admitted override of a stock name is
@@ -280,14 +280,14 @@ quarantines on mismatch with reason `code hash mismatch at boot — file tampere
   is admitted, it becomes the highest live version in `active-probation`; every `ctx.skills.run('go-to')`
   (used by `craft-item`, `use-chest`, `till-block`, …) then throws `ProbationError` until 3 clean root runs.
 - **Probation never resets on failure** — a failing run neither decrements nor resets
-  `probationRunsLeft` (`library.ts:160`); graduation is purely "3 clean root runs ever".
+  `probationRunsLeft` (`eden/src/skills/library.ts:160`); graduation is purely "3 clean root runs ever".
 - **Tripwire is inert** in the host (no `onTripwire` passed). Nothing auto-quarantines on failure streaks.
 - **Description pass is not wired** (no `describer`) — `description` stays equal to the author summary.
 - **`verifyHashes` is never invoked** at boot despite docs saying it is.
 - **Skill names are used unsanitized as directory names** (`join(dataDir,'library',name)`). A name
   containing `/` writes into a nested directory that `load()` (top-level only) will not find after a
   restart; `..` segments escape `library/`. `write_skill` only trims the name.
-- **Missing code file** → `resolve()` throws `ENOENT` from `readFileSync` (`library.ts:315-317`) for
+- **Missing code file** → `resolve()` throws `ENOENT` from `readFileSync` (`eden/src/skills/library.ts:315-317`) for
   `readRunnable`/`read`/`liveSkills`; only `history()` degrades to `''`. A single deleted `v*.js` of a live
   version therefore breaks `liveSkills()` and with it every `search_skills` call.
 - `quarantine` always journals actor `engine`, even when God or an admin caused it.

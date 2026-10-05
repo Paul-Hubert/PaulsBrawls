@@ -22,9 +22,9 @@ JS strings compiled by the engine, receiving only `(bot, args, ctx)`.
 - **Seeding:** `library.seedStock(input, 'active')` → `upsertDraft` + status `active` (no probation, D-12).
   Re-seeding appends a new version each boot (see [skills-library.md](skills-library.md#gotchas--known-issues)).
 - **Exemplars (full code in prompts):** `go-to`, `mine-block`, `find-block`, `collect-blocks`,
-  `craft-item`, `use-chest`, `deposit` (`main.ts:583`). Test pins 5–7 exemplars, all mortal, each ≤ 60
+  `craft-item`, `use-chest`, `deposit` (`eden/src/main.ts:583`). Test pins 5–7 exemplars, all mortal, each ≤ 60
   lines (`eden/tests/skills-exemplars.test.ts:41-48`).
-- **Primitives palette:** all other mortal stock skills as `name — signature — summary` (`main.ts:589-591`).
+- **Primitives palette:** all other mortal stock skills as `name — signature — summary` (`eden/src/main.ts:589-591`).
 - **Reflexes:** `eden/roles.json` binds `hurt → flee-to-safety` (everyone, `notWhileRunning`, cooldown 3000),
   `night-falls → go-home` (everyone), `hurt → defend-self` (guard, cooldown 1000),
   `new-day → harvest-field` (farmer) — zero-token `{kind:'skill'}` handlers.
@@ -229,11 +229,11 @@ stops on the first dig error.
   `dig` and ends the loop.
 - **go-home is always a no-op as a reflex:** roles.json binds it with `args: {}` and no anchor substitution
   exists; additionally `night-falls` has no live signal source (see
-  [bots-and-hardening.md](bots-and-hardening.md#signals-signalsts)).
+  [bots-and-hardening.md](bots-and-hardening.md#signals-edensrcbotssignalsts)).
 - **kill-mob** targets the first matching entity, not the nearest; **defend-self**'s chosen hostile may thus
   differ from the one `kill-mob` attacks.
 - **gesture** advertises `sneak/nod` in its summary but only `swing` and `jump` do anything.
-- **fly-to** needs creative mode; `god.gamemode` (`'creative'` default, `config.ts:92`) is parsed but not
+- **fly-to** needs creative mode; `god.gamemode` (`'creative'` default, `eden/src/config.ts:92`) is parsed but not
   consumed anywhere in `eden/src`, so nothing puts the avatar in creative.
 - **Divine skills report success unconditionally** — the chat command's server response is never read.
 - **Re-seed on every boot** appends a new version of all 37 skills (see skills-library gotchas).

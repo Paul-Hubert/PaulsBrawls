@@ -28,13 +28,13 @@ verified_at: 4a8081f
 
 ### Resolution at boot (`eden/src/main.ts:116-129`)
 If `eden.json` has a top-level `"provider": "<name>"`:
-1. `loadEnvFile(<dir of eden.json>/api-keys.env)` — loads `KEY=value` lines into `process.env`; **existing env vars win**; `#` comments and blank lines skipped; split on the first `=`; no-op if absent (`providers.ts:65-76`).
-2. `loadProviders(<dir>/providers.json)` (JSONC + trailing commas tolerated) → `resolveProvider(presets, name)`; unknown name throws `providers: unknown provider "<name>" — available: a, b` (`providers.ts:82-89`).
+1. `loadEnvFile(<dir of eden.json>/api-keys.env)` — loads `KEY=value` lines into `process.env`; **existing env vars win**; `#` comments and blank lines skipped; split on the first `=`; no-op if absent (`eden/src/providers.ts:65-76`).
+2. `loadProviders(<dir>/providers.json)` (JSONC + trailing commas tolerated) → `resolveProvider(presets, name)`; unknown name throws `providers: unknown provider "<name>" — available: a, b` (`eden/src/providers.ts:82-89`).
 3. `config.llm.providers = {strong, fast}` from the preset and `config.apiKeyEnv = preset.apiKeyEnv ?? undefined`.
 
-Without `"provider"`, `llm.providers.{strong,fast}` from `eden.json` are used (defaults: empty `baseUrl`/`model`, budgets 48000/16000, `config.ts:113-114`); setting both warns that `llm.providers` is ignored (`config.ts:287-289`).
+Without `"provider"`, `llm.providers.{strong,fast}` from `eden.json` are used (defaults: empty `baseUrl`/`model`, budgets 48000/16000, `eden/src/config.ts:113-114`); setting both warns that `llm.providers` is ignored (`eden/src/config.ts:287-289`).
 
-### `providers.json` schema (`providers.ts:12-17, 24-55`)
+### `providers.json` schema (`eden/src/providers.ts:12-17`, `eden/src/providers.ts:24-55`)
 
 ```jsonc
 {
@@ -55,13 +55,13 @@ Shipped presets (`eden/providers.example.json`):
 | `openai` | `https://api.openai.com/v1` · `gpt-4o` · 48000 | same · `gpt-4o-mini` · 16000 | `OPENAI_API_KEY` |
 | `local` | `http://127.0.0.1:1234/v1` · `your-model-name` · 32000 | same · 16000 | `null` |
 
-`eden/api-keys.example.env` lists `DEEPSEEK_API_KEY=` and `OPENAI_API_KEY=`. Both `providers.json` and `api-keys.env` are in `eden/.gitignore`.
+`eden/api-keys.example.env` lists `DEEPSEEK_API_KEY` and `OPENAI_API_KEY` with placeholder values (`sk-your-…-key-here`). Both `providers.json` and `api-keys.env` are in `eden/.gitignore`.
 
-### Key handling (`main.ts:496-506`, `client.ts:135,224,272-275`)
+### Key handling (`eden/src/main.ts:496-506`, `eden/src/llm/client.ts:135`, `eden/src/llm/client.ts:224`, `eden/src/llm/client.ts:272-275`)
 - If `config.apiKeyEnv` is set and `process.env[apiKeyEnv]` is empty → **boot throws** `llm: provider "<name>" requires <VAR>, but it is not set — put it in eden/api-keys.env or export it. The host does NOT fall back to OPENAI_API_KEY (R56).`
 - If `apiKeyEnv` is undefined (local preset, or no `provider` key), the client's own default `process.env.OPENAI_API_KEY` applies.
-- The key is sent as `authorization: Bearer <key>` **only** to non-local hosts. Local = hostname `localhost`, `127.0.0.1`, `::1`, `0.0.0.0`; an unparseable `baseUrl` counts as remote (`client.ts:177-185`).
-- The key is never written to config or journal; debug transcripts dump the request body only. `system.boot` journals the config through `redactSecrets`, which masks every key matching `/key|secret|token|password/i` (`main.ts:1148-1158`) — this also masks `inputTokenBudget`, `dailyTokens` and `apiKeyEnv`.
+- The key is sent as `authorization: Bearer <key>` **only** to non-local hosts. Local = hostname `localhost`, `127.0.0.1`, `::1`, `0.0.0.0`; an unparseable `baseUrl` counts as remote (`eden/src/llm/client.ts:177-185`).
+- The key is never written to config or journal; debug transcripts dump the request body only. `system.boot` journals the config through `redactSecrets`, which masks every key matching `/key|secret|token|password/i` (`eden/src/main.ts:1148-1158`) — this also masks `inputTokenBudget`, `dailyTokens` and `apiKeyEnv`.
 
 ## LlmClient (`eden/src/llm/client.ts`)
 
@@ -83,7 +83,7 @@ interface LlmResult { callId; content: string|null; toolCalls: {id,name,argument
 |---|---|
 | `timeoutMs` | `180_000` |
 | `maxRetries` (reset retries) | `4` |
-| `debugPrompts` | `false` (wired from `journal.debugPrompts`, `main.ts:506`) |
+| `debugPrompts` | `false` (wired from `journal.debugPrompts`, `eden/src/main.ts:506`) |
 | `dataDir` | `'.eden-data'` |
 | `fetchImpl` / `now` | global `fetch` / `Date.now` |
 | `apiKey` | `process.env.OPENAI_API_KEY` |
@@ -116,20 +116,20 @@ refs: { ...req.refs, llmCallId: callId }   // callId is a ULID
 ```
 Never prompt or completion bodies. Failed calls (timeout/HTTP/reset exhaustion) are **not** journaled by the client.
 
-Callers seen in code: `god:critic`, `god:curriculum`, `god:orchestrator`, `villager:<name>` (brain, `brain.ts:121`; also the memory summarizer, `memory-summarizer.ts:50`), and `god:describe` (DescriptionPass default, `eden/src/skills/describe.ts:37` — not wired in production).
+Callers seen in code: `god:critic`, `god:curriculum`, `god:orchestrator`, `villager:<name>` (brain, `eden/src/villagers/brain.ts:121`; also the memory summarizer, `eden/src/villagers/memory-summarizer.ts:50`), and `god:describe` (DescriptionPass default, `eden/src/skills/describe.ts:37` — not wired in production).
 
 ### debugPrompts transcripts (`:336, 340-348`)
-When enabled, writes `<dataDir>/llm/<callId>.json` = `{request: <wire body>, response: <raw JSON>}` (pretty-printed). Best-effort (errors swallowed); headers are never written. Served by admin `GET /llm/:callId` via `readLlmTranscript` (`main.ts:708-717`; id must match `/^[A-Za-z0-9_-]+$/`).
+When enabled, writes `<dataDir>/llm/<callId>.json` = `{request: <wire body>, response: <raw JSON>}` (pretty-printed). Best-effort (errors swallowed); headers are never written. Served by admin `GET /llm/:callId` via `readLlmTranscript` (`eden/src/main.ts:708-717`; id must match `/^[A-Za-z0-9_-]+$/`).
 
 ## LlmScheduler (`eden/src/llm/scheduler.ts`)
 
-Wired as `new LlmScheduler({maxConcurrent: llm.maxConcurrent, perVillagerCooldownMs: llm.perVillagerCooldownSeconds*1000})` (`main.ts:507`).
+Wired as `new LlmScheduler({maxConcurrent: llm.maxConcurrent, perVillagerCooldownMs: llm.perVillagerCooldownSeconds*1000})` (`eden/src/main.ts:507`).
 
 | Config / option | Default | Source |
 |---|---|---|
-| `llm.maxConcurrent` (alias `maxConcurrency`) | `3` | `config.ts:116, 139` |
-| `llm.perVillagerCooldownSeconds` (alias `perVillagerCooldownSec`) | `15` | `config.ts:117, 139` |
-| `rateCapPerMinute` (hardcoded, not a config key) | `12` | `scheduler.ts:79` |
+| `llm.maxConcurrent` (alias `maxConcurrency`) | `3` | `eden/src/config.ts:116`, `eden/src/config.ts:139` |
+| `llm.perVillagerCooldownSeconds` (alias `perVillagerCooldownSec`) | `15` | `eden/src/config.ts:117`, `eden/src/config.ts:139` |
+| `rateCapPerMinute` (hardcoded, not a config key) | `12` | `eden/src/llm/scheduler.ts:79` |
 
 ### Request (`WakeupRequest<T>`, `:20-29`)
 `{villager: string /* or 'god:<desk>' */, lane: Lane, kind: string, rolloutId?: string, run: () => Promise<T>}`.
@@ -144,7 +144,7 @@ Who uses which lane:
 | Curriculum | `god` | `curriculum` / `qa` / `decompose` |
 | Orchestrator | `god` | `orchestrator` |
 | Brain, rollout deliberation | `directive` (default when `rolloutId` set) | `deliberate` |
-| Brain, reactive wake-up | the subscription's lane (`main.ts:666`) | `reactive` |
+| Brain, reactive wake-up | the subscription's lane (`eden/src/main.ts:666`) | `reactive` |
 | Brain, other | `idle` (default) | `deliberate` |
 
 ### `enqueue` algorithm (`:110-137`)
@@ -157,16 +157,16 @@ Who uses which lane:
 - Nothing starts while paused.
 - While `running < maxConcurrent`, pick the best eligible entry; non-bypass entries whose villager's `lastRunAt + cooldownMs > now` are skipped. If everything left is cooling down, an **unref'd** `setTimeout` re-drains at the earliest ready time (`:188-192`).
 - `lastRunAt[villager]` is stamped at start and again at settle for every non-`god` lane (so cooldown is measured from completion). Rollout-immune requests also stamp it (affecting that villager's later non-immune requests) but ignore it themselves.
-- A run occupies its slot until its promise settles. A whole multi-turn brain deliberation (including every `run_skill` executed inside it) is **one** slot (`brain.ts:96-107`).
+- A run occupies its slot until its promise settles. A whole multi-turn brain deliberation (including every `run_skill` executed inside it) is **one** slot (`eden/src/villagers/brain.ts:96-107`).
 
 ### Pause (`:88-107`)
-`pause()` holds all queued and future work, including `god` and rollout-immune calls; `resume()` re-drains. Wired to admin `POST /pause` / `POST /resume` (`main.ts:388-389`). `pending()` = queued count (admin `queueDepth`). Rate-cap counting still happens while paused.
+`pause()` holds all queued and future work, including `god` and rollout-immune calls; `resume()` re-drains. Wired to admin `POST /pause` / `POST /resume` (`eden/src/main.ts:388-389`). `pending()` = queued count (admin `queueDepth`). Rate-cap counting still happens while paused.
 
 ### Not routed through the scheduler
 `MemorySummarizer` (`eden/src/villagers/memory-summarizer.ts:48`) and `DescriptionPass` (`eden/src/skills/describe.ts:35`) call `client.chat` directly — outside `maxConcurrent` and pause.
 
-## BudgetTracker (`scheduler.ts:227-258`)
-- Constructed from `config.god.budget.perDesk` (`main.ts:508`): `{critic|curriculum|orchestrator: {dailyTokens: number|null}}`, default all `null`.
+## BudgetTracker (`eden/src/llm/scheduler.ts:227-258`)
+- Constructed from `config.god.budget.perDesk` (`eden/src/main.ts:508`): `{critic|curriculum|orchestrator: {dailyTokens: number|null}}`, default all `null`.
 - `spend(desk, tokens)` — desks call it with `result.usage.totalTokens` after every call (critic, curriculum incl. QA, orchestrator). Villager brain spend is **not** tracked.
 - `degraded(desk)` → `spent > cap` (strict); `null`/missing cap never degrades. `remaining(desk)` → `max(0, cap-spent)` or `null`.
 - `resetDay()` clears all spend — **never called in production**, so caps are per process lifetime.
@@ -178,10 +178,10 @@ Who uses which lane:
 |---|---|
 | Critic `judge` | `god.desks.critic.model` (default strong) |
 | Curriculum `proposeTask` / `decompose` | `god.desks.curriculum.model` (default strong) |
-| Curriculum QA `howTo` | `fast` (hardwired, `main.ts:563`) |
+| Curriculum QA `howTo` | `fast` (hardwired, `eden/src/main.ts:563`) |
 | Orchestrator `dispatch` | `god.desks.orchestrator.model` (default fast) |
-| Villager rollout authoring/revision | `strong` (hardcoded, `main.ts:958`), budget `strong.inputTokenBudget` |
-| Villager reactive wake-up | `fast`, budget `fast.inputTokenBudget` (`main.ts:663-664`) |
+| Villager rollout authoring/revision | `strong` (hardcoded, `eden/src/main.ts:958`), budget `strong.inputTokenBudget` |
+| Villager reactive wake-up | `fast`, budget `fast.inputTokenBudget` (`eden/src/main.ts:663-664`) |
 | Memory summarizer | fast (internal) |
 
 `inputTokenBudget` is consumed only by the villager `ContextPackBuilder`; the client itself does not enforce it.
@@ -190,13 +190,13 @@ Who uses which lane:
 
 ### Service
 - `EmbeddingsService({backend?, maxFailures=3, onWarn?})`. `embed(texts)` returns `number[][]` or **`null`** (off or degraded) and never throws.
-- R38: each backend error increments `consecutiveFailures`; a success resets it; at `>= 3` the service sets `degraded=true` for the rest of the process and calls `onWarn("embeddings: N consecutive failures — degrading to the keyword floor for this run (R38): <msg>")` (wired to `logger.warn('embeddings', …)`, `main.ts:516`). No re-enable path.
+- R38: each backend error increments `consecutiveFailures`; a success resets it; at `>= 3` the service sets `degraded=true` for the rest of the process and calls `onWarn("embeddings: N consecutive failures — degrading to the keyword floor for this run (R38): <msg>")` (wired to `logger.warn('embeddings', …)`, `eden/src/main.ts:516`). No re-enable path.
 - No result caching inside the service; callers keep their own vectors (e.g. the curriculum QA cache stores the question vector in memory).
 
 ### Backends
 | Backend | Behaviour |
 |---|---|
-| `localBackend(modelId = 'Xenova/paraphrase-multilingual-MiniLM-L12-v2')` (production default, `main.ts:515`) | lazily `import('@xenova/transformers')` (dependency `^2.17.2`) on first use; `pipeline('feature-extraction', modelId)` cached as a promise; embeds texts one at a time with `{pooling:'mean', normalize:true}`. A failed load leaves a rejected cached promise, so every later call fails until R38 degrades. |
+| `localBackend(modelId = 'Xenova/paraphrase-multilingual-MiniLM-L12-v2')` (production default, `eden/src/main.ts:515`) | lazily `import('@xenova/transformers')` (dependency `^2.17.2`) on first use; `pipeline('feature-extraction', modelId)` cached as a promise; embeds texts one at a time with `{pooling:'mean', normalize:true}`. A failed load leaves a rejected cached promise, so every later call fails until R38 degrades. |
 | `providerBackend(baseUrl, model, apiKey?, fetchImpl?)` | `POST {baseUrl}/embeddings` `{model, input: texts}`, optional Bearer; non-2xx throws `embeddings: HTTP <status>`; count mismatch throws. Not wired by default (R59: never derive it from the chat provider). |
 | none (`backend` omitted) | permanently `off` → always `null` |
 
@@ -209,7 +209,7 @@ Consumers: `SkillRetriever`, `VillagerMemory` (relevance = `max(cosine, keywordS
 
 ## Gotchas & known issues
 
-- Cooldown re-drain uses an **unref'd** timer (`scheduler.ts:190-191`). If nothing else keeps the Node event loop alive, a cooled-down request never runs. In this checkout under Node 22.22 the tests `per-villager cooldown spaces out a villager’s runs` and the three following tests in `tests/llm-scheduler.test.ts` are **cancelled** ("Promise resolution is still pending but the event loop has already resolved"); the host is unaffected because the admin server keeps the loop alive.
+- Cooldown re-drain uses an **unref'd** timer (`eden/src/llm/scheduler.ts:190-191`). If nothing else keeps the Node event loop alive, a cooled-down request never runs. In this checkout under Node 22.22 the tests `per-villager cooldown spaces out a villager’s runs` and the three following tests in `eden/tests/llm-scheduler.test.ts` are **cancelled** ("Promise resolution is still pending but the event loop has already resolved"); the host is unaffected because the admin server keeps the loop alive.
 - The rate-cap counter counts coalesced and paused requests too; a burst of coalesced wake-ups can still trip the cap.
 - `LlmClient` timeout does not cover the response body read; reset retries have no back-off; failed calls leave no `llm.call` row.
 - Malformed tool-call arguments become `{}` silently — desks then fall back (critic → keep-draft verdict; curriculum → no task).

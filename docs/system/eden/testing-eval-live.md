@@ -119,8 +119,8 @@ Real dev server + real LLM + real mineflayer. Not part of `npm run check`; only 
 
 | Need | Where read |
 |---|---|
-| `run/server.properties` at the repo root with `enable-rcon=true` (else throws) | `eden/live-tests/config.ts:221-242`: `server-port` (default 25599), `rcon.port` (default 25575), `rcon.password`; RCON host fixed `127.0.0.1` |
-| `eden/providers.json` (not `live-tests/providers.json`) | `eden/live-tests/config.ts:167-175` (`join(liveTestsDir, '..', 'providers.json')`) |
+| `run/server.properties` at the repo root with `enable-rcon=true` (else throws) | `eden/live-tests/config.ts:97-118`: `server-port` (default 25599), `rcon.port` (default 25575), `rcon.password`; RCON host fixed `127.0.0.1` |
+| `eden/providers.json` (not `live-tests/providers.json`) | `eden/live-tests/config.ts:43-51` (`join(liveTestsDir, '..', 'providers.json')`) |
 | API key | `eden/api-keys.env` via `loadApiKeys()` (env wins), then `setupProviderEnv` copies `<apiKeyEnv>` into `OPENAI_API_KEY` if that is unset; missing key → exit 2 |
 | Provider | default `deepseek` (`DEFAULT_PROVIDER`), override `--provider <name>` / `-p` |
 

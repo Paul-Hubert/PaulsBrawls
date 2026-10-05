@@ -261,7 +261,10 @@ Exactly 11 (golden test `eden/tests/villagers-tools.test.ts:47`). Descriptions a
 **No direct micro-action tools** (`go_to`, `dig`, `say`, …) exist — every world effect is a `run_skill` of a library
 skill (`eden/src/villagers/tools.ts:1-4`). There are also **no social tools** (`say`, `tell`, `start_conversation`, `leave_conversation`,
 trade tools) despite `docs/04` listing them. Memory/subscription tools degrade to honest stubs (`(mémoire non câblée…)`,
-`(réactivité non câblée…)`) when unwired. Memory is resolved per `ctx.villager` from the shared registry.
+`(réactivité non câblée…)`) when unwired. Memory is resolved per `ctx.villager` from the shared registry. **In the live host the
+subscription tools are always stubs**: `main.ts` builds the `ToolRegistry` without a `subscriptions` store
+(`eden/src/main.ts:550`; the `SubscriptionStore` is only created later at `:618`), so `subscribe`/`unsubscribe`/
+`list_subscriptions` return `(réactivité non câblée…)` (`eden/src/villagers/tools.ts:293-336`).
 
 ## The context pack (`villagers/context-pack.ts`)
 
@@ -348,8 +351,10 @@ The **only consumer** is the `RolloutCoordinator`, which drains at the start of 
   (`eden/src/config.ts:229`) but the roster ignores it.
 - **`history` is always `[]`** in production, so `trimmedPairs` is always 0; prior revisions ride only via density.
 - **`brain.tool-call.ok` is true for a failed run** (only usage errors are `ok:false`), contrary to the comment in
-  `eden/src/journal/kinds.ts` ("ok false when … a run failure surfaced to the LLM").
-- **`subscribe` accepts any `on` string and any filter shape**; a typo'd event type silently never fires.
+  `eden/src/journal/kinds.ts:133-135` ("ok false when … a run failure surfaced to the LLM").
+- **`subscribe` accepts any `on` string and any filter shape** (once wired); a typo'd event type silently never fires.
+- **Villager-authored subscriptions are impossible in the host**: the `ToolRegistry` gets no `subscriptions` store
+  (`eden/src/main.ts:550`), so the only subscriptions that exist are the seeded role defaults.
 - **`setEnabled` has no caller** — the documented "auto-disable on God's quarantine of the underlying skill" is not
   wired; a quarantined skill's subscription keeps firing and erroring (`system.error`).
 - **Drives are dead code in the host** (no `DriveTracker` constructed; `behavior.drives` unused).

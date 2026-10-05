@@ -25,7 +25,7 @@ verified_at: 4a8081f
 | Wiring + refinement loop + autonomous pump | `eden/src/main.ts` | `wireGod` (`:486`), `RolloutCoordinator` (`:866`), `VillageLoop` (`:1061`) |
 | Shapes | `eden/src/types/task.ts`, `eden/src/types/inbox.ts` | `Task`, `Verdict`, `Directive`, `Rollout`, `Dossier`, `Inbox` |
 
-Dependency law: `god/` imports `skills/`, `llm/`, `render/`, `journal/`, `types/` only; it reaches villagers through the injected `Inbox` interface (`eden/src/types/inbox.ts:14`) and never imports `villagers/` or `social/` (`eden/src/god/orchestrator.ts:18-20`). The coordinator touches both sides, so it lives in `main.ts`.
+Dependency law: `god/` imports `skills/`, `llm/`, `render/`, `journal/`, `types/` only; it reaches villagers through the injected `Inbox` interface (`eden/src/types/inbox.ts:13`) and never imports `villagers/` or `social/` (`eden/src/god/orchestrator.ts:18-20`). The coordinator touches both sides, so it lives in `main.ts`.
 
 ## God state (single home)
 
@@ -33,40 +33,40 @@ Dependency law: `god/` imports `skills/`, `llm/`, `render/`, `journal/`, `types/
 
 | Field | Type | Sole writer |
 |---|---|---|
-| `ledger` | `TaskLedger {completed: TaskRecord[], failed: TaskRecord[], open: Task[]}` | Curriculum (`GodService` delegates via `LedgerWriter`, `god.ts:51-54`; wired by a cast at `main.ts:565`) |
+| `ledger` | `TaskLedger {completed: TaskRecord[], failed: TaskRecord[], open: Task[]}` | Curriculum (`GodService` delegates via `LedgerWriter`, `eden/src/god/god.ts:51-54`; wired by a cast at `eden/src/main.ts:565`) |
 | `tasks` | `Map<taskId, Task>` — open-task pool | Curriculum (`admit`/`closeTask`) |
 | `dossiers` | `Map<villager, Dossier>` | `GodService.updateDossier` (competence/verdicts) + `Orchestrator.reportToGod` (notes) |
 | `criticQueue` | `CriticTicket[]` | `GodService.fileTicket` (append only — never drained by anything) |
-| `rollouts` | `Map<rolloutId, Rollout>` | `GodService` (+ the coordinator sets `rollout.open=false` directly, `main.ts:991,1010`) |
+| `rollouts` | `Map<rolloutId, Rollout>` | `GodService` (+ the coordinator sets `rollout.open=false` directly, `eden/src/main.ts:991,1010`) |
 | `directivesOpen` | `Directive[]` | Orchestrator |
 
 ### Exact shapes (`eden/src/types/task.ts`)
 
 ```ts
-interface ItemCheck { item: string; count: number }                        // :59
-interface Task {                                                             // :65
+interface ItemCheck { item: string; count: number }                        // :4
+interface Task {                                                             // :10
   id: string; goal: string; assignee?: string; successCriteria: string;
   check?: ItemCheck; context: string;      // QA-cache answer folded in
   maxRetries: number;                      // set to 4 by Curriculum.makeTask
   parent?: string; currentRolloutId?: string;   // D-09 live-rollout pointer
 }
-interface TaskRecord { task: Task; closedAt: number; verdictId?: string; reason?: string } // :80
-interface Verdict {                                                          // :138
+interface TaskRecord { task: Task; closedAt: number; verdictId?: string; reason?: string } // :25
+interface Verdict {                                                          // :83
   ticketId: string; success: boolean; score?: number; critique: string;
   libraryAction: 'admit' | 'keep-draft' | 'quarantine' | 'archive' | 'none';
   followUp?: DirectiveSuggestion | TaskSuggestion; praise?: string; blocked?: boolean;
 }
-interface TaskSuggestion { goal: string; successCriteria?: string; assignee?: string; parent?: string; check?: ItemCheck } // :106
-interface DirectiveSuggestion { to: string | string[] | 'all'; goal: string; reason: string; priority?: Priority }      // :98
-interface Directive {                                                        // :117
+interface TaskSuggestion { goal: string; successCriteria?: string; assignee?: string; parent?: string; check?: ItemCheck } // :51
+interface DirectiveSuggestion { to: string | string[] | 'all'; goal: string; reason: string; priority?: Priority }      // :43
+interface Directive {                                                        // :62
   id: string; to: string | string[] | 'all'; goal: string; reason: string;
   priority: Priority;   // 'background' | 'normal' | 'interrupt'
   taskRef?: string; expiresAt?: number; standing?: boolean;
 }
-interface CriticTicket { id: string; source: 'rollout'|'tripwire'|'plea'|'second-opinion'; runReportRef: string; taskRef?: string; filedAt: number } // :129
-interface Rollout { id: string; taskId: string; villager: string; attempt: number; draftVersions: number[]; critiqueChain: string[]; open: boolean } // :155
-interface Dossier { villager: string; competence: Record<tag,{runs,successes}>; recentVerdicts: {verdictId,at,success}[]; notes: string[]; standingOrders?: string } // :176
-interface InboxMessage { from: 'god'|'villager'; kind: 'directive'|'critique'|'tell'; payload: object; at: number } // inbox.ts:2
+interface CriticTicket { id: string; source: 'rollout'|'tripwire'|'plea'|'second-opinion'; runReportRef: string; taskRef?: string; filedAt: number } // :74
+interface Rollout { id: string; taskId: string; villager: string; attempt: number; draftVersions: number[]; critiqueChain: string[]; open: boolean } // :100
+interface Dossier { villager: string; competence: Record<tag,{runs,successes}>; recentVerdicts: {verdictId,at,success}[]; notes: string[]; standingOrders?: string } // :121
+interface InboxMessage { from: 'god'|'villager'; kind: 'directive'|'critique'|'tell'; payload: object; at: number } // eden/src/types/inbox.ts:2
 ```
 
 ## Desk configuration
@@ -75,23 +75,23 @@ Config keys (`eden/src/config.ts:51-64`, defaults `:90-109`, parsing `:240-277`)
 
 | Key | Default | Effect in code |
 |---|---|---|
-| `god.name` | `"Dieu"` | Avatar username; must differ from every villager (fatal `assertIdentity`, `config.ts:379-388`); `"LLMBot"` only warns (`:365-367`) |
-| `god.desks.critic.model` | `"strong"` | `CriticDesk.tier` (`main.ts:567`). Any value other than `"fast"` → `strong` (`config.ts:251`) |
-| `god.desks.curriculum.model` | `"strong"` | proposal/decompose tier (`main.ts:563`); QA answers are hard-wired `fastTier:'fast'` |
-| `god.desks.orchestrator.model` | `"fast"` | dispatch tier (`main.ts:566`) |
-| `god.budget.perDesk.<critic\|curriculum\|orchestrator>.dailyTokens` | `null` | `BudgetTracker` cap; non-number → `null` (uncapped) (`config.ts:255-259`) |
+| `god.name` | `"Dieu"` | Avatar username; must differ from every villager (fatal `assertIdentity`, `eden/src/config.ts:379-388`); `"LLMBot"` only warns (`:365-367`) |
+| `god.desks.critic.model` | `"strong"` | `CriticDesk.tier` (`eden/src/main.ts:567`). Any value other than `"fast"` → `strong` (`eden/src/config.ts:251`) |
+| `god.desks.curriculum.model` | `"strong"` | proposal/decompose tier (`eden/src/main.ts:563`); QA answers are hard-wired `fastTier:'fast'` |
+| `god.desks.orchestrator.model` | `"fast"` | dispatch tier (`eden/src/main.ts:566`) |
+| `god.budget.perDesk.<critic\|curriculum\|orchestrator>.dailyTokens` | `null` | `BudgetTracker` cap; non-number → `null` (uncapped) (`eden/src/config.ts:255-259`) |
 | `god.budget.degradeOnBreach` | `true` | passed to all three desks |
 | `god.combineDesks` | `false` | **parsed but never read** — no combined mode exists |
-| `god.embodiedVerdicts` | `true` | passed to a `GodBody` that is constructed and discarded (`main.ts:570`) — no effect |
-| `god.authoring` | `"villager"` | parsed (`config.ts:260`), never read by `src/` |
+| `god.embodiedVerdicts` | `true` | passed to a `GodBody` that is constructed and discarded (`eden/src/main.ts:570`) — no effect |
+| `god.authoring` | `"villager"` | parsed (`eden/src/config.ts:260`), never read by `src/` |
 | `god.gamemode` | `"creative"` | not read by `god/` (see bots docs) |
-| `god.godPrompt` (scenario) | unset | appended to **every** desk's system prompt as `\n\n## Scenario instructions\n<gp>` (`main.ts:558-561`); also flips the curriculum's warm-up text (`hasMissionDirective`) |
+| `god.godPrompt` (scenario) | unset | appended to **every** desk's system prompt as `\n\n## Scenario instructions\n<gp>` (`eden/src/main.ts:558-561`); also flips the curriculum's warm-up text (`hasMissionDirective`) |
 
-Every desk call goes through `LlmScheduler.enqueue` with `lane: 'god'` and a `villager` key of `god:critic` / `god:curriculum` / `god:orchestrator` (so it bypasses rate cap, coalescing and cooldown — see [llm-and-scheduling.md](llm-and-scheduling.md)). There is **no** intra-God priority (critic vs curriculum vs orchestrator are FIFO within the `god` lane, `scheduler.ts:196-201`).
+Every desk call goes through `LlmScheduler.enqueue` with `lane: 'god'` and a `villager` key of `god:critic` / `god:curriculum` / `god:orchestrator` (so it bypasses rate cap, coalescing and cooldown — see [llm-and-scheduling.md](llm-and-scheduling.md)). There is **no** intra-God priority (critic vs curriculum vs orchestrator are FIFO within the `god` lane, `eden/src/llm/scheduler.ts:196-201`).
 
 ## The critic desk (`eden/src/god/critic.ts`)
 
-**Input — `CriticContext`** (`:29-42`): `ticket`, `task`, full `RunReport` (`report`), the skill version's full `code`, optional `dossier`, `stats`, `lastCritique`, `divineAssisted`. The coordinator passes ticket/task/report/code/dossier/lastCritique/divineAssisted — **not `stats`** (`main.ts:968-976`).
+**Input — `CriticContext`** (`:29-42`): `ticket`, `task`, full `RunReport` (`report`), the skill version's full `code`, optional `dossier`, `stats`, `lastCritique`, `divineAssisted`. The coordinator passes ticket/task/report/code/dossier/lastCritique/divineAssisted — **not `stats`** (`eden/src/main.ts:968-976`).
 
 **User message** (`renderContext`, `:212-222`, French headings): `## TÂCHE` (goal, criteria, optional `check objectif: N× item`), `## RUN REPORT` (`renderRunReport`), `## CODE DU SKILL (vN)`, optional `## DOSSIER`, `## STATS`, `## DERNIÈRE CRITIQUE (chaîne)`, then "Appelle l’outil `verdict` avec ton jugement."
 
@@ -113,7 +113,7 @@ A satisfied check is **not** an auto-admit — the LLM verdict stands.
 
 **Degraded mode (D-13)** (`templatedVerdict`, `:204-210`): if `degradeOnBreach && budget.degraded('critic')`, no LLM call. `success = checkSatisfied(...)` if the task has a check, else `report.outcome.ok`; `libraryAction` is always `keep-draft` (never admits); critique is a French template naming the budget breach.
 
-**Batching** (`judgeBatch`, `:160-193`, `batchMax` default 3, wired as 3 at `main.ts:567`): one call for ≤3 tickets, verdicts matched by a `ticketId` arg (positional fallback). **Not called anywhere in production** — the coordinator calls `judge` one ticket at a time.
+**Batching** (`judgeBatch`, `:160-193`, `batchMax` default 3, wired as 3 at `eden/src/main.ts:567`): one call for ≤3 tickets, verdicts matched by a `ticketId` arg (positional fallback). **Not called anywhere in production** — the coordinator calls `judge` one ticket at a time.
 
 ### Critic prompt (`prompts/critic.md`, 53 lines)
 Judge **world delta, not a clean exit** (R34) but "quiet is not futile" (R35); prefer generic/parameterized skills; prefer composition — name the existing skill to call via `ctx.skills.run`; name the ONE most instructive next change; "blocked on a missing resource is NOT a code defect" → `blocked:true`, `libraryAction:'none'`, provide `followUp`; describes each `libraryAction`; `critique` in English, `praise` in French; a satisfied `check` is evidence, never a bypass.
@@ -133,7 +133,7 @@ Sole writer of `state.ledger` and `state.tasks`.
 | Library coverage shown | first 40 live **mortal** skills | `:505-511` |
 | Follow-up dedup window | open goals + last 12 failed | `:324-325` |
 
-Triggers (`CurriculumTrigger`, `:141`): `idle | verdict-close | dawn | critic-follow-up | admin`. In production only `idle` is used (by `VillageLoop`, `main.ts:1127`); `critic-follow-up` by `addFollowUp`; `admin` by `addTask`/`decompose`.
+Triggers (`CurriculumTrigger`, `:141`): `idle | verdict-close | dawn | critic-follow-up | admin`. In production only `idle` is used (by `VillageLoop`, `eden/src/main.ts:1127`); `critic-follow-up` by `addFollowUp`; `admin` by `addTask`/`decompose`.
 
 ### `proposeTask({trigger, villager?, snapshot?})` (`:188-232`)
 1. If degraded (`budget.degraded('curriculum')`): `repeatLastTaskType` (`:548-561`) clones the newest open task (else newest completed) with a fresh id — no LLM call. Returns `undefined` only if there is no template, in which case it falls through to the LLM.
@@ -173,7 +173,7 @@ Sole writer of `state.directivesOpen`.
 - `directive` args (`:67-85`): required `to`, `goal`, `reason`, `priority ∈ {background,normal,interrupt}`; optional `standing:boolean`, `taskRef`. Calls missing `to`/`goal` are skipped; an invalid priority → `normal`. There is **no expiry parameter** — LLM-opened directives never expire.
 - Degraded: only `interrupt` directives survive (`:162`).
 - `taskRef` is bound to the dispatched `task.id` (authoritative), not the LLM echo (`:165`).
-- `DispatchTrigger` (`:94`): `new-task | closed-task | verdict-follow-up | event | idle-sweep | admin`; the coordinator maps curriculum triggers via `dispatchTriggerFor` (`main.ts:852-860`: idle→idle-sweep, verdict-close→closed-task, critic-follow-up→verdict-follow-up, dawn→new-task, else admin).
+- `DispatchTrigger` (`:94`): `new-task | closed-task | verdict-follow-up | event | idle-sweep | admin`; the coordinator maps curriculum triggers via `dispatchTriggerFor` (`eden/src/main.ts:852-860`: idle→idle-sweep, verdict-close→closed-task, critic-follow-up→verdict-follow-up, dawn→new-task, else admin).
 
 ### `openDirective(spec)` — anti-thrash, engine-enforced (`:184-232`)
 1. **Interrupt cooldown**: an `interrupt` to the same villager within `interruptCooldownMs` (default `5*60_000`, `:36`) is **downgraded to `normal`** (not dropped). Only a non-downgraded interrupt refreshes the timestamp.
@@ -194,17 +194,17 @@ Directives are data ("what and why"; brain decides how); call `directive` once p
 
 ## "Interventions teach" — what code enforces
 
-- Enforced: the critic's `voidDivineOverreach` rail (`critic.ts:259-263`) whenever `divineAssisted` is true; the coordinator passes `orchestrator.wasDivinelyAssisted(task.id)` (`main.ts:975`) and clears it on every rollout exit.
+- Enforced: the critic's `voidDivineOverreach` rail (`eden/src/god/critic.ts:259-263`) whenever `divineAssisted` is true; the coordinator passes `orchestrator.wasDivinelyAssisted(task.id)` (`eden/src/main.ts:975`) and clears it on every rollout exit.
 - Not reachable in production: the flag is only set by `Orchestrator.intervene`, which nothing calls, and `GodBody` does not implement the `DivineActor.runAction` method `intervene` requires. So the rail is tested (`tests/god-critic.test.ts`, `tests/god-orchestrator.test.ts`) but dormant live.
 - Note the rail voids **any** success on a flagged task, not only successes "achieved by" the intervention.
 
 ## The divine body (`eden/src/god/body.ts`)
 
-- Runner identity: `{name: <god.name>, role:'god', tier:'divine'}` (`body.ts:38`). Methods `appearNear(villager)`, `vanish()`, `gesture(type)` run the divine stock skills `appear-near`, `vanish`, `gesture` through `SkillEngine.run` (each a journaled `skill.run`), returning `report.outcome.ok`; any throw → `false` (never throws, `:75-83`).
+- Runner identity: `{name: <god.name>, role:'god', tier:'divine'}` (`eden/src/god/body.ts:38`). Methods `appearNear(villager)`, `vanish()`, `gesture(type)` run the divine stock skills `appear-near`, `vanish`, `gesture` through `SkillEngine.run` (each a journaled `skill.run`), returning `report.outcome.ok`; any throw → `false` (never throws, `:75-83`).
 - `deliverVerdict({villager, verdict, rolloutId?})` (`:61-72`): no-op returning `false` if `embodiedVerdicts` is false; else appear-near then gesture `nod` (success) / `swing` (failure); journals `god.appearance {villager, action:'verdict', ok}` (actor `god:body`).
-- **Wiring:** `void new GodBody({...})` (`main.ts:570`) — the instance is discarded; `deliverVerdict` is never called in production.
+- **Wiring:** `void new GodBody({...})` (`eden/src/main.ts:570`) — the instance is discarded; `deliverVerdict` is never called in production.
 
-Divine stock skills (`eden/src/skills/exemplars/index.ts:821-838`), all implemented as `bot.chat('/…')` commands (need op) except `gesture`/`fly-to`:
+Divine stock skills (`eden/src/skills/exemplars/index.ts:821-839`), all implemented as `bot.chat('/…')` commands (need op) except `gesture`/`fly-to`:
 
 | Skill | Args | Implementation |
 |---|---|---|
@@ -218,7 +218,7 @@ Divine stock skills (`eden/src/skills/exemplars/index.ts:821-838`), all implemen
 | `give-items` | `{target,item,count=1}` | `/give` |
 | `set-weather` | `{weather}` | `/weather` |
 
-The curriculum hides divine skills from its coverage list (`curriculum.ts:507`); `VillageLoop` never drives the avatar (`main.ts:1039`).
+The curriculum hides divine skills from its coverage list (`eden/src/god/curriculum.ts:507`); `VillageLoop` never drives the avatar (`eden/src/main.ts:1039`).
 
 ## GodService — verdict routing (`eden/src/god/god.ts`)
 
@@ -226,7 +226,7 @@ The curriculum hides divine skills from its coverage list (`curriculum.ts:507`);
 1. Journal `god.verdict {ticketId, success, libraryAction, score, critique}` with refs `{rolloutId, taskId, skill, skillVersion, verdictId}` (actor `god:critic`).
 2. Library action on the **current status** of `name@version`:
    - `admit` + `quarantined` → `library.unquarantine` (R37 → active-probation), `admitted=true`.
-   - `admit` + `draft` → `library.admit(...,{rolloutId, verdictId})`, `admitted=true`, then optional DescriptionPass (**no `describer` is wired in `main.ts:555`, so admission keeps the author's summary**).
+   - `admit` + `draft` → `library.admit(...,{rolloutId, verdictId})`, `admitted=true`, then optional DescriptionPass (**no `describer` is wired in `eden/src/main.ts:555`, so admission keeps the author's summary**).
    - `admit` on an already active/active-probation version → no-op, `admitted=false`.
    - `quarantine` → `library.quarantine(name, critique, version)`; `archive` → `library.archive`; `keep-draft`/`none` → nothing.
 3. Deliver `{from:'god', kind:'critique', payload:{critique, success, praise}}` to the assignee's inbox and update the dossier (per manifest tag `runs/successes`; `recentVerdicts` capped at 20).
@@ -282,27 +282,27 @@ sequenceDiagram
 ```
 
 Key facts:
-- The villager processed is `task.assignee ?? '(unassigned)'`; the orchestrator LLM's `to` can differ (then the directive lands in another inbox, and the coordinator falls back to `task.goal`/`task.successCriteria` for the pack's directive section, `main.ts:950`).
+- The villager processed is `task.assignee ?? '(unassigned)'`; the orchestrator LLM's `to` can differ (then the directive lands in another inbox, and the coordinator falls back to `task.goal`/`task.successCriteria` for the pack's directive section, `eden/src/main.ts:950`).
 - An iteration where the brain produced no draft **or** no run consumes a retry with no ticket (`:962-965`). A villager that completes the task only by running an existing (non-draft) skill is never judged.
 - A `success:true` verdict with any action other than an effective draft admission (e.g. `none`, `keep-draft`, or `admit` of an already-active version) does **not** close the rollout; the loop keeps revising until retries run out.
-- Revision deliberations run on the **strong** tier with `inputTokenBudget = strongInputTokenBudget ?? 48000` (from `providers.json`/config, `main.ts:611,958`); `hint:'authoring'`, `includeExemplarCode:true`, `history: []`.
-- `VillageLoop` pacing (`main.ts:1074-1077`): connect poll 2000 ms, settle 3000 ms after first connect, 1000 ms between producing turns, 5000 ms back-off after a no-proposal turn or a thrown rollout. Started on `/villagers start|restart` (admin `onScenarioStart`, `main.ts:406-420`), never on `autoSpawn`.
+- Revision deliberations run on the **strong** tier with `inputTokenBudget = strongInputTokenBudget ?? 48000` (from `providers.json`/config, `eden/src/main.ts:611,958`); `hint:'authoring'`, `includeExemplarCode:true`, `history: []`.
+- `VillageLoop` pacing (`eden/src/main.ts:1074-1077`): connect poll 2000 ms, settle 3000 ms after first connect, 1000 ms between producing turns, 5000 ms back-off after a no-proposal turn or a thrown rollout. Started on `/villagers start|restart` (admin `onScenarioStart`, `eden/src/main.ts:406-420`), never on `autoSpawn`.
 
 ### Density invariant and per-tier budgets (D-11)
 
-- Payload: from the 2nd iteration on, `density = {draft:{name, version, code}, runReport: lastRunReport, critique: lastCritique}` (`main.ts:954-956`), rendered by `renderDensity` as a final user message `## TRAVAIL EN COURS (à réviser maintenant)` (`eden/src/villagers/context-pack.ts:297-304`).
-- `fitBudget` (`context-pack.ts:150-164`) always keeps the frame (8 sections each capped by `CEILINGS`, `:93-102`) and the density message; only `history` turns are trimmed oldest-first as whole pairs. The coordinator always passes `history: []`, so **prior revision turns are never carried** — each revision sees only the latest draft/report/critique.
-- Budget numbers verified: default `strong.inputTokenBudget = 48000`, `fast = 16000` (`config.ts:113-114`; `providers.ts:25-27`; `providers.example.json` openai/deepseek presets 48000/16000, `local` strong 32000 / fast 16000). Boot warns if `strong.inputTokenBudget < 2*(maxSkillLines*12) + 8000` (= 17 600 at 400 lines) (`config.ts:351-361`).
-- The budget bounds only the **initial** pack; the brain's multi-turn conversation (up to 16 tool turns, `brain.ts:67`) grows unchecked, and the critic's own prompt is not budgeted.
-- Scheduler immunity: `Brain.deliberate` passes `rolloutId` → bypasses rate cap, coalescing and cooldown (`brain.ts:96-107`; lane defaults to `directive`).
+- Payload: from the 2nd iteration on, `density = {draft:{name, version, code}, runReport: lastRunReport, critique: lastCritique}` (`eden/src/main.ts:954-956`), rendered by `renderDensity` as a final user message `## TRAVAIL EN COURS (à réviser maintenant)` (`eden/src/villagers/context-pack.ts:297-304`).
+- `fitBudget` (`eden/src/villagers/context-pack.ts:150-164`) always keeps the frame (8 sections each capped by `CEILINGS`, `:93-102`) and the density message; only `history` turns are trimmed oldest-first as whole pairs. The coordinator always passes `history: []`, so **prior revision turns are never carried** — each revision sees only the latest draft/report/critique.
+- Budget numbers verified: default `strong.inputTokenBudget = 48000`, `fast = 16000` (`eden/src/config.ts:113-114`; `eden/src/providers.ts:25-27`; `providers.example.json` openai/deepseek presets 48000/16000, `local` strong 32000 / fast 16000). Boot warns if `strong.inputTokenBudget < 2*(maxSkillLines*12) + 8000` (= 17 600 at 400 lines) (`eden/src/config.ts:351-361`).
+- The budget bounds only the **initial** pack; the brain's multi-turn conversation (up to 16 tool turns, `eden/src/villagers/brain.ts:67`) grows unchecked, and the critic's own prompt is not budgeted.
+- Scheduler immunity: `Brain.deliberate` passes `rolloutId` → bypasses rate cap, coalescing and cooldown (`eden/src/villagers/brain.ts:96-107`; lane defaults to `directive`).
 
 ### Recovery (D-09)
 
-`GodService.recoverRollouts()` (`god.ts:218-235`), called at boot when God is wired (`main.ts:228-231`): for each task in `state.tasks` with `currentRolloutId`, journal `god.rollout-abandoned {reason:'crash-recovery', taskId}`, close the rollout, delete the pointer, re-add through the ledger writer. Because `GodState` is never persisted and the call runs on a freshly constructed state, **after a real process restart there is nothing to recover** — the ledger, tasks, dossiers and QA cache start empty (journal history remains but is not replayed into God).
+`GodService.recoverRollouts()` (`eden/src/god/god.ts:218-235`), called at boot when God is wired (`eden/src/main.ts:228-231`): for each task in `state.tasks` with `currentRolloutId`, journal `god.rollout-abandoned {reason:'crash-recovery', taskId}`, close the rollout, delete the pointer, re-add through the ledger writer. Because `GodState` is never persisted and the call runs on a freshly constructed state, **after a real process restart there is nothing to recover** — the ledger, tasks, dossiers and QA cache start empty (journal history remains but is not replayed into God).
 
 ### Budget degrade summary (D-13)
 
-`BudgetTracker` (`scheduler.ts:227-258`) is shared by the three desks; `spend(desk, totalTokens)` after each call; `degraded(desk)` is `spent > dailyTokens` (strict), never for `null`. `resetDay()` exists but **no production code calls it**, so a cap is effectively per-process-lifetime. On breach with `degradeOnBreach:true`: critic → templated keep-draft verdict; curriculum → repeat last task type; orchestrator → interrupt-only. No journal/warning event is emitted on breach.
+`BudgetTracker` (`eden/src/llm/scheduler.ts:227-258`) is shared by the three desks; `spend(desk, totalTokens)` after each call; `degraded(desk)` is `spent > dailyTokens` (strict), never for `null`. `resetDay()` exists but **no production code calls it**, so a cap is effectively per-process-lifetime. On breach with `degradeOnBreach:true`: critic → templated keep-draft verdict; curriculum → repeat last task type; orchestrator → interrupt-only. No journal/warning event is emitted on breach.
 
 ## Journal events emitted by God
 
@@ -323,16 +323,16 @@ Payload types: `eden/src/journal/kinds.ts:141-167`.
 
 - **New desk tool / field:** edit the `*_TOOL` schema and the parse function in the desk file, update the prompt `.md` (golden tests in `tests/god-*.test.ts` read them).
 - **New verdict rail:** add it in `CriticDesk.applyRails`; keep it one-directional (can only lower `success`/demote `admit`).
-- **New curriculum trigger:** extend `CurriculumTrigger` and `dispatchTriggerFor` (`main.ts:852`); nothing branches on the trigger except journaling and the dispatch prompt.
+- **New curriculum trigger:** extend `CurriculumTrigger` and `dispatchTriggerFor` (`eden/src/main.ts:852`); nothing branches on the trigger except journaling and the dispatch prompt.
 - **Wiring a dormant feature** (body theatrics, intervene, batching, tripwire tickets, dawn reset): all hooks must be added in `wireGod`/`RolloutCoordinator` in `main.ts` — `god/` cannot import peers.
 
 ## Gotchas & known issues
 
 - `god.combineDesks` and `god.authoring` are parsed config keys with **no code consumer**.
-- `GodBody` is built and discarded (`main.ts:570`): `embodiedVerdicts` has no effect; `deliverVerdict`'s `nod` gesture is a no-op skill anyway.
+- `GodBody` is built and discarded (`eden/src/main.ts:570`): `embodiedVerdicts` has no effect; `deliverVerdict`'s `nod` gesture is a no-op skill anyway.
 - `Orchestrator.intervene` needs a `DivineActor {runAction}`; `GodBody` has no `runAction` and nothing calls `intervene` — the divine-overreach rail is dormant live.
 - `CriticDesk.judgeBatch`, `Curriculum.decompose`, `cleanUpTasks`, `Orchestrator.expireStale`, `reportToGod` have no production callers; `criticQueue` grows forever (never drained).
-- The engine's failure tripwire is built with `autoQuarantineAfter` but `main.ts:526-533` passes no `onTripwire`, so no `tripwire` ticket is ever filed; no `plea`/`second-opinion` tickets either.
+- The engine's failure tripwire is built with `autoQuarantineAfter` but `eden/src/main.ts:526-533` passes no `onTripwire`, so no `tripwire` ticket is ever filed; no `plea`/`second-opinion` tickets either.
 - Brain `report_to_god` texts are returned in `DeliberationResult.reportsToGod` and ignored by the coordinator.
 - `BudgetTracker.resetDay()` is never called — "daily" caps never reset.
 - QA cache is in-memory only (the code comment and spec say "persisted").
