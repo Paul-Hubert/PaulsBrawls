@@ -4,18 +4,18 @@ title: Eden — tests, CI gate, eval scaffold and live-test harness
 system: eden
 summary: Eden's npm scripts, the node:test suite and its fakes, the npm run check gate, the dry-run eval scaffold, and the process-isolated live-test harness (RCON arenas, checks, three scenarios, evidence layout).
 tags: [eden, testing, node-test, tsx, fakes, ci, check, eslint, dependency-cruiser, eval, live-test, rcon, scenarios, evidence]
-sources: [eden/package.json, eden/tsconfig.json, eden/eslint.config.js, eden/.dependency-cruiser.cjs, eden/.gitignore, eden/tests/fakes/fake-bot.ts, eden/tests/fakes/fake-settlement.ts, eden/tests/fakes/memory-journal.ts, eden/tests/fakes/scripted-llm.ts, eden/tests/dependency-law.test.ts, eden/tests/parity.test.ts, eden/tests/main-full-wiring.test.ts, eden/tests/live-tests-catalogue.test.ts, eden/eval/run.ts, eden/eval/fixtures.ts, eden/eval/mock-llm.ts, eden/eval/roster.ts, eden/live-tests/README.md, eden/live-tests/catalogue.ts, eden/live-tests/config.ts, eden/live-tests/harness.ts, eden/live-tests/run.ts, eden/live-tests/run-one.ts, eden/live-tests/rcon.ts, eden/live-tests/arenas.ts, eden/live-tests/checks.ts, eden/live-tests/scenarios/farm-wheat.ts, eden/live-tests/scenarios/craft-wooden-tools.ts, eden/live-tests/scenarios/cooperative-mob-defense.ts, eden/src/main.ts, docs/19-live-test-suite.md, docs/20-live-test-process.md, docs/PROGRESS.md]
-verified_at: 4a8081f
+sources: [eden/package.json, eden/tsconfig.json, eden/eslint.config.js, eden/.dependency-cruiser.cjs, eden/.gitignore, eden/tests/fakes/fake-bot.ts, eden/tests/fakes/fake-settlement.ts, eden/tests/fakes/memory-journal.ts, eden/tests/fakes/scripted-llm.ts, eden/tests/fakes/keep-alive.ts, eden/tests/dependency-law.test.ts, eden/tests/parity.test.ts, eden/tests/main-full-wiring.test.ts, eden/tests/live-tests-catalogue.test.ts, eden/eval/run.ts, eden/eval/fixtures.ts, eden/eval/mock-llm.ts, eden/eval/roster.ts, eden/live-tests/README.md, eden/live-tests/catalogue.ts, eden/live-tests/config.ts, eden/live-tests/harness.ts, eden/live-tests/run.ts, eden/live-tests/run-one.ts, eden/live-tests/rcon.ts, eden/live-tests/arenas.ts, eden/live-tests/checks.ts, eden/live-tests/scenarios/farm-wheat.ts, eden/live-tests/scenarios/craft-wooden-tools.ts, eden/live-tests/scenarios/cooperative-mob-defense.ts, eden/src/main.ts, docs/19-live-test-suite.md, docs/20-live-test-process.md, docs/PROGRESS.md]
+verified_at: 98cb908
 ---
 
 # Eden — tests, CI gate, eval scaffold and live-test harness
 
-**TL;DR.** `npm run check` = ESLint + `tsc --noEmit` + dependency-cruiser + `node --test` over 62 test files
-(~530 `test()` cases) that run only against fakes — no Minecraft, no paid LLM. `npm run eval` is a **dry run**:
+**TL;DR.** `npm run check` = ESLint + `tsc --noEmit` + dependency-cruiser + `node --test` over 65 test files
+(604 tests) that run only against fakes — no Minecraft, no paid LLM. `npm run eval` is a **dry run**:
 it wipes `.eden-eval-data/`, builds and validates a 4-scenario catalogue, and logs the plan; it never connects to a
 server. `npm run live-test [name]` runs real scenarios (real dev server via RCON + real LLM + real mineflayer), each
-in a hard-killable child process, writing evidence to `live-tests/.runs/<scenario>-<ts>/`. No CI workflow file
-exists in this checkout.
+in a hard-killable child process, writing evidence to `live-tests/.runs/<scenario>-<ts>/`. There is no CI:
+`.github/` is gitignored and absent from git history.
 
 ## npm scripts (`eden/package.json`)
 
@@ -41,16 +41,19 @@ Engines: `node >=22`. Dependencies (`^` ranges): `@xenova/transformers ^2.17.2`,
 
 ## CI
 
-> ⚠ Unverified: the repo `CLAUDE.md` describes `.github/workflows/eden-ci.yml` (scoped to `eden/**`) and a mod
-> `ci.yml`. No `.github/` directory exists in this checkout and none appears in git history, so the CI steps cannot
-> be documented. The executable gate is `npm run check` run locally.
+There is no CI in this repo. `.github/` is gitignored (`.gitignore:1`), and no `.github/` directory exists in the
+checkout or anywhere in git history, so no workflow runs the gate. The executable gate is `npm run check`, run
+locally; every "CI" mention in comments (e.g. `live-tests/config.ts`) means that local check.
 
-Note: `node_modules/` is not present in this checkout either; test counts and coverage below are from source
-inspection and `docs/PROGRESS.md`, not from a run.
+The Java mod has its own 10 JUnit 5 classes under `src/test/java/com/paul/brawl/` (`./gradlew test`), outside
+this gate.
+
+Test counts below are from an `npm test` run at `98cb908`; coverage figures are from `docs/PROGRESS.md`, not re-run.
 
 ## The unit/integration suite (`eden/tests/`)
 
-62 `*.test.ts` files, 532 top-level `test(` call sites (grep), `node:test` + `node:assert/strict`, no `describe`.
+65 `*.test.ts` files; an `npm test` run reports **604 tests, 604 pass, 0 fail, 0 cancelled**. `node:test` +
+`node:assert/strict`, no `describe`.
 Rules: tests call `start()` with defaults (`spawnBots`, `installProcessGuards`, `enableGod`, `serveWeb` all false),
 so no server connection or global process handler is installed; servers bind port `0`.
 
@@ -61,8 +64,8 @@ so no server connection or global process handler is installed; servers bind por
 | Bots | `bots-pool*.test.ts`, `bots-hardening*.test.ts`, `bots-helpers*.test.ts`, `bots-anchors*.test.ts` |
 | Skills | `skills-engine`, `skills-library`, `skills-instrument`, `skills-retrieve`, `skills-describe`, `skills-exemplars` |
 | LLM | `llm-client`, `llm-scheduler`, `llm-embeddings` |
-| God | `god-service`, `god-critic`, `god-curriculum`, `god-orchestrator`, `god-budget`, `god-recovery`, `god-body`, `gate.test.ts` (M3 gate: one villager converges task → draft → run → verdict → admit), `loop-integration.test.ts` (M4-3 full loop via the real assignment path) |
-| Villagers / social | `villagers-brain`, `-context-pack`, `-tools`, `-memory`, `-events`, `-subscriptions`, `-routing`, `-role-defaults`, `-drives`, `-host-reactivity`; `social-conversation`, `social-trade` |
+| God | `god-service`, `god-critic`, `god-curriculum`, `god-orchestrator`, `god-budget`, `god-recovery`, `god-body`, `god-tripwire` (B3.3 streak → critic ticket → `routeTripwireVerdict`), `gate.test.ts` (M3 gate: one villager converges task → draft → run → verdict → admit), `loop-integration.test.ts` (M4-3 full loop via the real assignment path) |
+| Villagers / social | `villagers-brain`, `-context-pack`, `-tools`, `-memory`, `-events`, `-subscriptions`, `-routing`, `-role-defaults`, `-drives`, `-host-reactivity`, `-host-events` (D-17 signal forwarding through the shipped roles.json), `-conversation-turn` (D-18); `social-conversation`, `social-trade` |
 | Harness scaffolds | `eval-harness.test.ts`, `live-tests-catalogue.test.ts`, `live-tests-checks.test.ts` |
 
 ### Fakes (`eden/tests/fakes/`)
@@ -72,7 +75,8 @@ so no server connection or global process handler is installed; servers bind por
 | `fake-bot.ts` `FakeBot` | a mineflayer bot (the narrowed `Bot` seam, `src/types/bot.ts`) | position, inventory, events; timer-driven `path_update`; a `dig` that never resolves (stall tests); `currentWindow` + `clickWindow` routing and `_client` `set_slot`/`window_items` packets (R1–R3); auto-eat/armor-manager hooks; pathfinder/pvp/collectBlock objects; ordered `calls` recorder (abort order R4); `chat` recorder (R25); `loadPlugin`; vitals fields. |
 | `scripted-llm.ts` `ScriptedLlm` | an OpenAI-compatible endpoint | Ephemeral-port HTTP server; `/v1/chat/completions` returns queued turns (content and/or tool calls, optional token counts); `/v1/embeddings` returns a stable hash vector; records requests. |
 | `memory-journal.ts` `MemoryJournal` | `Journal` | Array-backed `IJournal` (`append`/`query`/`subscribe`), injectable clock, ids `mem-NNNNNNNN`. |
-| `fake-settlement.ts` `FakeSettlement` | Java `POST /trade/execute` on :8767 | Ephemeral-port server; settable status/reply to drive `trade.settled` vs `trade.failed`; records requests. |
+| `fake-settlement.ts` `FakeSettlement` | Java `POST /trade/execute` on :8767 | Ephemeral-port, `unref()`'d server; mirrors the Java `validateShape` check (`{botA, botB, aGives, bGives}`, ≤ 6 lines per side, count 1..512 → else 400 `{ok:false, error}` with the Java strings); settable status/reply to drive `trade.settled` vs `trade.failed`; records requests with headers (for `X-Village-Token`). |
+| `keep-alive.ts` `holdEventLoopPerTest(maxMs = 30000)` | — (test plumbing, R73) | Registers a ref'd, bounded `setTimeout` in `beforeEach` and clears it in `afterEach`, so a test awaiting only `unref()`'d production timers is not cancelled by Node 22's runner. Used by `fakes`, `god-tripwire`, `llm-scheduler`, `skills-engine`, `skills-exemplars`, `villagers-host-events`. |
 
 Coverage (from `docs/PROGRESS.md` 2026-06-14 audit, not re-run): line 93.90 %, branch 83.30 %, func 93.95 %.
 
@@ -119,8 +123,8 @@ Real dev server + real LLM + real mineflayer. Not part of `npm run check`; only 
 
 | Need | Where read |
 |---|---|
-| `run/server.properties` at the repo root with `enable-rcon=true` (else throws) | `eden/live-tests/config.ts:97-118`: `server-port` (default 25599), `rcon.port` (default 25575), `rcon.password`; RCON host fixed `127.0.0.1` |
-| `eden/providers.json` (not `live-tests/providers.json`) | `eden/live-tests/config.ts:43-51` (`join(liveTestsDir, '..', 'providers.json')`) |
+| `run/server.properties` at the repo root with `enable-rcon=true` (else throws) | `eden/live-tests/config.ts:100-122`: `server-port` (default 25599), `rcon.port` (default 25575), `rcon.password`; RCON host fixed `127.0.0.1` |
+| `eden/providers.json` (not `live-tests/providers.json`) | `loadProviders(path?)`, `eden/live-tests/config.ts:48-55` (default `join(liveTestsDir, '..', 'providers.json')`; throws with a hint to copy `providers.example.json`) |
 | API key | `eden/api-keys.env` via `loadApiKeys()` (env wins), then `setupProviderEnv` copies `<apiKeyEnv>` into `OPENAI_API_KEY` if that is unset; missing key → exit 2 |
 | Provider | default `deepseek` (`DEFAULT_PROVIDER`), override `--provider <name>` / `-p` |
 
@@ -214,9 +218,9 @@ after 60 ms of silence (multi-packet safe); 15 s per-command timeout.
   `OPENAI_API_KEY` (normalized by the harness) through the client's default.
 - `live-tests/README.md` is stale versus code: it says providers come from `live-tests/providers.json` (code: `eden/providers.json`), that `OPENAI_API_KEY` + gpt-4o/gpt-4o-mini are used (code default provider: `deepseek`), and that the defense arena is `difficulty hard` (code: `easy`). `arenas.ts` doc comment says the lit box is y198–204 (code: 198–202).
 - ~~`tests/live-tests-catalogue.test.ts` fails on a clean checkout without `eden/providers.json`~~ **Fixed
-  (bug #4):** `baseConfig` takes an optional `providers` argument (default: `loadProviders()` of the user's file)
-  and the catalogue test injects `loadProviders(exampleProvidersPath())`, the committed `providers.example.json`
-  (`eden/live-tests/config.ts`, `eden/tests/live-tests-catalogue.test.ts`). `npm run check` is green with no
+  (bug #4):** `baseConfig` takes an optional `providers` argument (default: `loadProviders()` of the user's file,
+  `eden/live-tests/config.ts:129-134`) and the catalogue test injects `loadProviders(exampleProvidersPath())`, the
+  committed `providers.example.json` (`eden/live-tests/config.ts:40-42`, `eden/tests/live-tests-catalogue.test.ts:19`). `npm run check` is green with no
   `providers.json`.
 - **R73:** on Node 22, a test that awaits a promise only `unref()`'d timers can resolve is *cancelled* (and so is
   every later test in its file) — 28 tests were silently cancelled this way until 2026-10-05. Such files call

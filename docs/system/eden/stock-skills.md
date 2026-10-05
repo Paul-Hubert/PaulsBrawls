@@ -4,15 +4,15 @@ title: Eden stock skills — the bundled mortal primitives and divine powers
 system: eden
 summary: Every bundled stock skill in exemplars/index.ts (28 mortal + 9 divine) with tier, params, returns, real-mineflayer behaviour, composition and hardening notes.
 tags: [eden, skills, stock, exemplars, mineflayer, farming, crafting, chest, divine, reflex]
-sources: [eden/src/skills/exemplars/index.ts, eden/src/skills/library.ts, eden/src/skills/engine.ts, eden/src/main.ts, eden/roles.json, eden/src/config.ts, eden/tests/skills-exemplars.test.ts, docs/02-skill-system.md, docs/07-hard-won-lessons.md]
-verified_at: 4a8081f
+sources: [eden/src/skills/exemplars/index.ts, eden/src/skills/library.ts, eden/src/villagers/subscriptions.ts, eden/src/villagers/events.ts, eden/src/bots/signals.ts, eden/src/skills/engine.ts, eden/src/main.ts, eden/roles.json, eden/src/config.ts, eden/tests/skills-exemplars.test.ts, docs/02-skill-system.md, docs/07-hard-won-lessons.md]
+verified_at: 98cb908
 ---
 
 # Eden stock skills — the bundled mortal primitives and divine powers
 
-**TL;DR.** `STOCK_SKILLS` (`eden/src/skills/exemplars/index.ts:843-876`) bundles **37** skills: 28
+**TL;DR.** `STOCK_SKILLS` (`eden/src/skills/exemplars/index.ts:854-887`) bundles **37** skills: 28
 `mortal` (movement, mining, crafting, chests, farming/bread economy, reflexes) and 9 `divine` avatar powers
-(server commands via chat). `seedStockSkills` (`:879-896`) seeds every one straight into `active` with
+(server commands via chat). `seedStockSkills` (`:898-920`) seeds every one straight into `active` with
 author `{kind:'stock'}` at boot — only when changed (bug #12, see below). Seven mortal skills are flagged
 `exemplar: true` and ride as full code in every authoring prompt. They are ordinary library skills:
 JS strings compiled by the engine, receiving only `(bot, args, ctx)`.
@@ -22,18 +22,18 @@ JS strings compiled by the engine, receiving only `(bot, args, ctx)`.
 - **Seeding:** `library.seedStockIfChanged(input, 'active')` → `unchanged` (same code hash + seed manifest as the newest stock version), `overridden` (a newer live non-stock version — left alone and logged), or `seedStock` → `upsertDraft` + status `active` (no probation, D-12).
   An unchanged stock skill gets no new version (see [skills-library.md](skills-library.md#gotchas--known-issues)).
 - **Exemplars (full code in prompts):** `go-to`, `mine-block`, `find-block`, `collect-blocks`,
-  `craft-item`, `use-chest`, `deposit` (`eden/src/main.ts:583`). Test pins 5–7 exemplars, all mortal, each ≤ 60
-  lines (`eden/tests/skills-exemplars.test.ts:41-48`).
-- **Primitives palette:** all other mortal stock skills as `name — signature — summary` (`eden/src/main.ts:589-591`).
+  `craft-item`, `use-chest`, `deposit` (`eden/src/main.ts:758`). Test pins 5–7 exemplars, all mortal, each ≤ 60
+  lines (`eden/tests/skills-exemplars.test.ts:45-52`).
+- **Primitives palette:** all other mortal stock skills as `name — signature — summary` (`eden/src/main.ts:764-766`).
 - **Reflexes:** `eden/roles.json` binds `hurt → flee-to-safety` (everyone, `notWhileRunning`, cooldown 3000),
-  `night-falls → go-home` (everyone), `hurt → defend-self` (guard, cooldown 1000),
+  `night-falls → go-home` (everyone, args `{x:'$home.x', y:'$home.y', z:'$home.z'}`), `hurt → defend-self` (guard, cooldown 1000),
   `new-day → harvest-field` (farmer) — zero-token `{kind:'skill'}` handlers.
 - **Composition:** stock skills are `active`, so they are composable via `ctx.skills.run`. Summaries are French.
 
 ## Shared inline helpers
 
 Skill bodies compile one at a time, so helpers are string-inlined into each body
-(`eden/src/skills/exemplars/index.ts:36-71`):
+(`eden/src/skills/exemplars/index.ts:40-71`):
 
 | Helper | Inlined into | Behaviour |
 |---|---|---|
@@ -55,43 +55,43 @@ Skill bodies compile one at a time, so helpers are string-inlined into each body
 | `find-block` | yes | `name` req, `maxDistance=48` | `{x,y,z,name}` | search, collection | 115-137 |
 | `collect-blocks` | yes | `x,y,z` req, `maxHeight=32` | `{collected}` | collection, wood | 139-167 |
 | `craft-item` | yes | `item` req, `count=1` | `{crafted}` | crafting | 169-213 |
-| `use-chest` | yes | `x,y,z` req, `deposit=[]`, `withdraw=[]` (arrays of `{name,count}`) | `{ok}` | storage | 215-243 |
-| `deposit` | yes | `x,y,z,items` req | `{deposited}` | storage | 245-257 |
-| `withdraw` | no | `x,y,z,items` req | `{withdrawn}` | storage | 259-271 |
-| `smelt-item` | no | `input,fuel` req, `count=1` | `{smelted}` | smelting | 273-302 |
-| `place-item` | no | `item,x,y,z` req, `faceX=0,faceY=1,faceZ=0` | `{placed}` | building | 304-320 |
-| `kill-mob` | no | `entityName` req, `maxDistance=16` | `{killed}` | combat | 322-337 |
-| `explore-until` | no | `target` req, `maxHops=8` | `{found,x,y,z}` | exploration | 339-357 |
+| `use-chest` | yes | `x,y,z` req, `deposit=[]`, `withdraw=[]` (arrays of `{name,count}`) | `{ok}` | storage | 215-244 |
+| `deposit` | yes | `x,y,z,items` req | `{deposited}` | storage | 246-258 |
+| `withdraw` | no | `x,y,z,items` req | `{withdrawn}` | storage | 260-272 |
+| `smelt-item` | no | `input,fuel` req, `count=1` | `{smelted}` | smelting | 274-304 |
+| `place-item` | no | `item,x,y,z` req, `faceX=0,faceY=1,faceZ=0` | `{placed}` | building | 306-322 |
+| `kill-mob` | no | `entityName` req, `maxDistance=16` | `{killed}` | combat | 324-339 |
+| `explore-until` | no | `target` req, `maxHops=8` | `{found,x,y,z}` | exploration | 341-359 |
 
 ### Mortal — farming and the bread economy
 
 | Skill | Params | Returns | Composes | Lines |
 |---|---|---|---|---|
-| `till-block` | `x,y,z` req | `{tilled,x,y,z}` | go-to | 366-406 |
-| `sow-seed` | `x,y,z,seed` req | `{sown,crop,x,y,z}` | go-to | 408-440 |
-| `find-till-spot` | `maxDistance=32` | `{found,x,y,z}` | — | 450-485 |
-| `till-spot-near-water` | `maxDistance=32` | `{tilled,x,y,z}` | find-till-spot → till-block | 487-502 |
-| `find-harvestable-plant` | `crop?`, `maxDistance=32` | `{found,x,y,z,crop}` | — | 504-528 |
-| `harvest-plant` | `x,y,z` req | `{harvested,crop,x,y,z}` | go-to | 530-551 |
-| `pickup-drops` | `radius=8` | `{picked}` | go-to (per drop) | 553-585 |
-| `harvest-nearby-crop` | `crop?`, `maxDistance=32` | `{harvested,x,y,z,crop}` | find-harvestable-plant → harvest-plant → pickup-drops | 587-607 |
-| `find-crafting-table` | `maxDistance=32` | `{found,x,y,z}` | — | 609-623 |
-| `make-bread` | `count=1` | `{crafted}` | find-crafting-table → craft-item | 625-642 |
-| `store-in-chest` | `items` req, `x?,y?,z?` | `{stored}` | deposit (→ use-chest → go-to) | 644-664 |
-| `tend-bread-farm` | `cycles=6`, `seed='wheat_seeds'`, `breadThreshold=3`, `chest?` (object) | `{harvested,planted,baked}` | all of the above | 666-711 |
+| `till-block` | `x,y,z` req | `{tilled,x,y,z}` | go-to | 368-408 |
+| `sow-seed` | `x,y,z,seed` req | `{sown,crop,x,y,z}` | go-to | 410-442 |
+| `find-till-spot` | `maxDistance=32` | `{found,x,y,z}` | — | 452-487 |
+| `till-spot-near-water` | `maxDistance=32` | `{tilled,x,y,z}` | find-till-spot → till-block | 489-504 |
+| `find-harvestable-plant` | `crop?`, `maxDistance=32` | `{found,x,y,z,crop}` | — | 506-530 |
+| `harvest-plant` | `x,y,z` req | `{harvested,crop,x,y,z}` | go-to | 532-553 |
+| `pickup-drops` | `radius=8` | `{picked}` | go-to (per drop) | 555-587 |
+| `harvest-nearby-crop` | `crop?`, `maxDistance=32` | `{harvested,x,y,z,crop}` | find-harvestable-plant → harvest-plant → pickup-drops | 589-609 |
+| `find-crafting-table` | `maxDistance=32` | `{found,x,y,z}` | — | 611-625 |
+| `make-bread` | `count=1` | `{crafted}` | find-crafting-table → craft-item | 627-644 |
+| `store-in-chest` | `items` req, `x?,y?,z?` | `{stored}` | deposit (→ use-chest → go-to) | 646-666 |
+| `tend-bread-farm` | `cycles=6`, `seed='wheat_seeds'`, `breadThreshold=3`, `chest?` (object) | `{harvested,planted,baked}` | all of the above | 668-713 |
 
 ### Mortal — reflex handlers
 
 | Skill | Params | Returns | Bound in roles.json | Lines |
 |---|---|---|---|---|
-| `flee-to-safety` | `home?` (object), `distance=12` | `{fled}` | everyone: `hurt` | 718-736 |
-| `defend-self` | `maxDistance=16` | `{defended}` | guard: `hurt` | 738-764 |
-| `go-home` | `x?,y?,z?`, `range=2` | `{home}` | everyone: `night-falls` (args `{}`) | 766-787 |
+| `flee-to-safety` | `home?` (object), `distance=12` | `{fled}` | everyone: `hurt` | 720-738 |
+| `defend-self` | `maxDistance=16` | `{defended}` | guard: `hurt` | 740-766 |
+| `go-home` | `x?,y?,z?`, `range=2` | `{home}` | everyone: `night-falls` (args `$home.x/y/z`) | 768-787 |
 | `harvest-field` | `maxBlocks=16` | `{harvested}` | farmer: `new-day` | 789-809 |
 
 ### Divine (avatar only; invisible to villager retrieval)
 
-All `exemplar:false`, built with the `divine(...)` helper (`:812-840`). Each is a one-liner that issues a
+All `exemplar:false`, built with the `divine(...)` helper (`:812-819`; list `:821-851`). Each is a one-liner that issues a
 chat command and returns immediately — **no confirmation** that the command succeeded.
 
 | Skill | Params | Returns | Effect on real server | Tags |
@@ -222,19 +222,22 @@ stops on the first dig error.
 - ~~**use-chest / smelt-item leak paused mutators on open failure**~~ **Fixed (bug #14):** `pauseMutators` and
   the `openContainer` / `openFurnace` call now sit inside the `try`, and the `finally` closes the window only if
   it opened, so a rejected open ("windowOpen did not fire") still resumes auto-eat and armor-manager. Pinned by
-  two FakeBot tests in `eden/tests/skills-exemplars.test.ts` whose open rejects.
+  two FakeBot tests in `eden/tests/skills-exemplars.test.ts:172, 186` whose open rejects.
 - **tend-bread-farm is not failure-tolerant at the harvest/till steps:** `harvest-nearby-crop` and
   `till-spot-near-water` are not try/caught, so e.g. `till-block`'s `pas de houe dans l’inventaire` aborts the
   whole loop. `breadThreshold` is also used as the wheat-per-loaf divisor (correct only at 3).
 - **harvest-field digs immature wheat** (no age check) and does not move or pick up drops; far wheat fails
   `dig` and ends the loop.
-- **go-home is always a no-op as a reflex:** roles.json binds it with `args: {}` and no anchor substitution
-  exists; additionally `night-falls` has no live signal source (see
-  [bots-and-hardening.md](bots-and-hardening.md#signals-edensrcbotssignalsts)).
+- ~~**go-home is always a no-op as a reflex**~~ — since B3.6 roles.json templates its args from `$home.x/y/z`
+  (`eden/roles.json:25`), `substituteArgs` resolves them from the healed home anchor the host supplies
+  (`eden/src/villagers/subscriptions.ts:241-266`, `eden/src/main.ts:874-876`), and `night-falls` has a live
+  source (the `time` signal, `eden/src/bots/signals.ts:129`; edge in `eden/src/villagers/events.ts:216-224`).
+  With no anchor yet the keys drop and go-home still no-ops. Role defaults are seeded only at a villager's
+  **first** boot, so a subscription file written before B3.6 keeps the old `args: {}` until it is deleted.
 - **kill-mob** targets the first matching entity, not the nearest; **defend-self**'s chosen hostile may thus
   differ from the one `kill-mob` attacks.
 - ~~**gesture** only does `swing` and `jump`~~ — `sneak` and `nod` are real moves since B3.5.
-- **fly-to** needs creative mode; `god.gamemode` (`'creative'` default, `eden/src/config.ts:92`) is parsed but not
+- **fly-to** needs creative mode; `god.gamemode` (`'creative'` default, `eden/src/config.ts:96`) is parsed but not
   consumed anywhere in `eden/src`, so nothing puts the avatar in creative.
 - **Divine skills report success unconditionally** — the chat command's server response is never read.
 - ~~**Re-seed on every boot**~~ **Fixed (bug #12):** a boot appends a version only for stock skills whose code or manifest changed (see skills-library gotchas).
