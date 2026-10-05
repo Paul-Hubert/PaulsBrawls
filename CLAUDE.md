@@ -158,8 +158,9 @@ mark a field [`@OptionalField`](src/main/java/com/paul/brawl/OptionalField.java)
 World-mutating tools dispatch through `GodActionQueue` (main thread, via `runOnMain` — see Thread safety). `Wait` defers the
 next `sendFunctionOutputs` via `GodScheduler`. `BuildPlan` needs an origin (`/construction` →
 `Raycaster.setLastPos`); sub-builds run as isolated [BuildSubAgent](src/main/java/com/paul/brawl/BuildSubAgent.java)
-instances that emit textual `PlaceBlock`/`PlaceLine`/`PlaceBlocks` (regex-scanned). That text-mode placement
-calls `setBlockState` **off the main thread**, bypassing the queue (VERIFICATION-NOTES bug #7).
+instances that emit textual `PlaceBlock`/`PlaceLine`/`PlaceBlocks` (regex-scanned). Each matched call is one
+`GodActionQueue` task; `BuildGuard` caps sub-agents at 4 server-wide and a call at 128 blocks, and `/godbody off` /
+server stop cancel running sub-builds (bug #7).
 
 Image inputs: client `/prove`/`/build` capture the framebuffer (resize 854×480), ship via the `ImagePayload`
 C2S packet; `ImageReceiver` → `ChatBot.sendImageChatRequest` attaches the bytes as a base64 `ImageContent`
@@ -238,7 +239,7 @@ Client (in `Screenshotter`): `/prove <text>`, `/build <text>` — screenshot + s
 
 ### Thread safety, memory, mixins
 
-- `response.thenAccept(...)` runs on the LLM worker pool, **not** the main thread. World-mutating tools go through `ChatBotFunctions.runOnMain` = `GodActionQueue.submit(...).get(5, SECONDS)`, which returns a French error string on timeout so memory stays balanced. **Never call it on the main thread** (it would wait on its own drain). Text-mode building is the exception that bypasses the queue (see above).
+- `response.thenAccept(...)` runs on the LLM worker pool, **not** the main thread. World-mutating tools go through `ChatBotFunctions.runOnMain` = `GodActionQueue.submit(...).get(5, SECONDS)`, which returns a French error string on timeout so memory stays balanced. **Never call it on the main thread** (it would wait on its own drain). Text-mode building goes through the queue too (one task per call line, bug #7).
 - `TokenWindowChatMemory` is not thread-safe — every `add`/`messages()` is `synchronized(memory)`. Tool-call / tool-result pairs must stay adjacent or the next request 400s.
 - Both `paulsbrawls.mixins.json` and `paulsbrawls.client.mixins.json` reference `ExampleMixin` stubs — no real mixin logic yet.
 

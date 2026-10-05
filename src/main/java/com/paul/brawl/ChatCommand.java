@@ -65,6 +65,7 @@ public class ChatCommand {
                             // Bug #5: commands run on the server thread, so restore directly —
                             // the queue that would have carried restoreAvatar was just cleared.
                             ChatBotActions.restoreAvatarOnMain(ctx.getSource().getServer());
+                            BuildGuard.cancelAll(); // bug #7: sub-builds stop at their next turn
                             GodBody.vanish();
                             GodSessionManager.forceEndSession();
                             BridgeConfig.INSTANCE.enabled = false;

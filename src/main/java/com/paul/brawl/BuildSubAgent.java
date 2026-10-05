@@ -62,6 +62,10 @@ public class BuildSubAgent {
 
     private int turnsTaken = 0;
     private int totalPlacements = 0;
+    /** Bug #7: the BuildGuard epoch this sub-build started under; a later cancelAll() stops it. */
+    private final int startEpoch = BuildGuard.epoch();
+    /** The slot BuildPlan acquired for us is released exactly once, on whichever exit comes first. */
+    private boolean released = false;
 
     public BuildSubAgent(ServerPlayerEntity player,
                          BlockPos pivot,
@@ -86,10 +90,27 @@ public class BuildSubAgent {
         sendTurn(initialUserMessage);
     }
 
+    /** Release this sub-build's BuildGuard slot (idempotent). Every terminal path calls it. */
+    private void finish() {
+        if (released) return;
+        released = true;
+        BuildGuard.release();
+    }
+
+    private boolean cancelled() {
+        if (!BuildGuard.cancelledSince(startEpoch)) return false;
+        LOGGER.info("Sub-build '{}' cancelled ({} blocks placed).", label, totalPlacements);
+        ChatPrinter.sendMessage(player, "[sub-build " + label + "] annulée (" + totalPlacements + " blocs placés).");
+        finish();
+        return true;
+    }
+
     private void sendTurn(String userMessage) {
+        if (cancelled()) return;
         if (++turnsTaken > MAX_TURNS) {
             LOGGER.warn("Sub-build '{}' hit MAX_TURNS={}, stopping.", label, MAX_TURNS);
             ChatPrinter.sendMessage(player, "[sub-build " + label + "] arrêt — limite de tours atteinte (" + totalPlacements + " blocs).");
+            finish();
             return;
         }
 
@@ -114,17 +135,20 @@ public class BuildSubAgent {
                 // "start" and then nothing, with refinement passes lost.
                 ChatPrinter.sendMessage(player, "[sub-build " + label + "] échec de l'appel LLM — construction interrompue ("
                     + totalPlacements + " blocs placés).");
+                finish();
                 return;
             }
             try {
                 handleResponse(r);
             } catch (Exception e) {
                 LOGGER.error("Sub-build '{}' handler threw", label, e);
+                finish();
             }
         });
     }
 
     private void handleResponse(ChatResponse r) {
+        if (cancelled()) return; // cancelled while the LLM call was in flight — place nothing
         AiMessage aiMessage = r.aiMessage();
         if (aiMessage != null) memory.add(aiMessage);
 
@@ -157,5 +181,6 @@ public class BuildSubAgent {
 
         // Genuinely finished.
         ChatPrinter.sendMessage(player, "[sub-build " + label + "] terminé (" + totalPlacements + " blocs placés).");
+        finish();
     }
 }

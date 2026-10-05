@@ -248,7 +248,10 @@ public class ChatBotFunctions {
             }
 
             int n = live.size();
+            int launched = 0;
             for (int i = 0; i < n; i++) {
+                // Bug #7: a server-wide cap on parallel sub-agents (each one is an LLM loop placing blocks).
+                if (!BuildGuard.tryAcquire()) break;
                 SubBuild sb = live.get(i);
 
                 net.minecraft.util.math.BlockPos subPivot =
@@ -285,10 +288,19 @@ public class ChatBotFunctions {
                     BuildSubAgent.DEFAULT_REFINEMENTS
                 );
                 agent.start();
+                launched++;
             }
 
-            return "Plan accepté : " + n + " sous-construction(s) lancée(s) en parallèle. "
-                 + "Chaque sous-agent fera ~" + (1 + BuildSubAgent.DEFAULT_REFINEMENTS.size()) + " passes (initiale + refinements).";
+            if (launched == 0) {
+                return "Plan refusé : " + BuildGuard.MAX_CONCURRENT_SUB_BUILDS
+                     + " sous-constructions tournent déjà sur le serveur. Réessaie quand elles auront fini.";
+            }
+            String skipped = launched < n
+                ? " " + (n - launched) + " sous-construction(s) non lancée(s) : limite de "
+                  + BuildGuard.MAX_CONCURRENT_SUB_BUILDS + " en parallèle atteinte."
+                : "";
+            return "Plan accepté : " + launched + " sous-construction(s) lancée(s) en parallèle." + skipped
+                 + " Chaque sous-agent fera ~" + (1 + BuildSubAgent.DEFAULT_REFINEMENTS.size()) + " passes (initiale + refinements).";
         }
 
         private static String safe(String s, String fallback) {
@@ -604,15 +616,50 @@ public class ChatBotFunctions {
         return text == null ? "" : text;
     }
 
+    /**
+     * Bug #7: textual placement used to call {@code setBlockState} straight from the LLM worker thread (and from
+     * parallel sub-agents). Every matched call is now ONE {@link GodActionQueue} task — the same main-thread hop
+     * every other world-mutating tool takes, spread over ticks by {@code MAX_PER_TICK} — and this waits for them
+     * (bounded) so the next turn sees the blocks. On the server thread itself it runs inline (waiting on the
+     * queue from the thread that drains it would deadlock).
+     */
     private static int scanAndExecute(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot) {
+        java.util.List<java.util.concurrent.CompletableFuture<String>> pending = new java.util.ArrayList<>();
         int total = 0;
-        total += scanPlaceBlock(text, player, pivot);
-        total += scanPlaceLine(text, player, pivot);
-        total += scanPlaceBlocks(text, player, pivot);
+        total += scanPlaceBlock(text, player, pivot, pending);
+        total += scanPlaceLine(text, player, pivot, pending);
+        total += scanPlaceBlocks(text, player, pivot, pending);
+        awaitPlacements(pending);
         return total;
     }
 
-    private static int scanPlaceBlock(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot) {
+    private static void placeOnMain(ServerPlayerEntity player, java.util.List<java.util.concurrent.CompletableFuture<String>> pending, Runnable place) {
+        var server = player.getServer();
+        if (server == null || server.isOnThread()) {
+            place.run();
+            return;
+        }
+        pending.add(GodActionQueue.submit(() -> {
+            place.run();
+            return "ok";
+        }));
+    }
+
+    private static void awaitPlacements(java.util.List<java.util.concurrent.CompletableFuture<String>> pending) {
+        if (pending.isEmpty()) return;
+        try {
+            java.util.concurrent.CompletableFuture.allOf(pending.toArray(new java.util.concurrent.CompletableFuture[0]))
+                .get(30, TimeUnit.SECONDS);
+        } catch (TimeoutException te) {
+            LOGGER.warn("{} textual placement(s) still queued after 30s — server frozen/paused/stopping?", pending.size());
+        } catch (Exception e) {
+            // A cancelled queue (/godbody off, server stop) or a throwing placement: logged by the queue; the
+            // count still reports the calls the model made.
+            LOGGER.warn("Textual placements did not all complete: {}", e.getMessage());
+        }
+    }
+
+    private static int scanPlaceBlock(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot, java.util.List<java.util.concurrent.CompletableFuture<String>> pending) {
         Matcher m = PLACE_BLOCK_PATTERN.matcher(text);
         int count = 0;
         while (m.find()) {
@@ -623,9 +670,9 @@ public class ChatBotFunctions {
                 int z = Integer.parseInt(m.group(3));
                 String blockType = firstNonNull(m.group(4), m.group(5), m.group(6), m.group(7));
                 if (pivot == null) {
-                    ChatBotActions.placeBlock(player, x, y, z, blockType);
+                    placeOnMain(player, pending, () -> ChatBotActions.placeBlock(player, x, y, z, blockType));
                 } else {
-                    ChatBotActions.placeBlockAt(player, pivot, x, y, z, blockType);
+                    placeOnMain(player, pending, () -> ChatBotActions.placeBlockAt(player, pivot, x, y, z, blockType));
                 }
                 count++;
             } catch (Exception e) {
@@ -636,7 +683,7 @@ public class ChatBotFunctions {
         return count;
     }
 
-    private static int scanPlaceLine(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot) {
+    private static int scanPlaceLine(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot, java.util.List<java.util.concurrent.CompletableFuture<String>> pending) {
         Matcher m = PLACE_LINE_PATTERN.matcher(text);
         int count = 0;
         while (m.find()) {
@@ -649,10 +696,15 @@ public class ChatBotFunctions {
                 int y2 = Integer.parseInt(m.group(5));
                 int z2 = Integer.parseInt(m.group(6));
                 String blockType = firstNonNull(m.group(7), m.group(8), m.group(9), m.group(10));
+                long blocks = BuildGuard.lineBlocks(x, y, z, x2, y2, z2);
+                if (!BuildGuard.withinCallCap(blocks)) {
+                    LOGGER.warn("Skipped textual PlaceLine of {} blocks (> {}): {}", blocks, BuildGuard.MAX_BLOCKS_PER_CALL, match);
+                    continue;
+                }
                 if (pivot == null) {
-                    ChatBotActions.placeLine(player, x, y, z, x2, y2, z2, blockType);
+                    placeOnMain(player, pending, () -> ChatBotActions.placeLine(player, x, y, z, x2, y2, z2, blockType));
                 } else {
-                    ChatBotActions.placeLineAt(player, pivot, x, y, z, x2, y2, z2, blockType);
+                    placeOnMain(player, pending, () -> ChatBotActions.placeLineAt(player, pivot, x, y, z, x2, y2, z2, blockType));
                 }
                 count++;
             } catch (Exception e) {
@@ -663,7 +715,7 @@ public class ChatBotFunctions {
         return count;
     }
 
-    private static int scanPlaceBlocks(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot) {
+    private static int scanPlaceBlocks(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot, java.util.List<java.util.concurrent.CompletableFuture<String>> pending) {
         Matcher m = PLACE_BLOCKS_PATTERN.matcher(text);
         int count = 0;
         while (m.find()) {
@@ -673,10 +725,15 @@ public class ChatBotFunctions {
                 int[] ys = parseIntArray(m.group(3));
                 int[] zs = parseIntArray(m.group(5));
                 String blockType = firstNonNull(m.group(7), m.group(8), m.group(9), m.group(10));
+                long blocks = Math.min(xs.length, Math.min(ys.length, zs.length));
+                if (!BuildGuard.withinCallCap(blocks)) {
+                    LOGGER.warn("Skipped textual PlaceBlocks of {} blocks (> {}): {}", blocks, BuildGuard.MAX_BLOCKS_PER_CALL, match);
+                    continue;
+                }
                 if (pivot == null) {
-                    ChatBotActions.placeBlocks(player, xs, ys, zs, blockType);
+                    placeOnMain(player, pending, () -> ChatBotActions.placeBlocks(player, xs, ys, zs, blockType));
                 } else {
-                    ChatBotActions.placeBlocksAt(player, pivot, xs, ys, zs, blockType);
+                    placeOnMain(player, pending, () -> ChatBotActions.placeBlocksAt(player, pivot, xs, ys, zs, blockType));
                 }
                 count++;
             } catch (Exception e) {

@@ -211,9 +211,16 @@ Failure handling:
 | Turn > 60 | Log warn; chat `"[sub-build <label>] arrêt — limite de tours atteinte (N blocs)."`; stop |
 | LLM call throws | Log root cause; chat `"[sub-build <label>] échec de l'appel LLM — construction interrompue (N blocs placés)."`; stop (no retry) |
 | `handleResponse` throws | Logged only (`"Sub-build '{}' handler threw"`); agent silently stops |
+| `BuildGuard.cancelAll()` ran since the agent started | chat `"[sub-build <label>] annulée (N blocs placés)."` at its next turn (or when its in-flight reply lands — nothing is placed); stop |
 
-There is **no cancel path**: `/construction`, `/llm reload`, `/godbody off` and player logout do not stop running
-sub-agents. `N blocs` is actually the number of executed **call lines**, not blocks.
+Every terminal path releases the agent's `BuildGuard` slot exactly once. **Cancel (bug #7):** `/godbody off` and
+`SERVER_STOPPING` call `BuildGuard.cancelAll()`; `/construction`, `/llm reload` and player logout still do not stop
+running sub-agents. `N blocs` is actually the number of executed **call lines**, not blocks.
+
+**Caps (bug #7, `BuildGuard`, unit-tested):** at most `MAX_CONCURRENT_SUB_BUILDS = 4` sub-agents run server-wide —
+`BuildPlan` launches what fits and says how many it skipped (`Plan refusé : 4 sous-constructions tournent déjà…` when
+none fit); one `PlaceLine`/`PlaceBlocks` call may place at most `MAX_BLOCKS_PER_CALL = 128` blocks (a larger one is
+skipped with a warning, not counted).
 
 ## Textual grammar (exact)
 
@@ -297,20 +304,19 @@ any code**.
    `Raycaster` pivot wrapper) and add it to `scanAndExecute`.
 3. Add it to `stripTextualFunctionCalls` (longest names first).
 4. `ChatBotActions.java`: add `xAt(player, pivot, ...)` using `changeBlockAtPos` (and a pivot-less wrapper if direct mode
-   should support it). Consider routing writes through `GodActionQueue.submit(...)` for main-thread safety.
+   should support it). Route the world write through `placeOnMain(player, pending, …)` like the existing three
+   (bug #7), and check its size against `BuildGuard.withinCallCap`.
 5. Teach the model: `build_prompt.txt` in the **runtime cwd** (and both tracked copies), the `ListTools` text-placement
    hint (`ChatBotFunctions.java:177-182`), the continuation strings (`ChatBot.java:373-375`, `BuildSubAgent.java:144-146`),
    and `DEFAULT_REFINEMENTS` / the BuildPlan addendum if they name the calls.
 
 ## Gotchas & known issues
 
-- **Off-thread world writes.** Textual placements call `setBlockState` from virtual LLM worker threads
-  (`ChatBot.java:558`, `BuildSubAgent.java:132`), contrary to the project's "world mutations via `GodActionQueue`" rule.
-  Several parallel sub-agents write concurrently.
-- **`/build` screenshot is never sent to the model**: `buildBot.hasImage = false` (`ChatBot.java:136`), so the image
-  bytes are dropped; only `"Build : <text>"` is used.
-- **`/build` argument is `StringArgumentType.string()`** (`Screenshotter.java:61`): multi-word text must be quoted
-  (`/build "a small tower"`), otherwise only one word parses.
+- ~~**Off-thread world writes.**~~ **Fixed (bug #7):** `scanAndExecute` submits each matched call as one
+  `GodActionQueue` task (≤ 8 per tick) and waits up to 30 s for them before returning the count; on the server thread
+  it runs inline. Only an in-game check proves the thread hop; the caps are unit-tested.
+- ~~**`/build` screenshot is never sent to the model**; `/build` takes one word~~ **Fixed (bug #9):** `buildBot.hasImage
+  = true`; the argument is `greedyString()`.
 - **Non-ops cannot really build**: `/build` is a client command open to all, but the pivot comes from the same player's
   `/construction` (perm 2). Without a pivot, direct-mode calls silently place nothing yet still count as executed, so the
   loop keeps going until the model stops or the 100-depth cap hits.
@@ -319,8 +325,8 @@ any code**.
 - **Order by kind**: a `PlaceBlock` window followed in the text by a `PlaceBlocks` wall covering the same cell ends up as
   wall.
 - **Counts are calls, not blocks**: messages saying `blocs placés` report call-line counts.
-- **Unbounded fan-out**: no limit on `builds.size()`; each sub-agent can make up to 60 provider calls concurrently with the
-  others; no cancel/kill switch for sub-agents.
+- ~~**Unbounded fan-out**; no cancel/kill switch~~ **Fixed (bug #7):** 4 parallel sub-agents server-wide, and
+  `BuildGuard.cancelAll()` on `/godbody off` / server stop. Each agent can still make up to 60 provider calls.
 - **Prompt drift**: `build_prompt.txt` (root) ≠ `run/build_prompt.txt`; production uses neither tracked file directly.
   The sub-agent system prompt reuses the planner prompt, which still describes the `BuildPlan` tool that sub-agents do not
   have.
