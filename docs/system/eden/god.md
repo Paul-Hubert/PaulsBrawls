@@ -10,7 +10,7 @@ verified_at: 4a8081f
 
 # Eden God — desks, body and the refinement loop
 
-**TL;DR.** Eden's village God is three LLM "desks" over one shared in-memory `GodState`: the **critic** (judges one skill run → `Verdict`, strong tier, forced `verdict` tool), the **curriculum** (proposes tasks, sole writer of the task ledger, strong tier + fast-tier QA cache), and the **orchestrator** (turns tasks into `Directive`s delivered to villager inboxes, fast tier). `GodService` owns rollouts, the critic queue and verdict routing into the skill library. The `RolloutCoordinator` in `main.ts` drives task → directive → villager deliberation → critic → route → revise/close. Several documented features (`combineDesks`, embodied verdicts, divine intervention, verdict batching, dawn trigger, daily budget reset, plea/tripwire tickets) exist as code or config but are **not wired in production** — see Gotchas.
+**TL;DR.** Eden's village God is three LLM "desks" over one shared in-memory `GodState`: the **critic** (judges one skill run → `Verdict`, strong tier, forced `verdict` tool), the **curriculum** (proposes tasks, sole writer of the task ledger, strong tier + fast-tier QA cache), and the **orchestrator** (turns tasks into `Directive`s delivered to villager inboxes, fast tier). `GodService` owns rollouts, the critic queue and verdict routing into the skill library. The `RolloutCoordinator` in `main.ts` drives task → directive → villager deliberation → critic → route → revise/close. Several documented features (`combineDesks`, embodied verdicts, divine intervention, verdict batching, dawn trigger, daily budget reset, plea tickets) exist as code or config but are **not wired in production** (tripwire tickets are, since B3.3) — see Gotchas.
 
 ## Where things live
 
@@ -332,7 +332,7 @@ Payload types: `eden/src/journal/kinds.ts:141-167`.
 - `GodBody` is built and discarded (`eden/src/main.ts:570`): `embodiedVerdicts` has no effect; `deliverVerdict`'s `nod` gesture is a no-op skill anyway.
 - `Orchestrator.intervene` needs a `DivineActor {runAction}`; `GodBody` has no `runAction` and nothing calls `intervene` — the divine-overreach rail is dormant live.
 - `CriticDesk.judgeBatch`, `Curriculum.decompose`, `cleanUpTasks`, `Orchestrator.expireStale`, `reportToGod` have no production callers; `criticQueue` grows forever (never drained).
-- The engine's failure tripwire is built with `autoQuarantineAfter` but `eden/src/main.ts:526-533` passes no `onTripwire`, so no `tripwire` ticket is ever filed; no `plea`/`second-opinion` tickets either.
+- ~~No `tripwire` ticket is ever filed~~ **Wired (B3.3):** `main.ts` passes `onTripwire` → `makeTripwireHandler` (B3.3): it files a `tripwire` critic ticket, the critic judges the last failing run against a synthetic "is this skill broken?" task, and `GodService.routeTripwireVerdict` journals `god.verdict` and applies only a `quarantine` (reason `tripwire: <critique>`, actor `god:critic`) — never admit/archive. No `plea`/`second-opinion` tickets yet.
 - Brain `report_to_god` texts are returned in `DeliberationResult.reportsToGod` and ignored by the coordinator.
 - `BudgetTracker.resetDay()` is never called — "daily" caps never reset.
 - QA cache is in-memory only (the code comment and spec say "persisted").

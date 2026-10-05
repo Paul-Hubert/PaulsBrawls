@@ -208,6 +208,27 @@ export class GodService {
   }
 
   /**
+   * B3.3 — execute a critic verdict on a FailureTripwire ticket (`autoQuarantineAfter` consecutive failures of
+   * one skill, outside any rollout). Journals `god.verdict` and applies ONLY a quarantine: a tripwire ticket can
+   * pull a failing skill, never admit/archive one (no rollout, no task, no assignee — nothing else to route).
+   */
+  routeTripwireVerdict(verdict: Verdict, opts: { skill: string; version: number }): { verdictId: string; quarantined: boolean } {
+    const verdictId = ulid();
+    this.journal.append('god:critic', 'god.verdict', {
+      ticketId: verdict.ticketId,
+      success: verdict.success,
+      libraryAction: verdict.libraryAction,
+      score: verdict.score,
+      critique: verdict.critique,
+    }, { skill: opts.skill, skillVersion: opts.version, verdictId });
+    let quarantined = false;
+    if (verdict.libraryAction === 'quarantine') {
+      quarantined = this.library.quarantine(opts.skill, `tripwire: ${verdict.critique}`, opts.version, 'god:critic') !== undefined;
+    }
+    return { verdictId, quarantined };
+  }
+
+  /**
    * D-09 boot-abandon (startup step 7). Every open task whose `currentRolloutId` is still set lost its
    * in-flight rollout to the crash (the in-memory conversation is the only volatile state crash-only
    * already accepts losing). For each: journal god.rollout-abandoned{reason:'crash-recovery'}, close the

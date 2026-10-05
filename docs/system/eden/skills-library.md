@@ -160,8 +160,7 @@ the engine counts clean root runs; there is no critic re-review ticket (comment 
 
 `FailureTripwire.recordRun` (`eden/src/skills/engine.ts:515-531`) counts consecutive failed **root** runs per skill name;
 on reaching the threshold it resets to 0 and returns `true`, which calls `onTripwire(skill, report)`.
-It **does not quarantine anything itself**, and `eden/src/main.ts` does not pass `onTripwire` (`eden/src/main.ts:526-533`),
-so in the running host the tripwire currently has no effect. A success resets the counter.
+It **does not quarantine anything itself**. Since B3.3 `main.ts` passes `onTripwire` → `makeTripwireHandler` (B3.3): it files a `tripwire` critic ticket, the critic judges the last failing run against a synthetic "is this skill broken?" task, and `GodService.routeTripwireVerdict` journals `god.verdict` and applies only a `quarantine` (reason `tripwire: <critique>`, actor `god:critic`) — never admit/archive. A success resets the counter.
 
 ## Authoring: `write_skill` and friends (villager tools)
 
@@ -282,7 +281,7 @@ quarantines on mismatch with reason `code hash mismatch at boot — file tampere
   (used by `craft-item`, `use-chest`, `till-block`, …) then throws `ProbationError` until 3 clean root runs.
 - **Probation never resets on failure** — a failing run neither decrements nor resets
   `probationRunsLeft` (`eden/src/skills/library.ts:160`); graduation is purely "3 clean root runs ever".
-- **Tripwire is inert** in the host (no `onTripwire` passed). Nothing auto-quarantines on failure streaks.
+- ~~**Tripwire is inert**~~ — wired (B3.3); a streak quarantines only if the critic says so.
 - **Description pass is not wired** (no `describer`) — `description` stays equal to the author summary.
 - **`verifyHashes` is never invoked** at boot despite docs saying it is.
 - ~~**Skill names are used unsanitized as directory names**~~ **Fixed (bug #13):** `upsertDraft` calls

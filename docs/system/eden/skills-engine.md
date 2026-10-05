@@ -145,7 +145,7 @@ context pack (`eden/src/main.ts:653, 682`).
 8. Finally: clear timers/heartbeat, disarm detector, remove pulse listeners, remove interceptor, pop `running`.
 9. `worldAfter = captureSnapshot(bot)`; build the `RunReport`; journal `skill.run` (refs `runId,
    rolloutId, skill, skillVersion`).
-10. Tripwire `recordRun(root, ok)` → `onTripwire` (unwired in main).
+10. Tripwire `recordRun(root, ok)` → `onTripwire` (main.ts: `makeTripwireHandler`, B3.3).
 11. If the root version's status was `active-probation`: `library.recordProbationRun(name, ok)` (R57).
 
 ## Supervisors
@@ -286,7 +286,7 @@ authors to verify world effects; judging is the critic's job).
 - **Single function expression only** (see Compilation pipeline); a trailing `;` is a compile error.
 - Inventory pulse uses total item count, so a craft that consumes and produces the same total, or an equip
   swap, does not pulse.
-- `onTripwire` is not passed by `eden/src/main.ts` — the `autoQuarantineAfter` streak has no runtime effect.
+- ~~`onTripwire` is not passed by `eden/src/main.ts`~~ — wired (B3.3): a streak files a `tripwire` critic ticket.
 - Arg validation is shallow: nested objects/array items are not checked.
 
 ## Related

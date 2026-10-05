@@ -544,8 +544,11 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
     logger.warn('skills', `stock: kept the admitted override of ${seed.overridden.join(', ')} — the newer stock code was NOT seeded over it`);
   }
   const grants = new AllGranted();
+  // B3.3: the FailureTripwire files a critic ticket — late-bound because the critic is built after the engine.
+  const tripwireRef: { current?: (skill: string, report: RunReport) => void } = {};
   const engine = new SkillEngine({
     library, journal, grants,
+    onTripwire: (skill, report) => tripwireRef.current?.(skill, report),
     resolveBot: (name: string): Bot | undefined => args.pool?.bot(name),
     runDefaultTimeoutMs: config.skills.runDefaultTimeoutMs,
     stallSeconds: config.skills.stallSeconds,
@@ -682,6 +685,7 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   (god as unknown as { ledger: Curriculum }).ledger = curriculum;
   const orchestrator = new Orchestrator({ state: god.state, journal, client, scheduler, inboxes, tier: config.god.desks.orchestrator.model, budget, degradeOnBreach: config.god.budget.degradeOnBreach, ...(orchestratorPrompt ? { systemPrompt: orchestratorPrompt } : {}) });
   const critic = new CriticDesk({ client, scheduler, journal, tier: config.god.desks.critic.model, budget, degradeOnBreach: config.god.budget.degradeOnBreach, batchMax: 3, ...(criticPrompt ? { systemPrompt: criticPrompt } : {}) });
+  tripwireRef.current = makeTripwireHandler({ god, critic, library, threshold: config.skills.autoQuarantineAfter });
 
   // The body (theatrics, never a dependency) — built so divine stage-setting has a runner (M3-5).
   void new GodBody({ engine, journal, avatarName: config.god.name, embodiedVerdicts: config.god.embodiedVerdicts });
@@ -811,6 +815,43 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   }
 
   return { god, curriculum, orchestrator, coordinator, library, scheduler, inboxes, memories, store, tools, ...(reactivity ? { reactivity } : {}) };
+}
+
+/**
+ * B3.3 — what the engine's FailureTripwire does (`autoQuarantineAfter` consecutive failures of one skill): file a
+ * `tripwire` critic ticket, have the critic judge the last failing run against a synthetic "is this skill broken?"
+ * task, and let God apply a quarantine verdict (GodService.routeTripwireVerdict — nothing else). Fire-and-forget:
+ * a failing judge is logged, never thrown into the engine.
+ */
+export function makeTripwireHandler(deps: {
+  god: GodService;
+  critic: CriticDesk;
+  library: SkillLibrary;
+  threshold: number;
+}): (skill: string, report: RunReport) => void {
+  return (skill, report) => {
+    void (async () => {
+      const ticket = deps.god.fileTicket({ rolloutId: report.rolloutId ?? `tripwire:${report.runId}`, report, source: 'tripwire' });
+      const task: Task = {
+        id: `tripwire:${skill}`,
+        goal: `Le skill « ${skill} » v${report.version} vient d'échouer ${deps.threshold} fois de suite. Juge s'il est cassé : mets-le en quarantaine (libraryAction "quarantine") si son code est en cause, sinon "none".`,
+        successCriteria: 'le skill réussit ses exécutions',
+        context: 'ticket du tripwire (échecs consécutifs hors rollout)',
+        maxRetries: 0,
+      };
+      const verdict = await deps.critic.judge({
+        ticket,
+        task,
+        report,
+        code: deps.library.read(skill, report.version)?.code ?? '',
+        dossier: deps.god.dossierFor(report.villager),
+      });
+      const r = deps.god.routeTripwireVerdict(verdict, { skill, version: report.version });
+      logger.info('god', `tripwire on ${skill} v${report.version}: ${verdict.libraryAction}${r.quarantined ? ' (quarantined)' : ''}`);
+    })().catch((e: unknown) => {
+      logger.warn('god', `tripwire ticket for ${skill} could not be judged: ${e instanceof Error ? e.message : String(e)}`);
+    });
+  };
 }
 
 /** The pending messages of a villager inbox without draining it (VillagerInbox.peek), else none. */

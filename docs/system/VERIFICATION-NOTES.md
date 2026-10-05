@@ -123,7 +123,7 @@ Citations are `path:line` at `4a8081f`.
 | `SkillContext` has 5 fields | 8: `skills.run, log, signal, runner, depth, Vec3, goals, mcData`; `sleep` is a scope global. |
 | Manifest-sanity step at write time | `write_skill` checks only the line cap and compile. |
 | Probation = N critic re-judged runs | Counts clean root runs; failures don't reset it. |
-| `autoQuarantineAfter` tripwire files critic tickets | `onTripwire` is never passed (`eden/src/main.ts:526-533`), so it is inert. |
+| `autoQuarantineAfter` tripwire files critic tickets | ~~`onTripwire` is never passed, so it is inert.~~ **Wired (B3.3):** `main.ts` passes `onTripwire` → `makeTripwireHandler` (B3.3): it files a `tripwire` critic ticket, the critic judges the last failing run against a synthetic "is this skill broken?" task, and `GodService.routeTripwireVerdict` journals `god.verdict` and applies only a `quarantine` (reason `tripwire: <critique>`, actor `god:critic`) — never admit/archive. Pinned by `eden/tests/god-tripwire.test.ts`. |
 | Descriptions are LLM-generated at admission | No describer is wired (`eden/src/main.ts:555`); the author's summary stays. |
 | `verifyHashes` runs at boot; anchors snap `home`/`chest` hints | Neither is called. `home`/`chest` are not accepted config keys (`eden/src/config.ts:223`). |
 
@@ -137,7 +137,7 @@ Citations are `path:line` at `4a8081f`.
 | Curriculum triggers (dawn, decompose…) | Only `idle` in production. |
 | Daily caps reset at dawn; a breach warns | `resetDay()` never called; no breach journal. |
 | God desk priority ordering in the scheduler | One FIFO `god` lane. |
-| Critic tickets from tripwire, plea, second opinion | Only `source:'rollout'`. |
+| Critic tickets from tripwire, plea, second opinion | `rollout` and (B3.3) `tripwire`. No `plea` / `second-opinion`. |
 | D-11: revision history trimmed oldest-first | The coordinator always passes `history: []` (`eden/src/main.ts:957`). The 48k/16k budgets are real but bound only the initial pack. |
 | Orchestrator sees runs and dossiers; directives expire | It sees trigger, task, event and open directives; the directive tool has no expiry. |
 
