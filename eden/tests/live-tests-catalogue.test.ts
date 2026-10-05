@@ -10,10 +10,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { SCENARIOS, scenarioAssignees } from '../live-tests/catalogue';
-import { baseConfig } from '../live-tests/config';
+import { baseConfig, loadProviders, exampleProvidersPath } from '../live-tests/config';
 import { parseConfig } from '../src/config';
 
 const KEBAB = /^[a-z][a-z0-9-]*$/;
+// Bug #4: validate against the COMMITTED presets, never the user's gitignored eden/providers.json — so the
+// check runs (and passes) on a clean checkout.
+const EXAMPLE_PROVIDERS = loadProviders(exampleProvidersPath());
 const STUB_PROPS = { mcPort: 25599, rconHost: '127.0.0.1', rconPort: 25575, rconPassword: 'x' };
 
 test('catalogue: scenario names are unique kebab-case', () => {
@@ -65,7 +68,7 @@ test('catalogue: arena commands are absolute (no ~/^ relative coords) — re-app
 
 test('catalogue: each roster assembles into a valid Eden config (no R12 avatar collision)', () => {
   for (const s of SCENARIOS) {
-    const config = (s.configure ?? ((c) => c))(baseConfig(STUB_PROPS, s.roster));
+    const config = (s.configure ?? ((c) => c))(baseConfig(STUB_PROPS, s.roster, undefined, EXAMPLE_PROVIDERS));
     // parseConfig throws on a duplicate villager name or a god/villager name collision (R12).
     assert.doesNotThrow(() => parseConfig(config), `${s.name}: roster does not assemble into a valid config`);
     assert.ok(!s.roster.some((v) => v.name === config.god.name), `${s.name}: a villager collides with the avatar`);

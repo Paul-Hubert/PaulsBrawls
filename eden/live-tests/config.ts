@@ -36,15 +36,19 @@ function liveTestsDir(): string {
   return dirname(fileURLToPath(import.meta.url));
 }
 
+/** The committed provider presets — what the CI structure check validates against (no real file needed). */
+export function exampleProvidersPath(): string {
+  return join(liveTestsDir(), '..', 'providers.example.json');
+}
+
 /**
- * Load live-tests/providers.json (gitignored). If it doesn't exist, error with a clear hint pointing
- * to providers.example.json.
+ * Load eden/providers.json (gitignored), or `path` when given. If it doesn't exist, error with a clear
+ * hint pointing to providers.example.json.
  */
-export function loadProviders(): LiveProviders {
-  const path = join(liveTestsDir(), '..', 'providers.json');
+export function loadProviders(path: string = join(liveTestsDir(), '..', 'providers.json')): LiveProviders {
   if (!existsSync(path)) {
     throw new Error(
-      `eden/providers.json not found — copy eden/providers.example.json to providers.json and fill in your model settings`,
+      `${path} not found — copy eden/providers.example.json to providers.json and fill in your model settings`,
     );
   }
   return JSON.parse(readFileSync(path, 'utf8')) as LiveProviders;
@@ -119,10 +123,16 @@ export function readServerProps(): ServerProps {
 
 /**
  * The base config parameterised by the live server's port and a named LLM provider. The provider
- * defaults to `deepseek`; each scenario may further mutate via its `configure` callback.
+ * defaults to `deepseek`; each scenario may further mutate via its `configure` callback. `providers`
+ * defaults to the user's eden/providers.json; the CI structure check injects providers.example.json.
  */
-export function baseConfig(props: ServerProps, roster: VillagerConfig[], providerName: string = DEFAULT_PROVIDER): EdenConfig {
-  const all = loadProviders();
+export function baseConfig(
+  props: ServerProps,
+  roster: VillagerConfig[],
+  providerName: string = DEFAULT_PROVIDER,
+  providers: LiveProviders = loadProviders(),
+): EdenConfig {
+  const all = providers;
   const entry = all[providerName];
   if (!entry) {
     throw new Error(

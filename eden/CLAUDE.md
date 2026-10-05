@@ -35,9 +35,11 @@ which drives this process's admin API on :8770.
 
 ## Build / test / run
 - npm run check     # lint + typecheck + dependency-cruiser + tests (fakes only, NO Minecraft)
-- npm test          # node:test via tsx, on the fakes (62 files, ~530 tests)
-- Both fail on a clean checkout until providers.json exists (copy providers.example.json):
-  tests/live-tests-catalogue.test.ts loads it.
+- npm test          # node:test via tsx, on the fakes — NEVER touches Minecraft
+- Both pass on a clean checkout: tests/live-tests-catalogue.test.ts validates against the committed
+  providers.example.json, never your gitignored providers.json (only `npm run live-test` needs that).
+- A test awaiting a promise that only unref'd timers resolve must hold the loop (R73):
+  call holdEventLoopPerTest() from tests/fakes/keep-alive.ts at the top of the file.
 - npm run eval      # dry run only: builds + validates 4 scenarios, connects to nothing
 - Smoke against the dev server on port 25599 (read run/server.properties — R28).
 - Settlement needs :8767 — stop ./gradlew runServer first (it steals it — R29). If the mod has a

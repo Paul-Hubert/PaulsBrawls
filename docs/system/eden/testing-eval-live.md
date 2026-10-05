@@ -213,10 +213,15 @@ after 60 ms of silence (multi-packet safe); 15 s per-command timeout.
   `apiKeyEnv`, so every live boot journals `config: unknown key .apiKeyEnv ignored (R22)`, and the host then uses
   `OPENAI_API_KEY` (normalized by the harness) through the client's default.
 - `live-tests/README.md` is stale versus code: it says providers come from `live-tests/providers.json` (code: `eden/providers.json`), that `OPENAI_API_KEY` + gpt-4o/gpt-4o-mini are used (code default provider: `deepseek`), and that the defense arena is `difficulty hard` (code: `easy`). `arenas.ts` doc comment says the lit box is y198–204 (code: 198–202).
-- `tests/live-tests-catalogue.test.ts` ("each roster assembles into a valid Eden config") calls
-  `baseConfig(...)`, which calls `loadProviders()` and throws `eden/providers.json not found` when the gitignored
-  `eden/providers.json` is absent. On a clean checkout (as here — only `providers.example.json` exists) that test
-  fails, so `npm test` / `npm run check` cannot be green without first copying the example file.
+- ~~`tests/live-tests-catalogue.test.ts` fails on a clean checkout without `eden/providers.json`~~ **Fixed
+  (bug #4):** `baseConfig` takes an optional `providers` argument (default: `loadProviders()` of the user's file)
+  and the catalogue test injects `loadProviders(exampleProvidersPath())`, the committed `providers.example.json`
+  (`eden/live-tests/config.ts`, `eden/tests/live-tests-catalogue.test.ts`). `npm run check` is green with no
+  `providers.json`.
+- **R73:** on Node 22, a test that awaits a promise only `unref()`'d timers can resolve is *cancelled* (and so is
+  every later test in its file) — 28 tests were silently cancelled this way until 2026-10-05. Such files call
+  `holdEventLoopPerTest()` from `eden/tests/fakes/keep-alive.ts` (a bounded, ref'd per-test timer). Node 24's
+  runner does not cancel them, so check on Node 22.
 - `combatArena`/defense `prepare` use `summon`, which `eval/fixtures.ts isIdempotentFixture` would reject; the
   live catalogue test only checks arena commands for `~`/`^` (prepare is not checked).
 - `waitForBots` counts any historical `system.bot-connected`, so a bot that connected and then dropped still

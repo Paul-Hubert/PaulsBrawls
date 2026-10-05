@@ -76,7 +76,8 @@ npm run rebuild-stats  # rebuild derived views from the journal by replay (must 
 ```
 
 - Test runner is **`node:test` via tsx**, NOT ava (v1 used ava; Eden starts clean). Node `>=22` (machine runs 24).
-- **`npm test` / `npm run check` fail on a clean checkout** until `eden/providers.json` exists (copy `providers.example.json`): `tests/live-tests-catalogue.test.ts` calls `baseConfig` → `loadProviders`, which throws without it.
+- `npm test` / `npm run check` pass on a clean checkout: `tests/live-tests-catalogue.test.ts` validates against the committed `providers.example.json`. Only `npm run live-test` needs the gitignored `eden/providers.json`.
+- A test that awaits a promise only `unref()`'d timers can resolve must call `holdEventLoopPerTest()` (`eden/tests/fakes/keep-alive.ts`), or Node 22's runner cancels it and every later test in the file (R73).
 - A direct boot (`tsx src/main.ts`) sets `spawnBots:true` + `installProcessGuards:true`; `start()` called from tests defaults both **false**, so tests never connect to a server. The pm2 supervision of the design (D-08) is not in the repo: `ecosystem.config.cjs` is gitignored and absent; `start.ps1` is just `npx tsx src/main.ts eden.json`.
 - The LLM key is read from `process.env.OPENAI_API_KEY` and sent only to the remote (https) provider — never written to a config file or the journal.
 
@@ -353,8 +354,8 @@ run by `npm run check`) — imports run **strictly downward**, an upward import 
 
 A **real server + real LLM + real mineflayer** regression net — distinct from [eden/eval/](eden/eval/), which
 is only a dry run. NOT in `npm run check` (needs a server + paid key, non-deterministic); only the harness
-*logic* is checked there (typed/lint-clean + `tests/live-tests-catalogue.test.ts` validates structure, and needs
-`eden/providers.json` to exist).
+*logic* is checked there (typed/lint-clean + `tests/live-tests-catalogue.test.ts` validates structure against the committed
+`providers.example.json`).
 
 - `npm run live-test [name]` — process-isolated (each scenario in a killable child; the parent hard-kills a wedge from its own healthy event loop). Evidence under `live-tests/.runs/<scenario>-<ts>/` (gitignored): `eden.db`, `llm/*.json`, `journal-report.txt`, `result.json`.
 - **Three scenarios** (lowest real-mineflayer risk first): `farm-wheat` (crop break + drop pickup — the end-to-end prover, reaches `skill.admit`), `craft-wooden-tools` (`recipesFor`/`craft` + crafting-table windows), `cooperative-mob-defense` (`pvp.attack` + armor + multi-villager scheduling).
