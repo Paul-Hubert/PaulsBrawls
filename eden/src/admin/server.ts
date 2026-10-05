@@ -346,6 +346,11 @@ function matchParam(path: string, prefix: string, suffix?: string): string | und
   return rest.length > 0 && !rest.includes('/') ? decodeURIComponent(rest) : undefined;
 }
 
+/** GET /journal returns at most this many events when the request names no `limit` (the most recent ones). */
+export const JOURNAL_DEFAULT_LIMIT = 1000;
+/** …and never more than this many, whatever `limit` asks for. */
+export const JOURNAL_MAX_LIMIT = 10_000;
+
 function parseJournalQuery(url: URL): JournalQuery {
   const q: JournalQuery = {};
   const kinds = parseList(url.searchParams.get('kinds'));
@@ -360,8 +365,10 @@ function parseJournalQuery(url: URL): JournalQuery {
   if (since) q.since = Number(since);
   const until = url.searchParams.get('until');
   if (until) q.until = Number(until);
-  const limit = url.searchParams.get('limit');
-  if (limit) q.limit = Number(limit);
+  // Bug #17: an unbounded GET /journal read (and serialized) the whole table on one request. Default to the most
+  // recent JOURNAL_DEFAULT_LIMIT events; an explicit limit is clamped to [1, JOURNAL_MAX_LIMIT].
+  const limit = Number(url.searchParams.get('limit'));
+  q.limit = Number.isFinite(limit) && limit >= 1 ? Math.min(Math.floor(limit), JOURNAL_MAX_LIMIT) : JOURNAL_DEFAULT_LIMIT;
   const order = url.searchParams.get('order');
   if (order === 'desc' || order === 'asc') q.order = order;
   return q;

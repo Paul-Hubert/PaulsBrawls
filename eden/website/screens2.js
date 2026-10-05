@@ -181,7 +181,7 @@
       '</div>';
       return;
     }
-    API.getJournal({ ref: id, order: 'asc' }).then(function (events) {
+    API.getJournal({ ref: id, order: 'asc', limit: 10000 }).then(function (events) {
       if (!events.length) { main.innerHTML = '<div class="screen"><div class="empty">No events for ref ' + U.esc(id) + '</div></div>'; return; }
 
       // derive summary

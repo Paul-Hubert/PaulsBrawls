@@ -35,7 +35,7 @@ host runs with `serveWeb` (default on a real boot).
 |---|---|---|---|---|
 | `/status` | — | `{ uptimeMs, uptime (s), botsConnected, totalBots (= villagers + 1), currentRuns: 0, queueDepth, paused, budgetSpend: 0, budgetCap: 0, budgetHistory: [] }` | — | `getStatus` 288-300 (`queueDepth`/`paused` from `LlmScheduler`; 0/false when God off) |
 | `/kinds` | — | `{ kinds: [{ kind, doc }] }` (all 42 registered kinds) | — | `describeKinds()` |
-| `/journal` | `kinds` (comma list, exact match), `actor`, `id`, `ref`, `since`, `until` (epoch ms), `limit`, `order=asc｜desc` | `{ events: JournalEvent[] }` | — | `journal.query` (see [journal-and-views.md](journal-and-views.md)) |
+| `/journal` | `kinds` (comma list, exact match), `actor`, `id`, `ref`, `since`, `until` (epoch ms), `limit` (default **1000**, clamped to 1–**10000**; the most recent N), `order=asc｜desc` | `{ events: JournalEvent[] }` | — | `journal.query` (see [journal-and-views.md](journal-and-views.md)) |
 | `/villagers` | — | `{ villagers: VillagerSummary[] }` | — | `villagerSummary` 719-766 |
 | `/villagers/:name` | — | `VillagerSummary` | `404 {error:"no villager <n>"}` (not in `config.villagers`) | same |
 | `/skills` | — | `{ skills: SkillListItem[] }` (live, non-archived library skills; `[]` when God off) | — | 306-319 |
@@ -143,7 +143,9 @@ reply and shows `[villagers] <message>` in chat. `edenAdminUrl` defaults to `htt
 
 - No authentication and no rate limits; the security boundary is the loopback bind only.
 - Non-POST methods are treated as GET (e.g. `DELETE /status` returns status).
-- `GET /journal` without `limit` returns the whole table.
+- ~~`GET /journal` without `limit` returns the whole table.~~ **Fixed (bug #17):** the admin always passes a limit —
+  `JOURNAL_DEFAULT_LIMIT` (1000) when none or a junk value is given, an explicit one clamped to `JOURNAL_MAX_LIMIT`
+  (10000). The dashboard's rollout replay asks `limit=10000` (`website/screens2.js`).
 - `/status` `currentRuns`, `budgetSpend`, `budgetCap`, `budgetHistory` are hardcoded zeros/empty; `totalBots` counts
   the avatar.
 - ~~`POST /skills/:name/quarantine` journals before knowing whether the skill exists, and the library journals a

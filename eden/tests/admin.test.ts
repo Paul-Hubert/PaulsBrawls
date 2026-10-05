@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { WebSocket } from 'ws';
 
-import { AdminServer } from '../src/admin/server';
+import { AdminServer, JOURNAL_DEFAULT_LIMIT, JOURNAL_MAX_LIMIT } from '../src/admin/server';
 import { MemoryJournal } from './fakes/memory-journal';
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -57,6 +57,26 @@ test('GET /journal filters by kind/actor/ref/limit', async (t) => {
   const limited = await getJson(`http://127.0.0.1:${port}/journal?limit=1`);
   assert.equal(limited.events.length, 1);
   assert.equal(limited.events[0].payload.message, 'b'); // most recent
+});
+
+// Bug #17: GET /journal without a limit used to read + serialize the WHOLE table in one request.
+test('GET /journal is capped: default JOURNAL_DEFAULT_LIMIT most-recent events, explicit limits clamped to the max', async (t) => {
+  const journal = new MemoryJournal();
+  const admin = new AdminServer({ port: 0, journal });
+  const { port } = await admin.start();
+  t.after(() => admin.stop());
+  for (let i = 0; i < JOURNAL_DEFAULT_LIMIT + 5; i++) journal.append('engine', 'system.error', { message: `m${i}` });
+
+  const dflt = await getJson(`http://127.0.0.1:${port}/journal`);
+  assert.equal(dflt.events.length, JOURNAL_DEFAULT_LIMIT);
+  assert.equal(dflt.events[0].payload.message, 'm5', 'the cap keeps the most recent events, still chronological');
+  const huge = await getJson(`http://127.0.0.1:${port}/journal?limit=999999999`);
+  assert.equal(huge.events.length, JOURNAL_DEFAULT_LIMIT + 5, 'below the max cap, an explicit limit is honoured');
+  for (let i = JOURNAL_DEFAULT_LIMIT + 5; i < JOURNAL_MAX_LIMIT + 5; i++) journal.append('engine', 'system.error', { message: `m${i}` });
+  const clamped = await getJson(`http://127.0.0.1:${port}/journal?limit=999999999`);
+  assert.equal(clamped.events.length, JOURNAL_MAX_LIMIT, 'an explicit limit above the max is clamped');
+  const junk = await getJson(`http://127.0.0.1:${port}/journal?limit=abc`);
+  assert.equal(junk.events.length, JOURNAL_DEFAULT_LIMIT, 'a junk limit falls back to the default');
 });
 
 test('GET /journal?order=desc returns newest-first — the dashboard live-feed order', async (t) => {
