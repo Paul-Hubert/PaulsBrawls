@@ -268,8 +268,8 @@ export class Orchestrator {
   /**
    * Direct intervention — divine stage-setting via the avatar. Runs a divine skill (spawn mobs, clear
    * rain, deliver tools), journals god.appearance, and FLAGS divineAssisted for the task so the critic
-   * voids any success the intervention itself achieved (D-12 voidDivineOverreach). Never does the
-   * villager's task. Returns whether the action succeeded (false if the avatar is down — best-effort).
+   * voids any success the intervention itself achieved (D-12 voidDivineOverreach) — only when the action succeeded.
+   * Never does the villager's task. Returns whether the action succeeded (false if the avatar is down — best-effort).
    */
   async intervene(opts: { villager: string; taskId?: string; action: string; args?: object }, body: DivineActor): Promise<boolean> {
     let ok = false;
@@ -278,7 +278,9 @@ export class Orchestrator {
     } catch {
       ok = false; // theatrics fail softly — the loop never depends on the body
     }
-    if (opts.taskId !== undefined) this.divineAssistedTasks.add(opts.taskId);
+    // Only a successful action staged anything. Flagging a failed one (avatar offline, refused action) made the critic
+    // void every success of the rollout, so it burned its retries without converging (review fix).
+    if (ok && opts.taskId !== undefined) this.divineAssistedTasks.add(opts.taskId);
     this.journal.append('god:orchestrator', 'god.appearance', { villager: opts.villager, action: opts.action, ok }, opts.taskId !== undefined ? { taskId: opts.taskId } : {});
     return ok;
   }

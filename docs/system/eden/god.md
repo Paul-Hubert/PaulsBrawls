@@ -189,7 +189,7 @@ Sole writer of `state.directivesOpen`.
 |---|---|---|
 | `closeDirectivesForTask(taskId, reason)` (`:306`) | close all with matching `taskRef`; journal `god.directive-closed` | coordinator (`completed` / `expired`) |
 | `expireStale()` (`:316`) | close directives with `expiresAt <= now` | none |
-| `intervene({villager, taskId?, action, args?}, body: DivineActor)` (`:274-284`) | run `body.runAction`, soft-fail, add `taskId` to `divineAssistedTasks` (even when the action failed), journal `god.appearance` | `dispatch`, on an `intervene` tool call (`:178-188`) |
+| `intervene({villager, taskId?, action, args?}, body: DivineActor)` (`:274-284`) | run `body.runAction`, soft-fail, add `taskId` to `divineAssistedTasks` only when the action succeeded (review fix: a failed one used to flag too, voiding every success of a rollout that could then never converge), journal `god.appearance` | `dispatch`, on an `intervene` tool call (`:178-188`) |
 | `wasDivinelyAssisted(taskId)` / `clearDivineAssist(taskId)` (`:287-294`) | flag read by the critic / cleared on close | coordinator |
 | `reportToGod({villager, text})` (`:297-303`) | append `objection (<ISO>): text` to dossier notes (cap 40) — no journal event | none (the brain collects `reportsToGod` but the coordinator ignores them) |
 

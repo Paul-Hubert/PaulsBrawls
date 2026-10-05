@@ -201,7 +201,8 @@ test('M4-2 (report_to_god): an objection journals + is noted in the dossier', as
 
 test('M4-2 (intervene soft-fail): a divine action that THROWS is caught — ok:false, the loop never depends on the body', async () => {
   // Theatrics are never a dependency (03): if the avatar is down, body.runAction throws; intervene must
-  // swallow it, journal ok:false, and STILL flag divineAssisted (the stage-set was attempted for this task).
+  // swallow it and journal ok:false. Review change: it no longer flags divineAssisted — nothing was staged, and the
+  // flag made the critic void every success of the rollout, so it could never converge while the avatar was down.
   const h = await harness([]);
   try {
     const downBody = {
@@ -211,7 +212,7 @@ test('M4-2 (intervene soft-fail): a divine action that THROWS is caught — ok:f
     };
     const ok = await h.orch.intervene({ villager: 'Firmin', taskId: 'task-9', action: 'set-weather', args: { clear: true } }, downBody);
     assert.equal(ok, false, 'a thrown body action fails soft (never propagates)');
-    assert.equal(h.orch.wasDivinelyAssisted('task-9'), true, 'the task is still flagged divineAssisted');
+    assert.equal(h.orch.wasDivinelyAssisted('task-9'), false, 'a failed intervention staged nothing — no flag');
     const ev = h.journal.query({ kinds: ['god.appearance'] });
     assert.equal(ev.length, 1);
     assert.equal((ev[0]!.payload as { ok: boolean }).ok, false, 'journaled as a failed appearance');
