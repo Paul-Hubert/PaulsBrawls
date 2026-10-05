@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 
 import net.fabricmc.fabric.api.entity.event.v1.EntityElytraEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.component.DataComponentTypes;
@@ -63,7 +64,16 @@ public class FlagManager {
                 updateGlow(player, hasFlag);
             }
         });
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> GLOW.forget(handler.getPlayer().getUuid()));
+        // Vanilla saves the glowing flag with the player. Clear a glow the mod owns before that save (DISCONNECT fires
+        // before PlayerManager.remove saves; SERVER_STOPPING before saveAllPlayerData), or it comes back unowned.
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+            if (GLOW.forget(handler.getPlayer().getUuid())) handler.getPlayer().setGlowing(false);
+        });
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            for (var player : server.getPlayerManager().getPlayerList()) {
+                if (GLOW.forget(player.getUuid())) player.setGlowing(false);
+            }
+        });
     }
 
     /** The first Flag the player carries, or null. */

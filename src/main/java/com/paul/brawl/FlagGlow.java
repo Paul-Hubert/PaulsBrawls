@@ -26,9 +26,13 @@ public final class FlagGlow {
         return Action.NONE;
     }
 
-    /** The player left: forget them (their glow is not ours to manage on rejoin). */
-    public synchronized void forget(UUID player) {
-        ours.remove(player);
+    /**
+     * The player is leaving (or the server stopping): forget them, and say whether the mod owned their glow — the
+     * caller must then clear it BEFORE the player is saved, because vanilla persists the flag ("Glowing" NBT) and a
+     * rejoining player's glow would no longer be ours to clear (a permanent glow).
+     */
+    public synchronized boolean forget(UUID player) {
+        return ours.remove(player);
     }
 
     /** True if the name marks a CTF flag banner (case-sensitive substring, as before). */

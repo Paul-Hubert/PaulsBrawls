@@ -31,11 +31,16 @@ class FlagGlowTest {
     }
 
     @Test
-    void forgetDropsOwnership() {
+    void forgetReportsOwnershipSoTheCallerClearsTheGlowBeforeTheSave() {
+        // Review fix: vanilla persists "Glowing". forget() used to return nothing, so a Flag carrier who logged out
+        // came back glowing with no owner, and the glow could never be cleared. The caller now clears an owned glow.
         FlagGlow g = new FlagGlow();
         g.update(alice, true, false);
-        g.forget(alice);
-        assertEquals(FlagGlow.Action.NONE, g.update(alice, false, true));
+        assertTrue(g.forget(alice), "the mod owned this glow — the caller must clear it before the player is saved");
+        assertFalse(g.forget(alice), "forgotten: nothing left to clear");
+        assertEquals(FlagGlow.Action.NONE, g.update(alice, false, true), "an unowned glow is still never cleared");
+        UUID bob = UUID.randomUUID();
+        assertFalse(g.forget(bob), "never ours: leave it alone");
     }
 
     @Test

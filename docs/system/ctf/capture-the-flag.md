@@ -25,7 +25,7 @@ are left to players/command blocks. Everything lives in `FlagManager.java` (with
 |---|---|---|---|
 | 1 | `banElytra()` | `EntityElytraEvents.ALLOW` | `:36-45` |
 | 2 | `dropOnHit()` | `ServerLivingEntityEvents.ALLOW_DAMAGE` | `:48-56` |
-| 3 | `glowFlagholders()` | `ServerTickEvents.START_WORLD_TICK` + `ServerPlayConnectionEvents.DISCONNECT` | `:59-67` |
+| 3 | `glowFlagholders()` | `ServerTickEvents.START_WORLD_TICK` + `ServerPlayConnectionEvents.DISCONNECT` + `ServerLifecycleEvents.SERVER_STOPPING` | `:59-67` |
 
 No commands, config or persistence. The only state is the in-memory `FlagGlow` set of players whose glow the mod
 turned on (forgotten on disconnect).
@@ -99,6 +99,10 @@ named `server` but is a `ServerWorld`), for each player in that world:
 | no | — | yes | `setGlowing(false)`, forget the player |
 | no | — | no | nothing |
 
+- Leaving: vanilla saves the glowing flag with the player (`Glowing` NBT), so on `DISCONNECT` (before the player is
+  saved) and on `SERVER_STOPPING` (before `saveAllPlayerData`) the mod clears a glow it owns. Otherwise a Flag carrier
+  who logged out came back glowing with no owner, and the glow could never be cleared (review fix). A hard crash skips
+  both hooks; the glow then persists from the last autosave.
 - Cost: one 41-slot scan per player per tick.
 - Bug #11: the glow used to be **forced every tick** (`setGlowing(false)` on every player without a Flag), clobbering
   `/data merge entity … {Glowing:1b}` and similar. Now only a glow the mod set is ever cleared.
