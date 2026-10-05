@@ -3,9 +3,9 @@ id: eden.types-and-contracts
 title: Eden shared types (layer 0) and the dependency law
 system: eden
 summary: Every exported type/interface/enum in eden/src/types/, the Inbox and Social seams that decouple layer-3 actors, and the dependency law exactly as .dependency-cruiser.cjs enforces it.
-tags: [eden, types, contracts, interfaces, enums, Bot, RunReport, Task, Verdict, EdenEvent, Subscription, Inbox, MemoryWriter, Conversant, dependency-cruiser, layers, dependency-law]
-sources: [eden/src/types/index.ts, eden/src/types/enums.ts, eden/src/types/bot.ts, eden/src/types/skill.ts, eden/src/types/task.ts, eden/src/types/events.ts, eden/src/types/journal.ts, eden/src/types/inbox.ts, eden/src/types/memory.ts, eden/src/types/social.ts, eden/.dependency-cruiser.cjs, eden/package.json, eden/src/main.ts, eden/src/villagers/inbox.ts, eden/src/villagers/memory.ts, eden/src/social/conversation.ts, eden/src/god/god.ts, eden/src/god/orchestrator.ts, eden/src/journal/kinds.ts, eden/tests/types.test.ts, CLAUDE.md, eden/CLAUDE.md, docs/11-class-model.md]
-verified_at: 4a8081f
+tags: [eden, types, contracts, interfaces, enums, Bot, RunReport, Task, Verdict, EdenEvent, Subscription, Inbox, MemoryWriter, Conversant, TradeDesk, ConversationDesk, dependency-cruiser, layers, dependency-law]
+sources: [eden/src/types/index.ts, eden/src/types/enums.ts, eden/src/types/bot.ts, eden/src/types/skill.ts, eden/src/types/task.ts, eden/src/types/events.ts, eden/src/types/journal.ts, eden/src/types/inbox.ts, eden/src/types/memory.ts, eden/src/types/social.ts, eden/.dependency-cruiser.cjs, eden/package.json, eden/src/main.ts, eden/src/villagers/inbox.ts, eden/src/villagers/memory.ts, eden/src/social/conversation.ts, eden/src/social/trade.ts, eden/src/villagers/tools.ts, eden/src/villagers/conversation-turn.ts, eden/src/god/god.ts, eden/src/god/orchestrator.ts, eden/src/journal/kinds.ts, eden/tests/types.test.ts, CLAUDE.md, eden/CLAUDE.md, docs/11-class-model.md]
+verified_at: 98cb908
 ---
 
 # Eden shared types (layer 0) and the dependency law
@@ -13,8 +13,8 @@ verified_at: 4a8081f
 **TL;DR.** `eden/src/types/` is layer 0: pure interfaces, unions and four `as const` enum arrays, re-exported by the
 barrel `types/index.ts`, importing nothing outside `types/`. It defines the cross-module contracts — the narrowed
 mineflayer `Bot` seam, skills/RunReport, God's task/verdict/directive model, the closed `EdenEvent` union and
-subscriptions, journal rows, and the two decoupling seams (`Inbox` for God→villager, `MemoryWriter`/`Conversant` for
-social→villager). The dependency law is enforced by 13 `forbidden` rules in `eden/.dependency-cruiser.cjs`, run by
+subscriptions, journal rows, and the decoupling seams (`Inbox` for God→villager; `MemoryWriter`/`Conversant`/`SpeakFn`
+for social→villager; `TradeDesk`/`ConversationDesk` for villager→social). The dependency law is enforced by 13 `forbidden` rules in `eden/.dependency-cruiser.cjs`, run by
 `npm run depcruise` inside `npm run check`.
 
 ## File map
@@ -30,7 +30,7 @@ social→villager). The dependency law is enforced by 13 `forbidden` rules in `e
 | `types/journal.ts` | `Refs`, `JournalEvent`, `JournalQuery` |
 | `types/inbox.ts` | `InboxMessage`, `Inbox` |
 | `types/memory.ts` | `MemoryEntry`, `Relation` |
-| `types/social.ts` | `TradeItem`, `MemorySeed`, `MemoryWriter`, `Conversant` |
+| `types/social.ts` | `TradeItem`, `MemorySeed`, `MemoryWriter`, `Conversant`, `TradeOffer`, `SettlementResult`, `PendingTrade`, `TradeDesk`, `LeaveDecision`, `SpeakResult`, `TranscriptLine`, `SpeakFn`, `ConversationDesk` |
 
 Some modules import `types/bot` directly rather than the barrel (`eden/src/bots/signals.ts:24`, `eden/src/villagers/events.ts:20`,
 `eden/src/villagers/reactivity.ts:17`).
@@ -70,7 +70,7 @@ the test `FakeBot` satisfy. No `any`; listener args are `unknown[]`.
 | `Bot` (extends `EmitterLike`) | `username`, `entity: {position} \| null`, `game?.dimension`, `health?`, `food?`, `time?.timeOfDay`, `inventory.items()`, `heldItem?`, `currentWindow`, `_client`, plugins `pathfinder?/pvp?/collectBlock?/autoEat?/armorManager?`, `registry?`; methods `chat, closeWindow, blockAt, openContainer, dig, loadPlugin, quit` | the only bot type anything outside the pool sees (`eden/src/types/bot.ts:114-149`) |
 
 Things the seam does **not** expose (e.g. `bot.entities`, `bot.findBlock`) are reached via localized casts
-(e.g. `eden/src/bots/signals.ts:92-94`); skill code receives the real bot object regardless.
+(e.g. `eden/src/bots/signals.ts:165`, `:174-176`); skill code receives the real bot object regardless.
 
 ## Skills and runs (`types/skill.ts`)
 
@@ -100,7 +100,7 @@ Things the seam does **not** expose (e.g. `bot.entities`, `bot.findBlock`) are r
 | `TaskSuggestion` | `goal, successCriteria?, assignee?, parent?, check?` | verdict follow-up (curriculum); `check` per R72 |
 | `Directive` | `id, to, goal, reason, priority, taskRef?, expiresAt?, standing?` | data, not code; delivered via inbox |
 | `CriticTicket` | `id, source: 'rollout'\|'tripwire'\|'plea'\|'second-opinion', runReportRef, taskRef?, filedAt` | |
-| `Verdict` | `ticketId, success, score?, critique, libraryAction: 'admit'\|'keep-draft'\|'quarantine'\|'archive'\|'none', followUp?: DirectiveSuggestion\|TaskSuggestion, praise?, blocked?` | `blocked` (R72) implies `success:false`, `libraryAction:'none'`; host distinguishes follow-ups with `'to' in fu` (`eden/src/main.ts:994`) |
+| `Verdict` | `ticketId, success, score?, critique, libraryAction: 'admit'\|'keep-draft'\|'quarantine'\|'archive'\|'none', followUp?: DirectiveSuggestion\|TaskSuggestion, praise?, blocked?` | `blocked` (R72) implies `success:false`, `libraryAction:'none'`; host distinguishes follow-ups with `'to' in fu` (`eden/src/main.ts:1350`) |
 | `Rollout` | `id, taskId, villager, attempt, draftVersions[], critiqueChain[], open` | one draft→run→verdict→revise attempt |
 | `VerdictRef` | `verdictId, at, success` | dossier back-reference |
 | `Competence` | `Record<tag, {runs, successes}>` | |
@@ -115,8 +115,8 @@ Things the seam does **not** expose (e.g. `bot.entities`, `bot.findBlock`) are r
 | `hurt` | `damage: number`, `byEntity?: string` |
 | `entity-spotted` | `entity: string`, `distance: number` |
 | `entity-lost` | `entity: string` |
-| `player-chat` | `player: string`, `text: string` |
-| `villager-chat` | `villager: string`, `text: string` |
+| `player-chat` | `player: string`, `text: string`, `distance?: number` |
+| `villager-chat` | `villager: string`, `text: string`, `distance?: number` |
 | `inbox` | — |
 | `item-received` | `item: string`, `count: number` |
 | `health-low` | `health: number` |
@@ -132,7 +132,7 @@ Things the seam does **not** expose (e.g. `bot.entities`, `bot.findBlock`) are r
 | `EventType` | `EdenEvent['type']` | a subscription's `on` |
 | `Envelope` | `{at, villager, event}` | what routers carry |
 | `Filter` | `within?: number, entityKind?: string, nameMatches?: string, timeOfDay?: 'day'\|'night'\|'dawn'\|'dusk', healthBelow?, foodBelow?, notWhileRunning?: string[]` | declarative only (P5), AND-composed |
-| `ArgTemplate` | `Record<string, unknown>` | `"$event.<path>"` strings resolve at fire time |
+| `ArgTemplate` | `Record<string, unknown>` | `"$event.<path>"` (and, since B3.6, host-scoped roots such as `"$home.x"`) resolve at fire time |
 | `SkillHandler` | `{kind:'skill', name, args}` | zero-token reflex |
 | `DeliberateHandler` | `{kind:'deliberate', hint, priority?: Priority}` | LLM wake-up |
 | `SubscriptionHandler` | `SkillHandler \| DeliberateHandler` | |
@@ -162,12 +162,15 @@ concrete instances `main.ts` wires.
 
 ```ts
 interface InboxMessage { from: 'god' | 'villager'; kind: 'directive' | 'critique' | 'tell'; payload: object; at: number }
-interface Inbox { deliver(m: InboxMessage): void; drain(): InboxMessage[] }
+interface Inbox { deliver(m: InboxMessage, actor?: string): void; drain(): InboxMessage[] }
 ```
 
-- Concrete: `VillagerInbox` (`eden/src/villagers/inbox.ts:13`) — journals `inbox.delivered` first, FIFO `drain`, plus
-  a non-interface `depth()` that main.ts duck-types for admin (`eden/src/main.ts:723`).
-- Wiring: `inboxes = new Map<string, Inbox>` (one per villager, `eden/src/main.ts:554`) handed to `GodService` and
+- `actor` (default `engine`) names who spoke on the single `inbox.delivered` row, e.g. `player:<name>` for an admin
+  tell (bug #17, `eden/src/types/inbox.ts:13-18`).
+- Concrete: `VillagerInbox` (`eden/src/villagers/inbox.ts:13`) — journals `inbox.delivered` first, then calls an optional
+  `onDeliver` hook (D-17), FIFO `drain`, plus non-interface `peek()` and `depth()` that main.ts duck-types
+  (`eden/src/main.ts:1039-1041`, `:1067`).
+- Wiring: `inboxes = new Map<string, Inbox>` (one per villager, `eden/src/main.ts:631-636`) handed to `GodService` and
   `Orchestrator`, which hold only the interface (`eden/src/god/god.ts:16`, `eden/src/god/orchestrator.ts:28`).
 - Producers/consumer: see the Inbox section of [villager-runtime.md](villager-runtime.md).
 
@@ -178,7 +181,11 @@ interface Inbox { deliver(m: InboxMessage): void; drain(): InboxMessage[] }
 | `TradeItem` | `{item, count}` — `coin` aliases `paulsbrawls:coin` at settlement | `social/trade.ts`, `journal/kinds.ts`, `views/` |
 | `MemorySeed` | `{kind, text, tags?, importance?}` | input to `remember` |
 | `MemoryWriter` | `readonly villager; remember(seed): void; moveRelation(other, delta, note): Relation` | implemented by `VillagerMemory` (`eden/src/villagers/memory.ts:91`); consumed by `eden/src/social/conversation.ts:18` |
-| `Conversant` | `readonly name; readonly memory: MemoryWriter; sayInGame(line): void; playerInEarshot(): boolean` | consumed by `social/conversation.ts`; **no concrete instance is built in `main.ts`** at this commit |
+| `Conversant` | `readonly name; readonly memory: MemoryWriter; sayInGame(line): void; playerInEarshot(): boolean` | built per live villager by `main.ts`'s `conversantFor` (`eden/src/main.ts:694-710`); consumed by `social/conversation.ts` |
+| `TradeOffer` / `PendingTrade` / `SettlementResult` | `{from, to, give, want}` / `{id, offer, expiresAt}` / `{ok, reason?}` | `social/trade.ts` |
+| `TradeDesk` | `propose(offer)`, `answer(id, by, accept): Promise<SettlementResult>`, `pendingFor(villager)` — never throw | implemented by `TradeBook`; consumed by the villager trade tools (`eden/src/villagers/tools.ts:420-459`) |
+| `LeaveDecision` / `SpeakResult` / `TranscriptLine` / `SpeakFn` | `{opinion, note, headline}` / `{say}\|{leave}` / `{from, text}` / `(transcript) => Promise<SpeakResult>` | D-18 turn types: `villagers/conversation-turn.ts` produces turns, `social/conversation.ts` runs them |
+| `ConversationDesk` | `say(v, text)`, `tell(from, to, text)`, `start(initiator, partner, topic)` — named French refusals, never throw | implemented by `ConversationBook` (`eden/src/social/conversation.ts:261`); consumed by the speech tools (`eden/src/villagers/tools.ts:392-417`) |
 
 ## The dependency law (`eden/.dependency-cruiser.cjs`)
 
@@ -227,7 +234,7 @@ root      main.ts (composition root, imports anything)
 - `main.ts` may import `admin/` (rule 12 exempts it) but **not** `cli/` (rule 13 exempts only `cli/` itself) —
   `cli/rebuild-stats.ts` is a standalone entry point.
 - To cross between layer-3 actors, add an interface to `types/` and inject the concrete instance from `main.ts`
-  (the Inbox / MemoryWriter / Conversant pattern). Code that needs both `god/` and `villagers/` (e.g. the
+  (the Inbox / MemoryWriter / Conversant / TradeDesk / ConversationDesk pattern). Code that needs both `god/` and `villagers/` (e.g. the
   `RolloutCoordinator`, `VillageLoop`) lives in `main.ts`.
 
 ## Gotchas & known issues
@@ -239,11 +246,14 @@ root      main.ts (composition root, imports anything)
 - `docs/04`'s `EdenEvent` sketch differs from the code: `hurt.attacker` → `byEntity`; `player-chat`/`villager-chat`
   use `player`/`villager` not `from`; `entity-spotted` carries `distance`; `inbox` has no fields; `new-day` has `day`;
   `run-finished` is `{skill, ok}` not a report ref; `block-broken-nearby` has no `by`; `died` has `byEntity?`.
-- `InboxMessage.from` has no `admin`/`player` member, so the admin prompt route labels its tell `from:'villager'`.
+- `InboxMessage.from` has no `admin`/`player` member, so the admin prompt route labels its tell `from:'villager'`
+  (the journal row's `actor` carries the real speaker).
 - Several types are declared but unused outside `types/` (`DirectiveSuggestion` as a named import, `VerdictRef`/
-  `Competence` only via `Dossier`, the runtime arrays `TIERS`/`SKILL_STATUSES`/`ABORT_CAUSES` only in tests).
+  `Competence` only via `Dossier`, the runtime arrays `TIERS`/`SKILL_STATUSES`/`ABORT_CAUSES`/`PRIORITIES` only in tests;
+  `eden/src/god/orchestrator.ts:67` keeps its own copy of the priorities list instead of importing `PRIORITIES`).
 - Adding an `EdenEvent` variant changes a frozen contract: update `types/events.ts`, add an emitter row in
-  `villagers/events.ts`, give it a live source in `bots/signals.ts`, and docs (S8).
+  `villagers/events.ts`, give it a live source in `bots/signals.ts`, and docs (S8). The B3.1 chat `distance?` field
+  was added this way.
 
 ## Related
 
