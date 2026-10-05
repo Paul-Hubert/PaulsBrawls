@@ -10,10 +10,11 @@ verified_at: 4a8081f
 
 # Capture the Flag - FlagManager
 
-**TL;DR** — A "Flag" is any banner item in a player's 36-slot main inventory whose displayed name
-contains the case-sensitive substring `Flag`. While a player carries one: they glow (re-evaluated every
-world tick), elytra flight is refused, and the first time they take damage the first such banner is made
-unbreakable and thrown out of their inventory. There is no team, score, base or capture logic — those
+**TL;DR** — A "Flag" is any banner item anywhere in a player's inventory — main, armour (head) or offhand — whose
+displayed name contains the case-sensitive substring `Flag`. While a player carries one: they glow (re-evaluated
+every world tick; the mod only ever clears a glow it set), elytra flight is refused, and when they take damage
+every such banner is made unbreakable and thrown out of their inventory (bug #11 fixed both the slot scan and the
+glow clobbering). There is no team, score, base or capture logic — those
 are left to players/command blocks. Everything lives in `FlagManager.java` and is registered from
 `ServerEntryPoint.java:30` (dedicated server only).
 
@@ -23,35 +24,36 @@ are left to players/command blocks. Everything lives in `FlagManager.java` and i
 |---|---|---|---|
 | 1 | `banElytra()` | `EntityElytraEvents.ALLOW` | `:29-38` |
 | 2 | `dropOnHit()` | `ServerLivingEntityEvents.ALLOW_DAMAGE` | `:41-49` |
-| 3 | `glowFlagholders()` | `ServerTickEvents.START_WORLD_TICK` | `:52-59` |
+| 3 | `glowFlagholders()` | `ServerTickEvents.START_WORLD_TICK` + `ServerPlayConnectionEvents.DISCONNECT` | `glowFlagholders` |
 
-No commands, config, persistence or state are involved.
+No commands, config or persistence. The only state is the in-memory `FlagGlow` set of players whose glow the mod
+turned on (forgotten on disconnect).
 
-## What counts as a Flag — `checkInventory(player)` (`FlagManager.java:61-72`)
+## What counts as a Flag — `findFlags(player)` / `checkInventory(player)`
 
 ```java
-for (var stack : player.getInventory().main) {
-    if (!stack.isEmpty() && stack.getItem() instanceof BannerItem) {
-        if (stack.getName().getString().contains("Flag")) return stack;
-    }
-}
-return null;
+for (var slots : List.of(inv.main, inv.armor, inv.offHand))
+    for (var stack : slots)
+        if (!stack.isEmpty() && stack.getItem() instanceof BannerItem
+                && FlagGlow.isFlagName(stack.getName().getString())) out.add(stack);
 ```
+
+`checkInventory` returns the first of `findFlags`, or `null`.
 
 | Rule | Exact behaviour |
 |---|---|
 | Item type | `instanceof net.minecraft.item.BannerItem` — any banner colour/pattern (not shields, not placed banner blocks) |
-| Name test | `stack.getName().getString().contains("Flag")` — **case-sensitive substring**: `Flag`, `Red Flag`, `Flags`, `MyFlagX` match; `flag`, `FLAG`, `Drapeau` do not |
+| Name test | `FlagGlow.isFlagName` = `name.contains("Flag")` — **case-sensitive substring** (unit-tested): `Flag`, `Red Flag`, `Flags`, `MyFlagX` match; `flag`, `FLAG`, `Drapeau` do not |
 | Name source | `getName()` = custom name (anvil/`custom_name` component) if set, otherwise the default item name resolved on the server; vanilla banner default names do not contain `Flag` |
-| Slots scanned | `PlayerInventory.main` only (hotbar + 27 storage slots). **Offhand and armor/head slots are not scanned** — a Flag held in the offhand or worn on the head is invisible to every rule |
-| Result | The **first** matching stack in slot order, or `null` |
+| Slots scanned | `main` (hotbar + 27 storage), then `armor` (a banner can be worn on the head), then `offHand` (bug #11 — only `main` used to be scanned) |
+| Result | `findFlags`: every matching stack in that order; `checkInventory`: the first, or `null` |
 | Entities | Only `ServerPlayerEntity` (real players and Mineflayer bots); mobs carrying banners are ignored |
 
-## Drop on damage — `dropOnHit()` / `dropItem()` (`FlagManager.java:41-49`, `:74-82`)
+## Drop on damage — `dropOnHit()` / `dropItem()`
 
-On every `ALLOW_DAMAGE` callback for a `ServerPlayerEntity`:
+On every `ALLOW_DAMAGE` callback for a `ServerPlayerEntity`, for **each** stack in `findFlags(player)`:
 
-1. `item = checkInventory(player)`; if null/empty, nothing happens.
+1. A null/empty stack is skipped.
 2. `item.set(DataComponentTypes.UNBREAKABLE, new UnbreakableComponent(true))` (`:79`) — marks the banner
    unbreakable (banners have no durability; this mainly tags it and shows an "Unbreakable" tooltip line).
 3. `player.dropItem(item.copyAndEmpty(), true, false)` (`:80`) — empties the slot and spawns the item
@@ -63,8 +65,7 @@ Properties of this rule:
 
 - Any damage source triggers it: melee, projectiles, fall, fire, drowning, starvation, `/damage`, etc.
   The attacker is not inspected.
-- Only **one** Flag stack drops per damage event; a player carrying two Flag stacks loses the second on
-  the next hit.
+- **Every** Flag stack drops on one damage event (it used to be one per hit).
 - The whole stack drops (banners stack to 16).
 - It runs in `ALLOW_DAMAGE`, i.e. before the damage is applied, so a hit that kills still drops the Flag
   through this path first.
@@ -82,18 +83,25 @@ starts and while it continues, so picking up a Flag mid-glide should end the gli
 > The handler is only registered on the dedicated server; the client never runs it, so a flag-carrying
 > client may briefly predict flight before the server corrects it.
 
-## Glowing — `glowFlagholders()` (`FlagManager.java:52-59`, `:84-86`)
+## Glowing — `glowFlagholders()` / `updateGlow()`
 
 On `START_WORLD_TICK` (called once per loaded world/dimension per server tick — the lambda parameter is
 named `server` but is a `ServerWorld`), for each player in that world:
-`player.setGlowing(checkInventory(player) != null)`.
+`FlagGlow.update(uuid, hasFlag, player.isGlowing())` decides (unit-tested, `FlagGlowTest`):
 
-- Cost: one 36-slot scan per player per tick.
-- The glowing flag is **forced every tick**: players without a Flag are set to `setGlowing(false)` 20
-  times a second, which overrides any other source that uses the same entity glowing flag (e.g.
-  `/data merge entity … {Glowing:1b}` on a player).
-  > ⚠ Unverified: whether the vanilla *Glowing status effect* (spectral arrows, `/effect`) shares this
-  > flag in 1.21.1 and is therefore also suppressed.
+| Has a Flag | Glowing now | Mod set it? | Action |
+|---|---|---|---|
+| yes | no | — | `setGlowing(true)`, remember the player |
+| yes | yes | yes | nothing |
+| yes | yes | no (another source) | nothing — the foreign glow is not adopted |
+| no | — | yes | `setGlowing(false)`, forget the player |
+| no | — | no | nothing |
+
+- Cost: one 41-slot scan per player per tick.
+- Bug #11: the glow used to be **forced every tick** (`setGlowing(false)` on every player without a Flag), clobbering
+  `/data merge entity … {Glowing:1b}` and similar. Now only a glow the mod set is ever cleared.
+  > ⚠ Unverified: whether the vanilla *Glowing status effect* shares the entity flag in 1.21.1 (if it does, a player
+  > who was already glowing from it when picking up a Flag is left alone, which is the intended behaviour).
 - Glow uses the player's scoreboard team colour (vanilla outline behaviour), which is how teams can be
   distinguished.
 
@@ -110,18 +118,18 @@ named `server` but is a `ServerWorld`), for each player in that world:
 | Want | Change |
 |---|---|
 | Case-insensitive / exact name | Edit the predicate at `FlagManager.java:65` |
-| Include offhand/armor | Iterate `player.getInventory().offHand` / `.armor` (or all `size()` slots) in `checkInventory` |
 | Drop only on PvP hits | In `dropOnHit`, check `source.getAttacker() instanceof PlayerEntity` before dropping |
-| Drop every Flag stack | Loop until `checkInventory` returns null |
+| Drop one Flag per hit | Use `checkInventory` instead of looping over `findFlags` in `dropOnHit` |
 
 ## Gotchas & known issues
 
-- Flag in offhand or on the head bypasses glow, elytra ban and drop (main inventory only).
+- ~~Flag in offhand or on the head bypasses glow, elytra ban and drop~~ **Fixed (bug #11).**
 - Case-sensitive substring match — "flag" is not a Flag; "Flagpole" is.
-- Environmental damage (fall, cactus, hunger) makes you drop the Flag too.
-- One stack per hit.
-- The comment above `glowFlagholders` says "ban elytra" (copy-paste, `FlagManager.java:51`).
-- Per-tick `setGlowing(false)` clobbers glowing set by other means on players.
+- Environmental damage (fall, cactus, hunger) makes you drop the Flag too (unchanged; listed in bug #11, not a
+  slot/glow defect).
+- ~~One stack per hit~~ every Flag stack drops.
+- ~~Per-tick `setGlowing(false)` clobbers glowing set by other means~~ **Fixed (bug #11).**
+- Only the decisions are unit-tested; the event wiring needs an in-game check.
 - Integrated (single-player/LAN) servers do not run `ServerEntryPoint`, so CTF is inactive there.
 
 ## Related
