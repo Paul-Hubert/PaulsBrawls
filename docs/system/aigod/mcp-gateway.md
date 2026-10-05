@@ -98,8 +98,9 @@ e.g. `ChatBotFunctions.java:307-311`, still refer to it).
 ### Threads
 
 `tools()` is invoked inside `ChatBot.doRequest`'s `supplyAsync` on an `llm-worker` virtual thread
-(`ChatBot.java:400-414`) precisely so a slow/down Node process stalls only the worker, not the server tick. Exception:
-`/mcp reload` calls `reload()` → `ensureStarted()` **synchronously on the server thread** (see Gotchas).
+(`ChatBot.java:400-414`) precisely so a slow/down Node process stalls only the worker, not the server tick. `/mcp reload` does
+the same since bug #18: it replies `MCP: rechargement en cours…` at once, runs `reload()` on `LLMConfig.sharedExecutor()`,
+and prints the status back on the server thread when the reconnect is done.
 
 ## Tool merge into the God's tool list
 
@@ -173,7 +174,7 @@ resets the backoff" is not implemented (success touches no state).
 |---|---|---|
 | `/mcp` | 0 (no `requires`) | Print `MCPGateway.status()` |
 | `/mcp status` | 0 | Same |
-| `/mcp reload` | 2 | `MCPGateway.INSTANCE.reload()` then print status |
+| `/mcp reload` | 2 | Feedback `MCP: rechargement en cours…`, then `MCPGateway.INSTANCE.reload()` on the LLM worker pool, then print status (bug #18 — it used to block the server thread for the whole handshake) |
 
 `status()` strings (`MCPGateway.java:157-165`):
 `MCP: disabled in mcp_config.properties` · `MCP: connected to <url>, N tool(s)` ·
@@ -212,18 +213,16 @@ resets the backoff" is not implemented (success touches no state).
 
 ## Gotchas & known issues
 
-- **`/mcp reload` can freeze the server tick**: it runs `ensureStarted()` (SSE handshake + `listTools()`, bounded by
-  `timeout_seconds`, default 60 s) on the command/main thread.
-- **Kill switch gap**: `/godbody off` only disables the HTTP bridge; MCP tools still drive the shared bot. To stop them
-  set `enabled=false` in `mcp_config.properties` and restart.
-- **No session gate**: a bodiless prayer (another player owns the avatar) can still call MCP movement/combat tools on the
-  shared bot.
+- ~~**`/mcp reload` can freeze the server tick**~~ **Fixed (bug #18):** the reload runs on the LLM worker pool.
+- ~~**Kill switch gap**; **no session gate**~~ **Fixed (bug #8):** `GodToolGate` refuses MCP calls while the bridge is
+  disabled (`/godbody off`) and from a bodiless prayer. The MCP client itself stays connected; set `enabled=false` in
+  `mcp_config.properties` and restart to drop it entirely.
 - **Stale catalogue**: after a disconnect the cached specs keep being advertised; calls return the "not connected" string
   until reconnect. After `/mcp reload` with the Node process down, the God has **no** MCP tools until a successful connect.
 - **Name collisions** are not detected: an MCP tool named like a Java tool would be advertised twice (provider may reject
   duplicate names) and the Java implementation would always win dispatch.
-- **Long MCP calls vs the idle watchdog**: they do not reset `GodSessionManager`'s timer (see
-  [god-body.md](god-body.md)).
+- **Long MCP calls vs the idle watchdog**: each dispatch resets the owner's timer before and after the call (bug #8);
+  a single call longer than `idleTimeoutSeconds` can still trip it (see [god-body.md](god-body.md)).
 - CLAUDE.md's failure log line `MCP gateway start FAILED` does not exist; the real line is
   `MCP gateway connect failed (...); will retry in 30s.` and the gateway retries automatically every 30 s.
 

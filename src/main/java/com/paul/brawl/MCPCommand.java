@@ -15,7 +15,7 @@ import net.minecraft.text.Text;
  *   <li>{@code /mcp} — print one-line status (permission level 0 — diagnostic).</li>
  *   <li>{@code /mcp status} — alias for {@code /mcp}.</li>
  *   <li>{@code /mcp reload} — tear down the MCP client, drop the cached spec list,
- *       reconnect now. Permission level 2 — destructive in that any in-flight
+ *       reconnect now (off the server thread; the status is printed when it is done). Permission level 2 — destructive in that any in-flight
  *       prayer's cached tool set is invalidated.</li>
  * </ul>
  *
@@ -43,8 +43,15 @@ public class MCPCommand {
                     .then(CommandManager.literal("reload")
                         .requires(source -> source.hasPermissionLevel(2))
                         .executes(ctx -> {
-                            MCPGateway.INSTANCE.reload();
-                            printStatus(ctx.getSource());
+                            // Bug #18: reload() tears down the client and re-handshakes over HTTP/SSE — on the
+                            // server thread that froze the tick for the whole connect timeout. Run it on the LLM
+                            // worker pool and report back on the server thread when it is done.
+                            ServerCommandSource source = ctx.getSource();
+                            source.sendFeedback(() -> Text.literal("MCP: rechargement en cours…"), false);
+                            LLMConfig.INSTANCE.sharedExecutor().execute(() -> {
+                                MCPGateway.INSTANCE.reload();
+                                source.getServer().execute(() -> printStatus(source));
+                            });
                             return Command.SINGLE_SUCCESS;
                         })
                     )
