@@ -26,9 +26,14 @@ function parseFrontmatter(text, file) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   if (!m) throw new Error(`${file}: missing YAML frontmatter`);
   const meta = {};
+  let listKey = null; // block-style list:  key:\n  - item
   for (const line of m[1].split(/\r?\n/)) {
+    const item = line.match(/^\s+-\s+(.+?)\s*$/);
+    if (item && listKey) { meta[listKey].push(item[1].replace(/^["']|["']$/g, '')); continue; }
     const kv = line.match(/^([a-z_]+):\s*(.*?)\s*(#.*)?$/);
+    listKey = null;
     if (!kv) continue;
+    if (kv[2] === '') { meta[kv[1]] = []; listKey = kv[1]; continue; }
     let v = kv[2];
     if (v.startsWith('[') && v.endsWith(']')) {
       v = v.slice(1, -1).split(',').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
@@ -38,6 +43,22 @@ function parseFrontmatter(text, file) {
     meta[kv[1]] = v;
   }
   return { meta, body: text.slice(m[0].length) };
+}
+
+const CITATION = /`((?:[\w.-]+\/)*[\w.-]+\.(?:java|ts|mjs|cjs|js|json|gradle|properties|md|txt|yml|ps1)):(\d+)(?:-\d+)?`/g;
+const SKIP_DIRS = new Set(['.git', 'node_modules', 'build', '.gradle', 'run', '.eden-data']);
+const byName = new Map(); // basename -> [abs paths]
+(function index(dir) {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) { if (!SKIP_DIRS.has(name)) index(p); continue; }
+    byName.set(name, [...(byName.get(name) ?? []), p]);
+  }
+})(repo);
+function resolveCitation(path) {
+  if (path.includes('/')) return existsSync(join(repo, path)) ? join(repo, path) : null;
+  const hits = byName.get(path) ?? [];
+  return hits.length === 1 ? hits[0] : null;
 }
 
 const errors = [];
@@ -62,6 +83,14 @@ for (const file of walk(here).sort()) {
     if (/^(https?:|mailto:|#)/.test(target)) continue;
     const path = target.split('#')[0].replace(/:\d+(-\d+)?$/, '');
     if (path && !existsSync(resolve(dirname(file), path))) errors.push(`${rel}: broken link '${target}'`);
+  }
+  // code citations like `eden/src/main.ts:570`, `ChatBot.java:241-247`: the file must exist (repo-relative path, or a
+  // bare file name that is unique in the repo) and the cited line must be in range
+  for (const [, path, line] of body.matchAll(CITATION)) {
+    const abs = resolveCitation(path);
+    if (!abs) { errors.push(`${rel}: cites '${path}', which is not a repo-relative path or a unique file name`); continue; }
+    const n = readFileSync(abs, 'utf8').split('\n').length;
+    if (Number(line) > n) errors.push(`${rel}: cites ${path}:${line} but the file has ${n} lines`);
   }
   const headings = [...body.matchAll(/^##\s+(.+)$/gm)].map((h) => h[1].trim());
   docs.push({

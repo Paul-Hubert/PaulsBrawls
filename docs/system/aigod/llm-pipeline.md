@@ -109,7 +109,7 @@ Order, every turn:
 | Event | Line format |
 |---|---|
 | `CHAT_MESSAGE` | `<sender> : <content>` (`:32-35`) |
-| `COMMAND_MESSAGE` (signed-message commands like `/say`, `/msg`) | `<player> command : <content>` (`:37-40`) |
+| `COMMAND_MESSAGE` (broadcast signed-message commands like `/say`, `/me`; not `/msg`, which is sent per-recipient) | `<player> command : <content>` (`:37-40`) |
 | `GAME_MESSAGE` (broadcast system text: joins, deaths, …) | `Game : <text>` (`:42-45`) |
 
 `getHistory()` joins with `"\n"` starting from `""`, so output begins with a newline (`:47-51`). Private

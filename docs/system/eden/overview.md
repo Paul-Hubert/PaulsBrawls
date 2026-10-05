@@ -161,8 +161,10 @@ constructed with `void new …` and the instances dropped (`eden/src/main.ts:570
 - `config.villagers[].persona` (from scenarios) is parsed but **never used**: the roster persona is hardcoded to
   `Tu es <name>, <role> du village. Tu parles français.` (`eden/src/main.ts:579`). The `farm` scenario's villager key
   `Harry` has a persona that says "Tu es Firmin" — irrelevant today because personas are ignored.
-- Config keys `god.gamemode`, `god.authoring`, `god.combineDesks`, `behavior.drives`, `journal.retentionDays` are
+- Config keys `god.gamemode`, `god.authoring`, `god.combineDesks`, `behavior.drives` are
   parsed but not read by any host code path (grep of `src/` outside `config.ts`/`scenario-loader.ts`).
+  `journal.retentionDays` is not even parsed: it is always the hardcoded default `7` (`eden/src/config.ts:132-133`,
+  `eden/src/config.ts:340`), and setting it in `eden.json` only draws an unknown-key warning (`eden/src/config.ts:333`).
 - `GodState` is in-memory only; nothing rehydrates tasks from the journal at boot, so the D-09 boot recovery
   (`wiring.god.recoverRollouts()`, `eden/src/main.ts:228-231`) iterates an empty task map on a real boot.
 - Trade/conversation/drives/anchors are not wired (see above), so `trade.*`, `conversation.*`, `chat.*` kinds are

@@ -143,11 +143,11 @@ The coin is the village currency simply because `paulsbrawls:coin` resolves here
 | Aspect | Eden code |
 |---|---|
 | URL | `settlement.url`, default `http://127.0.0.1:8767/trade/execute` (`eden/src/config.ts:127`, `eden/eden.example.json:64`) |
-| Method / headers | `POST`, `content-type: application/json` (`trade.ts:83-88`) |
-| **Body sent** | `{ from, to, give: TradeItem[], want: TradeItem[] }` with `coin` → `paulsbrawls:coin` (`trade.ts:74-79`, `:173-176`) |
-| Timeout | `AbortController`, 10 000 ms default (`trade.ts:66`, `:80-81`) |
-| Success | any 2xx → journal `trade.settled` (`:95-98`) |
-| Failure | non-2xx → `trade.failed` with reason `settlement HTTP <status>: <first 160 chars>`; network/timeout → `settlement could not reach …` / `settlement timed out after …` (`:89-105`) |
+| Method / headers | `POST`, `content-type: application/json` (`eden/src/social/trade.ts:83-88`) |
+| **Body sent** | `{ from, to, give: TradeItem[], want: TradeItem[] }` with `coin` → `paulsbrawls:coin` (`eden/src/social/trade.ts:74-79`, `:173-176`) |
+| Timeout | `AbortController`, 10 000 ms default (`eden/src/social/trade.ts:66`, `:80-81`) |
+| Success | any 2xx → journal `trade.settled` (`eden/src/social/trade.ts:95-98`) |
+| Failure | non-2xx → `trade.failed` with reason `settlement HTTP <status>: <first 160 chars>`; network/timeout → `settlement could not reach …` / `settlement timed out after …` (`eden/src/social/trade.ts:89-105`) |
 
 ### Contract mismatch (verified on both sides)
 
@@ -210,7 +210,7 @@ Response handling (`postScenario`, `:118-163`; `stopScenario`, `:165-193`):
 - start/restart: parse JSON; `ok` = `root.ok`; message = `root.message` or the raw body. If `ok` and
   `botNames` is an array → `activeScenarioBots` is **cleared and replaced** with those names. Feedback
   `[villagers] <message>`; unparseable → `[villagers] Eden error (HTTP <code>)`.
-- stop: `activeScenarioBots.clear()` first (even on failure), feedback `[villagers] <message|stopped>`.
+- stop: `activeScenarioBots.clear()` first (even on failure), feedback `[villagers] <message>`, or `[villagers] stopped` / `stopped (HTTP <code>)` when the body has no `message` / is unparseable.
 - Retry (`sendWithRetry`, `:210-231`): up to `MAX_RETRIES = 3` extra attempts, `RETRY_DELAY_MS = 750`,
   on any `IOException` root cause (includes `ConnectException` and `HttpTimeoutException`). After
   exhaustion: `ConnectException` → `[villagers] Eden n'est pas démarré (ou démarre encore) sur <url>.`;
@@ -220,8 +220,8 @@ Eden's side (`eden/src/admin/server.ts:268-291`, `eden/src/village-launch.ts`):
 
 | Route | Eden behaviour | Status / body |
 |---|---|---|
-| `POST /scenario/start` | journal `scenario.start`, `VillageLauncher.start` — **does not load a scenario file**; `name` must equal the scenario Eden booted with, otherwise `booted scenario is "<x>", not "<name>" — runtime scenario switching needs a reboot`; starts the boot pool; idempotent (`village already running`) | 200 / 404 `{ok,message,botNames?}`; 400 `{error:"name is required"}`; 503 if not wired |
-| `POST /scenario/restart` | stop pool, delete `<dataDir>/bots/<villager>.json` for each villager, start again with `/clear` | same |
+| `POST /scenario/start` | journal `scenario.start`, `VillageLauncher.start` — **does not load a scenario file**; if Eden booted a named scenario, `name` must equal it (a direct-`villagers` boot accepts any name), otherwise `booted scenario is "<x>", not "<name>" — runtime scenario switching needs a reboot`; starts the boot pool; idempotent (`village already running`) | 200 / 404 `{ok,message,botNames?}`; 400 `{error:"name is required"}`; 503 if not wired |
+| `POST /scenario/restart` | journal `scenario.restart`, stop village loop + pool, delete `<dataDir>/bots/<villager>.json` for each villager, start again with `/clear` | same |
 | `POST /scenario/stop` | stop village loop + pool | 200 / 500 `{ok,message}` |
 
 After a (re)start, each villager bot, ~1500 ms after spawning, **itself** chats

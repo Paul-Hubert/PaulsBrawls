@@ -86,53 +86,53 @@ A rollout replay is `GET /journal?ref=<rolloutId>` ([admin-api.md](admin-api.md)
 
 | Kind | Payload | Emitter (file:line) · actor |
 |---|---|---|
-| `system.boot` | `{ config }` (secrets redacted) | `src/main.ts:424` · engine |
-| `system.config-warning` | `{ message }` | `src/main.ts:147` · engine (config warnings); `src/admin/server.ts:298` · admin (`admin: pause|resume LLM scheduling`); `src/villagers/memory.ts:326` · villager:<n> (R32 memory quarantine) |
-| `system.bot-connected` | `{ name }` | `src/bots/pool.ts:206` · bot:<n> |
-| `system.bot-disconnected` | `{ name, reason? }` | `src/bots/pool.ts:225` · bot:<n> |
-| `system.error` | `{ message, stack? }` | `src/main.ts:1173`, `:1178` · engine (process guards); `src/villagers/events.ts:372` · villager:<n> |
-| `system.loop-lag` | `{ p99, max }` (ms, rounded) | `src/journal/lag-monitor.ts:51` · engine |
-| `vitals` | `{ name, health, food, position:[x,y,z], held, currentRun }` | `src/bots/pool.ts:265` · bot:<n> (each connected bot every `vitalsIntervalSeconds`) |
-| `world.death` | `{ name, cause? }` (cause from `death_combat_event`) | `src/bots/pool.ts:233` · bot:<n> |
-| `skill.draft` | `{ name, version, author:{kind,name?}, tier, lines }` | `src/skills/library.ts:119` · villager:<n> / god:authoring / engine |
-| `skill.admit` | `{ name, version, provenance? }` | `src/skills/library.ts:147` (admit) and `:196` (unquarantine → probation) · god:critic |
-| `skill.quarantine` | `{ name, version, reason }` | `src/skills/library.ts:178` · engine; `src/admin/server.ts:243` · admin (with `version: -1`) |
-| `skill.archive` | `{ name, version }` | `src/skills/library.ts:219` · god:critic |
-| `skill.run` | full `RunReport` `{ runId, rolloutId?, skill, version, villager, args, outcome:{ok,value?｜error,errorKind?}, aborted?, startedAt, durationMs, pulses, deepestDepth, callTree, worldBefore, worldAfter }` | `src/skills/engine.ts:406` · villager:<n> or god:body (divine) |
-| `skill.log` | `{ skill, message }` | `src/skills/engine.ts:318` · same as run |
-| `llm.call` | `{ caller, model, tier, latencyMs, promptTokens, completionTokens, finishReason, retries }` | `src/llm/client.ts:320` · `req.caller` |
-| `brain.wakeup` | `{ villager, triggers[], sections{}, totalTokens, trimmedPairs, tier }` | `src/villagers/context-pack.ts:174` · villager:<n> |
-| `brain.tool-call` | `{ villager, tool, ok }` (args not logged) | `src/villagers/brain.ts:157` · villager:<n> |
-| `brain.done` | `{ villager, summary, mood?, toolCalls }` | `src/villagers/brain.ts:187` · villager:<n> |
-| `god.ticket` | `{ source:'rollout'｜'tripwire'｜'plea'｜'second-opinion', skill?, version? }` | `src/god/god.ts:136` · god:critic |
-| `god.verdict` | `{ ticketId, success, libraryAction, score?, critique }` | `src/god/god.ts:155` · god:critic |
-| `god.appearance` | `{ villager, action, ok }` | `src/god/body.ts:65` · god:body; `src/god/orchestrator.ts:248` · god:orchestrator |
-| `god.rollout-abandoned` | `{ reason:'crash-recovery', taskId }` | `src/god/god.ts:223` · god |
-| `god.task-proposed` | `{ taskId, goal, assignee?, trigger, parent? }` | `src/god/curriculum.ts:457` · god:curriculum |
-| `god.task-closed` | `{ taskId, goal, outcome:'completed'｜'failed'｜'retired', reason? }` | `src/god/curriculum.ts:357-362` and `:421` (retired) · god:curriculum |
-| `god.directive` | `{ directiveId, to, goal, priority, superseded? }` | `src/god/orchestrator.ts:230` · god:orchestrator |
-| `god.directive-closed` | `{ directiveId, to, reason:'completed'｜'expired'｜'superseded' }` | `src/god/orchestrator.ts:203`, `:276`, `:288` · god:orchestrator |
-| `inbox.delivered` | `{ to, from, kind }` | `src/villagers/inbox.ts:23` · engine (every delivery); `src/admin/server.ts:260` · admin/player:<from> |
-| `chat.said` | `{ from, to, text }` | `src/social/conversation.ts:168` · villager:<n> |
-| `chat.heard` | `{ hearer, from, text, eavesdrop }` | `src/social/conversation.ts:185` · villager:<n> |
-| `conversation.started` | `{ id, initiator, partner, topic? }` | `src/social/conversation.ts:109` |
-| `conversation.turn` | `{ id, speaker, turn }` | `src/social/conversation.ts:140` |
-| `conversation.ended` | `{ id, by, reason:'left'｜'turn-cap'｜'deadline'｜'partner-gone', opinion?, headline? }` | `src/social/conversation.ts:154` |
-| `trade.proposed` | `{ id, from, to, give:TradeItem[], want:TradeItem[] }` | `src/social/trade.ts:157`, `:165` · villager:<from> |
-| `trade.settled` | same as proposed | `src/social/trade.ts:95` · villager:<from> |
-| `trade.failed` | `{ id, from, to, reason }` | `src/social/trade.ts:112`, `:160` · villager:<from> |
-| `subscription.created` | `{ id, villager, on, handler:'skill'｜'deliberate', source }` | `src/villagers/subscriptions.ts:85` · villager:<n> |
-| `subscription.removed` | `{ id, villager }` | `src/villagers/subscriptions.ts:102` · villager:<n> |
-| `subscription.fired` | `{ id, villager, on, outcome:'skill'｜'deliberate', target }` | `src/villagers/events.ts:390` · villager:<n> |
-| `subscription.suppressed` | `{ id, villager, on, reason }` | `src/villagers/events.ts:323` · villager:<n> |
-| `scenario.start` | `{ name, cx, cz }` | `src/admin/server.ts:278` · admin |
-| `scenario.stop` | `{}` | `src/admin/server.ts:288` · admin |
-| `scenario.restart` | `{ name, cx, cz }` | `src/admin/server.ts:280` · admin |
+| `system.boot` | `{ config }` (secrets redacted) | `eden/src/main.ts:424` · engine |
+| `system.config-warning` | `{ message }` | `eden/src/main.ts:147` · engine (config warnings); `eden/src/admin/server.ts:298` · admin (`admin: pause|resume LLM scheduling`); `eden/src/villagers/memory.ts:326` · villager:<n> (R32 memory quarantine) |
+| `system.bot-connected` | `{ name }` | `eden/src/bots/pool.ts:206` · bot:<n> |
+| `system.bot-disconnected` | `{ name, reason? }` | `eden/src/bots/pool.ts:225` · bot:<n> |
+| `system.error` | `{ message, stack? }` | `eden/src/main.ts:1173`, `:1178` · engine (process guards); `eden/src/villagers/events.ts:372` · villager:<n> |
+| `system.loop-lag` | `{ p99, max }` (ms, rounded) | `eden/src/journal/lag-monitor.ts:51` · engine |
+| `vitals` | `{ name, health, food, position:[x,y,z], held, currentRun }` | `eden/src/bots/pool.ts:265` · bot:<n> (each connected bot every `vitalsIntervalSeconds`) |
+| `world.death` | `{ name, cause? }` (cause from `death_combat_event`) | `eden/src/bots/pool.ts:233` · bot:<n> |
+| `skill.draft` | `{ name, version, author:{kind,name?}, tier, lines }` | `eden/src/skills/library.ts:119` · villager:<n> / god:authoring / engine |
+| `skill.admit` | `{ name, version, provenance? }` | `eden/src/skills/library.ts:147` (admit) and `:196` (unquarantine → probation) · god:critic |
+| `skill.quarantine` | `{ name, version, reason }` | `eden/src/skills/library.ts:178` · engine; `eden/src/admin/server.ts:243` · admin (with `version: -1`) |
+| `skill.archive` | `{ name, version }` | `eden/src/skills/library.ts:219` · god:critic |
+| `skill.run` | full `RunReport` `{ runId, rolloutId?, skill, version, villager, args, outcome:{ok,value?｜error,errorKind?}, aborted?, startedAt, durationMs, pulses, deepestDepth, callTree, worldBefore, worldAfter }` | `eden/src/skills/engine.ts:406` · villager:<n> or god:body (divine) |
+| `skill.log` | `{ skill, message }` | `eden/src/skills/engine.ts:318` · same as run |
+| `llm.call` | `{ caller, model, tier, latencyMs, promptTokens, completionTokens, finishReason, retries }` | `eden/src/llm/client.ts:320` · `req.caller` |
+| `brain.wakeup` | `{ villager, triggers[], sections{}, totalTokens, trimmedPairs, tier }` | `eden/src/villagers/context-pack.ts:174` · villager:<n> |
+| `brain.tool-call` | `{ villager, tool, ok }` (args not logged) | `eden/src/villagers/brain.ts:157` · villager:<n> |
+| `brain.done` | `{ villager, summary, mood?, toolCalls }` | `eden/src/villagers/brain.ts:187` · villager:<n> |
+| `god.ticket` | `{ source:'rollout'｜'tripwire'｜'plea'｜'second-opinion', skill?, version? }` | `eden/src/god/god.ts:136` · god:critic |
+| `god.verdict` | `{ ticketId, success, libraryAction, score?, critique }` | `eden/src/god/god.ts:155` · god:critic |
+| `god.appearance` | `{ villager, action, ok }` | `eden/src/god/body.ts:65` · god:body; `eden/src/god/orchestrator.ts:248` · god:orchestrator |
+| `god.rollout-abandoned` | `{ reason:'crash-recovery', taskId }` | `eden/src/god/god.ts:223` · god |
+| `god.task-proposed` | `{ taskId, goal, assignee?, trigger, parent? }` | `eden/src/god/curriculum.ts:457` · god:curriculum |
+| `god.task-closed` | `{ taskId, goal, outcome:'completed'｜'failed'｜'retired', reason? }` | `eden/src/god/curriculum.ts:357-362` and `:421` (retired) · god:curriculum |
+| `god.directive` | `{ directiveId, to, goal, priority, superseded? }` | `eden/src/god/orchestrator.ts:230` · god:orchestrator |
+| `god.directive-closed` | `{ directiveId, to, reason:'completed'｜'expired'｜'superseded' }` | `eden/src/god/orchestrator.ts:203`, `:276`, `:288` · god:orchestrator |
+| `inbox.delivered` | `{ to, from, kind }` | `eden/src/villagers/inbox.ts:23` · engine (every delivery); `eden/src/admin/server.ts:260` · admin/player:<from> |
+| `chat.said` | `{ from, to, text }` | `eden/src/social/conversation.ts:168` · villager:<n> |
+| `chat.heard` | `{ hearer, from, text, eavesdrop }` | `eden/src/social/conversation.ts:185` · villager:<n> |
+| `conversation.started` | `{ id, initiator, partner, topic? }` | `eden/src/social/conversation.ts:109` |
+| `conversation.turn` | `{ id, speaker, turn }` | `eden/src/social/conversation.ts:140` |
+| `conversation.ended` | `{ id, by, reason:'left'｜'turn-cap'｜'deadline'｜'partner-gone', opinion?, headline? }` | `eden/src/social/conversation.ts:154` |
+| `trade.proposed` | `{ id, from, to, give:TradeItem[], want:TradeItem[] }` | `eden/src/social/trade.ts:157`, `:165` · villager:<from> |
+| `trade.settled` | same as proposed | `eden/src/social/trade.ts:95` · villager:<from> |
+| `trade.failed` | `{ id, from, to, reason }` | `eden/src/social/trade.ts:112`, `:160` · villager:<from> |
+| `subscription.created` | `{ id, villager, on, handler:'skill'｜'deliberate', source }` | `eden/src/villagers/subscriptions.ts:85` · villager:<n> |
+| `subscription.removed` | `{ id, villager }` | `eden/src/villagers/subscriptions.ts:102` · villager:<n> |
+| `subscription.fired` | `{ id, villager, on, outcome:'skill'｜'deliberate', target }` | `eden/src/villagers/events.ts:390` · villager:<n> |
+| `subscription.suppressed` | `{ id, villager, on, reason }` | `eden/src/villagers/events.ts:323` · villager:<n> |
+| `scenario.start` | `{ name, cx, cz }` | `eden/src/admin/server.ts:278` · admin |
+| `scenario.stop` | `{}` | `eden/src/admin/server.ts:288` · admin |
+| `scenario.restart` | `{ name, cx, cz }` | `eden/src/admin/server.ts:280` · admin |
 
 (`TradeItem = { item, count }`.) Social kinds (`chat.*`, `conversation.*`, `trade.*`) have no production emitter
 path: the host never constructs `Conversation` or the trade services ([overview.md](overview.md)).
 
-`KIND_REGISTRY` (`kinds.ts:245-288`) holds a one-line `doc` per kind, enforced complete by
+`KIND_REGISTRY` (`eden/src/journal/kinds.ts:245-288`) holds a one-line `doc` per kind, enforced complete by
 `satisfies Record<JournalKind, KindDoc>`; `describeKinds()` serves it at `GET /kinds`.
 
 ### Adding a kind (S1 recipe)

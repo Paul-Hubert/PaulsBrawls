@@ -116,7 +116,7 @@ refs: { ...req.refs, llmCallId: callId }   // callId is a ULID
 ```
 Never prompt or completion bodies. Failed calls (timeout/HTTP/reset exhaustion) are **not** journaled by the client.
 
-Callers seen in code: `god:critic`, `god:curriculum`, `god:orchestrator`, `villager:<name>` (brain, `brain.ts:121`; also the memory summarizer, `memory-summarizer.ts:50`), and `god:describe` (DescriptionPass default, `skills/describe.ts:37` — not wired in production).
+Callers seen in code: `god:critic`, `god:curriculum`, `god:orchestrator`, `villager:<name>` (brain, `brain.ts:121`; also the memory summarizer, `memory-summarizer.ts:50`), and `god:describe` (DescriptionPass default, `eden/src/skills/describe.ts:37` — not wired in production).
 
 ### debugPrompts transcripts (`:336, 340-348`)
 When enabled, writes `<dataDir>/llm/<callId>.json` = `{request: <wire body>, response: <raw JSON>}` (pretty-printed). Best-effort (errors swallowed); headers are never written. Served by admin `GET /llm/:callId` via `readLlmTranscript` (`main.ts:708-717`; id must match `/^[A-Za-z0-9_-]+$/`).
@@ -163,7 +163,7 @@ Who uses which lane:
 `pause()` holds all queued and future work, including `god` and rollout-immune calls; `resume()` re-drains. Wired to admin `POST /pause` / `POST /resume` (`main.ts:388-389`). `pending()` = queued count (admin `queueDepth`). Rate-cap counting still happens while paused.
 
 ### Not routed through the scheduler
-`MemorySummarizer` (`villagers/memory-summarizer.ts:48`) and `DescriptionPass` (`skills/describe.ts:35`) call `client.chat` directly — outside `maxConcurrent` and pause.
+`MemorySummarizer` (`eden/src/villagers/memory-summarizer.ts:48`) and `DescriptionPass` (`eden/src/skills/describe.ts:35`) call `client.chat` directly — outside `maxConcurrent` and pause.
 
 ## BudgetTracker (`scheduler.ts:227-258`)
 - Constructed from `config.god.budget.perDesk` (`main.ts:508`): `{critic|curriculum|orchestrator: {dailyTokens: number|null}}`, default all `null`.

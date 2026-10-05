@@ -314,7 +314,7 @@ Key facts:
 | `god.directive` / `god.directive-closed` | `god:orchestrator` | `Orchestrator.openDirective` / close paths |
 | `god.appearance` | `god:body` / `god:orchestrator` | `GodBody.deliverVerdict` / `Orchestrator.intervene` |
 | `god.rollout-abandoned` | `god` | `GodService.recoverRollouts` |
-| `inbox.delivered {to, from, kind}` | `engine` | `VillagerInbox.deliver` (`villagers/inbox.ts:22-25`), empty refs |
+| `inbox.delivered {to, from, kind}` | `engine` | `VillagerInbox.deliver` (`eden/src/villagers/inbox.ts:22-25`), empty refs |
 | `llm.call` | `god:critic` / `god:curriculum` / `god:orchestrator` | `LlmClient` |
 
 Payload types: `eden/src/journal/kinds.ts:141-167`.

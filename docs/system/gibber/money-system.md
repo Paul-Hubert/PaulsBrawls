@@ -106,7 +106,7 @@ None sends chat feedback to the caller; each only writes a server log line (logg
 |---|---|---|---|---|
 | `/gib <amount>` | `IntegerArgumentType.integer()` — any int, **negatives accepted** | `total_revenue += amount`; `UpdateRevenueAll` (online players paid now) | `gibbed <amount>` | `:20-45` |
 | `/gib_salary <amount>` | `integer()` — any int, negatives accepted | `salary_per_day = amount` (takes effect on the next scheduler tick; no restart) | `gibbed salary <amount>` | `:49-68` |
-| `/gib_salary_period <seconds>` | `integer(1)` — min 1 | `salary_period = seconds`; `SalaryScheduler.restart(server)` (restart fires one salary tick immediately because initial delay is 0) | `gibbed salary period <seconds>` | `:72-92` |
+| `/gib_salary_period <amount>` (seconds; the Brigadier argument is named `amount`, `GibCommand.java:76`) | `integer(1)` — min 1 | `salary_period = seconds`; `SalaryScheduler.restart(server)` (restart fires one salary tick immediately because initial delay is 0) | `gibbed salary period <seconds>` | `:72-92` |
 
 All settings are stored in `gibbers_state` and therefore **persist across restarts** (per world).
 

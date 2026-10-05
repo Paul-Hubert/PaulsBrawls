@@ -22,16 +22,16 @@ host runs with `serveWeb` (default on a real boot).
 | Property | Value | Source |
 |---|---|---|
 | Host | `127.0.0.1` (hardcoded) | `eden/src/admin/server.ts:131` |
-| Port | `config.admin.port` (default 8770); `0` → ephemeral, actual port returned by `start()` | `server.ts:129-135`, `main.ts:284`, `main.ts:422` |
+| Port | `config.admin.port` (default 8770); `0` → ephemeral, actual port returned by `start()` | `eden/src/admin/server.ts:129-135`, `eden/src/main.ts:284`, `eden/src/main.ts:422` |
 | Auth | None. No token, no CORS headers. Anyone on the machine can call the POST verbs. | whole file |
-| Responses | `content-type: application/json`, body `JSON.stringify(x)`; handler exceptions → `500 {"error": "<message>"}` | `server.ts:151-160`, `304-307` |
-| Methods | `POST` → POST router; **every other method** (GET, PUT, DELETE, …) → GET router | `server.ts:155-156` |
-| Request bodies | Read fully; empty or invalid JSON or non-object → `{}` (never a 400) | `server.ts:309-320` |
-| Path params | `/<prefix>/<name>` with no further `/`; URL-decoded | `server.ts:329-339` |
+| Responses | `content-type: application/json`, body `JSON.stringify(x)`; handler exceptions → `500 {"error": "<message>"}` | `eden/src/admin/server.ts:151-160`, `eden/src/admin/server.ts:304-307` |
+| Methods | `POST` → POST router; **every other method** (GET, PUT, DELETE, …) → GET router | `eden/src/admin/server.ts:155-156` |
+| Request bodies | Read fully; empty or invalid JSON or non-object → `{}` (never a 400) | `eden/src/admin/server.ts:309-320` |
+| Path params | `/<prefix>/<name>` with no further `/`; URL-decoded | `eden/src/admin/server.ts:329-339` |
 
 ## GET routes
 
-| Path | Query | 200 response | Other statuses | Backed by (`main.ts`) |
+| Path | Query | 200 response | Other statuses | Backed by (`eden/src/main.ts` lines) |
 |---|---|---|---|---|
 | `/status` | — | `{ uptimeMs, uptime (s), botsConnected, totalBots (= villagers + 1), currentRuns: 0, queueDepth, paused, budgetSpend: 0, budgetCap: 0, budgetHistory: [] }` | — | `getStatus` 288-300 (`queueDepth`/`paused` from `LlmScheduler`; 0/false when God off) |
 | `/kinds` | — | `{ kinds: [{ kind, doc }] }` (all 42 registered kinds) | — | `describeKinds()` |
@@ -45,11 +45,11 @@ host runs with `serveWeb` (default on a real boot).
 | `/directives` | — | `{ directives: DirectiveRow[] }` (open directives) | — | 372-381 |
 | `/rollouts` | — | `{ rollouts: RolloutEntry[] }` (RolloutsView, live since process start) | — | 384 |
 | `/llm/:callId` | — | The transcript JSON `{ request, response }` from `.eden-data/llm/<callId>.json` | `404 {error:"no transcript <id>"}` (debugPrompts off, unknown, unreadable, or id not matching `^[A-Za-z0-9_-]+$`) | `readLlmTranscript` 708-717 |
-| anything else | — | Static file from the web root (if wired) | `404 {error:"no route <path>"}` when no web root | `server.ts:208-210` |
+| anything else | — | Static file from the web root (if wired) | `404 {error:"no route <path>"}` when no web root | `eden/src/admin/server.ts:208-210` |
 
 ### Response shapes
 
-**VillagerSummary** (`main.ts:753-765`):
+**VillagerSummary** (`eden/src/main.ts:753-765`):
 `{ name, role, persona: "Tu es <name>, <role> du village. Tu parles français.", vitals: { hp, hpMax: 20, food,
 foodMax: 20, pos: [x,y,z], held }, inbox: <depth>, inboxDepth: <depth>, subscriptions: [{ when, then, fired: 0,
 state: 'armed'｜'cooldown'｜'suppressed' }], activityKind, currentRun, relations: [{ name, score }], dossier: {
@@ -59,15 +59,15 @@ competence: { <tag>: successRate0to1 }, note } }`.
 the vitals kind, else `'vitals'`. `when` is `<on>` or `<on> (filtered)`; `then` is the skill name or
 `deliberate: <hint>`. `relations` come from `VillagerMemory.relations()`, not RelationsView.
 
-**SkillListItem** (`main.ts:307-319`): `{ name, version, status, tier, tags, signature, description, stats: { runs,
+**SkillListItem** (`eden/src/main.ts:307-319`): `{ name, version, status, tier, tags, signature, description, stats: { runs,
 successes, failures, stalls, avg_ms }, history: [], versionsCount, usedBy: [villager] }`.
 
-**SkillDetail** (`main.ts:332-352`): `{ name, version, status, tier, signature, description, tags, stats, history: [],
+**SkillDetail** (`eden/src/main.ts:332-352`): `{ name, version, status, tier, signature, description, tags, stats, history: [],
 usedBy, versions: [{ version, status, note (manifest summary), runs: 0, score: '—', admittedBy (provenance
 rolloutId｜null), code? }], quarantine?: { reason, at, by }, requestedVersion?, code? }`. `quarantine` is filled from
 the newest `skill.quarantine` event referencing the name when the resolved version is `quarantined`.
 
-**Card** (`main.ts:772-781`): `{ id, title (= goal), to (assignee｜'any'), reason (successCriteria｜context｜''),
+**Card** (`eden/src/main.ts:772-781`): `{ id, title (= goal), to (assignee｜'any'), reason (successCriteria｜context｜''),
 priority: 'med', expiry: '—', rolloutId｜null, result?: 'completed'｜'failed' }`.
 
 **VerdictRow**: `{ id (event id), skill (refs.skill｜'?'), version (refs.skillVersion｜''), success, score (0 if absent),
@@ -101,7 +101,7 @@ Handler semantics (wired in `main.ts`):
   the journal payload. The villager reacts via its `inbox` subscription (roles.json `everyone`, deliberate) and the
   coordinator drains inboxes during rollouts.
 - **scenario start/restart** → `launcher.start|restart(name, x, z)`, then `villageLoop.start()` if `ok`
-  (`main.ts:406-420`). Restart stops the loop first. **stop** → `villageLoop.stop()` then `launcher.stop()`.
+  (`eden/src/main.ts:406-420`). Restart stops the loop first. **stop** → `villageLoop.stop()` then `launcher.stop()`.
   Messages are listed in [process-config-and-boot.md](process-config-and-boot.md) (VillageLauncher).
   These are always wired (the launcher exists even with no pool and refuses with `ok:false`).
 
@@ -109,7 +109,7 @@ Handler semantics (wired in `main.ts`):
 
 `VillagersCommand.postScenario` POSTs `{"name":<word>,"x":<int>,"z":<int>}` (the player's position) to
 `<edenAdminUrl>/scenario/<start|restart>`; `stopScenario` POSTs an empty body to `/scenario/stop`; 10 s timeout,
-retried (`src/main/java/com/paul/brawl/VillagersCommand.java:118-170`). It reads `ok`, `message`, `botNames` from the
+retried (`src/main/java/com/paul/brawl/VillagersCommand.java:118-192`). It reads `ok`, `message`, `botNames` from the
 reply and shows `[villagers] <message>` in chat. `edenAdminUrl` defaults to `http://127.0.0.1:8770`
 (`VillageConfig.java:40`). Command syntax/permissions: [java-integration.md](java-integration.md).
 
@@ -127,11 +127,11 @@ reply and shows `[villagers] <message>` in chat. `edenAdminUrl` defaults to `htt
 ## Static dashboard (`eden/website/`)
 
 - Served when `webRoot` is set: `main.ts` passes `../website/` resolved from `main.ts`'s URL when
-  `serveWeb ?? spawnBots` is true (`main.ts:269-270`).
+  `serveWeb ?? spawnBots` is true (`eden/src/main.ts:269-270`).
 - `GET /` → `index.html`; other paths are URL-decoded, resolved under the root, and rejected with `403
   {error:"forbidden"}` if they escape it, `400 {error:"bad path"}` if undecodable, `404 {error:"no file <p>"}` if
   missing. Header `cache-control: no-cache`. MIME map: html, js, css, json, svg, png, ico, woff2; else
-  `application/octet-stream` (`server.ts:213-228`, `362-374`). API routes always win over files.
+  `application/octet-stream` (`eden/src/admin/server.ts:213-228`, `eden/src/admin/server.ts:362-374`). API routes always win over files.
 - Content: plain-JS IIFEs, no build step — `index.html` loads `api.js`, `ui.js`, `screens1.js`, `screens2.js`,
   `screens3.js`, `app.js`, `styles.css`. `api.js` exposes `window.EdenAPI` over the routes above (same-origin,
   relative URLs) and opens one unfiltered WebSocket to `/journal/stream` with exponential reconnect (500 ms →

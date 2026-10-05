@@ -14,7 +14,7 @@ verified_at: 4a8081f
 
 ## Layering
 
-`social/` is layer 3: it may import `skills/llm/render/journal/config/bots/types` but never `god/` or `villagers/` (`conversation.ts:6-9`, `trade.ts:237-239`). It reaches a villager through the layer-0 seams in `eden/src/types/social.ts`:
+`social/` is layer 3: it may import `skills/llm/render/journal/config/bots/types` but never `god/` or `villagers/` (`eden/src/social/conversation.ts:6-9`, `eden/src/social/trade.ts:12-14`). It reaches a villager through the layer-0 seams in `eden/src/types/social.ts`:
 
 ```ts
 interface TradeItem { item: string; count: number }                         // :14
@@ -30,7 +30,7 @@ interface Conversant {                                                        //
   playerInEarshot(): boolean;          // the mirror gate
 }
 ```
-`VillagerMemory` implements `MemoryWriter` (`eden/src/villagers/memory.ts:92`); `moveRelation` clamps the score to ±`RELATION_SCORE_BAND` = 100 (`memory.ts:53,144-155`) and persists the bot's JSON.
+`VillagerMemory` implements `MemoryWriter` (`eden/src/villagers/memory.ts:91`); `moveRelation` clamps the score to ±`RELATION_SCORE_BAND` = 100 (`eden/src/villagers/memory.ts:53`, `eden/src/villagers/memory.ts:144-155`) and persists the bot's JSON.
 
 ## Conversation (`eden/src/social/conversation.ts`)
 
@@ -86,7 +86,7 @@ interface ReachStrategy { inRange(): boolean; walkTo(): Promise<void> }         
 ### `SettlementClient.settle(tradeId, offer)` (`:73-108`)
 | Aspect | Value |
 |---|---|
-| URL | `opts.url` = `config.settlement.url`, default `http://127.0.0.1:8767/trade/execute` (`config.ts:127`) |
+| URL | `opts.url` = `config.settlement.url`, default `http://127.0.0.1:8767/trade/execute` (`eden/src/config.ts:127`) |
 | Method / headers | `POST`, `content-type: application/json`, no auth |
 | Body sent | `{from, to, give: TradeItem[], want: TradeItem[]}` with each `item === 'coin'` rewritten to `paulsbrawls:coin` (`resolveItem`, `:174-176`; `COIN_ITEM`, `:27`) |
 | Timeout | `10_000` ms via `AbortController` (`:66`) |
@@ -113,17 +113,17 @@ interface ReachStrategy { inRange(): boolean; walkTo(): Promise<void> }         
 | `TradeService` | never constructed outside tests | grep: only `social/trade.ts` |
 | `Conversation` | never constructed outside tests | grep: only `social/conversation.ts` |
 | Villager social tools (`say`, `tell`, `start_conversation`, `leave_conversation`, trade) | **absent** — the registry has `search_skills, read_skill, write_skill, run_skill, report_to_god, done, remember, recall, subscribe, unsubscribe, list_subscriptions` | `eden/src/villagers/tools.ts:82-154` |
-| Admin "tell" | `POST /villagers/:name/prompt` (`admin/server.ts:248`) delivers `{from:'villager', kind:'tell', payload:{text, from}}` to a villager inbox — not a conversation | `eden/src/main.ts:393-402` |
+| Admin "tell" | `POST /villagers/:name/prompt` (`eden/src/admin/server.ts:248`) delivers `{from:'villager', kind:'tell', payload:{text, from}}` to a villager inbox — not a conversation | `eden/src/main.ts:393-402` |
 
 Consequently no `conversation.*`, `chat.*` or `trade.*` events are produced by a live Eden host at this commit.
 
 ## Views fed by social events (`eden/src/views/index.ts`)
 
-Both are folded live from the journal stream (`main.ts:165-178`) and by `npm run rebuild-stats`.
+Both are folded live from the journal stream (`eden/src/main.ts:165-178`) and by `npm run rebuild-stats`.
 
 | View | Folds | Value shape | Notes |
 |---|---|---|---|
-| `RelationsView` (`:114`) | `conversation.started` (records pair), `conversation.ended` with `opinion` | `{[villager]: {[other]: {score, note, at}}}` — `score += opinion`, `note = headline` | **Unclamped** sum, unlike `VillagerMemory` (±100); not exposed by any admin route — the admin villager summary reads `memory.relations()` instead (`main.ts:763`) |
+| `RelationsView` (`:114`) | `conversation.started` (records pair), `conversation.ended` with `opinion` | `{[villager]: {[other]: {score, note, at}}}` — `score += opinion`, `note = headline` | **Unclamped** sum, unlike `VillagerMemory` (±100); not exposed by any admin route — the admin villager summary reads `memory.relations()` instead (`eden/src/main.ts:763`) |
 | `TradeLedgerView` (`:167`) | `trade.proposed` → `proposed`; `trade.settled` → `settled`; `trade.failed` → `failed` + `reason` | `TradeLedgerEntry[] {id, from, to, give, want, status, reason?, at}` sorted by `at` | Not exposed by any admin route at this commit |
 
 Journal payload types: `eden/src/journal/kinds.ts:176-202` (`chat.said`, `chat.heard`, `conversation.started/turn/ended`, `trade.proposed/settled/failed`).
@@ -144,7 +144,7 @@ Journal payload types: `eden/src/journal/kinds.ts:176-202` (`chat.said`, `chat.h
 - Mirror rate-limit state is per `Conversation` instance, so two concurrent conversations can each mirror the same speaker.
 - `RelationsView` (unclamped, journal-derived) and `VillagerMemory` relations (clamped ±100, JSON-persisted) can diverge; only the leaver's relation moves.
 - `trade.settled` journals the original (`coin`) items, not the resolved `paulsbrawls:coin` actually sent.
-- Port 8767 is shared with `./gradlew runServer`'s dev server (R29 per comments, `trade.ts:241-242`): whichever JVM binds first wins.
+- Port 8767 is shared with `./gradlew runServer`'s dev server (R29 per comments, `eden/src/social/trade.ts:16-17`): whichever JVM binds first wins.
 
 ## Related
 

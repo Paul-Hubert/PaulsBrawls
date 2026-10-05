@@ -30,12 +30,12 @@ window+archive by `0.5·relevance + 0.25·recency(2 h half-life) + 0.25·importa
 | `importance` | number 0–10 | caller's, else by kind; clamped |
 | `at` | epoch ms | writer-assigned |
 
-`Relation { other, score, note, at }` (`types/memory.ts:16-24`). `MemorySeed { kind, text, tags?, importance? }` and the
+`Relation { other, score, note, at }` (`eden/src/types/memory.ts:16-24`). `MemorySeed { kind, text, tags?, importance? }` and the
 `MemoryWriter` seam (`villager`, `remember(seed)`, `moveRelation(other, delta, note)`) are in
 `eden/src/types/social.ts:20-40`; `VillagerMemory implements MemoryWriter` so `social/` can write without importing
 `villagers/`.
 
-### Default importance by kind (`memory.ts:33-40`)
+### Default importance by kind (`eden/src/villagers/memory.ts:33-40`)
 
 | kind | importance |
 |---|---|
@@ -46,7 +46,7 @@ window+archive by `0.5·relevance + 0.25·recency(2 h half-life) + 0.25·importa
 | `thought` | 3 |
 | `system` | 2 |
 
-### Heuristic tags (`deriveTags`, `memory.ts:371-379`)
+### Heuristic tags (`deriveTags`, `eden/src/villagers/memory.ts:371-379`)
 
 Lowercase, split on non-letter/digit (Unicode), keep tokens of length ≥ 4 not in the stop set
 `{les, des, une, avec, pour, dans, sur, and, the, for, with}`, dedupe, first **4** only.
@@ -55,14 +55,14 @@ Lowercase, split on non-letter/digit (Unicode), keep tokens of length ≥ 4 not 
 
 | Constant | Value | Code | Constructor override |
 |---|---|---|---|
-| `DEFAULT_WINDOW_MAX` | 200 | `memory.ts:50` | `windowMax` |
-| `DEFAULT_EVICT_BATCH` | 20 | `memory.ts:51` | `evictBatch` |
-| `DEFAULT_ARCHIVE_MAX` | 2000 | `memory.ts:52` | `archiveMax` |
-| `RELATION_SCORE_BAND` | ±100 (score clamp) | `memory.ts:53` | — |
-| `RECENCY_HALF_LIFE_MS` | 2 h (7 200 000 ms) | `memory.ts:43` | — |
-| `W_RELEVANCE / W_RECENCY / W_IMPORTANCE` | 0.5 / 0.25 / 0.25 | `memory.ts:46-48` | — |
+| `DEFAULT_WINDOW_MAX` | 200 | `eden/src/villagers/memory.ts:50` | `windowMax` |
+| `DEFAULT_EVICT_BATCH` | 20 | `eden/src/villagers/memory.ts:51` | `evictBatch` |
+| `DEFAULT_ARCHIVE_MAX` | 2000 | `eden/src/villagers/memory.ts:52` | `archiveMax` |
+| `RELATION_SCORE_BAND` | ±100 (score clamp) | `eden/src/villagers/memory.ts:53` | — |
+| `RECENCY_HALF_LIFE_MS` | 2 h (7 200 000 ms) | `eden/src/villagers/memory.ts:43` | — |
+| `W_RELEVANCE / W_RECENCY / W_IMPORTANCE` | 0.5 / 0.25 / 0.25 | `eden/src/villagers/memory.ts:46-48` | — |
 
-The host never overrides them (`main.ts:545`: `new VillagerMemory({ villager, dataDir, journal, worldId, embeddings,
+The host never overrides them (`eden/src/main.ts:545`: `new VillagerMemory({ villager, dataDir, journal, worldId, embeddings,
 summarizer })`).
 
 ## API
@@ -82,20 +82,20 @@ summarizer })`).
 | Writer | Kind written | Code |
 |---|---|---|
 | `remember` tool (villager LLM) | `thought` (+ optional tags) | `eden/src/villagers/tools.ts:271-280` |
-| social conversation | `social` entries (heard lines at `OVERHEARD_IMPORTANCE = 3`; leave headline to both parties at `HEADLINE_IMPORTANCE = 8`); `moveRelation(other, opinion, note)` | `eden/src/social/conversation.ts:69`, `:186-200` |
-| summarizer | `lesson` (≤2 per eviction) | `memory.ts:289-297` |
+| social conversation | `social` entries (heard lines at `OVERHEARD_IMPORTANCE = 3`; leave headline to both parties at `HEADLINE_IMPORTANCE = 8`); `moveRelation(other, opinion, note)` | `eden/src/social/conversation.ts:69-71`, `:186-200` |
+| summarizer | `lesson` (≤2 per eviction) | `eden/src/villagers/memory.ts:289-297` |
 
-> ⚠ No `Conversation` is constructed anywhere in `eden/src/` outside `social/` (only a comment at `main.ts:572-575`
+> ⚠ No `Conversation` is constructed anywhere in `eden/src/` outside `social/` (only a comment at `eden/src/main.ts:572-575`
 > says they are built "lazily … at run time"), so in the live host the only memory writers are the `remember` tool
 > and the summarizer — relations stay empty.
 
-Readers: `recall` tool (`retrieve(query, 5)`), reactive wake-up §6 (`retrieve(query, 5)`, `main.ts:644`), rollout §6
-(`retrieve(task.goal, 6)` once per task, `main.ts:929-930`), admin villager summary (`relations()` → `{name, score}`,
-`main.ts:763`).
+Readers: `recall` tool (`retrieve(query, 5)`), reactive wake-up §6 (`retrieve(query, 5)`, `eden/src/main.ts:644`), rollout §6
+(`retrieve(task.goal, 6)` once per task, `eden/src/main.ts:929-930`), admin villager summary (`relations()` → `{name, score}`,
+`eden/src/main.ts:763`).
 
 ## Eviction and summarization
 
-### Trigger (`maybeEvict`, `memory.ts:252-261`)
+### Trigger (`maybeEvict`, `eden/src/villagers/memory.ts:252-261`)
 
 Runs on every `remember`. If `window.length > windowMax` (i.e. on the 201st entry):
 `take = max(overflow, evictBatch)` → the **oldest** `take` entries (20 in practice) are spliced out, appended to the
@@ -105,17 +105,17 @@ archive, the archive is trimmed oldest-first to `archiveMax`, and `scheduleSumma
 
 - Chained on a single `pendingSummary` promise (serialized per villager, off the hot path); any error is swallowed.
 - Skipped entirely if no summarizer is wired (eviction still archives). The host always wires one
-  (`new MemorySummarizer(client)`, `main.ts:541`).
-- `MemorySummarizer.summarize(villager, prevSummary, evicted)` (`memory-summarizer.ts:44-63`): empty batch → `null`
+  (`new MemorySummarizer(client)`, `eden/src/main.ts:541`).
+- `MemorySummarizer.summarize(villager, prevSummary, evicted)` (`eden/src/villagers/memory-summarizer.ts:44-63`): empty batch → `null`
   without an LLM call; otherwise one `client.chat({ tier: 'fast', caller: 'villager:<name>', messages })`.
-  System prompt (French, `memory-summarizer.ts:24-31`) demands strict JSON
+  System prompt (French, `eden/src/villagers/memory-summarizer.ts:24-31`) demands strict JSON
   `{"summary": string, "tags": {"entry-0": string[], …}, "importanceBumps": {"entry-0": number, …}, "lessons": string[]}`.
   The user message lists `entry-<i> (<kind>, imp <importance>): <text>`.
 - Parsing (`parseResult`/`extractJson`, `:66-92`): accepts a ```` ```json ```` fence or bare text, slices first `{` to
   last `}`; **no non-empty `summary` → null** (never a partial); `tags` kept only if every value is an array,
   `importanceBumps` only if every value is a number; `lessons` filtered to strings.
 
-### Applying the result (`memory.ts:274-298`)
+### Applying the result (`eden/src/villagers/memory.ts:274-298`)
 
 | Field | Effect |
 |---|---|
@@ -126,7 +126,7 @@ archive, the archive is trimmed oldest-first to `archiveMax`, and `scheduleSumma
 
 Then `persist()`. A null result degrades silently.
 
-## Retrieval (`retrieve`, `memory.ts:191-214`)
+## Retrieval (`retrieve`, `eden/src/villagers/memory.ts:191-214`)
 
 Pool = **window + archive** (up to 2200 entries). For each entry:
 
@@ -139,21 +139,21 @@ importance= clamp(importance, 0, 10) / 10
 score     = 0.5*relevance + 0.25*recency + 0.25*importance
 ```
 
-Sorted descending, top `k` returned. Verified by `tests/villagers-memory.test.ts:126`, `:146`, `:160`.
+Sorted descending, top `k` returned. Verified by `eden/tests/villagers-memory.test.ts:126`, `:146`, `:160`.
 
 ### Embeddings and keyword fallback (R38)
 
-- The `EmbeddingsService` is shared host-wide with skill retrieval and the curriculum (`main.ts:509-517`). Backend is
+- The `EmbeddingsService` is shared host-wide with skill retrieval and the curriculum (`eden/src/main.ts:509-517`). Backend is
   `localBackend()` = in-process `@xenova/transformers` `Xenova/paraphrase-multilingual-MiniLM-L12-v2`,
-  mean-pooled + normalized (`llm/embeddings.ts:130-153`); dynamic import, so a missing package counts as a failure.
+  mean-pooled + normalized (`eden/src/llm/embeddings.ts:130-153`); dynamic import, so a missing package counts as a failure.
 - `retrieve` calls `embed([query, ...poolTexts])` only when `embeddings.enabled()`; `null` → keyword floor.
 - After **3 consecutive** `embed` failures (`maxFailures` default 3) the service sets `degraded = true` for the rest of
-  the process and warns once via `logger.warn('embeddings', …)` (`embeddings.ts:44-63`). A success resets the streak.
+  the process and warns once via `logger.warn('embeddings', …)` (`eden/src/llm/embeddings.ts:44-63`). A success resets the streak.
 - There is no embedding cache: every `retrieve` re-embeds the whole pool, one text at a time.
 
 ## Persistence (`.eden-data/bots/<name>.json`)
 
-`file() = <dataDir>/bots/<villager>.json` (`memory.ts:306-308`). The file is shared with `AnchorService`, which owns
+`file() = <dataDir>/bots/<villager>.json` (`eden/src/villagers/memory.ts:306-308`). The file is shared with `AnchorService`, which owns
 the `anchors` key (`eden/src/bots/anchors.ts:160-187`). Both do read-modify-write of the whole JSON, each touching only
 its own key.
 
@@ -171,21 +171,21 @@ its own key.
 ```
 
 - `persist()` runs after every `remember`, `moveRelation`, applied summary and `resolveQuarantine`; it is a no-op
-  while quarantined (`memory.ts:340-361`). Writes are synchronous, pretty-printed (2-space).
+  while quarantined (`eden/src/villagers/memory.ts:340-361`). Writes are synchronous, pretty-printed (2-space).
 - `load()` (`:311-337`): missing file / no `memory` key → empty; corrupt JSON → empty (re-persisted on next write).
 
 ## R32 world-stamp quarantine
 
-`worldId` = `${config.minecraft.host}:${config.minecraft.port}` (`main.ts:540`). On load, if
+`worldId` = `${config.minecraft.host}:${config.minecraft.port}` (`eden/src/main.ts:540`). On load, if
 `persisted.worldId` is set and differs:
 
 1. The persisted block is held in `this.quarantine`; live state starts **empty** (no reasoning from a dead world).
 2. Journals `system.config-warning` (actor `villager:<name>`) with message
    `memory: "<name>" persisted world "<old>" != current "<new>" — <N> memories QUARANTINED behind an admin decision (wipe|migrate) (R32)`
-   (`memory.ts:322-331`).
+   (`eden/src/villagers/memory.ts:322-331`).
 3. `persist()` is suppressed so the old data on disk is not overwritten.
 
-`resolveQuarantine(decision)` (`memory.ts:232-244`):
+`resolveQuarantine(decision)` (`eden/src/villagers/memory.ts:232-244`):
 
 | Decision | Effect |
 |---|---|
@@ -199,7 +199,7 @@ Separately, `BotPool.start` stamps `<dataDir>/world.json {worldId, stampedAt}` a
 ## Deliberate omissions
 
 - **No `refuteBlockedBeliefs`** (R37) — the critic owns belief retirement; pinned by
-  `tests/villagers-memory.test.ts:247`.
+  `eden/tests/villagers-memory.test.ts:247`.
 - **No drives** here — rest/social live in `villagers/drives.ts` (optional, unwired; see villager-runtime).
 
 ## Gotchas & known issues
@@ -217,7 +217,7 @@ Separately, `BotPool.start` stamps `<dataDir>/world.json {worldId, stampedAt}` a
 - `recent()` and `lifeSummary()` are never used by the host, so the rolling summary and recent window never reach a
   prompt (§5 is always empty).
 - `docs/04` says relations are "journal-derived views … rather than separate stores"; in code the live relations are
-  stored in this file (a separate `RelationsView` fold exists in `eden/src/views/index.ts:105`).
+  stored in this file (a separate `RelationsView` fold exists in `eden/src/views/index.ts:114`).
 - `docs/04`'s entry-kind list omits `lesson`.
 
 ## Related

@@ -207,7 +207,7 @@ the server root for production):
 |---|---|---|
 | `prompt.txt`, `build_prompt.txt` | `ChatBot` | read once at registration (must pre-exist) |
 | `llm_config.properties` | `LLMConfig` | on `/llm …` save |
-| `bridge_config.properties` | `BridgeConfig` | on `/llm bridge …` save |
+| `bridge_config.properties` | `BridgeConfig` | on `/llm bridge …` or `/godbody on`/`off` save (`LLMCommand.java:120-170`, `ChatCommand.java:68,78`) |
 | `mcp_config.properties` | `MCPConfig` | on load if missing (see aigod docs) |
 | `village_config.properties` | `VillageConfig` | only on `/village on|off` |
 | `proof_screen.png` | `ImageReceiver` (debug save, currently commented out at the call site) | — |
@@ -242,7 +242,7 @@ food-production benchmark run; its header marks it **LEGACY** (Eden is primary).
    rotation/truncation), filters lines matching errors/warnings/`FAILED`/`DISABLED`/`unhandled`/`kicked`/
    skill and benchmark markers, and if more than 120 are flagged prints a grouped tally (top 20) plus the
    last 40.
-3. Tails the newest `logs/skills-*.jsonl` and prints one line per skill event.
+3. Tails the newest `minecraft-mcp-server/logs/skills-*.jsonl` and prints one line per skill event.
 4. `GET http://127.0.0.1:8766/village/metrics` and `/village/status` (5 s timeout) and prints food
    counters and per-bot state.
 

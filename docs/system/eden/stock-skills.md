@@ -33,7 +33,7 @@ JS strings compiled by the engine, receiving only `(bot, args, ctx)`.
 ## Shared inline helpers
 
 Skill bodies compile one at a time, so helpers are string-inlined into each body
-(`exemplars/index.ts:36-71`):
+(`eden/src/skills/exemplars/index.ts:36-71`):
 
 | Helper | Inlined into | Behaviour |
 |---|---|---|

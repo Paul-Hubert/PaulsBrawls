@@ -119,8 +119,8 @@ Real dev server + real LLM + real mineflayer. Not part of `npm run check`; only 
 
 | Need | Where read |
 |---|---|
-| `run/server.properties` at the repo root with `enable-rcon=true` (else throws) | `live-tests/config.ts:221-242`: `server-port` (default 25599), `rcon.port` (default 25575), `rcon.password`; RCON host fixed `127.0.0.1` |
-| `eden/providers.json` (not `live-tests/providers.json`) | `live-tests/config.ts:167-175` (`join(liveTestsDir, '..', 'providers.json')`) |
+| `run/server.properties` at the repo root with `enable-rcon=true` (else throws) | `eden/live-tests/config.ts:221-242`: `server-port` (default 25599), `rcon.port` (default 25575), `rcon.password`; RCON host fixed `127.0.0.1` |
+| `eden/providers.json` (not `live-tests/providers.json`) | `eden/live-tests/config.ts:167-175` (`join(liveTestsDir, '..', 'providers.json')`) |
 | API key | `eden/api-keys.env` via `loadApiKeys()` (env wins), then `setupProviderEnv` copies `<apiKeyEnv>` into `OPENAI_API_KEY` if that is unset; missing key → exit 2 |
 | Provider | default `deepseek` (`DEFAULT_PROVIDER`), override `--provider <name>` / `-p` |
 
@@ -146,7 +146,7 @@ inherited. A timer in the parent's healthy event loop hard-kills the child after
 child was killed or wrote none, it synthesizes a FAIL (`hard-killed after Ns — child wedged` or `child exited N
 without writing result.json`). 10 s pause between scenarios.
 
-### `runScenario` flow (`live-tests/harness.ts:201-287`)
+### `runScenario` flow (`eden/live-tests/harness.ts:201-287`)
 
 1. `readServerProps()`; `baseConfig(props, roster, provider)` (avatar `Dieu`, 3 concurrent, cooldown 15 s,
    `debugPrompts: true`, admin port 8770), then the scenario's `configure`; `writeConfig` → `<runDir>/eden.json`

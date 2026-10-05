@@ -240,7 +240,7 @@ Unknown name throws `providers: unknown provider "<n>" — available: …`.
 | Variable | Read by | Behavior |
 |---|---|---|
 | `<preset.apiKeyEnv>` (e.g. `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`) | `wireGod` (`eden/src/main.ts:497-505`) | Required when the preset names one; empty → boot throws (no fallback, R56). |
-| `OPENAI_API_KEY` | `LlmClient` default (`eden/src/llm/client.ts:224`) | Used only when `apiKey` was not passed (i.e. no `provider`, or a `null` `apiKeyEnv`). Sent as `Authorization: Bearer` only to non-local base URLs (`client.ts:273`). |
+| `OPENAI_API_KEY` | `LlmClient` default (`eden/src/llm/client.ts:224`) | Used only when `apiKey` was not passed (i.e. no `provider`, or a `null` `apiKeyEnv`). Sent as `Authorization: Bearer` only to non-local base URLs (`eden/src/llm/client.ts:273`). |
 | `EDEN_LIVE_RUNDIR`, `EDEN_LIVE_PROVIDER` | `live-tests/run-one.ts` | Set by the live-test parent for each child. |
 
 `api-keys.env` (`eden/api-keys.example.env`): `KEY=value` lines, `#` comments; loaded by `loadEnvFile`
@@ -281,11 +281,11 @@ The Java side sends `{ name, x, z }` (integer player position) with a 10 s timeo
 | Path | Writer | Content |
 |---|---|---|
 | `eden.db` (+ `-wal`, `-shm`) | `Journal` | The only SQLite table, `journal` ([journal-and-views.md](journal-and-views.md)). |
-| `world.json` | `stampWorldId` (`eden/src/bots/pool.ts:354-363`) | `{ worldId, stampedAt }`; mismatch only logs a warning. |
+| `world.json` | `stampWorldId` (`eden/src/bots/pool.ts:353-364`) | `{ worldId, stampedAt }`; mismatch only logs a warning. |
 | `library/<skill>/skill.json` | `SkillLibrary.persist` (`eden/src/skills/library.ts:373-378`) | The skill record (versions, statuses, manifests). |
 | `library/<skill>/v<N>.js` | `SkillLibrary.writeCode` | Source per version, append-only. |
 | `bots/<name>.json` | `VillagerMemory.persist` (`memory` key), `AnchorService` (unwired) | Memory window/archive/relations/life summary + `worldId`. |
-| `subscriptions/<villager>.json` | `SubscriptionStore` (`eden/src/villagers/subscriptions.ts:140-151`) | Persisted subscriptions; deleting it re-seeds role defaults on next boot. |
+| `subscriptions/<villager>.json` | `SubscriptionStore` (`eden/src/villagers/subscriptions.ts:139-147`) | Persisted subscriptions; deleting it re-seeds role defaults on next boot. |
 | `llm/<callId>.json` | `LlmClient.dumpTranscript` (`eden/src/llm/client.ts:342-344`) | `{ request, response }` body (no headers), only when `debugPrompts`. |
 
 Other gitignored paths: `.eden-data*/`, `.eden-eval-data/`, `eden.json`, `providers.json`, `api-keys.env`,

@@ -25,7 +25,7 @@ quiescence helpers) are tested but **not wired** into the running host.
 | `eden/src/bots/pool.ts` | `BotPool`, `stampWorldId`, `LOGIN_STAGGER_MS` | `main.ts:193-210`, `village-launch.ts` | wired (only when `spawnBots` and villagers > 0) |
 | `eden/src/bots/plugins.ts` | `loadPlugins`, `AUTO_EAT_OPTS`, `pathfinder` | `pool.ts` | wired |
 | `eden/src/bots/hardening.ts` | `boundPathfinder`, `abortActiveTasks`, `installChatInterceptor`, `craftQuiescence`, `waitForInventoryQuiescence` | pool (bound), engine (abort, interceptor) | quiescence helpers: tests only |
-| `eden/src/bots/signals.ts` | `attachReactivitySignals` | `villagers/reactivity.ts:63` | wired |
+| `eden/src/bots/signals.ts` | `attachReactivitySignals` | `eden/src/villagers/reactivity.ts:63` | wired |
 | `eden/src/bots/anchors.ts` | `AnchorService` | none | **not wired** (tests only) |
 | `eden/src/bots/helpers.ts` | `goToHops`, `collectTrunk`, `useChest`, `deposit`, `withdraw`, `MAX_HOP_BLOCKS` | none | **not wired** — stock skills inline their own copies |
 | `eden/src/render/*.ts` | `estimateTokens`, `renderSnapshot`, `renderRunReport` | `god/critic.ts`, `villagers/context-pack.ts` | wired |
@@ -189,7 +189,7 @@ TS twins of the stock primitives, ported from v1, exercised only by tests:
 ## Signals (`signals.ts`)
 
 `attachReactivitySignals(bot)` (`signals.ts:56-85`) creates a fresh `EventEmitter` bus (max listeners
-unlimited) for the villager `EventRouter` (`villagers/reactivity.ts:63-77`), so the router never sees
+unlimited) for the villager `EventRouter` (`eden/src/villagers/reactivity.ts:63-77`), so the router never sees
 mineflayer's native per-entity `entityHurt`.
 
 | Native bot event | Synthetic bus emission |
@@ -205,7 +205,7 @@ ravager, evoker, blaze, ghast, magma_cube, zoglin, hoglin, piglin, piglin_brute,
 
 Only `entityHurt`, `health` and `death` are ever emitted. The EventRouter also binds `chat`,
 `entitySpotted`, `entityGone`, `itemReceived`, `blockBrokenNearby`, `runFinished`, `inbox` and `time`
-(`villagers/events.ts:142-215`), so on a live bot **`player-chat`, `entity-spotted`, `night-falls`,
+(`eden/src/villagers/events.ts:142-215`), so on a live bot **`player-chat`, `entity-spotted`, `night-falls`,
 `new-day`, `inbox` etc. never fire from this bus** (only `tick-30s` is pumped separately). Stall-detector
 pulses are a different mechanism (engine-side bot listeners, see [skills-engine.md](skills-engine.md#pulse-sources-d-10--r26--r46)).
 

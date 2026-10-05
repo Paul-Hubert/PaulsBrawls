@@ -21,7 +21,7 @@ social→villager). The dependency law is enforced by 13 `forbidden` rules in `e
 
 | File | Exports |
 |---|---|
-| `types/index.ts` | barrel: `export *` from enums, bot, skill, task, events, journal, inbox, memory, social (`index.ts:4-12`) |
+| `types/index.ts` | barrel: `export *` from enums, bot, skill, task, events, journal, inbox, memory, social (`eden/src/types/index.ts:4-12`) |
 | `types/enums.ts` | `TIERS`/`Tier`, `SKILL_STATUSES`/`SkillStatus`, `ABORT_CAUSES`/`AbortCause`, `PRIORITIES`/`Priority` |
 | `types/bot.ts` | `Vec3Like`, `BotItem`, `BotBlock`, `BotWindow`, `PathfinderLike`, `PvpLike`, `CollectBlockLike`, `AutoEatLike`, `ArmorManagerLike`, `ItemRegistry`, `BotContainer`, `EmitterLike`, `Bot` |
 | `types/skill.ts` | `JsonSchema`, `Author`, `Provenance`, `SkillManifest`, `SkillVersion`, `SkillStats`, `Snapshot`, `CallFrame`, `RunOutcome`, `RunReport`, `RunnerRef` |
@@ -32,8 +32,8 @@ social→villager). The dependency law is enforced by 13 `forbidden` rules in `e
 | `types/memory.ts` | `MemoryEntry`, `Relation` |
 | `types/social.ts` | `TradeItem`, `MemorySeed`, `MemoryWriter`, `Conversant` |
 
-Some modules import `types/bot` directly rather than the barrel (`bots/signals.ts:24`, `villagers/events.ts:20`,
-`villagers/reactivity.ts:17`).
+Some modules import `types/bot` directly rather than the barrel (`eden/src/bots/signals.ts:24`, `eden/src/villagers/events.ts:20`,
+`eden/src/villagers/reactivity.ts:17`).
 
 ## Enums (`types/enums.ts`)
 
@@ -41,12 +41,12 @@ Each is an `as const` array (runtime-visible) plus the derived union.
 
 | Array | Members | Meaning |
 |---|---|---|
-| `TIERS` | `mortal`, `divine` | runner tier; `divine` = the God avatar only (`enums.ts:5`) |
+| `TIERS` | `mortal`, `divine` | runner tier; `divine` = the God avatar only (`eden/src/types/enums.ts:5`) |
 | `SKILL_STATUSES` | `draft`, `active-probation`, `active`, `quarantined`, `archived` | D-12 lifecycle; `active-probation` = runnable + retrievable, not yet composable (`:12-18`) |
 | `ABORT_CAUSES` | `preempted`, `stalled`, `timeout` | why a run aborted (`:22`) |
 | `PRIORITIES` | `background`, `normal`, `interrupt` | directive/handler priority, low→high (`:26`) |
 
-Pinned by `tests/types.test.ts:24-41`.
+Pinned by `eden/tests/types.test.ts:24-41`.
 
 ## The Bot seam (`types/bot.ts`, D-14)
 
@@ -67,10 +67,10 @@ the test `FakeBot` satisfy. No `any`; listener args are `unknown[]`.
 | `ItemRegistry` | `itemsByName`, `blocksByName?` (`name → {id}`) | `bot.registry`; surfaced to skills as `ctx.mcData` |
 | `BotContainer` | `deposit(type, metadata, count)`, `withdraw(…)`, `containerItems?()`, `close()` | chest ops |
 | `EmitterLike` | `on, once, removeListener` | minimal emitter (also the signal-adapter bus) |
-| `Bot` (extends `EmitterLike`) | `username`, `entity: {position} \| null`, `game?.dimension`, `health?`, `food?`, `time?.timeOfDay`, `inventory.items()`, `heldItem?`, `currentWindow`, `_client`, plugins `pathfinder?/pvp?/collectBlock?/autoEat?/armorManager?`, `registry?`; methods `chat, closeWindow, blockAt, openContainer, dig, loadPlugin, quit` | the only bot type anything outside the pool sees (`bot.ts:114-149`) |
+| `Bot` (extends `EmitterLike`) | `username`, `entity: {position} \| null`, `game?.dimension`, `health?`, `food?`, `time?.timeOfDay`, `inventory.items()`, `heldItem?`, `currentWindow`, `_client`, plugins `pathfinder?/pvp?/collectBlock?/autoEat?/armorManager?`, `registry?`; methods `chat, closeWindow, blockAt, openContainer, dig, loadPlugin, quit` | the only bot type anything outside the pool sees (`eden/src/types/bot.ts:114-149`) |
 
 Things the seam does **not** expose (e.g. `bot.entities`, `bot.findBlock`) are reached via localized casts
-(e.g. `bots/signals.ts:92-94`); skill code receives the real bot object regardless.
+(e.g. `eden/src/bots/signals.ts:92-94`); skill code receives the real bot object regardless.
 
 ## Skills and runs (`types/skill.ts`)
 
@@ -100,7 +100,7 @@ Things the seam does **not** expose (e.g. `bot.entities`, `bot.findBlock`) are r
 | `TaskSuggestion` | `goal, successCriteria?, assignee?, parent?, check?` | verdict follow-up (curriculum); `check` per R72 |
 | `Directive` | `id, to, goal, reason, priority, taskRef?, expiresAt?, standing?` | data, not code; delivered via inbox |
 | `CriticTicket` | `id, source: 'rollout'\|'tripwire'\|'plea'\|'second-opinion', runReportRef, taskRef?, filedAt` | |
-| `Verdict` | `ticketId, success, score?, critique, libraryAction: 'admit'\|'keep-draft'\|'quarantine'\|'archive'\|'none', followUp?: DirectiveSuggestion\|TaskSuggestion, praise?, blocked?` | `blocked` (R72) implies `success:false`, `libraryAction:'none'`; host distinguishes follow-ups with `'to' in fu` (`main.ts:994`) |
+| `Verdict` | `ticketId, success, score?, critique, libraryAction: 'admit'\|'keep-draft'\|'quarantine'\|'archive'\|'none', followUp?: DirectiveSuggestion\|TaskSuggestion, praise?, blocked?` | `blocked` (R72) implies `success:false`, `libraryAction:'none'`; host distinguishes follow-ups with `'to' in fu` (`eden/src/main.ts:994`) |
 | `Rollout` | `id, taskId, villager, attempt, draftVersions[], critiqueChain[], open` | one draft→run→verdict→revise attempt |
 | `VerdictRef` | `verdictId, at, success` | dossier back-reference |
 | `Competence` | `Record<tag, {runs, successes}>` | |
@@ -108,7 +108,7 @@ Things the seam does **not** expose (e.g. `bot.entities`, `bot.findBlock`) are r
 
 ## Events and subscriptions (`types/events.ts`)
 
-`EdenEvent` — closed discriminated union (`events.ts:8-22`):
+`EdenEvent` — closed discriminated union (`eden/src/types/events.ts:8-22`):
 
 | `type` | Fields |
 |---|---|
@@ -166,9 +166,9 @@ interface Inbox { deliver(m: InboxMessage): void; drain(): InboxMessage[] }
 ```
 
 - Concrete: `VillagerInbox` (`eden/src/villagers/inbox.ts:13`) — journals `inbox.delivered` first, FIFO `drain`, plus
-  a non-interface `depth()` that main.ts duck-types for admin (`main.ts:723`).
-- Wiring: `inboxes = new Map<string, Inbox>` (one per villager, `main.ts:554`) handed to `GodService` and
-  `Orchestrator`, which hold only the interface (`god/god.ts:16`, `god/orchestrator.ts:28`).
+  a non-interface `depth()` that main.ts duck-types for admin (`eden/src/main.ts:723`).
+- Wiring: `inboxes = new Map<string, Inbox>` (one per villager, `eden/src/main.ts:554`) handed to `GodService` and
+  `Orchestrator`, which hold only the interface (`eden/src/god/god.ts:16`, `eden/src/god/orchestrator.ts:28`).
 - Producers/consumer: see the Inbox section of [villager-runtime.md](villager-runtime.md).
 
 ### Social seam (`types/social.ts`)
@@ -177,7 +177,7 @@ interface Inbox { deliver(m: InboxMessage): void; drain(): InboxMessage[] }
 |---|---|---|
 | `TradeItem` | `{item, count}` — `coin` aliases `paulsbrawls:coin` at settlement | `social/trade.ts`, `journal/kinds.ts`, `views/` |
 | `MemorySeed` | `{kind, text, tags?, importance?}` | input to `remember` |
-| `MemoryWriter` | `readonly villager; remember(seed): void; moveRelation(other, delta, note): Relation` | implemented by `VillagerMemory` (`villagers/memory.ts:91`); consumed by `social/conversation.ts:18` |
+| `MemoryWriter` | `readonly villager; remember(seed): void; moveRelation(other, delta, note): Relation` | implemented by `VillagerMemory` (`eden/src/villagers/memory.ts:91`); consumed by `eden/src/social/conversation.ts:18` |
 | `Conversant` | `readonly name; readonly memory: MemoryWriter; sayInGame(line): void; playerInEarshot(): boolean` | consumed by `social/conversation.ts`; **no concrete instance is built in `main.ts`** at this commit |
 
 ## The dependency law (`eden/.dependency-cruiser.cjs`)
@@ -220,7 +220,7 @@ root      main.ts (composition root, imports anything)
 - `skills/` ↔ `llm/` (same layer) may import each other (only cycles are blocked); both may import `bots/`,
   `render/`, `views/`, `journal/`, `config.ts`, `logger.ts`.
 - `bots/` may import `journal/`, `config.ts`, `render/`, `views/`, `logger.ts` (rule 7 only lists upward dirs).
-  `villagers/` legally imports `bots/` (`villagers/reactivity.ts:21` → `bots/signals.ts`).
+  `villagers/` legally imports `bots/` (`eden/src/villagers/reactivity.ts:21` → `bots/signals.ts`).
 - Strict layer-1 modules (`journal/`, `config.ts`, `render/`, `views/`) may not import `src/logger.ts`.
 - Root-level files `logger.ts`, `providers.ts`, `scenario-loader.ts`, `village-launch.ts` have no layer rule beyond
   rules 1, 12, 13 (they import `config`, `journal`, `logger`).
@@ -234,7 +234,7 @@ root      main.ts (composition root, imports anything)
 
 - `CLAUDE.md` says "admin/, cli/ are pure CONSUMERS (only main.ts imports them)"; for `cli/` the config forbids
   every importer including `main.ts`.
-- The config's header comment (`.dependency-cruiser.cjs:2`) lists layer 1 as `{journal, config, bots}`; `render/` and
+- The config's header comment (`eden/.dependency-cruiser.cjs:2`) lists layer 1 as `{journal, config, bots}`; `render/` and
   `views/` are layer-1 too by their own rules (5, 6).
 - `docs/04`'s `EdenEvent` sketch differs from the code: `hurt.attacker` → `byEntity`; `player-chat`/`villager-chat`
   use `player`/`villager` not `from`; `entity-spotted` carries `distance`; `inbox` has no fields; `new-day` has `day`;

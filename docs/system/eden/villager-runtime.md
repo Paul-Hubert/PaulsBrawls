@@ -28,66 +28,66 @@ actually fire** (see Gotchas) — most role defaults are inert today.
 | `SubscriptionStore` | `eden/src/villagers/subscriptions.ts:55` | sole writer of subscription state (S2), persistence, cooldown clock | ONE shared per host |
 | `FilterEvaluator` | `eden/src/villagers/subscriptions.ts:218` | clause registry, AND-composition | per router |
 | `loadRoles`/`seedRoleDefaults` | `eden/src/villagers/role-defaults.ts:46`, `:72` | first-boot seeding from `eden/roles.json` | boot |
-| `VillagerReactivity` | `eden/src/villagers/reactivity.ts:167` | assembles adapter + both routers per villager, reconnect-safe | ONE per host (only with a live pool) |
+| `VillagerReactivity` | `eden/src/villagers/reactivity.ts:46` | assembles adapter + both routers per villager, reconnect-safe | ONE per host (only with a live pool) |
 | `DriveTracker` | `eden/src/villagers/drives.ts:52` | optional rest/social decay → `tired`/`lonely` wake-ups | **not instantiated by main.ts** |
 | `Brain` | `eden/src/villagers/brain.ts:73` | one deliberation = one scheduler slot, multi-turn tool loop | ONE per host (stateless) |
 | `ToolRegistry` | `eden/src/villagers/tools.ts:76` | the 11 villager tools; `dispatch` never throws | ONE shared per host |
 | `ContextPackBuilder` | `eden/src/villagers/context-pack.ts:133` | 8 sections, ceilings, density payload, journals `brain.wakeup` | ONE per host |
 | `VillagerInbox` | `eden/src/villagers/inbox.ts:13` | concrete `Inbox`; deliver journals first | one per villager |
 
-Wiring lives entirely in `eden/src/main.ts` `wireGod` (`main.ts:540-696`); the pool's spawn hook calls
-`reactivityRef.current?.attach(name, bot)` on every (re)spawn (`main.ts:206`), and a 30 s `setInterval` (unref'd)
-pumps `reactivity.tick()` (`main.ts:221`).
+Wiring lives entirely in `eden/src/main.ts` `wireGod` (`eden/src/main.ts:486-697`); the pool's spawn hook calls
+`reactivityRef.current?.attach(name, bot)` on every (re)spawn (`eden/src/main.ts:206`), and a 30 s `setInterval` (unref'd)
+pumps `reactivity.tick()` (`eden/src/main.ts:221`).
 
 ## Event normalization (`villagers/events.ts`)
 
 ### The closed event set
 
-The union is fixed in `eden/src/types/events.ts:8-22`. The `EventRouter` registry (`events.ts:138-226`) maps a raw
+The union is fixed in `eden/src/types/events.ts:8-22`. The `EventRouter` registry (`eden/src/villagers/events.ts:138-226`) maps a raw
 signal name to a pure mapper. "Live source" = does anything in a real boot emit that raw signal?
 
 | `EdenEvent.type` | Payload (exact fields) | Raw signal (registry row) | Mapper notes | Live source today |
 |---|---|---|---|---|
-| `hurt` | `damage: number`, `byEntity?: string` | `entityHurt(self, {damage, byEntity})` | `damage` defaults 0 (`events.ts:142-148`) | **yes** — adapter synthesizes it from a health decrease; `byEntity` = nearest hostile's bare name (`signals.ts:61-71`) |
-| `player-chat` | `player: string`, `text: string` | `chat(from, text, meta)` with `meta.isVillager` falsy | `events.ts:151-157` | no |
+| `hurt` | `damage: number`, `byEntity?: string` | `entityHurt(self, {damage, byEntity})` | `damage` defaults 0 (`eden/src/villagers/events.ts:142-148`) | **yes** — adapter synthesizes it from a health decrease; `byEntity` = nearest hostile's bare name (`eden/src/bots/signals.ts:61-71`) |
+| `player-chat` | `player: string`, `text: string` | `chat(from, text, meta)` with `meta.isVillager` falsy | `eden/src/villagers/events.ts:151-157` | no |
 | `villager-chat` | `villager: string`, `text: string` | `chat(from, text, {isVillager:true})` | same row | no |
-| `entity-spotted` | `entity: string` (`name:id` or `name`), `distance: number` | `entitySpotted(entity)` | `refOf()` `events.ts:241`; distance default 0 | no |
-| `entity-lost` | `entity: string` | `entityGone(entity)` | `events.ts:166-169` | no |
+| `entity-spotted` | `entity: string` (`name:id` or `name`), `distance: number` | `entitySpotted(entity)` | `refOf()` `eden/src/villagers/events.ts:241`; distance default 0 | no |
+| `entity-lost` | `entity: string` | `entityGone(entity)` | `eden/src/villagers/events.ts:166-169` | no |
 | `item-received` | `item: string`, `count: number` | `itemReceived(item)` | count default 1 | no |
-| `block-broken-nearby` | `block: string` | `blockBrokenNearby(block)` | `events.ts:177-180` | no |
-| `died` | `byEntity?: string` (never set by the mapper) | `death` | `events.ts:181-184` | **yes** (`signals.ts:72`) |
+| `block-broken-nearby` | `block: string` | `blockBrokenNearby(block)` | `eden/src/villagers/events.ts:177-180` | no |
+| `died` | `byEntity?: string` (never set by the mapper) | `death` | `eden/src/villagers/events.ts:181-184` | **yes** (`eden/src/bots/signals.ts:72`) |
 | `run-finished` | `skill: string`, `ok: boolean` | `runFinished(report)` | `ok = report.ok === true` | no |
-| `inbox` | none | `inbox` | `events.ts:192-195` | no (nothing emits it; see Inbox) |
-| `health-low` | `health: number` | `health` (reads `bot.health`) | hysteresis edge | **yes** (`signals.ts:70`) |
+| `inbox` | none | `inbox` | `eden/src/villagers/events.ts:192-195` | no (nothing emits it; see Inbox) |
+| `health-low` | `health: number` | `health` (reads `bot.health`) | hysteresis edge | **yes** (`eden/src/bots/signals.ts:70`) |
 | `night-falls` | none | `time` (reads `bot.time.timeOfDay`) | hysteresis edge | no |
 | `new-day` | `day: number` | `time` | edge; `day = floor(timeOfDay/24000)` | no |
-| `tick-30s` | none | not a signal — `EventRouter.tick()` | `events.ts:124-126` | **yes** — host `setInterval(30_000)` |
+| `tick-30s` | none | not a signal — `EventRouter.tick()` | `eden/src/villagers/events.ts:124-126` | **yes** — host `setInterval(30_000)` |
 
-Every emitted event is wrapped `{ at: now(), villager, event }` (`events.ts:129-131`). The router journals nothing
+Every emitted event is wrapped `{ at: now(), villager, event }` (`eden/src/villagers/events.ts:129-131`). The router journals nothing
 (R44 — normalization is pulse-adjacent); journaling is the `SubscriptionRouter`'s job.
 
 ### Hysteresis (edge events)
 
 | Edge | Constant | Fires when | Re-arms when | Code |
 |---|---|---|---|---|
-| `health-low` | `DEFAULT_HEALTH_LOW = 6` (override `healthLowThreshold`; host never overrides) | `bot.health < 6` and latch armed (missing health reads as 20) | a `health` signal with `health >= 6` | `events.ts:60`, `:200-211` |
-| `night-falls` | night = `13000 <= t < 23000` on the 0..24000 clock (`NIGHT_FROM`/`NIGHT_TO`) | phase day→night | n/a (phase tracking) | `events.ts:58-59`, `:215-224`, `:230-233` |
+| `health-low` | `DEFAULT_HEALTH_LOW = 6` (override `healthLowThreshold`; host never overrides) | `bot.health < 6` and latch armed (missing health reads as 20) | a `health` signal with `health >= 6` | `eden/src/villagers/events.ts:60`, `:200-211` |
+| `night-falls` | night = `13000 <= t < 23000` on the 0..24000 clock (`NIGHT_FROM`/`NIGHT_TO`) | phase day→night | n/a (phase tracking) | `eden/src/villagers/events.ts:58-59`, `:215-224`, `:230-233` |
 | `new-day` | same band | phase night→day | n/a | same |
 
 The first `time` observation only records the phase (no boot edge). Starting already low fires `health-low` once,
-not repeatedly (`tests/villagers-events.test.ts:110`).
+not repeatedly (`eden/tests/villagers-events.test.ts:110`).
 
 ### Signal adapter (`bots/signals.ts`)
 
 Why it exists: mineflayer's native `entityHurt(entity)` fires for every entity with no damage/attacker; the router
 would emit spurious damage-0 `hurt`s. So the router attaches to a fresh `EventEmitter` bus instead of the bot
-(`signals.ts:8-12`). Scope is explicitly limited to `hurt` + `health` + `death` (`signals.ts:14-18`). The first
+(`eden/src/bots/signals.ts:8-12`). Scope is explicitly limited to `hurt` + `health` + `death` (`eden/src/bots/signals.ts:14-18`). The first
 `health` observation sets the baseline (no hurt at spawn); food-only `health` ticks forward `health` but no
-`entityHurt`. Its hostile table (`signals.ts:28-33`, 27 names) is broader than the `FilterEvaluator`'s (19 names).
+`entityHurt`. Its hostile table (`eden/src/bots/signals.ts:28-33`, 27 names) is broader than the `FilterEvaluator`'s (19 names).
 
 ## Subscriptions (`villagers/subscriptions.ts`)
 
-A `Subscription` (`types/events.ts:66-75`) is data: `{ id (ulid), villager, on: EventType, filter?, handler,
+A `Subscription` (`eden/src/types/events.ts:66-75`) is data: `{ id (ulid), villager, on: EventType, filter?, handler,
 cooldownMs?, source: 'role-default'|'self'|'god'|'admin', enabled }`. No predicate code (P5).
 
 ### Store
@@ -114,13 +114,13 @@ ignored (`:220-228`). Registry `CLAUSES` at `:191-215`:
 | `within` | number | distance ≤ value. **Only `entity-spotted` carries a distance**; for every other event the clause passes (`:192-196`, `:306-309`) |
 | `entityKind` | string | classify the event's entity name into `villager` (`villager`, `wandering_trader`) / `hostile` / `animal` / else **`player`**. Non-entity events → **false** (`:197-201`, `:268-282`) |
 | `nameMatches` | string | case-insensitive substring of a per-event haystack: entity ref, item, block, `"<player> <text>"`, `"<villager> <text>"`, skill name; other events `''` (`:202-206`, `:285-303`) |
-| `timeOfDay` | `'day'\|'night'\|'dawn'\|'dusk'` | phase of `ctx.timeOfDay`: dawn `t>=23000 \|\| t<1000`; dusk `11500<=t<13000`; night `13000<=t<23000`; else day (`:312-318`) — note this differs from the emitter's night band only by the dawn carve-out |
+| `timeOfDay` | `'day'\|'night'\|'dawn'\|'dusk'` | phase of `ctx.timeOfDay`: dawn `t>=23000 \|\| t<1000`; dusk `11500<=t<13000`; night `13000<=t<23000`; else day (`:312-318`) — the night band is identical to the emitter's (`13000<=t<23000`); dawn and dusk are carved out of what the emitter calls day |
 | `healthBelow` | number | `ctx.health < value` |
 | `foodBelow` | number | `ctx.food < value` |
 | `notWhileRunning` | string[] | passes iff none of the named skills is in `ctx.runningSkills` — treated as a **suppression**, not a match clause (below) |
 
 `FilterContext` (`:174-182`) = `{ selfPos, timeOfDay, health, food, runningSkills }`, supplied live by main.ts's
-`vitalsFor` (`main.ts:674-684`; defaults when the bot is absent: pos `[0,64,0]`, time 1200, health 20, food 20;
+`vitalsFor` (`eden/src/main.ts:674-684`; defaults when the bot is absent: pos `[0,64,0]`, time 1200, health 20, food 20;
 `runningSkills = engine.runningSkills(villager)`).
 
 ### Arg templates
@@ -128,7 +128,7 @@ ignored (`:220-228`). Registry `CLAUSES` at `:191-215`:
 `substituteArgs` (`:238-244`): a skill handler arg whose value is a string starting `$event.` is replaced by that
 dotted path into the event (e.g. `"$event.byEntity"`); unresolved → `undefined`, never throws. Other values pass through.
 
-### Routing algorithm (`SubscriptionRouter.route`, `events.ts:308-347`)
+### Routing algorithm (`SubscriptionRouter.route`, `eden/src/villagers/events.ts:308-347`)
 
 For each subscription of this villager whose `on === event.type`:
 
@@ -145,13 +145,13 @@ For each subscription of this villager whose `on === event.type`:
    `WakeupRequest { villager, triggers: ["évènement <type>: <json>"], hints: [all hints], lane, event }` where `lane` is
    the highest among matched subs (`:350-360`, `:413-415`).
 
-Priority → scheduler lane (`events.ts:291-295`): `interrupt → combat`, `normal`/omitted `→ conversation`,
+Priority → scheduler lane (`eden/src/villagers/events.ts:291-295`): `interrupt → combat`, `normal`/omitted `→ conversation`,
 `background → idle`. Lane rank `god < player < combat < conversation < directive < job < idle` (lower = higher
 priority; `eden/src/llm/scheduler.ts:15-16`).
 
-Routing is fire-and-forget at the emit site; a rejected `route()` is only `logger.warn`ed (`reactivity.ts:81-86`).
+Routing is fire-and-forget at the emit site; a rejected `route()` is only `logger.warn`ed (`eden/src/villagers/reactivity.ts:81-86`).
 
-### The reactive wake-up (main.ts `wakeup`, `main.ts:633-671`)
+### The reactive wake-up (main.ts `wakeup`, `eden/src/main.ts:633-671`)
 
 Builds a **fast-tier** context pack and calls `brain.deliberate(input, { lane: req.lane, kind: 'reactive' })`:
 query = `triggers + hints`; `retrievedSkills = retriever.search(query, {tier:'mortal', k: 8})`; §6 =
@@ -165,7 +165,7 @@ config.llm.providers.fast.inputTokenBudget`. Errors are swallowed to `logger.war
 
 JSONC (comments + trailing commas tolerated via `strip-json-comments`). Top level is an object: `everyone` plus any
 role names, each an array of `RoleDefaultSpec { on: EventType, handler: SubscriptionHandler, filter?, cooldownMs? }`
-(`role-defaults.ts:25-36`). An entry is kept iff `on` is a non-empty string and `handler.kind` is `skill` or
+(`eden/src/villagers/role-defaults.ts:25-36`). An entry is kept iff `on` is a non-empty string and `handler.kind` is `skill` or
 `deliberate` (`:99-107`) — `on` is **not** checked against the event union. Missing/corrupt file → `{ everyone: [] }`
 (never throws). Path: `DEFAULT_ROLES_PATH` = `eden/roles.json` resolved from the module (`:39`).
 
@@ -175,7 +175,7 @@ role names, each an array of `RoleDefaultSpec { on: EventType, handler: Subscrip
   `.eden-data/subscriptions/<name>.json`.
 - **D-15 per-event override**: every `everyone` spec whose `on` appears in the role block is dropped; the role spec wins.
 - All seeded subs get `source: 'role-default'`. Unknown role → `everyone` only.
-- Only seeded when a live bot pool exists (`main.ts:620-626`); logs `M5: seeded N role-default reflex(es)…`.
+- Only seeded when a live bot pool exists (`eden/src/main.ts:620-626`); logs `M5: seeded N role-default reflex(es)…`.
 
 ### Every shipped default (`eden/roles.json`)
 
@@ -201,11 +201,11 @@ have no block → `everyone` only. Seeded count per villager: 5 (everyone), guar
 `socialDecayPerTick` = 1), firing `wakeup('tired'|'lonely', villager)` ONCE when a level drops below 25
 (`tiredBelow`/`lonelyBelow`), re-arming on recovery ≥ threshold; `rest(to=100)` / `socialize(to=100)` restore;
 `snapshot()` returns `{rest, social}`. Inert when `enabled:false`. It deliberately does not add events to the
-`EdenEvent` union (`drives.ts:7-14`).
+`EdenEvent` union (`eden/src/villagers/drives.ts:7-14`).
 
 Config gate `behavior.drives` exists (`eden/src/config.ts:65`, default `false` at `:110`), but **nothing in
 `main.ts` constructs a `DriveTracker` or reads `config.behavior`** — the header claim "main.ts ticks one tracker per
-villager" (`drives.ts:13-14`) is false at this commit. With 30 s ticks, a drive would take 76 ticks (~38 min) to fire.
+villager" (`eden/src/villagers/drives.ts:13-14`) is false at this commit. With 30 s ticks, a drive would take 76 ticks (~38 min) to fire.
 
 ## Reactivity assembly (`villagers/reactivity.ts`)
 
@@ -239,9 +239,9 @@ Returns `DeliberationResult { villager, toolCalls, authoredDraft?, draft?, lastR
 messages }` (`:39-54`). `ctx.draft` is seeded from `input.density.draft` so `run_skill` of the draft-under-revision
 trials that version (P2).
 
-### Every villager tool (`villagers/tools.ts:80-155`)
+### Every villager tool (`eden/src/villagers/tools.ts:80-155`)
 
-Exactly 11 (golden test `tests/villagers-tools.test.ts:47`). Descriptions are French. `dispatch` never throws
+Exactly 11 (golden test `eden/tests/villagers-tools.test.ts:47`). Descriptions are French. `dispatch` never throws
 (`:159-192`); usage errors return `ok:false`; an executed-but-failed run is `ok:true` (the brain got a RunReport).
 
 | Tool | Params (required*) | Semantics / result |
@@ -259,13 +259,13 @@ Exactly 11 (golden test `tests/villagers-tools.test.ts:47`). Descriptions are Fr
 | `list_subscriptions` | — | lines `<id> — quand "<on>" [filtre: …] → <handler> (désactivé)`. |
 
 **No direct micro-action tools** (`go_to`, `dig`, `say`, …) exist — every world effect is a `run_skill` of a library
-skill (`tools.ts:1-4`). There are also **no social tools** (`say`, `tell`, `start_conversation`, `leave_conversation`,
+skill (`eden/src/villagers/tools.ts:1-4`). There are also **no social tools** (`say`, `tell`, `start_conversation`, `leave_conversation`,
 trade tools) despite `docs/04` listing them. Memory/subscription tools degrade to honest stubs (`(mémoire non câblée…)`,
 `(réactivité non câblée…)`) when unwired. Memory is resolved per `ctx.villager` from the shared registry.
 
 ## The context pack (`villagers/context-pack.ts`)
 
-Deterministic: same input → byte-identical frame (`tests/villagers-context-pack.test.ts:93`). Output messages:
+Deterministic: same input → byte-identical frame (`eden/tests/villagers-context-pack.test.ts:93`). Output messages:
 `[system frame, …kept history turns, density user message?]`.
 
 ### The 8 sections (fixed order, `:104-125`; ceilings `:93-102`)
@@ -297,10 +297,10 @@ rollout refs (`:174-186`).
 
 ### Who fills which section (actual host behaviour)
 
-| Field | Reactive wake-up (`main.ts:645-664`) | Rollout revision (`main.ts:945-958`) |
+| Field | Reactive wake-up (`eden/src/main.ts:645-664`) | Rollout revision (`eden/src/main.ts:945-958`) |
 |---|---|---|
 | tier / budget | `fast` / fast `inputTokenBudget` | `strong` / strong `inputTokenBudget` (fallback 48000) |
-| persona | `Tu es <name>, <role> du village. Tu parles français.` (roster, `main.ts:579`) | same |
+| persona | `Tu es <name>, <role> du village. Tu parles français.` (roster, `eden/src/main.ts:579`) | same |
 | mood, standingOrders | never set | never set |
 | triggers / hint | `évènement <type>: <json>` / joined hints | `directive de Dieu: <goal>` / literal `authoring` |
 | snapshot | live position/health/food/inventory over `DEFAULT_SNAPSHOT` | same |
@@ -315,7 +315,7 @@ rollout refs (`:174-186`).
 ## The inbox (`villagers/inbox.ts`, `types/inbox.ts`)
 
 `InboxMessage { from: 'god'|'villager', kind: 'directive'|'critique'|'tell', payload: object, at }`. `VillagerInbox`
-journals `inbox.delivered {to, from, kind}` (actor `engine`) **before** queuing (`inbox.ts:22-25`); `drain()` returns
+journals `inbox.delivered {to, from, kind}` (actor `engine`) **before** queuing (`eden/src/villagers/inbox.ts:22-25`); `drain()` returns
 and clears (FIFO); `depth()` is a non-destructive peek used by admin `/villagers`.
 
 | Sender | from / kind | Payload | Code |
@@ -325,7 +325,7 @@ and clears (FIFO); `depth()` is a non-destructive peek used by admin `/villagers
 | Admin `POST /villagers/:name/prompt` | `villager` / `tell` | `{text, from}` | `eden/src/main.ts:393-401`, `eden/src/admin/server.ts:248-261` |
 
 The **only consumer** is the `RolloutCoordinator`, which drains at the start of each revision iteration
-(`main.ts:941`). Nothing emits the `inbox` event, so the `everyone` inbox→deliberate reflex never fires.
+(`eden/src/main.ts:941`). Nothing emits the `inbox` event, so the `everyone` inbox→deliberate reflex never fires.
 
 ## Gotchas & known issues
 
@@ -336,7 +336,7 @@ The **only consumer** is the `RolloutCoordinator`, which drains at the start of 
   `health-low`, `died`, `tick-30s`.
 - **`within` doesn't gate chat.** Only `entity-spotted` carries a distance, so `player-chat` `within: 8` passes for
   any distance (would matter once chat is emitted).
-- **`new-day.day` is always 0**: `dayOf` divides `bot.time.timeOfDay` (0..24000) by 24000 (`events.ts:236-238`).
+- **`new-day.day` is always 0**: `dayOf` divides `bot.time.timeOfDay` (0..24000) by 24000 (`eden/src/villagers/events.ts:236-238`).
 - **`entityKind` defaults unknown names to `player`**, and the clause returns false for non-entity events.
 - **Admin "tell" never wakes a villager**: it sits in the inbox until the next rollout revision drains it; it is
   tagged `from:'villager'` even though a player/admin sent it.
@@ -345,7 +345,7 @@ The **only consumer** is the `RolloutCoordinator`, which drains at the start of 
 - **`report_to_god` goes nowhere in the host**: `reportsToGod` is never read outside `brain.ts`.
 - **§5 recent past is always empty**: both host paths pass `recentEvents: []`; `VillagerMemory.recent()` is unused.
   Mood and standing orders (§1) are also never supplied; `config.villagers[].persona` is parsed
-  (`config.ts:229`) but the roster ignores it.
+  (`eden/src/config.ts:229`) but the roster ignores it.
 - **`history` is always `[]`** in production, so `trimmedPairs` is always 0; prior revisions ride only via density.
 - **`brain.tool-call.ok` is true for a failed run** (only usage errors are `ok:false`), contrary to the comment in
   `eden/src/journal/kinds.ts` ("ok false when … a run failure surfaced to the LLM").
@@ -353,7 +353,7 @@ The **only consumer** is the `RolloutCoordinator`, which drains at the start of 
 - **`setEnabled` has no caller** — the documented "auto-disable on God's quarantine of the underlying skill" is not
   wired; a quarantined skill's subscription keeps firing and erroring (`system.error`).
 - **Drives are dead code in the host** (no `DriveTracker` constructed; `behavior.drives` unused).
-- Comment drift: `roles.json:9-10` still says a duplicate role spec is *skipped*; the code (D-15) makes the role spec
+- Comment drift: `eden/roles.json:9-10` still says a duplicate role spec is *skipped*; the code (D-15) makes the role spec
   *replace* everyone's spec on that event.
 - Reactivity (routers, seeding) exists only when a bot pool exists; CI/no-bot boots have none.
 
