@@ -884,6 +884,7 @@ function wireGod(args: {
         const home = args.homeOf?.(villager);
         return { home: home ? { x: home[0], y: home[1], z: home[2] } : undefined };
       },
+      silentSpeakers: [config.god.name],
     });
     const live = reactivity;
     signalInbox = (villager) => live.signal(villager, 'inbox');

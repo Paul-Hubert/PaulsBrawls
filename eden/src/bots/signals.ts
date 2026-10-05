@@ -46,6 +46,8 @@ export interface BotSignals {
 export interface SignalOptions {
   /** True for a roster villager's username — its chat becomes `villager-chat`, everyone else's `player-chat`. */
   isVillager?: (username: string) => boolean;
+  /** Speakers whose chat is not an event at all (the divine avatar: God reaches villagers through the inbox). */
+  isSilent?: (username: string) => boolean;
   /** An entity entering this radius (blocks) is `entitySpotted`. Default 16 (the guard role's filter). */
   spotRadius?: number;
   /** A spotted entity is `entityGone` only beyond this radius (hysteresis). Default 24. */
@@ -97,7 +99,7 @@ export function attachReactivitySignals(bot: Bot, opts: SignalOptions = {}): Bot
   // meta so `within` can gate a chat subscription (an unloaded speaker is CHAT_DISTANCE_UNKNOWN away).
   const onChat = (...args: unknown[]): void => {
     const username = String(args[0] ?? '');
-    if (!username || username === bot.username) return;
+    if (!username || username === bot.username || opts.isSilent?.(username)) return;
     const isVillager = opts.isVillager?.(username) ?? false;
     bus.emit('chat', username, String(args[1] ?? ''), { isVillager, distance: distanceTo(bot, playerPosition(bot, username)) });
   };

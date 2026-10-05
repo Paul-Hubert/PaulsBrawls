@@ -37,6 +37,8 @@ export interface VillagerReactivityOptions {
   healthLowThreshold?: number;
   /** B3.6: per-villager template scope for skill-handler args (main.ts: `{ home }` from the healed anchors). */
   scopeFor?: (villager: string) => Record<string, unknown>;
+  /** Usernames whose chat is never an event (main.ts: the avatar — else its in-person verdicts read as player-chat). */
+  silentSpeakers?: readonly string[];
 }
 
 interface PerBot {
@@ -64,7 +66,8 @@ export class VillagerReactivity {
   attach(villager: string, bot: Bot): void {
     if (!this.roles.has(villager)) return;
     this.detachOne(villager); // reconnect-safe — drop the stale router bound to the previous bot instance
-    const adapter = attachReactivitySignals(bot, { isVillager: (name) => this.roles.has(name) });
+    const silent = new Set(this.o.silentSpeakers ?? []);
+    const adapter = attachReactivitySignals(bot, { isVillager: (name) => this.roles.has(name), isSilent: (name) => silent.has(name) });
     const runner: RunnerRef = { name: villager, role: this.roles.get(villager) as string, tier: 'mortal' };
     const subRouter = new SubscriptionRouter({
       villager,

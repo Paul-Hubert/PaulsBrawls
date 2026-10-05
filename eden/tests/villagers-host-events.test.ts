@@ -101,7 +101,7 @@ test('adapter: native time is forwarded (the router owns the day/night edge)', (
 
 // ── 2. End-to-end through VillagerReactivity + the shipped roles.json ─────────────────────────────
 
-function host(roster: Array<{ name: string; role: string }>) {
+function host(roster: Array<{ name: string; role: string }>, extra: { silentSpeakers?: string[] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'eden-host-events-'));
   const journal = new MemoryJournal();
   const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
@@ -119,6 +119,7 @@ function host(roster: Array<{ name: string; role: string }>) {
     villagers: roster, store, engine, journal,
     wakeup: async (req) => { wakeups.push(req); },
     vitalsFor: (name) => ({ selfPos: [0, 64, 0], timeOfDay: 6000, health: 20, food: 20, runningSkills: engine.runningSkills(name) }),
+    ...extra,
   });
   return { journal, reactivity, wakeups, bots };
 }
@@ -237,4 +238,19 @@ test('an inbox wake-up shows only the messages not shown before', async () => {
   assert.deepEqual(unseenInbox(inbox, shown).map((m) => (m.payload as { text: string }).text), ['deux']);
   assert.deepEqual(unseenInbox(inbox, shown), []);
   assert.equal(inbox.depth(), 2, 'still not drained — the rollout coordinator owns draining');
+});
+
+// Review fix: the avatar (Dieu) is not a roster villager, so its in-person verdicts reached villagers within 8 blocks
+// as player-chat ("un joueur te parle"). Its chat is not an event (God reaches villagers through the inbox).
+test('the avatar’s chat is not a player-chat event', async () => {
+  const h = host([{ name: 'Firmin', role: 'farmer' }], { silentSpeakers: ['Dieu'] });
+  const bot = botWithPlayers('Firmin', { Dieu: { x: 2, y: 64, z: 0 }, paul: { x: 2, y: 64, z: 1 } });
+  h.bots.set('Firmin', bot);
+  h.reactivity.attach('Firmin', bot);
+  bot.emit('chat', 'Dieu', 'Ton skill est admis.');
+  await settle();
+  assert.equal(h.wakeups.length, 0, 'God speaking is not a player talking to me');
+  bot.emit('chat', 'paul', 'bonjour');
+  await waitFor(() => h.wakeups.length === 1);
+  h.reactivity.detach();
 });
