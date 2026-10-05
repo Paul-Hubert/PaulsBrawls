@@ -100,6 +100,7 @@ export class SkillLibrary {
   // ── Authoring ──────────────────────────────────────────────────────────
   /** Upsert a draft (owner #8: same tool creates + updates). Creates a new draft version, never reuses. */
   upsertDraft(input: DraftInput): SkillVersion {
+    assertSkillName(input.name); // bug #13: the name becomes a directory under library/
     const record = this.skills.get(input.name) ?? { name: input.name, records: [] };
     const version = this.nextVersion(record);
     const codePath = this.writeCode(input.name, version, input.code);
@@ -390,6 +391,26 @@ export class SkillLibrary {
         // A corrupt index for one skill must not stop the rest from loading.
       }
     }
+  }
+}
+
+/** A skill name that cannot be used as its `library/<name>/` directory (bug #13 — path traversal). */
+export class InvalidSkillNameError extends Error {
+  constructor(name: string, reason: string) {
+    super(`invalid skill name ${JSON.stringify(name)}: ${reason} — use letters, digits, '-' or '_' (it names a directory under library/)`);
+    this.name = 'InvalidSkillNameError';
+  }
+}
+
+/** Reject a name that would nest (`/`, `\`), escape (`..`), hide (leading `.`), or misbehave as a
+ *  directory name on the owner's Windows host (`:` opens an alternate data stream; control chars). */
+export function assertSkillName(name: string): void {
+  if (name.trim() === '') throw new InvalidSkillNameError(name, 'empty');
+  if (/[/\\]/.test(name)) throw new InvalidSkillNameError(name, 'contains a path separator');
+  if (name.includes('..')) throw new InvalidSkillNameError(name, "contains '..'");
+  if (name.startsWith('.')) throw new InvalidSkillNameError(name, "starts with '.'");
+  if (name.includes(':') || [...name].some((c) => c.charCodeAt(0) < 0x20)) {
+    throw new InvalidSkillNameError(name, "contains ':' or a control character");
   }
 }
 

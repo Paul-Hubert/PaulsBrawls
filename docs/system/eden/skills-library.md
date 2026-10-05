@@ -74,7 +74,7 @@ Refs carry `skill` + `skillVersion` (and `rolloutId`/`verdictId` for admit). Ski
 
 | Field | Type | Source / default |
 |---|---|---|
-| `name` | string | input name (also the directory name — not sanitized) |
+| `name` | string | input name (also the directory name — validated by `assertSkillName`, see Gotchas) |
 | `summary` | string | author's one-liner; may be replaced by the description pass |
 | `description` | string | `input.description ?? input.summary` |
 | `params` | JSON Schema object | as given; `write_skill` default `{type:'object', properties:{}}` |
@@ -284,9 +284,11 @@ quarantines on mismatch with reason `code hash mismatch at boot — file tampere
 - **Tripwire is inert** in the host (no `onTripwire` passed). Nothing auto-quarantines on failure streaks.
 - **Description pass is not wired** (no `describer`) — `description` stays equal to the author summary.
 - **`verifyHashes` is never invoked** at boot despite docs saying it is.
-- **Skill names are used unsanitized as directory names** (`join(dataDir,'library',name)`). A name
-  containing `/` writes into a nested directory that `load()` (top-level only) will not find after a
-  restart; `..` segments escape `library/`. `write_skill` only trims the name.
+- ~~**Skill names are used unsanitized as directory names**~~ **Fixed (bug #13):** `upsertDraft` calls
+  `assertSkillName` first, which throws `InvalidSkillNameError` (`invalid skill name "<n>": <reason> — use
+  letters, digits, '-' or '_' …`) for an empty name, `/` or `\`, `..`, a leading `.`, `:` (a Windows alternate
+  data stream) or a control character — before anything is written or journaled. `write_skill` surfaces it
+  as an `ok:false` tool result. Records already on disk are not re-validated at `load()`.
 - **Missing code file** → `resolve()` throws `ENOENT` from `readFileSync` (`eden/src/skills/library.ts:315-317`) for
   `readRunnable`/`read`/`liveSkills`; only `history()` degrades to `''`. A single deleted `v*.js` of a live
   version therefore breaks `liveSkills()` and with it every `search_skills` call.

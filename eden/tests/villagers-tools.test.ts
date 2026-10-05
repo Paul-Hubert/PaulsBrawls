@@ -382,3 +382,14 @@ test('trade tools: malformed args are usage errors; an unwired desk is an honest
   assert.equal(stub.ok, false);
   assert.match(stub.content, /non câblé/);
 });
+
+test('bug #13: write_skill with a path-traversal name is a readable tool error, never a file outside library/', async () => {
+  const { tools } = harness();
+  const out = await tools.dispatch(
+    call('write_skill', { name: '../../escape', summary: 's', params: OBJ, returns: OBJ, code: 'async function f(bot,args,ctx){ return 1; }' }),
+    CTX(),
+  );
+  assert.equal(out.ok, false);
+  assert.match(out.content, /invalid skill name "\.\.\/\.\.\/escape"/);
+  assert.equal(out.authored, undefined);
+});

@@ -158,3 +158,15 @@ test('M2-2: a divine draft keeps its tier through the manifest (set by God/admin
   const m: SkillManifest | undefined = library.read('summon-creature', v.version)?.manifest;
   assert.equal(m?.tier, 'divine');
 });
+
+// Bug #13: a skill name is a directory under library/ — `/` nested it, `..` escaped library/ entirely.
+test('bug #13: upsertDraft rejects names that are not a safe directory name, writing nothing', () => {
+  const { library, journal, dir } = lib();
+  for (const bad of ['../evil', 'a/b', 'a\\b', '..', '.hidden', 'x..y', 'c:stream', 'tab\tname', '', '   ']) {
+    assert.throws(() => library.upsertDraft(draft({ name: bad })), /invalid skill name/, `"${bad}" must be refused`);
+  }
+  assert.deepEqual(readdirSync(dir), [], 'nothing was written anywhere under the data dir');
+  assert.equal(journal.query({ kinds: ['skill.draft'] }).length, 0);
+  // Ordinary names (incl. accents, digits, - and _) stay valid.
+  assert.equal(library.upsertDraft(draft({ name: 'récolter-blé_2' })).version, 1);
+});
