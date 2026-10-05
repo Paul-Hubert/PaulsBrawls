@@ -2,7 +2,7 @@
 id: aigod.configuration-and-commands
 title: AI God — LLMConfig, llm_config.properties, /llm, /pray, /prompt and prompt.txt
 system: aigod
-summary: LLMConfig fields/defaults, llm_config.properties keys, env vars, every AI God command (/llm and /llm bridge, /pray, /pray stop, /accept, /prompt, /godbody, /block, /construction) with syntax and perms, prompt.txt loading.
+summary: LLMConfig fields, llm_config.properties keys, env vars, every AI God command (/llm, /llm bridge, /pray, /accept, /prompt, /godbody, /block, /construction), prompt.txt loading.
 tags: [aigod, config, llmconfig, llm_config.properties, env, openai_api_key, commands, llm, pray, prompt, godbody, accept, prompt.txt, permissions]
 sources: [src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/LLMCommand.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPCommand.java, src/main/java/com/paul/brawl/Prompts.java, prompt.txt, build_prompt.txt, build.gradle]
 verified_at: 4a8081f
@@ -39,7 +39,7 @@ commands are perm 2; `/pray`, `/pray stop`, `/accept` are perm 0. The persona is
 | `anthropic` | `https://api.anthropic.com` | `443` | `claude-opus-4-8` | `""` (→ env) |
 
 Anthropic uses `AnthropicChatModel` and ignores host/port (dependency `langchain4j-anthropic:1.0.0-beta5`,
-`build.gradle:49`, `:57`). Builder details: [llm-pipeline.md](llm-pipeline.md#provider-construction-llmconfigbuildmodel-llmconfigjava98-123).
+`build.gradle:49`, `:57`). Builder details: [llm-pipeline.md](llm-pipeline.md) (section "Provider construction").
 
 ### Environment variables
 
@@ -125,7 +125,7 @@ Status line format: `BridgeConfig{enabled=…, url=…, bot=…, appear=[1.0..6.
 
 | Syntax | Perm | Behaviour |
 |---|---|---|
-| `/pray <text…>` (`MessageArgumentType.message()` — greedy, supports `@`-selectors) | 0 | `onChatCommand` (`:87-109`): private echo `<name> : <text>`; `GodSessionManager.claim(player)`; if not owned, private `Dieu : (occupé ailleurs — je t'écoute, mais sans forme.)`; then `ChatBot.godBot.sendChatRequest(text, player)`. Exceptions are logged, not shown. |
+| `/pray <text…>` (`MessageArgumentType.message()`, greedy) | 0 | `onChatCommand` (`:87-109`): private echo `<name> : <text>`; `GodSessionManager.claim(player)`; if not owned, private `Dieu : (occupé ailleurs — je t'écoute, mais sans forme.)`; then `ChatBot.godBot.sendChatRequest(text, player)`. Exceptions are logged, not shown. |
 | `/pray stop` | 0 | If the caller owns the avatar session: `ChatBot.endPrayerSession(player)` + private `Dieu : (la séance est close.)`. Otherwise silently does nothing. Does not clear memory or cancel an in-flight LLM call (its response is then dropped by the session-ended check). |
 
 Note `/pray stop` is a literal branch: praying the single word "stop" is impossible.
@@ -133,7 +133,7 @@ Note `/pray stop` is a literal branch: praying the single word "stop" is impossi
 ### `/accept` (`TradeOffers.java:97-107`)
 
 `/accept` — no `requires` → perm 0. Executes the caller's pending trade. Details:
-[actions-and-trades.md](actions-and-trades.md#trades--tradeoffers).
+[actions-and-trades.md](actions-and-trades.md) (section "Trades").
 
 ### `/godbody` (`ChatCommand.java:57-85`)
 

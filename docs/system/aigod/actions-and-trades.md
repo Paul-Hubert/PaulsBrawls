@@ -2,7 +2,7 @@
 id: aigod.actions-and-trades
 title: AI God — world actions (ChatBotActions) and trades (/accept)
 system: aigod
-summary: Every public ChatBotActions method (item give, lightning, weather, spawn, block placement, getBlockInfo, avatar invulnerability) and the TradeOffers pending-offer + /accept flow with exact messages and edge cases.
+summary: ChatBotActions world effects (items, lightning, weather, spawns, block placement, getBlockInfo, avatar invulnerability) and the TradeOffers pending-offer + /accept flow.
 tags: [aigod, chatbotactions, tradeoffers, accept, reward, punishment, smite, weather, spawncreature, getblockinfo, avatar, invulnerable, coin]
 sources: [src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/ChatPrinter.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/Money.java, src/main/java/com/paul/brawl/Raycaster.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/GodSessionManager.java]
 verified_at: 4a8081f

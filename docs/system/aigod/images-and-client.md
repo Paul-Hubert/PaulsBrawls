@@ -2,7 +2,7 @@
 id: aigod.images-and-client
 title: AI God — screenshots (/prove, /build), ImagePayload, client entrypoint
 system: aigod
-summary: Client-side /prove and /build commands, framebuffer capture and resize, the screenshot:image C2S payload codec, server ImageReceiver routing into ChatBot.sendImageChatRequest, and ClientEntryPoint wiring.
+summary: Client /prove and /build, framebuffer capture + resize, the screenshot:image C2S payload, ImageReceiver routing into ChatBot.sendImageChatRequest, ClientEntryPoint wiring.
 tags: [aigod, client, screenshot, prove, build, imagepayload, imagereceiver, networking, customPayload, vision, clientEntryPoint, money]
 sources: [src/client/java/com/paul/brawl/Screenshotter.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, src/main/java/com/paul/brawl/ImagePayload.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/Money.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/resources/fabric.mod.json]
 verified_at: 4a8081f
