@@ -7,7 +7,7 @@
   // "$event.*" paths in a skill handler's args resolve from the event at fire time.
   //
   // "everyone" seeds every villager regardless of role; a named role block adds to it. A role spec that
-  // duplicates an everyone spec (same event + handler kind) is skipped (no double-reflex).
+  // duplicates an everyone spec (same event + handler kind) replaces it (D-15 — no double-reflex).
   // Edit freely — re-seeding only happens on a villager's FIRST boot (delete its
   // .eden-data/subscriptions/<name>.json to re-adopt these).
 
@@ -18,8 +18,9 @@
     { "on": "health-low", "handler": { "kind": "deliberate", "hint": "ta santé est basse — décide quoi faire (manger, fuir, demander de l'aide)", "priority": "interrupt" } },
     // A player speaks within earshot → deliberate (they may want to trade or talk).
     { "on": "player-chat", "filter": { "within": 8 }, "handler": { "kind": "deliberate", "hint": "un joueur te parle — réponds en français", "priority": "normal" }, "cooldownMs": 2000 },
-    // Something landed in your inbox (a directive/critique/tell from God) → deliberate.
-    { "on": "inbox", "handler": { "kind": "deliberate", "hint": "tu as reçu un message de Dieu — lis-le et agis", "priority": "normal" } },
+    // A tell landed in your inbox (an admin, a player or another villager — D-17; God's directives and critiques
+    // reach the villager through the rollout, not this event) → deliberate.
+    { "on": "inbox", "handler": { "kind": "deliberate", "hint": "tu as reçu un message — lis-le et agis", "priority": "normal" } },
     // Night fell → go home (a free reflex) so villagers don't wander into the dark. $home.* is the villager's
     // healed home anchor (B3.6); with no anchor yet the keys drop and go-home no-ops cleanly.
     { "on": "night-falls", "handler": { "kind": "skill", "name": "go-home", "args": { "x": "$home.x", "y": "$home.y", "z": "$home.z" } } }

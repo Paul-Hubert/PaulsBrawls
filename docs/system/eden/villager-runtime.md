@@ -193,12 +193,12 @@ role names, each an array of `RoleDefaultSpec { on: EventType, handler: Subscrip
 | everyone | `hurt` | `notWhileRunning: ["flee-to-safety"]` | skill `flee-to-safety` `{}` | 3000 | 16 |
 | everyone | `health-low` | — | deliberate, `interrupt`: « ta santé est basse — décide quoi faire (manger, fuir, demander de l'aide) » | — | 18 |
 | everyone | `player-chat` | `within: 8` | deliberate, `normal`: « un joueur te parle — réponds en français » | 2000 | 20 |
-| everyone | `inbox` | — | deliberate, `normal`: « tu as reçu un message de Dieu — lis-le et agis » | — | 22 |
-| everyone | `night-falls` | — | skill `go-home` `{x:"$home.x", y:"$home.y", z:"$home.z"}` | — | 25 |
-| guard | `hurt` (overrides everyone's) | `notWhileRunning: ["defend-self"]` | skill `defend-self` `{}` | 1000 | 34 |
-| guard | `entity-spotted` | `entityKind: "hostile", within: 16` | deliberate, `interrupt`: « un ennemi est repéré — décide d'attaquer, d'alerter ou de te replier » | 5000 | 36 |
-| farmer | `new-day` | — | skill `harvest-field` `{}` | — | 41 |
-| miner | `new-day` | — | deliberate, `background`: « nouveau jour — planifie ta session de minage » | — | 46 |
+| everyone | `inbox` | — | deliberate, `normal`: « tu as reçu un message — lis-le et agis » (D-17: an admin, player or villager tell) | — | 23 |
+| everyone | `night-falls` | — | skill `go-home` `{x:"$home.x", y:"$home.y", z:"$home.z"}` | — | 26 |
+| guard | `hurt` (overrides everyone's) | `notWhileRunning: ["defend-self"]` | skill `defend-self` `{}` | 1000 | 35 |
+| guard | `entity-spotted` | `entityKind: "hostile", within: 16` | deliberate, `interrupt`: « un ennemi est repéré — décide d'attaquer, d'alerter ou de te replier » | 5000 | 37 |
+| farmer | `new-day` | — | skill `harvest-field` `{}` | — | 42 |
+| miner | `new-day` | — | deliberate, `background`: « nouveau jour — planifie ta session de minage » | — | 47 |
 
 All four named skills exist as stock skills (`eden/src/skills/exemplars/index.ts:721` flee-to-safety, `:741`
 defend-self, `:769` go-home, `:790` harvest-field). Scenario roles `crafter` and `merchant` (in `eden/scenarios/*.json`)
@@ -391,8 +391,8 @@ sees the messages through `peek()` and does not drain them. Directives and criti
 - ~~**Drives are dead code in the host**~~ **Fixed (B3.7):** `wireDrives` builds them when `behavior.drives` is true (see
   Drives). Comment drift: `eden/src/villagers/drives.ts:13-14` still says the wake-up rides the conversation lane; the
   host uses `idle`.
-- Comment drift: `eden/roles.json:9-10` still says a duplicate role spec is *skipped*; the code (D-15) makes the role spec
-  *replace* everyone's spec on that event.
+- ~~Comment drift: `eden/roles.json:9-10` says a duplicate role spec is *skipped*~~ — corrected in phase C: the comment now
+  says the role spec *replaces* everyone's spec on that event (D-15).
 - Reactivity (routers, seeding, drives) exists only when a bot pool exists; CI/no-bot boots have none.
 
 ## Related

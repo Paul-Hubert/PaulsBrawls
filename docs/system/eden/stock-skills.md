@@ -229,7 +229,7 @@ stops on the first dig error.
 - **harvest-field digs immature wheat** (no age check) and does not move or pick up drops; far wheat fails
   `dig` and ends the loop.
 - ~~**go-home is always a no-op as a reflex**~~ — since B3.6 roles.json templates its args from `$home.x/y/z`
-  (`eden/roles.json:25`), `substituteArgs` resolves them from the healed home anchor the host supplies
+  (`eden/roles.json:26`), `substituteArgs` resolves them from the healed home anchor the host supplies
   (`eden/src/villagers/subscriptions.ts:241-266`, `eden/src/main.ts:874-876`), and `night-falls` has a live
   source (the `time` signal, `eden/src/bots/signals.ts:129`; edge in `eden/src/villagers/events.ts:216-224`).
   With no anchor yet the keys drop and go-home still no-ops. Role defaults are seeded only at a villager's
