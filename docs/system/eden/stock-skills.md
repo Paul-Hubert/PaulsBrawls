@@ -142,8 +142,8 @@ return value is `{crafted: count}` (not the item total; e.g. planks yield 4 per 
 asked for a recipe craftable at least once, so `count > 1` can fail in `bot.craft` on short materials.
 
 **use-chest** — compose `go-to` (range 3); `blockAt`; throws `no chest at …`; `safeCloseStray`;
-`pauseMutators`; `bot.openContainer(block)`; deposit/withdraw each `{name,count}` via `itemId`;
-`finally` `chest.close()` + `resumeMutators`. Works for any container block (chest, barrel…).
+then inside one `try`: `pauseMutators`, `bot.openContainer(block)`, deposit/withdraw each `{name,count}` via `itemId`;
+`finally` closes the chest if it opened + `resumeMutators`. Works for any container block (chest, barrel…).
 
 **deposit / withdraw** — thin wrappers over `use-chest`; the return is `items.length` (number of entries),
 not the item count.
@@ -219,9 +219,10 @@ stops on the first dig error.
 
 ## Gotchas & known issues
 
-- **use-chest / smelt-item leak paused mutators on open failure:** `pauseMutators` runs *before* the `try`,
-  so if `openContainer` / `openFurnace` rejects (e.g. "windowOpen did not fire"), auto-eat and armor-manager
-  stay disabled (`:232-241`, `:291-300`). `craft-item` wraps everything in `try/finally` and is safe.
+- ~~**use-chest / smelt-item leak paused mutators on open failure**~~ **Fixed (bug #14):** `pauseMutators` and
+  the `openContainer` / `openFurnace` call now sit inside the `try`, and the `finally` closes the window only if
+  it opened, so a rejected open ("windowOpen did not fire") still resumes auto-eat and armor-manager. Pinned by
+  two FakeBot tests in `eden/tests/skills-exemplars.test.ts` whose open rejects.
 - **tend-bread-farm is not failure-tolerant at the harvest/till steps:** `harvest-nearby-crop` and
   `till-spot-near-water` are not try/caught, so e.g. `till-block`'s `pas de houe dans l’inventaire` aborts the
   whole loop. `breadThreshold` is also used as the wheat-per-loaf divisor (correct only at 3).

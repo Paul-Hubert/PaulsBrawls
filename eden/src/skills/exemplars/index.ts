@@ -229,14 +229,15 @@ const USE_CHEST: StockSkill = {
   const block = bot.blockAt(new ctx.Vec3(x, y, z));
   if (!block) throw new Error('no chest at ' + x + ',' + y + ',' + z + ' (gone or chunk unloaded)');
   await safeCloseStray(bot); // R1: a stray window makes openContainer hang ("windowOpen did not fire") or hijack (D4)
-  pauseMutators(bot); // R3
-  const chest = await bot.openContainer(block);
+  let chest = null;
   try {
+    pauseMutators(bot); // R3 — inside the try so a failed open still resumes them (bug #14)
+    chest = await bot.openContainer(block);
     for (const it of deposit) await chest.deposit(itemId(bot, it.name), null, it.count);
     for (const it of withdraw) await chest.withdraw(itemId(bot, it.name), null, it.count);
     return { ok: true };
   } finally {
-    chest.close();
+    if (chest) chest.close();
     resumeMutators(bot);
   }
 }`,
@@ -288,16 +289,17 @@ const SMELT_ITEM: StockSkill = {
   const furnaceBlock = bot.findBlock({ matching: (b) => b.name === 'furnace', maxDistance: 16 });
   if (!furnaceBlock) throw new Error('no furnace within reach');
   await safeCloseStray(bot); // R1/D4
-  pauseMutators(bot); // R3
-  const furnace = await bot.openFurnace(furnaceBlock);
+  let furnace = null;
   try {
+    pauseMutators(bot); // R3 — inside the try so a failed open still resumes them (bug #14)
+    furnace = await bot.openFurnace(furnaceBlock);
     await furnace.putFuel(itemId(bot, fuel), null, 1);
     await furnace.putInput(itemId(bot, input), null, count);
     let smelted = 0;
     while (smelted < count) { await new Promise((r) => setTimeout(r, 1000)); ctx.log('smelting...'); smelted = furnace.outputItem() ? furnace.outputItem().count : smelted; }
     await furnace.takeOutput();
     return { smelted: count };
-  } finally { furnace.close(); resumeMutators(bot); }
+  } finally { if (furnace) furnace.close(); resumeMutators(bot); }
 }`,
 };
 

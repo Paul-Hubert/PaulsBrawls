@@ -167,6 +167,36 @@ test('M2-6 (D4/R3): use-chest pause/resume is GUARDED — no throw when auto-eat
   assert.equal(bot.chestContents({ x: 2, y: 64, z: 0 }).find((i) => i.name === 'oak_log')?.count, 4);
 });
 
+// Bug #14: pauseMutators used to run BEFORE the try, so a window that failed to open skipped the finally and
+// left auto-eat + armor-manager disabled for the rest of the bot's life (a starving, unarmoured villager).
+test('bug #14: use-chest RESUMES auto-eat/armor-manager when the container fails to open', async () => {
+  const bot = new FakeBot({ username: 'Firmin', position: { x: 0, y: 64, z: 0 } });
+  bot.setBlock({ x: 2, y: 64, z: 0 }, 'chest');
+  (bot as unknown as { openContainer: () => Promise<never> }).openContainer = () =>
+    Promise.reject(new Error('windowOpen did not fire within 20000ms'));
+  const { engine } = harness(bot);
+  const report = await engine.run('use-chest', { x: 2, y: 64, z: 0, deposit: [] }, MORTAL);
+  assert.equal(report.outcome.ok, false, 'the failed open is still reported');
+  assert.match(report.outcome.ok ? '' : report.outcome.error, /windowOpen did not fire/);
+  assert.ok(bot.calls.includes('autoEat.disableAuto'), 'the mutators were paused around the open');
+  assert.equal(bot.autoEat.enabled, true, 'auto-eat re-enabled after the failed open');
+  assert.equal(bot.armorManager.paused, false, 'armor-manager resumed after the failed open');
+});
+
+test('bug #14: smelt-item RESUMES auto-eat/armor-manager when the furnace fails to open', async () => {
+  const bot = new FakeBot({ username: 'Firmin', position: { x: 0, y: 64, z: 0 } });
+  bot.setBlock({ x: 2, y: 64, z: 0 }, 'furnace');
+  (bot as unknown as { openFurnace: () => Promise<never> }).openFurnace = () =>
+    Promise.reject(new Error('windowOpen did not fire within 20000ms'));
+  const { engine } = harness(bot);
+  const report = await engine.run('smelt-item', { input: 'iron_ore', fuel: 'coal' }, MORTAL);
+  assert.equal(report.outcome.ok, false);
+  assert.match(report.outcome.ok ? '' : report.outcome.error, /windowOpen did not fire/);
+  assert.ok(bot.calls.includes('autoEat.disableAuto'));
+  assert.equal(bot.autoEat.enabled, true, 'auto-eat re-enabled after the failed open');
+  assert.equal(bot.armorManager.paused, false, 'armor-manager resumed after the failed open');
+});
+
 test('M2-6: deposit composes use-chest (a 3-level mortal call tree, depth-cap safe)', async () => {
   const bot = new FakeBot({ username: 'Firmin' });
   bot.setBlock({ x: 2, y: 64, z: 0 }, 'chest');
