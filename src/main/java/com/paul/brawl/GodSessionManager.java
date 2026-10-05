@@ -18,8 +18,8 @@ import net.minecraft.server.network.ServerPlayerEntity;
  * one process driving Appear / Vanish / the invuln flag at any moment.
  *
  * <p>An idle watchdog force-vanishes a session that goes quiet for
- * {@link BridgeConfig#idleTimeoutSeconds}. Each user message and each Wait
- * resets it; the timeout is required to exceed {@code waitMaxSeconds} so a
+ * {@link BridgeConfig#idleTimeoutSeconds}. Each user message, each Wait and
+ * every tool dispatch of the owning session (bug #8) resets it; the timeout is required to exceed {@code waitMaxSeconds} so a
  * deliberate pause doesn't trip it.
  */
 public final class GodSessionManager {

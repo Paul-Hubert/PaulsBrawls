@@ -368,7 +368,12 @@ public class ChatBotFunctions {
         List<FunctionResult> results = new ArrayList<>();
         int waitSeconds = 0;
         for (ToolExecutionRequest req : requests) {
+            // Bug #8: the owner's session is busy while its tools run. The watchdog used to reset only on
+            // claim / Appear / Wait, so a long chain of other calls (slow MCP tools) was killed mid-chain.
+            // Reset around every dispatch (a no-op unless this player owns the session).
+            GodSessionManager.resetIdleTimer(player);
             String ret = executeFunction(req, player, chatBot);
+            GodSessionManager.resetIdleTimer(player);
             results.add(new FunctionResult(req, ret));
             if ("Wait".equals(req.name())) {
                 // Multiple Waits in one batch: take the longest (more dramatic
@@ -457,7 +462,9 @@ public class ChatBotFunctions {
                     // can never collide with the PascalCase Java POJO names above,
                     // so a fallthrough check is safe.
                     if (MCPGateway.INSTANCE.handlesTool(name)) {
-                        yield MCPGateway.INSTANCE.execute(req);
+                        // Bug #8: these drive the shared avatar — same ownership rule as Appear/Vanish.
+                        String refusal = GodToolGate.mcpRefusal(BridgeConfig.INSTANCE.enabled, GodSessionManager.isActive(player));
+                        yield refusal != null ? refusal : MCPGateway.INSTANCE.execute(req);
                     }
                     // Genuinely unknown name (model hallucination, or a tool we
                     // removed). Point at ListTools so the model has a one-call
@@ -516,7 +523,8 @@ public class ChatBotFunctions {
      * calls so they never touch world state.
      */
     private static void fireGestures(List<ToolExecutionRequest> requests, ServerPlayerEntity player, List<FunctionResult> results) {
-        if (!GodSessionManager.hasManifested()) return;
+        // Bug #8: hasManifested() is global — a bodiless player's Reward used to nod the owner's body.
+        if (!GodSessionManager.hasManifested() || !GodSessionManager.isActive(player)) return;
         for (ToolExecutionRequest req : requests) {
             switch (req.name()) {
                 case "Punishment" -> {

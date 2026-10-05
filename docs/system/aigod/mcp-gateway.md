@@ -146,7 +146,10 @@ Execution characteristics:
 - Runs on the LLM worker thread that is processing the tool batch; **not** wrapped in `GodActionQueue`/`runOnMain` (the
   work happens in the Node process). It blocks that worker until the MCP call returns or times out.
 - Tool results join the other results and go back via `sendFunctionOutputs` (or a `Wait` deferral) like any Java tool.
-- No ownership gate (`GodSessionManager`), no `BridgeConfig.enabled` check, no gestures (`fireGestures` has no MCP arms).
+- Gated (bug #8): `executeFunction` asks `GodToolGate.mcpRefusal(BridgeConfig.enabled, GodSessionManager.isActive(player))`
+  first and returns its French refusal instead of calling the gateway (`Le corps de Dieu est désactivé…` /
+  `…occupé avec un autre fidèle…`). No gestures (`fireGestures` has no MCP arms). Each dispatch resets the owner's
+  idle watchdog before and after the call.
 - Results count toward `ChatBot.MAX_MEMORY_TOKENS = 16_000`; large JSON results evict older memory.
 
 ## Reconnect state machine

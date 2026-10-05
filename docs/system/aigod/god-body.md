@@ -177,8 +177,9 @@ Watchdog fire (`GodSessionManager.java:125-134`): if owner still equals the pinn
 `GodBody.vanish()` directly) → `forceEndSession()`. Any in-flight LLM response for that player is then dropped and its
 memory wiped (`ChatBot.java:539-546`).
 
-**What resets the watchdog**: `claim` (each `/pray` / `/prove` by the owner), `Appear`, and a batch containing `Wait`.
-Ordinary tool calls and LLM turns do **not** reset it.
+**What resets the watchdog**: `claim` (each `/pray` / `/prove` by the owner), `Appear`, a batch containing `Wait`, and —
+since bug #8 — every tool dispatch of the owning session, before and after the call (`checkForFunctions`). A plain LLM
+turn without tool calls does not reset it.
 
 ### The `idleTimeoutSeconds > waitMaxSeconds` invariant — enforced three ways
 
@@ -280,11 +281,12 @@ conversations are answered normally.
   logic to unit-test). `/godbody off` still does not call `endPrayerSession`.
 - **`/godbody off` does not disable MCP tools**: the God can still move the bot through `MCPGateway` tools (see
   [mcp-gateway.md](mcp-gateway.md)).
-- **Watchdog is not reset per turn.** A long chain of non-`Wait` tool calls (e.g. slow MCP tools) lasting more than
-  `idleTimeoutSeconds` (90 s) after the last `/pray`/`Appear`/`Wait` force-ends the session mid-chain; the next response is
-  dropped and memory wiped. The class Javadoc's "per-turn hooks in ChatBot" do not exist.
-- **Gestures ignore ownership**: `fireGestures` checks only the global `hasManifested()`, so a bodiless player's
-  `Reward`/`Punishment` makes the owner's manifested avatar nod/swing and look at the bodiless player.
+- ~~**Watchdog is not reset per turn.**~~ **Fixed (bug #8):** every tool dispatch of the owner resets it, so a long chain
+  of tool calls no longer trips it; only a single call (or LLM wait) longer than `idleTimeoutSeconds` still can.
+- ~~**Gestures ignore ownership**~~ **Fixed (bug #8):** `fireGestures` also requires `GodSessionManager.isActive(player)`.
+- **MCP tools are session-gated (bug #8):** `GodToolGate.mcpRefusal(bridgeEnabled, ownsSession)` refuses an MCP call
+  from a bodiless prayer or while the bridge is disabled — read-only MCP tools included (they also run on the avatar).
+  Only an in-game check proves the wiring; the decision is unit-tested (`GodToolGateTest`).
 - **`Appear` reports success even when the bridge is disabled/down** (`God a pris forme physique…`).
 - **`GET /health` is dead code** in the mod; nothing probes bridge liveness.
 - **Bot name changes**: `/llm bridge bot` affects `findAvatar` and future op-on-join only; the Node `--username` must be

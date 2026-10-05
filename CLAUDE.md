@@ -197,8 +197,8 @@ the API-error branch, and `/pray stop` call `ChatBot.endPrayerSession(player)` â
 the avatar directly (`restoreAvatarOnMain`), vanishes, calls `forceEndSession()` and disables the bridge.
 **Watchdog vs `Wait`:** the watchdog fires after `max(idleTimeoutSeconds, waitMaxSeconds+5)`
 (`GodSessionManager.java:123-124`), and `/llm bridge waitmax|idle` keep `idle > waitMax`, so a deliberate
-`Wait` cannot trip it. The watchdog resets only on claim, `Appear` and `Wait`, so a long chain of other tool calls
-(e.g. slow MCP calls) can be cut off mid-chain.
+`Wait` cannot trip it. The watchdog also resets around every tool dispatch of the owning session (bug #8), and MCP
+tools refuse a bodiless prayer or a disabled bridge (`GodToolGate`).
 
 ### MCP toolkit + Mineflayer plugins (`minecraft-mcp-server/`)
 
