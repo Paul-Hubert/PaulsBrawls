@@ -27,7 +27,7 @@ Citations are `path:line` at `98cb908` unless a row says otherwise.
 
 Driven by [docs/22-rework-followup-prompt.md](../22-rework-followup-prompt.md); one commit per item
 (`git log --oneline 4a8081f..98cb908`). Test totals: Eden `npm test` went from 545 tests (516 pass, 1 fail,
-28 cancelled on Node 22) to 604/604; Java from 1 JUnit class (11 tests) to 10 classes (42 tests).
+28 cancelled on Node 22) to 605/605; Java from 1 JUnit class (11 tests) to 10 classes (42 tests).
 
 | Area | Change | Item |
 |---|---|---|

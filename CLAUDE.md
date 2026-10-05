@@ -69,7 +69,7 @@ npx tsx src/main.ts eden.json    # boot the host: spawns bots + installs process
 
 ```powershell
 npm run check          # local gate: lint + tsc --noEmit + dependency-cruiser (0 violations) + npm test
-npm test               # node:test via tsx, on the fakes only — NEVER touches Minecraft (65 files, 604 tests)
+npm test               # node:test via tsx, on the fakes only — NEVER touches Minecraft (65 files, 605 tests)
 npm run test:coverage  # node built-in coverage (~94% line / ~83% branch)
 npm run eval           # DRY RUN: builds + validates 4 scenarios, logs the plan, connects to nothing
 npm run live-test      # real server + real LLM scenario suite (needs a server + a provider key)

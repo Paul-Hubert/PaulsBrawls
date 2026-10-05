@@ -11,7 +11,7 @@ verified_at: 98cb908
 # Eden — tests, CI gate, eval scaffold and live-test harness
 
 **TL;DR.** `npm run check` = ESLint + `tsc --noEmit` + dependency-cruiser + `node --test` over 65 test files
-(604 tests) that run only against fakes — no Minecraft, no paid LLM. `npm run eval` is a **dry run**:
+(605 tests) that run only against fakes — no Minecraft, no paid LLM. `npm run eval` is a **dry run**:
 it wipes `.eden-eval-data/`, builds and validates a 4-scenario catalogue, and logs the plan; it never connects to a
 server. `npm run live-test [name]` runs real scenarios (real dev server via RCON + real LLM + real mineflayer), each
 in a hard-killable child process, writing evidence to `live-tests/.runs/<scenario>-<ts>/`. There is no CI:
@@ -52,7 +52,7 @@ Test counts below are from an `npm test` run at `98cb908`; coverage figures are 
 
 ## The unit/integration suite (`eden/tests/`)
 
-65 `*.test.ts` files; an `npm test` run reports **604 tests, 604 pass, 0 fail, 0 cancelled**. `node:test` +
+65 `*.test.ts` files; an `npm test` run reports **605 tests, 605 pass, 0 fail, 0 cancelled**. `node:test` +
 `node:assert/strict`, no `describe`.
 Rules: tests call `start()` with defaults (`spawnBots`, `installProcessGuards`, `enableGod`, `serveWeb` all false),
 so no server connection or global process handler is installed; servers bind port `0`.

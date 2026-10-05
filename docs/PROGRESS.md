@@ -1543,8 +1543,10 @@ surprises. Newest first.
   - **Trade (B4):** offers left open by a previous host are closed at boot; `settlement.reach`/`maxTradeDistance`;
     live `:8767` smoke runbook in docs/system/eden/java-integration.md.
   - **Corpus (C):** every docs/system page re-checked against the code at `98cb908`; VERIFICATION-NOTES gained a
-    "Changes since 4a8081f" section; root and eden CLAUDE.md updated.
-  - Tests: Eden 545 (516 pass / 1 fail / 28 cancelled) → 604/604, `npm run check` green; Java 11 → 42 (10 classes).
+    "Changes since 4a8081f" section; root and eden CLAUDE.md updated. The re-verification turned up and fixed: a critic
+    quarantine journaled as `engine` (now `god:critic`), the inbox reflex hint claiming every message is from God,
+    two stale Java Javadocs and five stale Eden comments/messages. `index.json` regenerated (34 docs).
+  - Tests: Eden 545 (516 pass / 1 fail / 28 cancelled) → 605/605, `npm run check` green; Java 11 → 42 (10 classes).
 - Decisions: R73, R74 (docs/07); D-17, D-18 (docs/04); D-19 (docs/03).
 - Next: the live smoke runbook (first real `:8767` trade); in-game checks for the Java fixes (avatar vulnerability,
   `/prove`/`/build`, main-thread text building, clamps, CTF offhand); a live run to see conversations, drives and

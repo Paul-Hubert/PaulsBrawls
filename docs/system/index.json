@@ -26,9 +26,13 @@
         "src/main/java/com/paul/brawl/ServerEntryPoint.java",
         "src/client/java/com/paul/brawl/ClientEntryPoint.java",
         "eden/src/main.ts",
-        "build.gradle"
+        "build.gradle",
+        "eden/src/config.ts",
+        "eden/src/villagers/tools.ts",
+        "eden/src/villagers/brain.ts",
+        "eden/src/llm/scheduler.ts"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/00-overview.md",
       "headings": [
         "The systems at a glance",
@@ -38,7 +42,7 @@
         "How to navigate this corpus",
         "Related"
       ],
-      "bytes": 9476
+      "bytes": 10628
     },
     {
       "id": "readme",
@@ -56,7 +60,7 @@
       "sources": [
         "docs/system/build-index.mjs"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/README.md",
       "headings": [
         "Documents",
@@ -66,13 +70,13 @@
         "Serving over MCP (intended design)",
         "Related"
       ],
-      "bytes": 9521
+      "bytes": 9764
     },
     {
       "id": "verification-notes",
       "title": "Verification notes — where existing docs disagree with the code, and bugs found",
       "system": "meta",
-      "summary": "Every place CLAUDE.md, README, docs/*.md or code comments contradict the code at 4a8081f, plus a ranked list of real bugs and sharp edges found during verification.",
+      "summary": "Every place CLAUDE.md, README, docs/*.md or code comments contradict the code (first audit at 4a8081f, re-verified at 98cb908), plus a ranked list of real bugs and sharp edges and what changed since the first audit.",
       "tags": [
         "verification",
         "discrepancies",
@@ -86,6 +90,7 @@
         "CLAUDE.md",
         "README.md",
         "eden/CLAUDE.md",
+        "docs/22-rework-followup-prompt.md",
         "docs/README.md",
         "src/main/java/com/paul/brawl/VillageHttpListener.java",
         "src/main/java/com/paul/brawl/TradeOffers.java",
@@ -93,9 +98,10 @@
         "eden/src/social/trade.ts",
         "eden/src/main.ts"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/VERIFICATION-NOTES.md",
       "headings": [
+        "0. Changes since `4a8081f` (re-verified 2026-10-05)",
         "1. Ranked bugs and sharp edges",
         "2. Repository-level discrepancies",
         "3. Gibber, CTF, entrypoints",
@@ -104,7 +110,7 @@
         "6. Eden",
         "Related"
       ],
-      "bytes": 20896
+      "bytes": 30252
     },
     {
       "id": "aigod.actions-and-trades",
@@ -136,9 +142,13 @@
         "src/main/java/com/paul/brawl/Money.java",
         "src/main/java/com/paul/brawl/Raycaster.java",
         "src/main/java/com/paul/brawl/ServerEntryPoint.java",
-        "src/main/java/com/paul/brawl/GodSessionManager.java"
+        "src/main/java/com/paul/brawl/GodSessionManager.java",
+        "src/main/java/com/paul/brawl/GodClamps.java",
+        "src/main/java/com/paul/brawl/ItemIds.java",
+        "src/main/java/com/paul/brawl/BlockInfoJson.java",
+        "src/main/java/com/paul/brawl/ChatCommand.java"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/aigod/actions-and-trades.md",
       "headings": [
         "Thread contract",
@@ -155,7 +165,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 16596
+      "bytes": 18834
     },
     {
       "id": "aigod.building",
@@ -178,6 +188,9 @@
       ],
       "sources": [
         "src/main/java/com/paul/brawl/BuildSubAgent.java",
+        "src/main/java/com/paul/brawl/BuildGuard.java",
+        "src/main/java/com/paul/brawl/GodActionQueue.java",
+        "src/main/java/com/paul/brawl/ImageMime.java",
         "src/main/java/com/paul/brawl/Raycaster.java",
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
         "src/main/java/com/paul/brawl/ChatBotActions.java",
@@ -193,7 +206,7 @@
         "run/max_build_prompt.txt",
         "LANGCHAIN4J_MIGRATION_PLAN.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/aigod/building.md",
       "headings": [
         "Components and where they live",
@@ -208,7 +221,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 24730
+      "bytes": 27519
     },
     {
       "id": "aigod.configuration-and-commands",
@@ -241,11 +254,12 @@
         "src/main/java/com/paul/brawl/BridgeConfig.java",
         "src/main/java/com/paul/brawl/MCPCommand.java",
         "src/main/java/com/paul/brawl/Prompts.java",
+        "src/main/java/com/paul/brawl/BuildGuard.java",
         "prompt.txt",
         "build_prompt.txt",
         "build.gradle"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/aigod/configuration-and-commands.md",
       "headings": [
         "LLMConfig (`src/main/java/com/paul/brawl/LLMConfig.java`)",
@@ -257,7 +271,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 14720
+      "bytes": 15514
     },
     {
       "id": "aigod.god-body",
@@ -297,11 +311,13 @@
         "src/main/java/com/paul/brawl/ServerEntryPoint.java",
         "src/main/java/com/paul/brawl/ImageReceiver.java",
         "src/main/java/com/paul/brawl/LLMConfig.java",
+        "src/main/java/com/paul/brawl/GodToolGate.java",
+        "src/main/java/com/paul/brawl/BuildGuard.java",
         "GOD_BOT_INTEGRATION_PLAN.md",
         "VERIFICATION.md",
         "HIGHER_LEVEL_TOOLS.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/aigod/god-body.md",
       "headings": [
         "Component map",
@@ -318,7 +334,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 22588
+      "bytes": 24062
     },
     {
       "id": "aigod.images-and-client",
@@ -347,9 +363,10 @@
         "src/main/java/com/paul/brawl/ChatBot.java",
         "src/main/java/com/paul/brawl/Money.java",
         "src/main/java/com/paul/brawl/GodSessionManager.java",
+        "src/main/java/com/paul/brawl/ImageMime.java",
         "src/main/resources/fabric.mod.json"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/aigod/images-and-client.md",
       "headings": [
         "Client entrypoint",
@@ -360,7 +377,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 8810
+      "bytes": 8525
     },
     {
       "id": "aigod.llm-pipeline",
@@ -385,6 +402,10 @@
       "sources": [
         "src/main/java/com/paul/brawl/ChatBot.java",
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
+        "src/main/java/com/paul/brawl/ImageMime.java",
+        "src/main/java/com/paul/brawl/BlockInfoJson.java",
+        "src/main/java/com/paul/brawl/LLMCommand.java",
+        "src/main/java/com/paul/brawl/GodToolGate.java",
         "src/main/java/com/paul/brawl/LLMConfig.java",
         "src/main/java/com/paul/brawl/PlayerDataCollector.java",
         "src/main/java/com/paul/brawl/ChatMessageHistory.java",
@@ -398,22 +419,22 @@
         "src/main/java/com/paul/brawl/ChatCommand.java",
         "build.gradle"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/aigod/llm-pipeline.md",
       "headings": [
         "Key constants",
         "Memory",
         "Entry points and per-turn bookkeeping",
-        "Message list construction (`buildMessageList`, `:448-481`)",
+        "Message list construction (`buildMessageList`, `:450-483`)",
         "Tool spec assembly",
-        "`doRequest` and the callback chain (`:400-425`)",
+        "`doRequest` and the callback chain (`:402-427`)",
         "Executor / threading",
         "Timeouts",
         "Provider construction (`LLMConfig.buildModel`, `LLMConfig.java:98-123`)",
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 19297
+      "bytes": 20491
     },
     {
       "id": "aigod.mcp-gateway",
@@ -439,13 +460,15 @@
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
         "src/main/java/com/paul/brawl/ChatBot.java",
         "src/main/java/com/paul/brawl/BridgeConfig.java",
+        "src/main/java/com/paul/brawl/GodToolGate.java",
+        "src/main/java/com/paul/brawl/LLMConfig.java",
         "build.gradle",
         "run/mcp_config.properties",
         "MCP_TOOLS_VERIFICATION.md",
         "verify-mcp-tools.mjs",
         "HIGHER_LEVEL_TOOLS.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/aigod/mcp-gateway.md",
       "headings": [
         "Components",
@@ -460,7 +483,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 14281
+      "bytes": 15315
     },
     {
       "id": "aigod.overview",
@@ -480,6 +503,9 @@
       ],
       "sources": [
         "src/main/java/com/paul/brawl/ChatBot.java",
+        "src/main/java/com/paul/brawl/BuildGuard.java",
+        "src/main/java/com/paul/brawl/GodToolGate.java",
+        "src/client/java/com/paul/brawl/Screenshotter.java",
         "src/main/java/com/paul/brawl/ChatCommand.java",
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
         "src/main/java/com/paul/brawl/ChatBotActions.java",
@@ -500,7 +526,7 @@
         "eden/src/config.ts",
         "prompt.txt"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/aigod/overview.md",
       "headings": [
         "What it is",
@@ -512,7 +538,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 13715
+      "bytes": 14492
     },
     {
       "id": "aigod.tools-catalogue",
@@ -546,12 +572,18 @@
         "src/main/java/com/paul/brawl/ChatBot.java",
         "src/main/java/com/paul/brawl/BridgeConfig.java",
         "src/main/java/com/paul/brawl/MCPGateway.java",
-        "src/main/java/com/paul/brawl/GodSessionManager.java"
+        "src/main/java/com/paul/brawl/GodSessionManager.java",
+        "src/main/java/com/paul/brawl/GodClamps.java",
+        "src/main/java/com/paul/brawl/ItemIds.java",
+        "src/main/java/com/paul/brawl/GodToolGate.java",
+        "src/main/java/com/paul/brawl/BuildGuard.java",
+        "src/main/java/com/paul/brawl/BuildSubAgent.java",
+        "src/main/java/com/paul/brawl/TradeOffers.java"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/aigod/tools-catalogue.md",
       "headings": [
-        "Attachment matrix (`buildToolSpecs`, `ChatBotFunctions.java:313-340`)",
+        "Attachment matrix (`buildToolSpecs`, `ChatBotFunctions.java:325-352`)",
         "Schema generation (`JsonSchemaAdapter`, `JsonSchemaAdapter.java`)",
         "Argument parsing and dispatch",
         "Reward",
@@ -571,13 +603,13 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 19903
+      "bytes": 21824
     },
     {
       "id": "ctf.capture-the-flag",
       "title": "Capture the Flag - FlagManager",
       "system": "ctf",
-      "summary": "Exact rules of the CTF feature - which banners count as a Flag, drop-on-damage mechanics, elytra ban, per-tick glowing, and edge cases. All in FlagManager.java.",
+      "summary": "Exact rules of the CTF feature - which banners count as a Flag, drop-on-damage mechanics, elytra ban, per-tick glowing, and edge cases. FlagManager.java plus the FlagGlow helper.",
       "tags": [
         "ctf",
         "capture-the-flag",
@@ -591,24 +623,26 @@
       ],
       "sources": [
         "src/main/java/com/paul/brawl/FlagManager.java",
+        "src/main/java/com/paul/brawl/FlagGlow.java",
+        "src/test/java/com/paul/brawl/FlagGlowTest.java",
         "src/main/java/com/paul/brawl/ServerEntryPoint.java",
         "src/main/java/com/paul/brawl/VillageHttpListener.java",
         "README.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/ctf/capture-the-flag.md",
       "headings": [
-        "Registration (`FlagManager.register()`, `FlagManager.java:18-26`)",
-        "What counts as a Flag — `checkInventory(player)` (`FlagManager.java:61-72`)",
-        "Drop on damage — `dropOnHit()` / `dropItem()` (`FlagManager.java:41-49`, `:74-82`)",
-        "Elytra ban — `banElytra()` (`FlagManager.java:29-38`)",
-        "Glowing — `glowFlagholders()` (`FlagManager.java:52-59`, `:84-86`)",
+        "Registration (`FlagManager.register()`, `FlagManager.java:25-33`)",
+        "What counts as a Flag — `findFlags(player)` / `checkInventory(player)` (`FlagManager.java:70-92`)",
+        "Drop on damage — `dropOnHit()` / `dropItem()`",
+        "Elytra ban — `banElytra()` (`FlagManager.java:36-45`)",
+        "Glowing — `glowFlagholders()` / `updateGlow()`",
         "Interactions with other systems",
         "How to modify",
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 7333
+      "bytes": 8379
     },
     {
       "id": "eden.admin-api",
@@ -638,11 +672,13 @@
         "eden/website/index.html",
         "src/main/java/com/paul/brawl/VillagersCommand.java",
         "src/main/java/com/paul/brawl/VillageConfig.java",
+        "src/main/java/com/paul/brawl/EdenRetry.java",
+        "eden/src/village-launch.ts",
         "eden/tests/admin-routes.test.ts",
         "eden/tests/main-full-wiring.test.ts",
         "docs/05-observability.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/admin-api.md",
       "headings": [
         "Binding, auth, transport",
@@ -653,7 +689,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 13684
+      "bytes": 15281
     },
     {
       "id": "eden.bots.hardening",
@@ -704,9 +740,12 @@
         "eden/tests/bots-helpers.test.ts",
         "eden/tests/bots-anchors.test.ts",
         "eden/tests/fakes/fake-bot.ts",
+        "eden/tests/villagers-host-events.test.ts",
+        "eden/roles.json",
+        "src/main/java/com/paul/brawl/ServerEntryPoint.java",
         "docs/07-hard-won-lessons.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/bots-and-hardening.md",
       "headings": [
         "Files and runtime status",
@@ -716,12 +755,12 @@
         "Hardening guards (`bots/hardening.ts`)",
         "Helpers (`bots/helpers.ts`) — not wired",
         "Signals (`eden/src/bots/signals.ts`)",
-        "Anchors (`eden/src/bots/anchors.ts`) — not wired",
+        "Anchors (`eden/src/bots/anchors.ts`) — wired since B3.6",
         "Render layer",
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 21591
+      "bytes": 25150
     },
     {
       "id": "eden.god",
@@ -775,9 +814,13 @@
         "eden/tests/god-recovery.test.ts",
         "eden/tests/god-service.test.ts",
         "eden/tests/loop-integration.test.ts",
-        "eden/tests/village-loop.test.ts"
+        "eden/tests/village-loop.test.ts",
+        "eden/tests/god-tripwire.test.ts",
+        "eden/tests/main-full-wiring.test.ts",
+        "eden/src/providers.ts",
+        "eden/providers.example.json"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/god.md",
       "headings": [
         "Where things live",
@@ -789,13 +832,13 @@
         "\"Interventions teach\" — what code enforces",
         "The divine body (`eden/src/god/body.ts`)",
         "GodService — verdict routing (`eden/src/god/god.ts`)",
-        "Refinement loop (`RolloutCoordinator`, `eden/src/main.ts:866-1025`)",
+        "Refinement loop (`RolloutCoordinator`, `eden/src/main.ts:1217-1381`)",
         "Journal events emitted by God",
         "How to extend",
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 34513
+      "bytes": 37548
     },
     {
       "id": "eden.java-integration",
@@ -834,23 +877,28 @@
         "eden/src/admin/server.ts",
         "eden/src/village-launch.ts",
         "eden/eden.example.json",
-        "eden/tests/social-trade.test.ts"
+        "eden/tests/social-trade.test.ts",
+        "src/main/java/com/paul/brawl/EdenRetry.java",
+        "src/test/java/com/paul/brawl/EdenRetryTest.java",
+        "src/test/java/com/paul/brawl/TradeMathTest.java",
+        "eden/roles.json"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/java-integration.md",
       "headings": [
         "Components at a glance",
         "`VillageConfig` (`VillageConfig.java`)",
         "Settlement listener — `VillageHttpListener`",
         "Eden's side of the settlement — `SettlementClient` (`eden/src/social/trade.ts`)",
+        "Live smoke runbook — the first real `:8767` trade (B4)",
         "`/village` (`VillageCommand.java`)",
         "`/villagers` (`VillagersCommand.java`) — Eden scenario control",
-        "Op-on-join (`ServerEntryPoint.java:58-74`)",
+        "Op-on-join (`ServerEntryPoint.java:62-78`)",
         "Ports involved",
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 22289
+      "bytes": 27601
     },
     {
       "id": "eden.journal-and-views",
@@ -897,13 +945,15 @@
         "eden/src/god/orchestrator.ts",
         "eden/src/social/conversation.ts",
         "eden/src/social/trade.ts",
+        "eden/src/skills/describe.ts",
+        "eden/website/api.js",
         "eden/tests/fakes/memory-journal.ts",
         "docs/05-observability.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/journal-and-views.md",
       "headings": [
-        "SQLite schema (`eden/src/journal/journal.ts:46-69`)",
+        "SQLite schema (`eden/src/journal/journal.ts:46-77`)",
         "API (`IJournal`)",
         "Refs (causality column, `eden/src/types/journal.ts:5-16`)",
         "Actor conventions (observed in emitters)",
@@ -915,7 +965,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 18030
+      "bytes": 20075
     },
     {
       "id": "eden.llm-and-scheduling",
@@ -952,7 +1002,11 @@
         "eden/src/main.ts",
         "eden/src/villagers/brain.ts",
         "eden/src/villagers/memory-summarizer.ts",
+        "eden/src/villagers/conversation-turn.ts",
         "eden/src/skills/describe.ts",
+        "eden/src/god/critic.ts",
+        "eden/src/god/curriculum.ts",
+        "eden/src/god/orchestrator.ts",
         "eden/src/journal/kinds.ts",
         "eden/eden.example.json",
         "eden/.gitignore",
@@ -961,9 +1015,10 @@
         "eden/tests/llm-scheduler.test.ts",
         "eden/tests/llm-embeddings.test.ts",
         "eden/tests/providers.test.ts",
-        "eden/tests/god-budget.test.ts"
+        "eden/tests/god-budget.test.ts",
+        "eden/tests/fakes/keep-alive.ts"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/llm-and-scheduling.md",
       "headings": [
         "Files",
@@ -976,7 +1031,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 19198
+      "bytes": 20279
     },
     {
       "id": "eden.overview",
@@ -997,6 +1052,10 @@
       "sources": [
         "eden/src/main.ts",
         "eden/src/config.ts",
+        "eden/src/bots/signals.ts",
+        "eden/src/social/conversation.ts",
+        "eden/src/villagers/tools.ts",
+        "eden/src/llm/scheduler.ts",
         "eden/src/village-launch.ts",
         "eden/src/scenario-loader.ts",
         "eden/src/providers.ts",
@@ -1011,7 +1070,7 @@
         "eden/CLAUDE.md",
         "CLAUDE.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/overview.md",
       "headings": [
         "What Eden is (and is not)",
@@ -1024,7 +1083,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 16487
+      "bytes": 19228
     },
     {
       "id": "eden.process-config-and-boot",
@@ -1065,23 +1124,26 @@
         "eden/.gitignore",
         "eden/package.json",
         "eden/src/bots/pool.ts",
+        "eden/src/bots/anchors.ts",
+        "eden/src/journal/journal.ts",
         "eden/src/skills/library.ts",
         "eden/src/villagers/memory.ts",
         "eden/src/villagers/subscriptions.ts",
         "eden/src/llm/client.ts",
         "src/main/java/com/paul/brawl/VillagersCommand.java",
-        "src/main/java/com/paul/brawl/VillageConfig.java"
+        "src/main/java/com/paul/brawl/VillageConfig.java",
+        "src/main/java/com/paul/brawl/EdenRetry.java"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/process-config-and-boot.md",
       "headings": [
         "Entrypoints",
-        "`start()` options (`EdenHostOptions`, `eden/src/main.ts:52-87`)",
-        "Boot sequence (exact order, `eden/src/main.ts:107-453`)",
-        "Process guards (`installProcessGuards`, `eden/src/main.ts:1169-1186`)",
-        "Shutdown (`EdenHost.stop()`, `eden/src/main.ts:441-451`)",
-        "`VillageLoop` — the production pump (`eden/src/main.ts:1061-1136`)",
-        "`RolloutCoordinator` (`eden/src/main.ts:866-1025`)",
+        "`start()` options (`EdenHostOptions`, `eden/src/main.ts:58-93`)",
+        "Boot sequence (exact order, `eden/src/main.ts:116-509`)",
+        "Process guards (`installProcessGuards`, `eden/src/main.ts:1531-1548`)",
+        "Shutdown (`EdenHost.stop()`, `eden/src/main.ts:495-507`)",
+        "`VillageLoop` — the production pump (`eden/src/main.ts:1393-1492`)",
+        "`RolloutCoordinator` (`eden/src/main.ts:1217-1381`)",
         "`eden.json` schema (`eden/src/config.ts`)",
         "`providers.json` (`eden/src/providers.ts`, template `eden/providers.example.json`)",
         "Environment variables and `api-keys.env`",
@@ -1093,7 +1155,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 24979
+      "bytes": 28221
     },
     {
       "id": "eden.skills.engine",
@@ -1132,7 +1194,7 @@
         "docs/02-skill-system.md",
         "docs/07-hard-won-lessons.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/skills-engine.md",
       "headings": [
         "Compilation pipeline",
@@ -1151,7 +1213,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 22117
+      "bytes": 22956
     },
     {
       "id": "eden.skills.library",
@@ -1192,7 +1254,7 @@
         "eden/tests/skills-engine.test.ts",
         "docs/02-skill-system.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/skills-library.md",
       "headings": [
         "Where things live",
@@ -1208,7 +1270,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 22436
+      "bytes": 24122
     },
     {
       "id": "eden.social-and-trade",
@@ -1248,9 +1310,10 @@
         "src/main/java/com/paul/brawl/VillageHttpListener.java",
         "src/main/java/com/paul/brawl/VillageConfig.java",
         "eden/tests/social-conversation.test.ts",
-        "eden/tests/social-trade.test.ts"
+        "eden/tests/social-trade.test.ts",
+        "eden/src/villagers/conversation-turn.ts"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/social-and-trade.md",
       "headings": [
         "Layering",
@@ -1262,7 +1325,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 19206
+      "bytes": 22546
     },
     {
       "id": "eden.skills.stock",
@@ -1284,6 +1347,9 @@
       "sources": [
         "eden/src/skills/exemplars/index.ts",
         "eden/src/skills/library.ts",
+        "eden/src/villagers/subscriptions.ts",
+        "eden/src/villagers/events.ts",
+        "eden/src/bots/signals.ts",
         "eden/src/skills/engine.ts",
         "eden/src/main.ts",
         "eden/roles.json",
@@ -1292,7 +1358,7 @@
         "docs/02-skill-system.md",
         "docs/07-hard-won-lessons.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/stock-skills.md",
       "headings": [
         "How stock skills are used",
@@ -1302,7 +1368,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 17518
+      "bytes": 18622
     },
     {
       "id": "eden.testing-eval-live",
@@ -1335,6 +1401,7 @@
         "eden/tests/fakes/fake-settlement.ts",
         "eden/tests/fakes/memory-journal.ts",
         "eden/tests/fakes/scripted-llm.ts",
+        "eden/tests/fakes/keep-alive.ts",
         "eden/tests/dependency-law.test.ts",
         "eden/tests/parity.test.ts",
         "eden/tests/main-full-wiring.test.ts",
@@ -1360,7 +1427,7 @@
         "docs/20-live-test-process.md",
         "docs/PROGRESS.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/testing-eval-live.md",
       "headings": [
         "npm scripts (`eden/package.json`)",
@@ -1371,7 +1438,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 19728
+      "bytes": 21233
     },
     {
       "id": "eden.types-and-contracts",
@@ -1393,6 +1460,8 @@
         "Inbox",
         "MemoryWriter",
         "Conversant",
+        "TradeDesk",
+        "ConversationDesk",
         "dependency-cruiser",
         "layers",
         "dependency-law"
@@ -1414,6 +1483,9 @@
         "eden/src/villagers/inbox.ts",
         "eden/src/villagers/memory.ts",
         "eden/src/social/conversation.ts",
+        "eden/src/social/trade.ts",
+        "eden/src/villagers/tools.ts",
+        "eden/src/villagers/conversation-turn.ts",
         "eden/src/god/god.ts",
         "eden/src/god/orchestrator.ts",
         "eden/src/journal/kinds.ts",
@@ -1422,7 +1494,7 @@
         "eden/CLAUDE.md",
         "docs/11-class-model.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/types-and-contracts.md",
       "headings": [
         "File map",
@@ -1438,7 +1510,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 18670
+      "bytes": 20586
     },
     {
       "id": "eden.villagers.memory",
@@ -1471,6 +1543,9 @@
         "eden/src/social/conversation.ts",
         "eden/src/bots/anchors.ts",
         "eden/src/bots/pool.ts",
+        "eden/src/village-launch.ts",
+        "eden/src/villagers/conversation-turn.ts",
+        "eden/src/views/index.ts",
         "eden/src/main.ts",
         "eden/src/admin/server.ts",
         "eden/src/journal/kinds.ts",
@@ -1478,27 +1553,27 @@
         "eden/tests/villagers-tools.test.ts",
         "docs/04-villager-runtime.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/villager-memory.md",
       "headings": [
         "Data model",
         "Constants",
         "API",
         "Eviction and summarization",
-        "Retrieval (`retrieve`, `eden/src/villagers/memory.ts:191-214`)",
+        "Retrieval (`retrieve`, `eden/src/villagers/memory.ts:193-216`)",
         "Persistence (`.eden-data/bots/<name>.json`)",
         "R32 world-stamp quarantine",
         "Deliberate omissions",
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 14149
+      "bytes": 15112
     },
     {
       "id": "eden.villagers.runtime",
       "title": "Eden villager runtime — events, subscriptions, brain, tools, context pack, inbox",
       "system": "eden",
-      "summary": "How an Eden villager reacts and thinks — the closed event set, hysteresis, subscription filters/outcomes, roles.json, drives, the brain loop, its 11 LLM tools, the 8-section context pack, and the inbox.",
+      "summary": "How an Eden villager reacts and thinks — the closed event set, hysteresis, subscription filters/outcomes, roles.json, drives, the brain loop, its 17 LLM tools, the 8-section context pack, and the inbox.",
       "tags": [
         "eden",
         "villagers",
@@ -1540,6 +1615,8 @@
         "eden/src/god/god.ts",
         "eden/src/god/orchestrator.ts",
         "eden/src/admin/server.ts",
+        "eden/src/social/conversation.ts",
+        "eden/src/skills/exemplars/index.ts",
         "eden/tests/villagers-events.test.ts",
         "eden/tests/villagers-routing.test.ts",
         "eden/tests/villagers-subscriptions.test.ts",
@@ -1549,16 +1626,17 @@
         "eden/tests/villagers-tools.test.ts",
         "eden/tests/villagers-context-pack.test.ts",
         "eden/tests/villagers-drives.test.ts",
+        "eden/tests/main-full-wiring.test.ts",
         "docs/04-villager-runtime.md"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/eden/villager-runtime.md",
       "headings": [
         "Component map",
         "Event normalization (`villagers/events.ts`)",
         "Subscriptions (`villagers/subscriptions.ts`)",
         "Role defaults (`eden/roles.json` + `role-defaults.ts`)",
-        "Drives (`villagers/drives.ts`) — optional, NOT wired",
+        "Drives (`villagers/drives.ts`) — optional, wired since B3.7",
         "Reactivity assembly (`villagers/reactivity.ts`)",
         "The brain (`villagers/brain.ts`)",
         "The context pack (`villagers/context-pack.ts`)",
@@ -1566,7 +1644,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 31176
+      "bytes": 36170
     },
     {
       "id": "gibber.money-system",
@@ -1592,6 +1670,8 @@
         "src/main/java/com/paul/brawl/SalaryScheduler.java",
         "src/main/java/com/paul/brawl/PlayerPersistentState.java",
         "src/main/java/com/paul/brawl/GibCommand.java",
+        "src/main/java/com/paul/brawl/GibberMath.java",
+        "src/main/java/com/paul/brawl/ItemIds.java",
         "src/main/java/com/paul/brawl/ServerEntryPoint.java",
         "src/client/java/com/paul/brawl/ClientEntryPoint.java",
         "src/main/java/com/paul/brawl/ChatBotActions.java",
@@ -1604,12 +1684,12 @@
         "eden/src/social/trade.ts",
         "eden/src/main.ts"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/gibber/money-system.md",
       "headings": [
         "The coin item",
         "Data model — `PlayerPersistentState`",
-        "Payout algorithm — `RevenueManager.updateRevenue(uuid, server)` (`RevenueManager.java:28-49`)",
+        "Payout algorithm — `RevenueManager.updateRevenue(uuid, server)` (`RevenueManager.java:28-63`)",
         "Salary scheduler — `SalaryScheduler`",
         "Commands (`GibCommand.java`)",
         "Threading",
@@ -1617,16 +1697,18 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 11374
+      "bytes": 12135
     },
     {
       "id": "platform.build-and-runtime",
       "title": "Build, packaging and runtime layout of the Fabric mod",
       "system": "platform",
-      "summary": "How the paulsbrawls Fabric mod is built (Loom, versions, jar-in-jar deps, copy tasks), what is tracked in run/, CI reality, the empty minecraft-mcp-server gitlink, supervisor/ and .claude/.",
+      "summary": "How the paulsbrawls Fabric mod is built (Loom, versions, jar-in-jar deps, copy tasks), what is tracked in run/, CI reality, the Java unit tests, the empty minecraft-mcp-server gitlink, supervisor/ and .claude/.",
       "tags": [
         "gradle",
         "loom",
+        "junit",
+        "tests",
         "fabric",
         "build",
         "jar-in-jar",
@@ -1663,9 +1745,21 @@
         "supervisor/check.ps1",
         ".claude/launch.json",
         "src/main/java/com/paul/brawl/ChatBot.java",
-        "src/main/java/com/paul/brawl/MCPGateway.java"
+        "src/main/java/com/paul/brawl/MCPGateway.java",
+        "src/main/java/com/paul/brawl/ChatCommand.java",
+        "src/main/java/com/paul/brawl/ImageReceiver.java",
+        "src/test/java/com/paul/brawl/TradeMathTest.java",
+        "src/test/java/com/paul/brawl/BuildGuardTest.java",
+        "src/test/java/com/paul/brawl/FlagGlowTest.java",
+        "src/test/java/com/paul/brawl/GodClampsTest.java",
+        "src/test/java/com/paul/brawl/BlockInfoJsonTest.java",
+        "src/test/java/com/paul/brawl/EdenRetryTest.java",
+        "src/test/java/com/paul/brawl/GibberMathTest.java",
+        "src/test/java/com/paul/brawl/GodToolGateTest.java",
+        "src/test/java/com/paul/brawl/ImageMimeTest.java",
+        "src/test/java/com/paul/brawl/ItemIdsTest.java"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/platform/build-and-runtime.md",
       "headings": [
         "Toolchain and versions",
@@ -1677,6 +1771,7 @@
         "Assets (`src/main/resources/assets/paulsbrawls/`)",
         "Gradle wrapper and IDE files are not tracked",
         "CI — what really exists",
+        "Java unit tests (`src/test/java/com/paul/brawl/`)",
         "`run/` — the dev server working directory (`./gradlew runServer`)",
         "`minecraft-mcp-server/` — an empty gitlink",
         "`supervisor/` — legacy v1 run-supervision protocol",
@@ -1684,7 +1779,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 18600
+      "bytes": 21177
     },
     {
       "id": "platform.entrypoints-and-wiring",
@@ -1731,22 +1826,24 @@
         "src/main/java/com/paul/brawl/BridgeConfig.java",
         "src/main/java/com/paul/brawl/VillageConfig.java",
         "src/main/java/com/paul/brawl/Prompts.java",
-        "src/main/resources/fabric.mod.json"
+        "src/main/resources/fabric.mod.json",
+        "src/main/java/com/paul/brawl/FlagGlow.java",
+        "src/main/java/com/paul/brawl/BuildGuard.java"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/platform/entrypoints-and-wiring.md",
       "headings": [
         "Entrypoint declaration",
         "`ServerEntryPoint.onInitializeServer()` — step by step",
         "Event hooks — consolidated, in invocation order",
-        "Op-on-join (`ServerEntryPoint.java:58-74`)",
+        "Op-on-join (`ServerEntryPoint.java:62-78`)",
         "`ClientEntryPoint.onInitializeClient()` (`ClientEntryPoint.java:7-13`)",
         "Subsystem → classes",
         "How to add a new server feature",
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 14134
+      "bytes": 14713
     },
     {
       "id": "reference.commands",
@@ -1783,9 +1880,11 @@
         "src/main/java/com/paul/brawl/VillagersCommand.java",
         "src/client/java/com/paul/brawl/Screenshotter.java",
         "eden/package.json",
-        "eden/src/admin/server.ts"
+        "eden/src/admin/server.ts",
+        "src/main/java/com/paul/brawl/EdenRetry.java",
+        "eden/tests/live-tests-catalogue.test.ts"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/reference/commands.md",
       "headings": [
         "Server commands (Fabric mod)",
@@ -1794,7 +1893,7 @@
         "Eden — admin HTTP verbs (`127.0.0.1:8770`, no auth)",
         "Related"
       ],
-      "bytes": 9147
+      "bytes": 10085
     },
     {
       "id": "reference.ports-files-config",
@@ -1826,9 +1925,13 @@
         "eden/eden.example.json",
         "eden/providers.example.json",
         "eden/.gitignore",
-        ".gitignore"
+        ".gitignore",
+        "eden/src/main.ts",
+        "eden/src/journal/journal.ts",
+        "eden/src/llm/client.ts",
+        "eden/eval/roster.ts"
       ],
-      "verified_at": "4a8081f",
+      "verified_at": "98cb908",
       "path": "docs/system/reference/ports-files-config.md",
       "headings": [
         "Ports",
@@ -1838,7 +1941,7 @@
         "Login names (must be pairwise distinct)",
         "Related"
       ],
-      "bytes": 10279
+      "bytes": 11281
     }
   ]
 }
