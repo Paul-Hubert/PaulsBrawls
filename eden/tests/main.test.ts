@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { EventEmitter } from 'node:events';
-import { start, installShutdownHandlers } from '../src/main';
+import { start, installShutdownHandlers, redactSecrets } from '../src/main';
 
 test('the assembled M0 spine boots, serves /status + /journal, and journals system.boot', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'eden-host-'));
@@ -68,4 +68,19 @@ test('installShutdownHandlers: the first signal stops the host once then exits 0
   assert.deepEqual(exits, [1, 0], 'the graceful stop then exits 0');
   detach();
   assert.equal(target.listenerCount('SIGINT') + target.listenerCount('SIGTERM'), 0, 'detached');
+});
+
+// Bug #17: the substring test /key|secret|token|password/ masked token BUDGETS and env-var names in system.boot.
+test('redactSecrets masks secret values but keeps budgets and env-var names readable', () => {
+  const out = redactSecrets({
+    apiKey: 'sk-1', settlementToken: 't', password: 'p', clientSecret: 's', key: 'k',
+    apiKeyEnv: 'DEEPSEEK_API_KEY', inputTokenBudget: 48000,
+    budget: { perDesk: { critic: { dailyTokens: 100 } } },
+    list: [{ token: 'x', maxTokens: 5 }],
+  }) as Record<string, any>;
+  for (const k of ['apiKey', 'settlementToken', 'password', 'clientSecret', 'key']) assert.equal(out[k], '***', k);
+  assert.equal(out.apiKeyEnv, 'DEEPSEEK_API_KEY');
+  assert.equal(out.inputTokenBudget, 48000);
+  assert.equal(out.budget.perDesk.critic.dailyTokens, 100);
+  assert.deepEqual(out.list, [{ token: '***', maxTokens: 5 }]);
 });

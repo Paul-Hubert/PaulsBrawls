@@ -64,8 +64,9 @@ post-provider), `journal`, `coordinator?` and `god?` (present only when God is w
 | 13 | `journal.append('engine', 'system.boot', { config: redactSecrets(config) })`; log `Eden host up — admin on http://127.0.0.1:<port>` | 424-425 | Presence of `system.boot` = complete boot. |
 | 14 | If `pool && autoSpawn`: `void pool.start()` | 433 | |
 
-`redactSecrets` replaces the value of any key matching `/key|secret|token|password/i` with `'***'`
-(`eden/src/main.ts:1148-1158`). Note this also masks `apiKeyEnv` and `inputTokenBudget` (they match `key`/`token`).
+`redactSecrets` replaces with `'***'` the value of any key matching `/secret|passw(or)?d/i` or ending in `key`/`token`
+(`/(key|token)$/i`). Budgets (`inputTokenBudget`, `dailyTokens`) and the env-var name `apiKeyEnv` stay readable
+(bug #17 — the old `/key|secret|token|password/i` substring test masked them).
 
 ### `wireGod` construction order (`eden/src/main.ts:486-697`)
 

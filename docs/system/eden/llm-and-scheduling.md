@@ -61,7 +61,7 @@ Shipped presets (`eden/providers.example.json`):
 - If `config.apiKeyEnv` is set and `process.env[apiKeyEnv]` is empty → **boot throws** `llm: provider "<name>" requires <VAR>, but it is not set — put it in eden/api-keys.env or export it. The host does NOT fall back to OPENAI_API_KEY (R56).`
 - If `apiKeyEnv` is undefined (local preset, or no `provider` key), the client's own default `process.env.OPENAI_API_KEY` applies.
 - The key is sent as `authorization: Bearer <key>` **only** to non-local hosts. Local = hostname `localhost`, `127.0.0.1`, `::1`, `0.0.0.0`; an unparseable `baseUrl` counts as remote (`eden/src/llm/client.ts:177-185`).
-- The key is never written to config or journal; debug transcripts dump the request body only. `system.boot` journals the config through `redactSecrets`, which masks every key matching `/key|secret|token|password/i` (`eden/src/main.ts:1148-1158`) — this also masks `inputTokenBudget`, `dailyTokens` and `apiKeyEnv`.
+- The key is never written to config or journal; debug transcripts dump the request body only. `system.boot` journals the config through `redactSecrets`, which masks a key matching `/secret|passw(or)?d/i` or ending in `key`/`token` (`/(key|token)$/i`); `inputTokenBudget`, `dailyTokens` and `apiKeyEnv` stay readable (bug #17).
 
 ## LlmClient (`eden/src/llm/client.ts`)
 
@@ -214,7 +214,7 @@ Consumers: `SkillRetriever`, `VillagerMemory` (relevance = `max(cosine, keywordS
 - `LlmClient` timeout does not cover the response body read; reset retries have no back-off; failed calls leave no `llm.call` row.
 - Malformed tool-call arguments become `{}` silently — desks then fall back (critic → keep-draft verdict; curriculum → no task).
 - When `apiKeyEnv` is undefined (local preset or inline `llm.providers`), `OPENAI_API_KEY` from the environment is sent to any non-local `baseUrl`.
-- `redactSecrets` over-masks: `inputTokenBudget`, `dailyTokens`, `apiKeyEnv` show as `***` in `system.boot`.
+- ~~`redactSecrets` over-masks budgets~~ **Fixed (bug #17):** only secret-valued keys (`*secret*`, `*password*`, `…key`, `…token`) are masked.
 - `BudgetTracker.resetDay` is never called; villager-brain tokens are never budgeted.
 - `MemorySummarizer` and `DescriptionPass` bypass the scheduler (not counted against `maxConcurrent`, not paused).
 - A rollout deliberation holds a scheduler slot for its whole duration including skill runs (up to `runDefaultTimeoutMs` 120 s each, 16 tool turns), so 3 concurrent rollouts saturate `maxConcurrent:3`; `god` lane calls then wait despite their priority (priority only orders the queue, it does not preempt running work).

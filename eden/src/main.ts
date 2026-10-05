@@ -1199,13 +1199,19 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+/** A key that names a secret VALUE: `*secret*`/`*password*`, or one ending in `key`/`token` (`apiKey`,
+ *  `settlementToken`). Bug #17: the old substring test also masked `inputTokenBudget`, `dailyTokens` and
+ *  `apiKeyEnv` (an env var NAME), so the boot snapshot hid the budgets an operator needs to read. */
+const SECRET_KEY = /secret|passw(or)?d/i;
+const SECRET_SUFFIX = /(key|token)$/i;
+
 /** Mask anything secret-shaped before the config snapshot enters the journal. */
-function redactSecrets(value: unknown): unknown {
+export function redactSecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactSecrets);
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      out[k] = /key|secret|token|password/i.test(k) ? '***' : redactSecrets(v);
+      out[k] = SECRET_KEY.test(k) || SECRET_SUFFIX.test(k) ? '***' : redactSecrets(v);
     }
     return out;
   }
