@@ -10,7 +10,7 @@ verified_at: 4a8081f
 
 # Eden God — desks, body and the refinement loop
 
-**TL;DR.** Eden's village God is three LLM "desks" over one shared in-memory `GodState`: the **critic** (judges one skill run → `Verdict`, strong tier, forced `verdict` tool), the **curriculum** (proposes tasks, sole writer of the task ledger, strong tier + fast-tier QA cache), and the **orchestrator** (turns tasks into `Directive`s delivered to villager inboxes, fast tier). `GodService` owns rollouts, the critic queue and verdict routing into the skill library. The `RolloutCoordinator` in `main.ts` drives task → directive → villager deliberation → critic → route → revise/close. Several documented features (`combineDesks`, verdict batching, dawn trigger, daily budget reset, plea tickets) exist as code or config but are **not wired in production** (tripwire tickets, embodied verdicts and divine intervention are, since B3.3/B3.5) — see Gotchas.
+**TL;DR.** Eden's village God is three LLM "desks" over one shared in-memory `GodState`: the **critic** (judges one skill run → `Verdict`, strong tier, forced `verdict` tool), the **curriculum** (proposes tasks, sole writer of the task ledger, strong tier + fast-tier QA cache), and the **orchestrator** (turns tasks into `Directive`s delivered to villager inboxes, fast tier). `GodService` owns rollouts, the critic queue and verdict routing into the skill library. The `RolloutCoordinator` in `main.ts` drives task → directive → villager deliberation → critic → route → revise/close. Several documented features (verdict batching, dawn trigger, daily budget reset, plea tickets) exist as code or config but are **not wired in production** (tripwire tickets, embodied verdicts and divine intervention are, since B3.3/B3.5) — see Gotchas.
 
 ## Where things live
 
@@ -81,7 +81,7 @@ Config keys (`eden/src/config.ts:51-64`, defaults `:90-109`, parsing `:240-277`)
 | `god.desks.orchestrator.model` | `"fast"` | dispatch tier (`eden/src/main.ts:566`) |
 | `god.budget.perDesk.<critic\|curriculum\|orchestrator>.dailyTokens` | `null` | `BudgetTracker` cap; non-number → `null` (uncapped) (`eden/src/config.ts:255-259`) |
 | `god.budget.degradeOnBreach` | `true` | passed to all three desks |
-| `god.combineDesks` | `false` | **parsed but never read** — no combined mode exists |
+| ~~`god.combineDesks`~~ | — | **removed (D-19)** — an unknown key now (R22 warning) |
 | `god.embodiedVerdicts` | `true` | gates `GodBody.deliverVerdict` — on, the coordinator's notable verdicts (admit/quarantine) are also delivered in person (B3.5) |
 | `god.authoring` | `"villager"` | parsed (`eden/src/config.ts:260`), never read by `src/` |
 | `god.gamemode` | `"creative"` | not read by `god/` (see bots docs) |
@@ -336,7 +336,7 @@ Payload types: `eden/src/journal/kinds.ts:141-167`.
 
 ## Gotchas & known issues
 
-- `god.combineDesks` and `god.authoring` are parsed config keys with **no code consumer**.
+- `god.authoring` (and `god.gamemode`) are parsed config keys with **no code consumer**; `god.combineDesks` was removed (D-19).
 - ~~`GodBody` is built and discarded; `nod` is a no-op; `intervene` is never called~~ **Wired (B3.5).** The divine-assist
   flag lasts the whole rollout (cleared on every rollout exit), so after an intervention no success counts for that
   rollout — by design (03), but costly; the prompt says so.

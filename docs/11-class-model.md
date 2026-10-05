@@ -511,8 +511,7 @@ classDiagram
 
 ## 6. Layer 3 — God (one entity, three desks, a body)
 
-`combineDesks: true` is a wiring change in `EdenHost` (one queue, one prompt),
-not a class change — the desk classes stay; only their dispatch merges.
+(`combineDesks`, a planned one-queue/one-prompt mode, was never wired and is removed — D-19.)
 
 ```mermaid
 classDiagram

@@ -147,7 +147,9 @@ test('parses god overrides', () => {
     villagers: {},
   });
   const { god } = loadScenario(path);
-  assert.equal(god.combineDesks, true);
+  // B3.8: combineDesks was removed (parsed, never read) — a scenario that still sets it is ignored. This used to
+  // assert it was copied (true); the override no longer exists.
+  assert.equal('combineDesks' in god, false);
   assert.equal(god.embodiedVerdicts, false);
   assert.equal(god.authoring, 'god');
 });
@@ -167,7 +169,7 @@ test('parses god.godPrompt and threads it through applyScenario', () => {
 test('godPrompt absent when not set', () => {
   const path = writeTmp('nogodprompt.json', {
     name: 'test', description: '',
-    god: { combineDesks: true },
+    god: { embodiedVerdicts: true },
     villagers: {},
   });
   const { god } = loadScenario(path);
@@ -192,7 +194,7 @@ test('applyScenario replaces villagers and merges god overrides', () => {
   const path = writeTmp('apply.json', {
     name: 'apply-test',
     description: '',
-    god: { combineDesks: true },
+    god: { embodiedVerdicts: false },
     villagers: {
       Firmin: { role: 'farmer', home: [1, 64, 2], chest: [3, 64, 4] },
     },
@@ -201,7 +203,7 @@ test('applyScenario replaces villagers and merges god overrides', () => {
   const cfg = applyScenario(BASE_CONFIG, scenario);
   assert.equal(cfg.villagers.length, 1);
   assert.equal(cfg.villagers[0]?.name, 'Firmin');
-  assert.equal(cfg.god.combineDesks, true);
+  assert.equal(cfg.god.embodiedVerdicts, false, 'the god override merged (was combineDesks — removed in B3.8)');
   // Unchanged sections come from base
   assert.equal(cfg.admin.port, DEFAULT_CONFIG.admin.port);
   assert.equal(cfg.god.name, 'Dieu');

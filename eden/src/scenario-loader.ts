@@ -24,8 +24,6 @@ export interface ScenarioVillager {
 export interface ScenarioGod {
   /** Avatar username. Defaults to "Dieu". Must differ from every villager name. */
   name?: string;
-  /** true = one LLM call for critic+curriculum+orchestrator (cheap mode). */
-  combineDesks?: boolean;
   /** true = avatar appears in-world to deliver critiques. */
   embodiedVerdicts?: boolean;
   /** "villager" (default) | "god" — who writes skill drafts. */
@@ -115,7 +113,7 @@ export function loadScenario(scenarioPath: string): ScenarioLoadResult {
   const rawGod = isObj(raw['god']) ? raw['god'] : {};
   const god: ScenarioGod = {};
   if (typeof rawGod['name'] === 'string') god.name = rawGod['name'];
-  if (typeof rawGod['combineDesks'] === 'boolean') god.combineDesks = rawGod['combineDesks'];
+  // B3.8: a scenario's `combineDesks` is ignored (the key was removed — it was never read).
   if (typeof rawGod['embodiedVerdicts'] === 'boolean') god.embodiedVerdicts = asBool(rawGod['embodiedVerdicts'], true);
   if (rawGod['authoring'] === 'god' || rawGod['authoring'] === 'villager') god.authoring = rawGod['authoring'];
   if (typeof rawGod['godPrompt'] === 'string') god.godPrompt = rawGod['godPrompt'];

@@ -7,13 +7,11 @@ asked: *who decides what good looks like?*
 
 God's roles are separable **desks** — independent prompt templates, queues, and
 (optionally) model tiers — under one persona and one shared state. The owner left
-"multiple prompts vs. one that does everything" open; the architecture supports
-both behind a config flag:
+"multiple prompts vs. one that does everything" open; the build answers it with three
+desks (D-19 below removed the never-implemented `combineDesks` flag):
 
 ```jsonc
 "god": {
-  "combineDesks": false,   // false: three desks, three prompts, tierable models
-                           // true:  one combined prompt handles all queued work per tick
   "desks": {
     "critic":       { "model": "strong" },   // judgment quality is the product
     "curriculum":   { "model": "strong" },   // frontier selection compounds
@@ -22,9 +20,18 @@ both behind a config flag:
 }
 ```
 
+### Decision D-19: no combined-desk "cheap mode" (the `combineDesks` key is removed)
+
+`combineDesks: true` ("one combined prompt handles all queued work per tick") was parsed from config but no
+code ever read it — a setting that silently does nothing. It is removed (docs/22 B3.8): `god.combineDesks` is now
+an unknown key (the R22 warning), and scenarios no longer carry it. *Chosen over* implementing it because the
+cost lever it promised is already provided by the strong/fast tier split and the per-desk budget valve (D-13),
+the throughput ceiling (not tokens) is what binds (R49), and a merged prompt would reintroduce exactly the
+mega-context D-06 forbids. If a combined mode is ever wanted, it is a new decision with its own wiring.
+
 ### Decision D-06: desks share one state, never one context window
 
-Whatever the flag, the three desks read and write the **same persistent state**
+The three desks read and write the **same persistent state**
 (ledger, dossiers, library view, knowledge cache) but each LLM call gets a
 desk-shaped context. The failure mode this avoids is v1's god-prompt sprawl: one
 mega-context where critique evidence, curriculum history, and dispatch chatter

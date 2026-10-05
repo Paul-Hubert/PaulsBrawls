@@ -57,7 +57,8 @@ export interface EdenConfig {
       perDesk: Record<'critic' | 'curriculum' | 'orchestrator', { dailyTokens: number | null }>;
       degradeOnBreach: boolean;
     };
-    combineDesks: boolean;
+    // B3.8: `combineDesks` (a one-prompt "cheap mode") was parsed but never read; it is removed. A config that
+    // still sets it gets the usual unknown-key warning (R22).
     embodiedVerdicts: boolean;
     /** Optional scenario-level mission statement injected into every desk's system prompt. */
     godPrompt?: string;
@@ -104,7 +105,6 @@ export const DEFAULT_CONFIG: Omit<EdenConfig, 'villagers'> = {
       },
       degradeOnBreach: true,
     },
-    combineDesks: false,
     embodiedVerdicts: true,
   },
   behavior: { drives: false },
@@ -241,7 +241,7 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
   warnUnknown(
     'god',
     g,
-    ['name', 'gamemode', 'authoring', 'desks', 'budget', 'combineDesks', 'embodiedVerdicts', 'godPrompt'],
+    ['name', 'gamemode', 'authoring', 'desks', 'budget', 'embodiedVerdicts', 'godPrompt'],
     warnings,
   );
   const desks = isObj(g['desks']) ? g['desks'] : {};
@@ -271,7 +271,6 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
       },
       degradeOnBreach: bool(budget, 'degradeOnBreach', d.god.budget.degradeOnBreach),
     },
-    combineDesks: bool(g, 'combineDesks', d.god.combineDesks),
     embodiedVerdicts: bool(g, 'embodiedVerdicts', d.god.embodiedVerdicts),
   };
   if (typeof g['godPrompt'] === 'string') god.godPrompt = g['godPrompt'];

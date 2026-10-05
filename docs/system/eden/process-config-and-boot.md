@@ -182,7 +182,7 @@ Other keys (e.g. `home`, `chest`) warn as unknown.
 | `desks.orchestrator.model` | same | `'fast'` | |
 | `budget.perDesk.<desk>.dailyTokens` | number｜null | `null` | Non-number → `null` (uncapped). |
 | `budget.degradeOnBreach` | boolean | `true` | Passed to each desk. |
-| `combineDesks` | boolean | `false` | Not read by host code. |
+| ~~`combineDesks`~~ | — | — | Removed (D-19); an unknown key now. |
 | `embodiedVerdicts` | boolean | `true` | Passed to the (discarded) `GodBody`. |
 | `godPrompt` | string | unset | Appended to all three desk prompts; also sets `hasMissionDirective` on Curriculum. |
 
@@ -252,7 +252,7 @@ Unknown name throws `providers: unknown provider "<n>" — available: …`.
 
 ## Scenarios (`eden/src/scenario-loader.ts`, `eden/scenarios/*.json`)
 
-Shape: `{ name, description, god?: { name?, combineDesks?, embodiedVerdicts?, authoring?, godPrompt? },
+Shape: `{ name, description, god?: { name?, embodiedVerdicts?, authoring?, godPrompt? },
 villagers: { <username>: { role, persona?, items?: [{id,count}] } } }`. `loadScenario` (JSONC, no trailing commas)
 throws on missing file / bad JSON; unknown keys are ignored silently. `applyScenario` replaces `villagers`, sets
 `scenario` to the file's `name`, and shallow-merges `god`. It also computes `setupCommands`
@@ -260,10 +260,10 @@ throws on missing file / bad JSON; unknown keys are ignored silently. `applyScen
 
 | File | `name` | God overrides | Villagers (role) and items |
 |---|---|---|---|
-| `farm.json` | `farm` | combineDesks false, embodiedVerdicts true, authoring villager, long `godPrompt` teaching 4 skills in order (till-and-sow, reap-mature, bake-bread, store-bread) | `Harry` (farmer): iron_hoe×1, wheat_seeds×32 |
+| `farm.json` | `farm` | embodiedVerdicts true, authoring villager, long `godPrompt` teaching 4 skills in order (till-and-sow, reap-mature, bake-bread, store-bread) | `Harry` (farmer): iron_hoe×1, wheat_seeds×32 |
 | `farming-hamlet.json` | `farming-hamlet` | same flags, `godPrompt` on food security; Bertrand defensive | `Firmin` (farmer): iron_hoe, wheat_seeds×32, bread×10; `Margot` (farmer): iron_hoe, carrot×16, potato×16, bread×10; `Bertrand` (guard): iron_sword, iron_chestplate, iron_helmet, cooked_beef×5 |
 | `mining-crew.json` | `mining-crew` | same flags, no `godPrompt` | `Gaspard` (miner): iron_pickaxe, iron_shovel, torch×64, bread×10; `Céleste` (miner): iron_pickaxe, torch×64, bread×10, bucket; `Honoré` (crafter): crafting_table, furnace×2, coal×32, bread×10 |
-| `trading-post.json` | `trading-post` | combineDesks true, embodiedVerdicts false, authoring god | `Théodore` (merchant): gold_ingot×20, emerald×10, paper×16, bread×15; `Aurélie` (crafter): anvil, iron_ingot×32, iron_pickaxe×2, iron_sword×2, bread×10; `Rodolphe` (guard): iron_sword, iron_chestplate, iron_leggings, shield, cooked_beef×5 |
+| `trading-post.json` | `trading-post` | embodiedVerdicts false, authoring god | `Théodore` (merchant): gold_ingot×20, emerald×10, paper×16, bread×15; `Aurélie` (crafter): anvil, iron_ingot×32, iron_pickaxe×2, iron_sword×2, bread×10; `Rodolphe` (guard): iron_sword, iron_chestplate, iron_leggings, shield, cooked_beef×5 |
 
 `eden.example.json` boots `"scenario": "farming-hamlet"`, `"provider": "openai"`.
 

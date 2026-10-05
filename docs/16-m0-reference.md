@@ -583,7 +583,7 @@ validated now, consumed M1+).
 | `god.desks.{critic,curriculum,orchestrator}.model` | `strong`\|`fast` | strong/strong/fast | god/ (M3) | |
 | `god.budget.perDesk.<desk>.dailyTokens` | number\|null | `null` | god/ (M3) | null = uncapped (D-13) |
 | `god.budget.degradeOnBreach` | boolean | `true` | god/ (M3) | |
-| `god.combineDesks` | boolean | `false` | god/ (M3) | |
+| ~~`god.combineDesks`~~ | — | — | removed (D-19) | now an unknown key (R22 warning) |
 | `god.embodiedVerdicts` | boolean | `true` | god/ (M3) | |
 | `behavior.drives` | boolean | `false` | villagers/ (M4+) | |
 | `llm.providers.{strong,fast}.baseUrl` | string | `''` | llm/ (M2) | |

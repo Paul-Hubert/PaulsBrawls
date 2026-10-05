@@ -273,7 +273,7 @@ code-checked as-built description is [docs/system/eden/](docs/system/eden/overvi
 not run in a real boot, however well it is tested. The following are **not wired** in `main.ts`. Details and
 citations are in [docs/system/VERIFICATION-NOTES.md §6](docs/system/VERIFICATION-NOTES.md):
 
-- **`combineDesks`** (and `god.authoring`, `god.gamemode`): parsed, never read.
+- **`god.authoring`, `god.gamemode`:** parsed, never read (`combineDesks` was removed, D-19).
 - **Also inert:** curriculum triggers other than `idle`, `resetDay()` for daily caps, `report_to_god` (its result is discarded), revision history (the coordinator always passes `history: []`), journal retention (`retentionDays` is not parsed, no pruning), and the R32 `wipe|migrate` admin route (doesn't exist). God state (ledger, dossiers, QA cache, directives) is RAM-only.
 
 The remaining sections describe the **design**. Where a design point is in the list above, it is marked *(not wired)*.
@@ -311,7 +311,7 @@ run by `npm run check`) — imports run **strictly downward**, an upward import 
 
 ### God ([docs/03](docs/03-god.md), code in [eden/src/god/](eden/src/god/))
 
-- **Three desks, one persona:** critic / curriculum / orchestrator, independently promptable and model-tierable (critic + curriculum on `strong`, orchestrator on `fast`); a `combineDesks` cheap mode is parsed but never read *(not wired)*. The scheduler gives all desks one FIFO `god` lane. **D-06: desks share one state, never one context window.**
+- **Three desks, one persona:** critic / curriculum / orchestrator, independently promptable and model-tierable (critic + curriculum on `strong`, orchestrator on `fast`); the never-wired `combineDesks` cheap mode was removed (D-19). The scheduler gives all desks one FIFO `god` lane. **D-06: desks share one state, never one context window.**
 - **Critic** (owner #1): judges `RunReport`s — full code, world before/after, call tree, abort cause — returns a structured `Verdict` (success flag + constructive critique + library action).
 - **Curriculum** (owner #6): "what next for the *village*," one task at the edge of ability. The **sole writer of the ledger** (S2). Keeps Voyager's QA-cache (in memory only; warm-up is a hardcoded `WARMUP_COMPLETED=8`) and `maxRetries`. In production only the `idle` trigger fires (no dawn/decompose triggers).
 - **Orchestrator** (owner #4): emits **directives — data, not code** (goal + reason + priority; the directive tool has no expiry) with anti-thrash rules. The design allows doctrine-bound divine intervention (**interventions teach, never do a villager's task**; the critic voids a success on a divinely assisted task) — the orchestrator's `intervene` tool runs one stage-setting divine skill through `GodBody` (B3.5).
@@ -338,7 +338,7 @@ run by `npm run check`) — imports run **strictly downward**, an upward import 
 
 ### Config, ports, identity
 
-- **Config:** [eden/eden.example.json](eden/eden.example.json) → `eden.json` (gitignored). Holds NO key (env-only). Sections: `minecraft`, `provider`, `villagers` (roster: `name`/`role`/`persona`/`items`; `home`/`chest` are not accepted keys — anchors are discovered in the world after spawn, R18/B3.6), `scenario` (wins over `villagers`), `god` (name/desks/budget/`combineDesks`/`embodiedVerdicts`/`godPrompt`), `behavior`, `llm` (strong/fast providers, `maxConcurrent`, cooldown), `skills`, `settlement.url` (`:8767`), `admin.port` (8770), `journal`.
+- **Config:** [eden/eden.example.json](eden/eden.example.json) → `eden.json` (gitignored). Holds NO key (env-only). Sections: `minecraft`, `provider`, `villagers` (roster: `name`/`role`/`persona`/`items`; `home`/`chest` are not accepted keys — anchors are discovered in the world after spawn, R18/B3.6), `scenario` (wins over `villagers`), `god` (name/desks/budget/`embodiedVerdicts`/`godPrompt`), `behavior`, `llm` (strong/fast providers, `maxConcurrent`, cooldown), `skills`, `settlement.url` (`:8767`), `admin.port` (8770), `journal`.
 - **Data dir** `.eden-data/` (gitignored): `eden.db` (journal), `library/<skill>/skill.json` + `v*.js` (authored code), `bots/<name>.json` (memory + relations), `subscriptions/<name>.json`, `world.json` (world stamp), `llm/*.json` (transcripts).
 - **Port map** (R24 — a registry, never folklore): **8770** Eden admin (its only held port) · 8765/8766 v1 (reserved while coexisting) · **8767 Java settlement (stateless per request; Eden POSTs accepted trades to it, with `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when the mod sets `settlementToken`; `./gradlew runServer` steals it, R29)** · 25565 `PaulsBrawlsVanilla` (RCON 25575, production/eval) · 25599 dev server. **Read `run/server.properties`, never assume the port (R28).**
 - **Identity** (R12): Eden's avatar is **`Dieu`** — never v1's `LLMBot`/`GodBot`; villagers use French roster names; the eval harness namespaces every username `EvalBot*`. Minecraft kicks the second login of a name, so every login across all coexisting systems must be pairwise distinct.

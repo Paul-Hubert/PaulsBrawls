@@ -3,7 +3,6 @@
   "description": "Comptoir marchand: un marchand, un forgeron et un garde animent le poste d'échange.",
 
   "god": {
-    "combineDesks": true,
     "embodiedVerdicts": false,
     "authoring": "god"
   },

@@ -65,7 +65,6 @@ export function buildEvalRoster(count: number): EvalRoster {
         perDesk: { critic: { dailyTokens: null }, curriculum: { dailyTokens: null }, orchestrator: { dailyTokens: null } },
         degradeOnBreach: true,
       },
-      combineDesks: false,
       embodiedVerdicts: false, // no theatrics in eval — scenarios assert behavior, not appearances
     },
     behavior: { drives: false }, // ambient suppression: no tired/lonely wake-ups

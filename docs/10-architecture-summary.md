@@ -106,8 +106,8 @@ This directly attacks v1's four caps ([00 §Why a rewrite](00-vision.md#why-a-re
 
 - **Three desks, one persona:** critic / curriculum / orchestrator —
   independently promptable and model-tierable (critic and curriculum on
-  `strong`, orchestrator on `fast`), with a `combineDesks` cheap mode behind a
-  config flag (the owner left one-vs-many prompts open).
+  `strong`, orchestrator on `fast`). The `combineDesks` cheap-mode flag was never
+  implemented and is removed (D-19).
 - **D-06 — Desks share one state, never one context window.** Shared ledger,
   dossiers, QA-cache; each LLM call gets a desk-shaped context. Avoids v1's
   god-prompt sprawl where critique evidence, curriculum history, and dispatch

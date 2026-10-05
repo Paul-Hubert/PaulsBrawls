@@ -154,7 +154,6 @@ export function baseConfig(
         perDesk: { critic: { dailyTokens: null }, curriculum: { dailyTokens: null }, orchestrator: { dailyTokens: null } },
         degradeOnBreach: true,
       },
-      combineDesks: false,
       embodiedVerdicts: true,
     },
     behavior: { drives: false },

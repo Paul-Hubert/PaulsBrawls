@@ -294,7 +294,6 @@ not retrievable).
       },
       "degradeOnBreach": true              // critic→check+template, curriculum→repeat, orchestrator→urgent-only
     },
-    "combineDesks": false,                 // true = one prompt does all three (cheap mode)
     "embodiedVerdicts": true               // avatar shows up to deliver critiques
   },
   "behavior": { "drives": false },         // optional rest/social drives that generate wake-ups (04 §Memory)

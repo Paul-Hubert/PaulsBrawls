@@ -51,6 +51,15 @@ test('warns on an unknown key (R22) but does not throw', () => {
   );
 });
 
+// B3.8: combineDesks was parsed but never read — removed. An old config that still sets it gets the R22 warning.
+test('B3.8: god.combineDesks is no longer a config key — it warns and is dropped', () => {
+  const raw = minimal();
+  raw['god'] = { name: 'Dieu', combineDesks: true };
+  const { config, warnings } = parseConfig(raw);
+  assert.ok(warnings.some((w) => w === 'config: unknown key god.combineDesks ignored (R22)'), JSON.stringify(warnings));
+  assert.equal('combineDesks' in config.god, false);
+});
+
 test('adopts a known alias and warns (R22)', () => {
   const raw = minimal();
   raw['llm'] = { maxConcurrency: 5, perVillagerCooldownSec: 30 };
@@ -128,7 +137,6 @@ test('golden: a fully-defaulted validated config object', () => {
         },
         degradeOnBreach: true,
       },
-      combineDesks: false,
       embodiedVerdicts: true,
     },
     behavior: { drives: false },

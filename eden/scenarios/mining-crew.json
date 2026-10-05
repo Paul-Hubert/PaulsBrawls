@@ -3,7 +3,6 @@
   "description": "Équipe minière: deux mineurs et un artisan qui transforme les matériaux bruts.",
 
   "god": {
-    "combineDesks": false,
     "embodiedVerdicts": true,
     "authoring": "villager"
   },
