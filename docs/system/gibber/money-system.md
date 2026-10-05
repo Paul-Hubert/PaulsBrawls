@@ -127,7 +127,7 @@ The scheduler thread comes from the default thread factory (non-daemon); it is s
 | Consumer | How it touches coins | Source |
 |---|---|---|
 | Village settlement listener (`:8767`) | `resolveItem("coin")` tries `minecraft:coin`, then falls back to `paulsbrawls:coin`; `"paulsbrawls:coin"` also resolves directly. Coins are swapped like any item. | `VillageHttpListener.java:225-234` |
-| Eden `SettlementClient` | Rewrites trade item `coin` → `paulsbrawls:coin` before POSTing (`COIN_ITEM`, `resolveItem`). The client is constructed in `main.ts` but never used, and its body shape does not match the Java listener — see [../eden/java-integration.md](../eden/java-integration.md). | `eden/src/social/trade.ts:27`, `:173-176`; `eden/src/main.ts:577` |
+| Eden `SettlementClient` | Rewrites trade item `coin` → `paulsbrawls:coin` before POSTing the Java-shaped `{botA,botB,aGives,bGives}` body (`COIN_ITEM`, `resolveItem`, `toSettlementRequest`). The client is constructed in `main.ts` but never used — see [../eden/java-integration.md](../eden/java-integration.md). | `eden/src/social/trade.ts:29`, `:52-59`, `:193-195`; `eden/src/main.ts:577` |
 | AI God `Reward` tool | Gives any `namespace:path` item via `giveItemFromString`; `paulsbrawls:coin` works if the model names it (the persona prompt does not mention coins) | `ChatBotFunctions.java:39-48`, `ChatBotActions.java:78-91` |
 | AI God `Trade` tool + `/accept` | `getItemFromString` requires `ns:name`; the take side matches inventory stacks by **display name** equality over `main` only | `TradeOffers.java:33-86`, `ChatBotActions.java:119-142` |
 | `ChatBotActions.giveGoodReward` | Gives 10 coins — **no callers** (dead code) | `ChatBotActions.java:56-58` |

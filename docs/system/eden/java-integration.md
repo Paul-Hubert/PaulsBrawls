@@ -4,7 +4,7 @@ title: Eden Java integration - settlement listener, /village, /villagers, op-on-
 system: eden
 summary: The mod's server-authority duties for the village - the :8767 trade-settlement HTTP listener, VillageConfig, /village and /villagers commands, op-on-join, and how Eden's clients match (or do not match) them.
 tags: [eden, village, settlement, trade, http, 8767, 8770, VillageHttpListener, VillageConfig, VillageCommand, VillagersCommand, op-on-join, scenario, coin]
-sources: [src/main/java/com/paul/brawl/VillageHttpListener.java, src/main/java/com/paul/brawl/VillageConfig.java, src/main/java/com/paul/brawl/VillageCommand.java, src/main/java/com/paul/brawl/VillagersCommand.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/BridgeConfig.java, eden/src/social/trade.ts, eden/src/types/social.ts, eden/src/main.ts, eden/src/config.ts, eden/src/admin/server.ts, eden/src/village-launch.ts, eden/eden.example.json, eden/tests/social-trade.test.ts]
+sources: [src/main/java/com/paul/brawl/VillageHttpListener.java, eden/tests/fakes/fake-settlement.ts, src/main/java/com/paul/brawl/VillageConfig.java, src/main/java/com/paul/brawl/VillageCommand.java, src/main/java/com/paul/brawl/VillagersCommand.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/BridgeConfig.java, eden/src/social/trade.ts, eden/src/types/social.ts, eden/src/main.ts, eden/src/config.ts, eden/src/admin/server.ts, eden/src/village-launch.ts, eden/eden.example.json, eden/tests/social-trade.test.ts]
 verified_at: 4a8081f
 ---
 
@@ -14,9 +14,9 @@ verified_at: 4a8081f
 `POST 127.0.0.1:8767/trade/execute` that validates and swaps items between two online players on the main
 thread; (2) `/village` (config + listener toggle + legacy v1 status/pause/resume); (3) `/villagers
 start|stop|restart` which drives Eden's admin API on `:8770`; (4) op-on-join for `LLMBot`, `Dieu` and the
-current scenario's villagers. **The Eden `SettlementClient` sends `{from,to,give,want}` but the listener
-requires `{botA,botB,aGives,bGives}`, so every Eden settlement would be rejected with 400 `missing botA`**
-— and in the current Eden build the client is constructed but never called.
+current scenario's villagers. The Eden `SettlementClient` now sends the listener's own shape
+`{botA,botB,aGives,bGives}` (it used to send `{from,to,give,want}` → 400 `missing botA`, bug #1, fixed),
+but in the current Eden build the client is still constructed and never called.
 
 ## Components at a glance
 
@@ -143,25 +143,27 @@ The coin is the village currency simply because `paulsbrawls:coin` resolves here
 | Aspect | Eden code |
 |---|---|
 | URL | `settlement.url`, default `http://127.0.0.1:8767/trade/execute` (`eden/src/config.ts:127`, `eden/eden.example.json:64`) |
-| Method / headers | `POST`, `content-type: application/json` (`eden/src/social/trade.ts:83-88`) |
-| **Body sent** | `{ from, to, give: TradeItem[], want: TradeItem[] }` with `coin` → `paulsbrawls:coin` (`eden/src/social/trade.ts:74-79`, `:173-176`) |
-| Timeout | `AbortController`, 10 000 ms default (`eden/src/social/trade.ts:66`, `:80-81`) |
-| Success | any 2xx → journal `trade.settled` (`eden/src/social/trade.ts:95-98`) |
-| Failure | non-2xx → `trade.failed` with reason `settlement HTTP <status>: <first 160 chars>`; network/timeout → `settlement could not reach …` / `settlement timed out after …` (`eden/src/social/trade.ts:89-105`) |
+| Method / headers | `POST`, `content-type: application/json` (`eden/src/social/trade.ts:102-107`) |
+| **Body sent** | `{ botA, botB, aGives: TradeItem[], bGives: TradeItem[] }` built by `toSettlementRequest` with `coin` → `paulsbrawls:coin` (`eden/src/social/trade.ts:44-59`, `:193-195`) |
+| Timeout | `AbortController`, 10 000 ms default (`eden/src/social/trade.ts:90`, `:99-100`) |
+| Success | any 2xx → journal `trade.settled` (`eden/src/social/trade.ts:114-117`) |
+| Failure | non-2xx → `trade.failed` with reason `settlement HTTP <status>: <first 160 chars>`; network/timeout → `settlement could not reach …` / `settlement timed out after …` (`eden/src/social/trade.ts:108-124`) |
 
-### Contract mismatch (verified on both sides)
+### Contract mapping (bug #1, fixed Eden-side)
 
-| Java expects | Eden sends | Effect |
+| Java field | Eden `TradeOffer` field | Meaning |
 |---|---|---|
-| `botA` | `from` | Java: `missing botA` → HTTP 400 |
-| `botB` | `to` | — |
-| `aGives` | `give` | — |
-| `bGives` | `want` | — |
+| `botA` | `from` | proposer |
+| `botB` | `to` | partner |
+| `aGives` | `give` | items moved `botA → botB` |
+| `bGives` | `want` | items moved `botB → botA` |
 
-Every settlement from the current Eden client would therefore fail with
-`settlement HTTP 400: {"ok":false,"error":"missing botA"}`. Eden's unit tests use a `FakeSettlement`
-and assert the Eden-side shape (`eden/tests/social-trade.test.ts:52-54`), so CI does not catch it. The fix
-is a field rename on either side (`from→botA`, `to→botB`, `give→aGives`, `want→bGives`).
+Before the fix, Eden sent the right-hand names verbatim, so every settlement failed with
+`settlement HTTP 400: {"ok":false,"error":"missing botA"}`, and CI missed it because the fake accepted any
+body. Now `eden/tests/social-trade.test.ts` pins the exact body (`deepEqual` against the Java names), and
+`FakeSettlement` ports `validateShape` (same checks and error strings), so a drifted body fails every
+happy-path test. Java was not changed. Only the shape is covered by CI; a live `:8767` smoke run is still
+the proof for resolution and the swap.
 
 ### The client is not wired
 
@@ -248,7 +250,7 @@ dedicated server (the entrypoint does not run on an integrated server).
 
 ## Gotchas & known issues
 
-- **Shape mismatch** with Eden's `SettlementClient` (above) — all Eden settlements 400; plus the client is unused.
+- ~~**Shape mismatch** with Eden's `SettlementClient`~~ — fixed Eden-side (see above). The client is still unused.
 - **Item duplication**: validation checks each line independently against the full inventory, so
   `aGives: [{coin,10},{coin,10}]` passes with only 15 coins; removal then takes 15 but `addItems` creates
   20. Duplicate item lines must be summed before validating.

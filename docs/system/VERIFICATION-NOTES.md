@@ -14,7 +14,7 @@ verified_at: 4a8081f
 (1) every claim in the existing docs that the code contradicts and (2) the bugs and sharp edges found along the way,
 ranked. The biggest themes:
 - Several Eden features documented as live are **constructed in tests only**.
-- The Eden→Java **trade settlement cannot work**: the JSON shapes don't match, and the client is never wired.
+- The Eden→Java **trade settlement is never called**: the client is not wired. The JSON shape mismatch (bug #1) is now fixed Eden-side.
 - The CI workflows **don't exist in the repo**.
 - A handful of Java exploits let players **duplicate items or coins**.
 
@@ -24,7 +24,7 @@ Citations are `path:line` at `4a8081f`.
 
 | # | Sev | Area | Finding | Evidence |
 |---|---|---|---|---|
-| 1 | High | Eden ↔ Java | **Settlement contract mismatch.** Eden POSTs `{from,to,give,want}`; the Java listener requires `{botA,botB,aGives,bGives}` and answers 400 `missing botA`. The client is also never wired (`void new SettlementClient`), and `TradeService` is never constructed. | `eden/src/social/trade.ts:74-79`, `VillageHttpListener.java:63-68,158-161`, `eden/src/main.ts:577` |
+| 1 | High | Eden ↔ Java | ~~**Settlement contract mismatch.** Eden POSTs `{from,to,give,want}`; the Java listener requires `{botA,botB,aGives,bGives}` and answers 400 `missing botA`.~~ **Shape fixed Eden-side.** `toSettlementRequest` maps `from→botA, to→botB, give→aGives, want→bGives` (coin → `paulsbrawls:coin` kept), with no Java change. A test pins the exact body, and `FakeSettlement` now runs the Java shape check. **Still open:** the client is never wired (`void new SettlementClient`), `TradeService` is never constructed, and villagers have no trade tool. | `eden/src/social/trade.ts:44-59,98`, `eden/tests/social-trade.test.ts`, `VillageHttpListener.java:63-68,158-161`, `eden/src/main.ts:577` |
 | 2 | High | Java settlement | **Item duplication.** Duplicate item lines are each validated against the whole inventory: with 15 coins, two lines of 10 pass, 15 are removed and 20 created. Receivers also get fresh default stacks, so damage, enchantments and names are lost. Any two online players can be swapped, at any distance, with no auth. | [eden/java-integration.md](eden/java-integration.md) |
 | 3 | High | AI God trades | **Negative `Trade.takeAmount` duplicates items** on `/accept`. Items are matched by translated display name, and offers never expire. | `TradeOffers.java:59-77` |
 | 4 | High | Eden tests | `npm test` / `npm run check` **fail on a clean checkout**: `tests/live-tests-catalogue.test.ts` loads the gitignored `eden/providers.json`. | [eden/testing-eval-live.md](eden/testing-eval-live.md) |
@@ -96,7 +96,7 @@ Citations are `path:line` at `4a8081f`.
 
 | Claim | Code reality |
 |---|---|
-| "Trade settles via `SettlementClient` POST to :8767" | Never wired, and the shapes mismatch (bug #1). |
+| "Trade settles via `SettlementClient` POST to :8767" | Never wired (bug #1). The body shape now matches the listener. |
 | `/village status|pause|resume` controls the village | Targets the **legacy v1** admin on :8766; Eden is controlled by `/villagers start|stop|restart` (missing from CLAUDE.md's command list) and `POST /pause|/resume` on :8770. |
 | `VillagersCommand` loads `eden/scenarios/<name>.json` | Eden loads nothing on that call; `name` must equal the scenario Eden booted with, or 404 (`eden/src/village-launch.ts:143-152`). |
 | `VillageConfig` can be tuned "without a restart" | Read once at class init; written only by `/village on|off`. |

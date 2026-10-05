@@ -102,7 +102,7 @@
         "6. Eden",
         "Related"
       ],
-      "bytes": 19031
+      "bytes": 19402
     },
     {
       "id": "aigod.actions-and-trades",
@@ -817,6 +817,7 @@
       ],
       "sources": [
         "src/main/java/com/paul/brawl/VillageHttpListener.java",
+        "eden/tests/fakes/fake-settlement.ts",
         "src/main/java/com/paul/brawl/VillageConfig.java",
         "src/main/java/com/paul/brawl/VillageCommand.java",
         "src/main/java/com/paul/brawl/VillagersCommand.java",
@@ -845,7 +846,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 18708
+      "bytes": 18989
     },
     {
       "id": "eden.journal-and-views",
@@ -910,7 +911,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 17915
+      "bytes": 17916
     },
     {
       "id": "eden.llm-and-scheduling",
@@ -1230,6 +1231,7 @@
       "sources": [
         "eden/src/social/conversation.ts",
         "eden/src/social/trade.ts",
+        "eden/tests/fakes/fake-settlement.ts",
         "eden/src/types/social.ts",
         "eden/src/types/memory.ts",
         "eden/src/villagers/memory.ts",
@@ -1256,7 +1258,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 13056
+      "bytes": 14479
     },
     {
       "id": "eden.skills.stock",
@@ -1611,7 +1613,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 11304
+      "bytes": 11333
     },
     {
       "id": "platform.build-and-runtime",
