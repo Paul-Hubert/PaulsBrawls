@@ -52,7 +52,7 @@ import {
   TradeLedgerView,
   RolloutsView,
 } from './views/index';
-import type { Bot, Conversant, Inbox, InboxMessage, MemoryWriter, RunReport, Snapshot, SkillStats, Task, TaskLedger, Vec3Like, Verdict } from './types/index';
+import type { Bot, Conversant, Inbox, InboxMessage, JournalEvent, MemoryWriter, RunReport, Snapshot, SkillStats, Task, TaskLedger, Vec3Like, Verdict } from './types/index';
 
 /** Options for {@link start}. */
 export interface EdenHostOptions {
@@ -182,8 +182,7 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
   // live fold — `npm run rebuild-stats` is the same replay), THEN fold new events live.
   // ONE scan, and without `vitals` (the bulk of a long journal: a row per bot every 10 s, folded by no view and
   // never tagged with a rolloutId).
-  const history = journal.query({ kinds: JOURNAL_KINDS.filter((k) => k !== 'vitals') });
-  for (const v of Object.values(views)) v.rebuildByReplay({ query: () => history });
+  replayViews(journal, Object.values(views));
   journal.subscribe((e) => {
     views.skillStats.fold(e);
     views.competence.fold(e);
@@ -1038,6 +1037,16 @@ export function wireDrives(deps: {
     },
     snapshot: (villager) => trackers.get(villager)?.snapshot(),
   };
+}
+
+/**
+ * B3.9: fold the journal (minus `vitals`) into the derived views at boot. A function of its own so the parsed history
+ * is garbage once it returns — held in start()'s scope, every closure start() creates kept the whole journal alive
+ * for the life of the process (review fix).
+ */
+function replayViews(journal: Journal, views: Array<{ rebuildByReplay(src: { query: () => JournalEvent[] }): void }>): void {
+  const history = journal.query({ kinds: JOURNAL_KINDS.filter((k) => k !== 'vitals') });
+  for (const v of views) v.rebuildByReplay({ query: () => history });
 }
 
 /** The pending messages of a villager inbox not shown to it before (VillagerInbox.peek, without draining), marking
