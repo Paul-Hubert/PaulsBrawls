@@ -239,14 +239,28 @@ export class FilterEvaluator {
 // ── ArgTemplate $event.* substitution ──────────────────────────────────────────────────────────────
 
 /**
- * Resolve a skill handler's args from the event at fire time (04). A string value of the form
- * `$event.path.to.field` is replaced by the event field; anything else passes through unchanged. An
- * unresolved path becomes `undefined` (never throws — a bad template degrades, it doesn't crash routing).
+ * Resolve a skill handler's args at fire time (04). A string value `$<root>.path.to.field` is replaced from a
+ * scope: `$event.*` is the event; B3.6 adds the villager's own facts the host supplies (today `$home.x/y/z`, the
+ * healed home anchor). Anything else passes through unchanged. An unresolved path DROPS the key (never throws):
+ * an `undefined` value would fail the callee's type check (`x: expected number, got undefined`) where an absent
+ * optional arg lets the skill take its own default — e.g. go-home with no home anchor no-ops cleanly.
  */
-export function substituteArgs(template: object | ArgTemplate, env: Envelope): Record<string, unknown> {
+export function substituteArgs(
+  template: object | ArgTemplate,
+  env: Envelope,
+  scope: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const roots: Record<string, unknown> = { ...scope, event: env.event };
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(template as Record<string, unknown>)) {
-    out[k] = typeof v === 'string' && v.startsWith('$event.') ? resolvePath(env.event, v.slice('$event.'.length)) : v;
+    const m = typeof v === 'string' ? /^\$([A-Za-z]+)\.(.+)$/.exec(v) : null;
+    if (m) {
+      // A template whose root the scope doesn't provide is unresolved too — dropped, never passed as a literal.
+      const resolved = m[1]! in roots ? resolvePath(roots[m[1]!], m[2]!) : undefined;
+      if (resolved !== undefined) out[k] = resolved;
+      continue;
+    }
+    out[k] = v;
   }
   return out;
 }

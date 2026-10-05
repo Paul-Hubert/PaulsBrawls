@@ -290,6 +290,8 @@ export interface SubscriptionRouterOptions {
   wakeup: WakeupFn;
   /** Live world facts the FilterEvaluator reads (vitals + running skills + time). */
   vitals: () => FilterContext;
+  /** B3.6: the villager's own facts a skill handler's args may template (`$home.x` …). Default none. */
+  scope?: () => Record<string, unknown>;
   now?: () => number;
 }
 
@@ -368,7 +370,7 @@ export class SubscriptionRouter {
   /** Run a skill handler as a zero-token engine run. Failures land in the RunReport (never swallowed, 04). */
   private async runSkillHandler(sub: Subscription, env: Envelope): Promise<void> {
     if (sub.handler.kind !== 'skill') return;
-    const args = substituteArgs(sub.handler.args, env);
+    const args = substituteArgs(sub.handler.args, env, this.opts.scope?.() ?? {});
     try {
       // The engine journals skill.run (success OR failure) + the FailureTripwire owns the streak.
       await this.opts.engine.run(sub.handler.name, args, this.opts.runner);

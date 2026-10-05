@@ -181,10 +181,20 @@ test('M5-2 (ArgTemplate): a literal args object passes through unchanged', () =>
   assert.deepEqual(args, { to: 'home', n: 2 });
 });
 
-test('M5-2 (ArgTemplate): an unresolved $event.* path becomes undefined (never throws)', () => {
+// B3.6: an unresolved path now DROPS the key (it used to be `{ x: undefined }`). An undefined value fails the
+// callee's arg type check ("x: expected number, got undefined"); an absent optional arg takes the skill's default.
+test('M5-2 (ArgTemplate): an unresolved $event.* path drops the key (never throws)', () => {
   const e = env({ type: 'tick-30s' });
-  const args = substituteArgs({ x: '$event.entity' }, e);
-  assert.deepEqual(args, { x: undefined });
+  const args = substituteArgs({ x: '$event.entity', keep: 1 }, e);
+  assert.deepEqual(args, { keep: 1 });
+});
+
+test('B3.6 (ArgTemplate): $home.* resolves from the host scope; a missing home drops the keys', () => {
+  const e = env({ type: 'night-falls' });
+  const tpl = { x: '$home.x', y: '$home.y', z: '$home.z', range: 2 };
+  assert.deepEqual(substituteArgs(tpl, e, { home: { x: 10, y: 64, z: -3 } }), { x: 10, y: 64, z: -3, range: 2 });
+  assert.deepEqual(substituteArgs(tpl, e, {}), { range: 2 }, 'a root the scope does not provide is unresolved — dropped');
+  assert.deepEqual(substituteArgs(tpl, e, { home: undefined }), { range: 2 }, 'a known-but-empty home drops the coords');
 });
 
 test('M5-2 (ArgTemplate): $event.type and nested numeric fields resolve', () => {

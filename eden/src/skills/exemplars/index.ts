@@ -773,11 +773,9 @@ const GO_HOME: StockSkill = {
   tier: 'mortal',
   exemplar: false,
   tags: ['movement', 'reflex'],
-  // The everyone night-falls→go-home reflex. NOTE: the night-falls signal has no live emitter yet
-  // (bots/signals.ts forwards only hurt/health/death), and the anchor→args substitution is NOT wired —
-  // so today this runs only with explicit x/y/z (e.g. via run_skill) and no-ops cleanly when no anchor
-  // is supplied (a villager with no home just stays put). Feed the home-anchor coords into the reflex
-  // args when the time emitter lands.
+  // The everyone night-falls→go-home reflex (roles.json). The reflex args template `$home.x/y/z` from the
+  // villager's healed home anchor (B3.6); with no anchor yet the keys drop and this no-ops cleanly (a
+  // villager with no home just stays put).
   code: `async function goHome(bot, { x, y, z, range = 2 }, ctx) {
   if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') {
     ctx.log('go-home: pas d’ancre maison fournie — rien à faire');

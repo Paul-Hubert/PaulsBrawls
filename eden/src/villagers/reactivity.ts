@@ -35,6 +35,8 @@ export interface VillagerReactivityOptions {
   vitalsFor: (villager: string) => FilterContext;
   /** Below this health an edge fires `health-low` (defaults to the EventRouter's S7 default of 6). */
   healthLowThreshold?: number;
+  /** B3.6: per-villager template scope for skill-handler args (main.ts: `{ home }` from the healed anchors). */
+  scopeFor?: (villager: string) => Record<string, unknown>;
 }
 
 interface PerBot {
@@ -72,6 +74,7 @@ export class VillagerReactivity {
       journal: this.o.journal,
       wakeup: this.o.wakeup,
       vitals: () => this.o.vitalsFor(villager),
+      ...(this.o.scopeFor ? { scope: () => this.o.scopeFor!(villager) } : {}),
     });
     const router = new EventRouter({
       villager,

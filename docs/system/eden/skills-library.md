@@ -125,7 +125,7 @@ active-probation ──recordProbationRun(ok)×probationRuns──► active
 | (new) → `active` | `seedStock` (`eden/src/skills/library.ts:130-137`) | `seedStockSkills` at every boot (`eden/src/main.ts:524`) | author forced to `{kind:'stock'}` |
 | `draft` → `active-probation` | `admit` (`eden/src/skills/library.ts:141-154`) | `routeVerdict` when `libraryAction==='admit'` and current status is `draft` (`eden/src/god/god.ts:167-174`) | `probationRunsLeft = probationRuns`; stamps `provenance` |
 | `active-probation` → `active` | `recordProbationRun(name, ok)` (`eden/src/skills/library.ts:157-169`) | engine, after every **root** run whose resolved version is `active-probation` (`eden/src/skills/engine.ts:421`) | only `ok=true` decrements; at `left <= 0` → `active`, `probationRunsLeft` deleted |
-| any → `quarantined` | `quarantine(name, reason, version?)` (`eden/src/skills/library.ts:172-183`) | verdict `libraryAction==='quarantine'` (`eden/src/god/god.ts:177-178`); admin route (`eden/src/main.ts:391`); `verifyHashes` | default target = live version, else newest non-archived |
+| any → `quarantined` | `quarantine(name, reason, version?)` (`eden/src/skills/library.ts:172-183`) | verdict `libraryAction==='quarantine'` (`eden/src/god/god.ts:177-178`); admin route (`onQuarantine`); `verifyHashes` at boot; the tripwire verdict (B3.3) | default target = live version, else newest non-archived |
 | `quarantined` → `active-probation` | `unquarantine` (`eden/src/skills/library.ts:186-201`) | verdict `'admit'` on a quarantined version (`eden/src/god/god.ts:167-170`) | **never** straight to `active` (R37/R48); resets `probationRunsLeft` |
 | any → `archived` | `archive` (`eden/src/skills/library.ts:214-220`) | verdict `libraryAction==='archive'` (`eden/src/god/god.ts:179-180`) | invisible to retrieval and default read; file kept |
 
@@ -253,9 +253,9 @@ run/compose passes through it, so an economy policy can be swapped in without en
 ## Integrity: `verifyHashes`
 
 `verifyHashes()` (`eden/src/skills/library.ts:287-298`) re-hashes every non-archived version whose file exists and
-quarantines on mismatch with reason `code hash mismatch at boot — file tampered or corrupted`. Tested
-(`eden/tests/skills-library.test.ts:133`) but **not called** anywhere in `eden/src/` (no boot call in
-`eden/src/main.ts`).
+quarantines on mismatch with reason `code hash mismatch at boot — file tampered or corrupted`. **Called at boot** since
+B3.6: `wireGod` runs it right before the stock seed (so a tampered file is quarantined before anything can run it);
+pinned through `start()` by `eden/tests/main-full-wiring.test.ts`.
 
 ## How to extend
 
@@ -283,7 +283,7 @@ quarantines on mismatch with reason `code hash mismatch at boot — file tampere
   `probationRunsLeft` (`eden/src/skills/library.ts:160`); graduation is purely "3 clean root runs ever".
 - ~~**Tripwire is inert**~~ — wired (B3.3); a streak quarantines only if the critic says so.
 - ~~**Description pass is not wired**~~ — wired (B3.4).
-- **`verifyHashes` is never invoked** at boot despite docs saying it is.
+- ~~**`verifyHashes` is never invoked** at boot~~ — it is (B3.6).
 - ~~**Skill names are used unsanitized as directory names**~~ **Fixed (bug #13):** `upsertDraft` calls
   `assertSkillName` first, which throws `InvalidSkillNameError` (`invalid skill name "<n>": <reason> — use
   letters, digits, '-' or '_' …`) for an empty name, `/` or `\`, `..`, a leading `.`, `:` (a Windows alternate

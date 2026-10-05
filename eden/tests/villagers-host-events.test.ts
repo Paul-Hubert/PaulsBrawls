@@ -192,3 +192,34 @@ test('D-17: VillagerInbox reports each delivery to its hook, and peek() does not
   assert.equal(inbox.peek().length, 2);
   assert.equal(inbox.depth(), 2, 'peek leaves the messages for the rollout coordinator to drain');
 });
+
+test('B3.6: night falls → go-home walks to the healed home anchor ($home.* templated from the host scope)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eden-host-home-'));
+  const journal = new MemoryJournal();
+  const library = new SkillLibrary({ dataDir: dir, journal, probationRuns: 3 });
+  seedStockSkills(library);
+  const bot = new FakeBot({ username: 'Firmin', position: { x: 0, y: 64, z: 0 } });
+  const engine = new SkillEngine({
+    library, journal, grants: new AllGranted(), resolveBot: () => bot,
+    runDefaultTimeoutMs: 2_000, stallSeconds: 20, maxCallDepth: 8, autoQuarantineAfter: 5,
+  });
+  const store = new SubscriptionStore({ dataDir: dir, journal });
+  seedRoleDefaults(store, 'Firmin', 'farmer', loadRoles(DEFAULT_ROLES_PATH));
+  const reactivity = new VillagerReactivity({
+    villagers: [{ name: 'Firmin', role: 'farmer' }], store, engine, journal,
+    wakeup: async () => undefined,
+    vitalsFor: () => ({ selfPos: [0, 64, 0], timeOfDay: 14000, health: 20, food: 20, runningSkills: [] }),
+    scopeFor: () => ({ home: { x: 12, y: 64, z: -5 } }),
+  });
+  reactivity.attach('Firmin', bot);
+  bot.setTime(6000);
+  bot.emit('time');
+  bot.setTime(14000);
+  bot.emit('time');
+  await waitFor(() => journal.query({ kinds: ['skill.run'] }).some((e) => (e.payload as { skill: string }).skill === 'go-home'));
+  const run = journal.query({ kinds: ['skill.run'] }).find((e) => (e.payload as { skill: string }).skill === 'go-home')!;
+  assert.deepEqual((run.payload as { args: object }).args, { x: 12, y: 64, z: -5 });
+  assert.deepEqual((run.payload as { outcome: { ok: boolean; value: unknown } }).outcome, { ok: true, value: { home: true } });
+  assert.equal(bot.entity.position.x, 12, 'the villager walked home');
+  reactivity.detach();
+});

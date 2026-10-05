@@ -14,6 +14,7 @@ import { logger } from './logger';
 import { Journal, type JournalAppender } from './journal/journal';
 import { createLagMonitor, type LagMonitor } from './journal/lag-monitor';
 import { BotPool } from './bots/pool';
+import { AnchorService, type Anchors } from './bots/anchors';
 import { AdminServer } from './admin/server';
 import { VillageLauncher } from './village-launch';
 import { SkillLibrary, AllGranted, renderSignature } from './skills/library';
@@ -191,6 +192,25 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
   // Late-bound so the pool's spawn hook (built below) can reach the launcher (built after the pool).
   const launcherRef: { current?: VillageLauncher } = {};
 
+  // B3.6 (R18): each villager's home/chest anchors are DISCOVERED in the live world — healed a few seconds after
+  // spawn (once the launcher's /spreadplayers has placed the body), persisted in bots/<name>.json and reused on
+  // later boots. The go-home reflex reads `$home.*` from them. A disconnected bot is skipped.
+  const anchorService = new AnchorService(dataDir);
+  const anchors = new Map<string, Anchors>();
+  const villagerSet = new Set(config.villagers.map((v) => v.name));
+  const healAnchors = (name: string, bot: Bot): void => {
+    if (!villagerSet.has(name)) return;
+    const t = setTimeout(() => {
+      try {
+        if (pool?.bot(name) !== bot) return; // reconnected or gone since — the next spawn heals again
+        anchors.set(name, anchorService.heal(name, bot, {}));
+      } catch (e) {
+        logger.warn('anchors', `${name}: anchor heal failed — ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }, ANCHOR_SETTLE_MS);
+    t.unref();
+  };
+
   // The bot pool (M1) — the SINGLE pool (villagers + avatar) God is wired to. Built only when there's a
   // roster to embody: a bare boot (no scenario, no villagers) builds NO pool, so the avatar never
   // auto-logs-in (R12/R53 — option C). The spawn itself is DEFERRED to the in-game `/villagers start`
@@ -211,13 +231,14 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
         onBotSpawn: (name, bot) => {
           reactivityRef.current?.attach(name, bot);
           launcherRef.current?.onSpawn(name, bot);
+          healAnchors(name, bot);
         },
       })
     : undefined;
 
   // God's desks + the refinement loop (M4-3). Wired only for a real run (needs a live world + provider).
   const enableGod = opts.enableGod ?? opts.spawnBots ?? false;
-  const wiring = enableGod ? wireGod({ config, journal, dataDir, pool }) : undefined;
+  const wiring = enableGod ? wireGod({ config, journal, dataDir, pool, homeOf: (name) => anchors.get(name)?.home }) : undefined;
   const reactivity = wiring?.reactivity;
   reactivityRef.current = reactivity; // hand the live reactivity to the (already-built) pool spawn hook
 
@@ -501,7 +522,14 @@ interface GodWiring {
  * The strong/fast tier split (D-13): curriculum proposal + critic run STRONG (novelty); orchestrator
  * dispatch + QA-cache run FAST. Per-desk budget caps default null (R49 — throughput is the limiter).
  */
-function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; pool: BotPool | undefined }): GodWiring {
+function wireGod(args: {
+  config: EdenConfig;
+  journal: Journal;
+  dataDir: string;
+  pool: BotPool | undefined;
+  /** B3.6: a villager's healed home anchor, if any (the go-home reflex templates `$home.*` from it). */
+  homeOf?: (villager: string) => [number, number, number] | undefined;
+}): GodWiring {
   const { config, journal, dataDir } = args;
   const providers = new ProviderRegistry({
     strong: { baseUrl: config.llm.providers.strong.baseUrl, model: config.llm.providers.strong.model, inputTokenBudget: config.llm.providers.strong.inputTokenBudget },
@@ -539,6 +567,9 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   // at `active` (curated review IS their probation, D-12). Without this the library boots EMPTY:
   // search_skills returns nothing and a villager has nothing to compose. Bug #12: only CHANGED stock gets a new
   // version, and never over a villager's admitted override of a stock name.
+  // B3.6: the boot integrity check — a code file whose hash drifted from its record (tampered or corrupted on
+  // disk) is quarantined before anything can run it. Before the seed, so a re-seeded stock version is fresh.
+  library.verifyHashes();
   const seed = seedStockSkills(library);
   if (seed.seeded.length > 0) logger.info('skills', `stock: seeded ${seed.seeded.length} new/changed skill version(s) (${seed.unchanged} unchanged)`);
   if (seed.overridden.length > 0) {
@@ -814,6 +845,10 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
       journal,
       wakeup,
       vitalsFor,
+      scopeFor: (villager) => {
+        const home = args.homeOf?.(villager);
+        return { home: home ? { x: home[0], y: home[1], z: home[2] } : undefined };
+      },
     });
     const live = reactivity;
     signalInbox = (villager) => live.signal(villager, 'inbox');
@@ -1012,6 +1047,9 @@ export interface RolloutResult {
    *  enqueued instead of grinding revisions on a correct skill. */
   blocked?: boolean;
 }
+
+/** B3.6: how long after a spawn the anchors are healed — after the launcher's /spreadplayers (fires at +1.5 s). */
+const ANCHOR_SETTLE_MS = 10_000;
 
 const DEFAULT_SNAPSHOT: Snapshot = {
   biome: 'plains', time: 1200, position: [0, 64, 0], health: 20, hunger: 20,

@@ -26,7 +26,7 @@ quiescence helpers) are tested but **not wired** into the running host.
 | `eden/src/bots/plugins.ts` | `loadPlugins`, `AUTO_EAT_OPTS`, `pathfinder` | `eden/src/bots/pool.ts` | wired |
 | `eden/src/bots/hardening.ts` | `boundPathfinder`, `abortActiveTasks`, `installChatInterceptor`, `craftQuiescence`, `waitForInventoryQuiescence` | pool (bound), engine (abort, interceptor) | quiescence helpers: tests only |
 | `eden/src/bots/signals.ts` | `attachReactivitySignals` | `eden/src/villagers/reactivity.ts:63` | wired |
-| `eden/src/bots/anchors.ts` | `AnchorService` | none | **not wired** (tests only) |
+| `eden/src/bots/anchors.ts` | `AnchorService` | none | wired (B3.6): healed 10 s after each villager spawn in `start()` |
 | `eden/src/bots/helpers.ts` | `goToHops`, `collectTrunk`, `useChest`, `deposit`, `withdraw`, `MAX_HOP_BLOCKS` | none | **not wired** — stock skills inline their own copies |
 | `eden/src/render/*.ts` | `estimateTokens`, `renderSnapshot`, `renderRunReport` | `eden/src/god/critic.ts`, `eden/src/villagers/context-pack.ts` | wired |
 | `eden/src/types/bot.ts` | narrowed `Bot` seam (D-14) | everything in bots/ + engine | — |
@@ -218,7 +218,7 @@ loseRadius=24})`:
 `eden/tests/villagers-host-events.test.ts`; only a live run proves mineflayer emits the native events as modelled. Stall-detector
 pulses are a different mechanism (engine-side bot listeners, see [skills-engine.md](skills-engine.md#pulse-sources-d-10--r26--r46)).
 
-## Anchors (`eden/src/bots/anchors.ts`) — not wired
+## Anchors (`eden/src/bots/anchors.ts`) — wired since B3.6
 
 `AnchorService(dataDir, {searchRadius=16, onWarn})` (`eden/src/bots/anchors.ts:40-50`); `heal(botName, bot, {})`
 (`eden/src/bots/anchors.ts:57-91`):
@@ -235,7 +235,13 @@ pulses are a different mechanism (engine-side bot listeners, see [skills-engine.
 
 `AnchorInput` is an empty interface: configured home/chest hints are **not** an input, and
 `VillagerConfig` has no `home`/`chest` keys (allowed keys: `name, role, persona, items`, `eden/src/config.ts:223`).
-Nothing in `eden/src` instantiates `AnchorService`.
+**Wiring (B3.6):** `start()` builds one `AnchorService(dataDir)`; the pool's `onBotSpawn` schedules `heal` for a roster
+villager `ANCHOR_SETTLE_MS = 10 s` later (after the launcher's `/spreadplayers` at +1.5 s), skipped if the bot reconnected
+or left meanwhile; the result lands in an in-memory map. `wireGod` gets `homeOf(name)`, and `VillagerReactivity`'s
+`scopeFor` exposes `{ home: {x,y,z} | undefined }` so a skill handler may template `$home.x/y/z` — the `everyone`
+`night-falls → go-home` reflex does (`roles.json`). Only a live run proves the heal (it needs a real world); the
+templating is pinned by `eden/tests/villagers-host-events.test.ts`. A `/villagers restart` deletes the persisted
+anchors with `bots/<name>.json`, so the next spawn re-discovers them.
 
 ## Render layer
 
@@ -278,8 +284,8 @@ actually sees for run evidence.
 
 ## Gotchas & known issues
 
-- **AnchorService and helpers.ts are dead code at runtime** — R18 "homes snap to real ground" is
-  implemented and tested but never invoked; villager config carries no home/chest.
+- ~~**AnchorService is dead code at runtime**~~ — wired (B3.6). `helpers.ts` is still not used at runtime; villager
+  config still carries no home/chest hints (anchors are discovered).
 - **Vitals `currentRun` is always `null`** — `currentRunOf` is not passed (`engine.runningSkills` exists).
 - ~~**Most reactivity events have no source**~~ **Fixed (B3.1, D-17):** chat, entity-spotted/-lost, time and inbox are
   forwarded, so every `roles.json` default can fire. item-received / block-broken-nearby / run-finished remain inert.

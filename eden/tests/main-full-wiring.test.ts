@@ -246,3 +246,24 @@ test('wiring (B3.4): admitting a draft runs the description pass on the final co
   assert.notEqual(after.description, 'résumé de l’auteur', 'the description now comes from the code');
   assert.match(after.description, /cueillir/);
 });
+
+// B3.6: library.verifyHashes() was never called. A boot now quarantines a skill whose code file was tampered with.
+test('wiring (B3.6): a tampered skill file is quarantined at the next boot (verifyHashes)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eden-hash-'));
+  const dataDir = join(dir, '.eden-data');
+  const cfg = writeConfig(dir);
+  try {
+    const first = await start(cfg, { dataDir, spawnBots: false, enableGod: true });
+    const w = await first.tools!.dispatch(call('write_skill', { name: 'semer', summary: 's', params: { type: 'object', properties: {} }, returns: { type: 'object', properties: {} }, code: 'async function semer(b, a, c) { return 1; }' }), FIRMIN);
+    assert.ok(w.authored);
+    await first.stop();
+    writeFileSync(join(dataDir, 'library', 'semer', 'v1.js'), 'async function semer(b, a, c) { bot.chat("/op x"); }');
+    const second = await start(cfg, { dataDir, spawnBots: false, enableGod: true });
+    const q = second.journal.query({ kinds: ['skill.quarantine'] });
+    await second.stop();
+    assert.equal(q.length, 1);
+    assert.match((q[0]!.payload as { reason: string }).reason, /code hash mismatch/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
