@@ -110,7 +110,7 @@
         "6. Eden",
         "Related"
       ],
-      "bytes": 30252
+      "bytes": 31385
     },
     {
       "id": "aigod.actions-and-trades",
@@ -221,7 +221,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 27519
+      "bytes": 27658
     },
     {
       "id": "aigod.configuration-and-commands",
@@ -334,7 +334,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 24062
+      "bytes": 25290
     },
     {
       "id": "aigod.images-and-client",
@@ -434,7 +434,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 20491
+      "bytes": 20604
     },
     {
       "id": "aigod.mcp-gateway",
@@ -538,7 +538,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 14492
+      "bytes": 14542
     },
     {
       "id": "aigod.tools-catalogue",
@@ -642,7 +642,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 8379
+      "bytes": 8836
     },
     {
       "id": "eden.admin-api",
@@ -760,7 +760,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 25150
+      "bytes": 25396
     },
     {
       "id": "eden.god",
@@ -838,7 +838,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 37548
+      "bytes": 37881
     },
     {
       "id": "eden.java-integration",
@@ -1155,7 +1155,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 28221
+      "bytes": 28683
     },
     {
       "id": "eden.skills.engine",
@@ -1213,7 +1213,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 22956
+      "bytes": 23532
     },
     {
       "id": "eden.skills.library",
@@ -1270,7 +1270,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 24122
+      "bytes": 24667
     },
     {
       "id": "eden.social-and-trade",
@@ -1325,7 +1325,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 22546
+      "bytes": 23274
     },
     {
       "id": "eden.skills.stock",
@@ -1368,7 +1368,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 18622
+      "bytes": 18695
     },
     {
       "id": "eden.testing-eval-live",
@@ -1644,7 +1644,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 36170
+      "bytes": 36980
     },
     {
       "id": "gibber.money-system",
@@ -1697,7 +1697,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 12135
+      "bytes": 12640
     },
     {
       "id": "platform.build-and-runtime",
@@ -1757,7 +1757,8 @@
         "src/test/java/com/paul/brawl/GibberMathTest.java",
         "src/test/java/com/paul/brawl/GodToolGateTest.java",
         "src/test/java/com/paul/brawl/ImageMimeTest.java",
-        "src/test/java/com/paul/brawl/ItemIdsTest.java"
+        "src/test/java/com/paul/brawl/ItemIdsTest.java",
+        "src/test/java/com/paul/brawl/GodActionQueueTest.java"
       ],
       "verified_at": "98cb908",
       "path": "docs/system/platform/build-and-runtime.md",
@@ -1779,7 +1780,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 21177
+      "bytes": 21488
     },
     {
       "id": "platform.entrypoints-and-wiring",
@@ -1843,7 +1844,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 14713
+      "bytes": 14766
     },
     {
       "id": "reference.commands",

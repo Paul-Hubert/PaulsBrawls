@@ -11,7 +11,7 @@ verified_at: 98cb908
 # Eden — tests, CI gate, eval scaffold and live-test harness
 
 **TL;DR.** `npm run check` = ESLint + `tsc --noEmit` + dependency-cruiser + `node --test` over 65 test files
-(605 tests) that run only against fakes — no Minecraft, no paid LLM. `npm run eval` is a **dry run**:
+(621 tests) that run only against fakes — no Minecraft, no paid LLM. `npm run eval` is a **dry run**:
 it wipes `.eden-eval-data/`, builds and validates a 4-scenario catalogue, and logs the plan; it never connects to a
 server. `npm run live-test [name]` runs real scenarios (real dev server via RCON + real LLM + real mineflayer), each
 in a hard-killable child process, writing evidence to `live-tests/.runs/<scenario>-<ts>/`. There is no CI:
@@ -45,14 +45,14 @@ There is no CI in this repo. `.github/` is gitignored (`.gitignore:1`), and no `
 checkout or anywhere in git history, so no workflow runs the gate. The executable gate is `npm run check`, run
 locally; every "CI" mention in comments (e.g. `live-tests/config.ts`) means that local check.
 
-The Java mod has its own 10 JUnit 5 classes under `src/test/java/com/paul/brawl/` (`./gradlew test`), outside
+The Java mod has its own 11 JUnit 5 classes under `src/test/java/com/paul/brawl/` (`./gradlew test`), outside
 this gate.
 
 Test counts below are from an `npm test` run at `98cb908`; coverage figures are from `docs/PROGRESS.md`, not re-run.
 
 ## The unit/integration suite (`eden/tests/`)
 
-65 `*.test.ts` files; an `npm test` run reports **605 tests, 605 pass, 0 fail, 0 cancelled**. `node:test` +
+65 `*.test.ts` files; an `npm test` run reports **621 tests, 621 pass, 0 fail, 0 cancelled**. `node:test` +
 `node:assert/strict`, no `describe`.
 Rules: tests call `start()` with defaults (`spawnBots`, `installProcessGuards`, `enableGod`, `serveWeb` all false),
 so no server connection or global process handler is installed; servers bind port `0`.

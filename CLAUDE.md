@@ -52,9 +52,9 @@ They copy the remapped jar into the paths set by `mods_folder` / `client_mods_fo
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
-The Java side has ten JUnit 5 classes (42 tests) under `src/test/java/com/paul/brawl/`, each covering a
+The Java side has eleven JUnit 5 classes (47 tests) under `src/test/java/com/paul/brawl/`, each covering a
 Minecraft-free helper: `TradeMath`, `ImageMime`, `BuildGuard`, `GodToolGate`, `GodClamps`, `ItemIds`, `FlagGlow`,
-`GibberMath`, `BlockInfoJson`, `EdenRetry` (`./gradlew test`). The world-facing wiring around them is in-game-check only. `jacocoTestReport` fails, because Jacoco isn't applied.
+`GibberMath`, `BlockInfoJson`, `EdenRetry`, `GodActionQueue` (`./gradlew test`). The world-facing wiring around them is in-game-check only. `jacocoTestReport` fails, because Jacoco isn't applied.
 **There is no CI in this repo:** `.github/` is gitignored (`.gitignore:1`) and absent from all of git history, so
 no workflow runs these or uploads releases. Every "CI gate" in the Eden docs means the local `npm run check`.
 
@@ -69,7 +69,7 @@ npx tsx src/main.ts eden.json    # boot the host: spawns bots + installs process
 
 ```powershell
 npm run check          # local gate: lint + tsc --noEmit + dependency-cruiser (0 violations) + npm test
-npm test               # node:test via tsx, on the fakes only — NEVER touches Minecraft (65 files, 605 tests)
+npm test               # node:test via tsx, on the fakes only — NEVER touches Minecraft (65 files, 621 tests)
 npm run test:coverage  # node built-in coverage (~94% line / ~83% branch)
 npm run eval           # DRY RUN: builds + validates 4 scenarios, logs the plan, connects to nothing
 npm run live-test      # real server + real LLM scenario suite (needs a server + a provider key)

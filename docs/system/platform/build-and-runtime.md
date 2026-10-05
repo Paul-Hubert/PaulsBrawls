@@ -4,7 +4,7 @@ title: Build, packaging and runtime layout of the Fabric mod
 system: platform
 summary: How the paulsbrawls Fabric mod is built (Loom, versions, jar-in-jar deps, copy tasks), what is tracked in run/, CI reality, the Java unit tests, the empty minecraft-mcp-server gitlink, supervisor/ and .claude/.
 tags: [gradle, loom, junit, tests, fabric, build, jar-in-jar, langchain4j, okhttp, mixins, assets, ci, run-dir, server-properties, submodule, supervisor]
-sources: [build.gradle, settings.gradle, gradle.properties, .gitignore, .gitattributes, src/main/resources/fabric.mod.json, src/main/resources/paulsbrawls.mixins.json, src/client/resources/paulsbrawls.client.mixins.json, src/main/java/com/paul/brawl/mixin/ExampleMixin.java, src/client/java/com/paul/brawl/mixin/client/ExampleClientMixin.java, src/main/resources/assets/paulsbrawls/items/coin.json, src/main/resources/assets/paulsbrawls/models/item/coin.json, src/main/resources/assets/paulsbrawls/lang/en_us.json, src/main/resources/assets/paulsbrawls/lang/fr_fr.json, run/server.properties, run/mcp_config.properties, run/eula.txt, run/prompt.txt, supervisor/SUPERVISOR.md, supervisor/check.ps1, .claude/launch.json, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/test/java/com/paul/brawl/TradeMathTest.java, src/test/java/com/paul/brawl/BuildGuardTest.java, src/test/java/com/paul/brawl/FlagGlowTest.java, src/test/java/com/paul/brawl/GodClampsTest.java, src/test/java/com/paul/brawl/BlockInfoJsonTest.java, src/test/java/com/paul/brawl/EdenRetryTest.java, src/test/java/com/paul/brawl/GibberMathTest.java, src/test/java/com/paul/brawl/GodToolGateTest.java, src/test/java/com/paul/brawl/ImageMimeTest.java, src/test/java/com/paul/brawl/ItemIdsTest.java]
+sources: [build.gradle, settings.gradle, gradle.properties, .gitignore, .gitattributes, src/main/resources/fabric.mod.json, src/main/resources/paulsbrawls.mixins.json, src/client/resources/paulsbrawls.client.mixins.json, src/main/java/com/paul/brawl/mixin/ExampleMixin.java, src/client/java/com/paul/brawl/mixin/client/ExampleClientMixin.java, src/main/resources/assets/paulsbrawls/items/coin.json, src/main/resources/assets/paulsbrawls/models/item/coin.json, src/main/resources/assets/paulsbrawls/lang/en_us.json, src/main/resources/assets/paulsbrawls/lang/fr_fr.json, run/server.properties, run/mcp_config.properties, run/eula.txt, run/prompt.txt, supervisor/SUPERVISOR.md, supervisor/check.ps1, .claude/launch.json, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/test/java/com/paul/brawl/TradeMathTest.java, src/test/java/com/paul/brawl/BuildGuardTest.java, src/test/java/com/paul/brawl/FlagGlowTest.java, src/test/java/com/paul/brawl/GodClampsTest.java, src/test/java/com/paul/brawl/BlockInfoJsonTest.java, src/test/java/com/paul/brawl/EdenRetryTest.java, src/test/java/com/paul/brawl/GibberMathTest.java, src/test/java/com/paul/brawl/GodToolGateTest.java, src/test/java/com/paul/brawl/ImageMimeTest.java, src/test/java/com/paul/brawl/ItemIdsTest.java, src/test/java/com/paul/brawl/GodActionQueueTest.java]
 verified_at: 98cb908
 ---
 
@@ -14,7 +14,7 @@ verified_at: 98cb908
 client/main source sets). LangChain4j + Jackson + OkHttp/Okio/Kotlin stdlib are shipped jar-in-jar via
 `include`. `build` is finalized by two `Copy` tasks that drop the remapped jar into Paul's local mods
 folders. In this checkout there is **no Gradle wrapper and no `.github/` directory** (both are gitignored),
-`minecraft-mcp-server/` is an **empty gitlink** (no `.gitmodules`), and the Java side has ten JUnit 5 suites
+`minecraft-mcp-server/` is an **empty gitlink** (no `.gitmodules`), and the Java side has eleven JUnit 5 suites
 for its Minecraft-free helpers (`./gradlew test`).
 
 ## Toolchain and versions
@@ -189,7 +189,7 @@ from the repo.
 
 ## Java unit tests (`src/test/java/com/paul/brawl/`)
 
-Ten JUnit 5 suites, run with `./gradlew test`. Each covers a Minecraft-free helper class in
+Eleven JUnit 5 suites (47 `@Test`s), run with `./gradlew test`. Each covers a Minecraft-free helper class in
 `src/main/java/com/paul/brawl/`; none boots Minecraft, so command trees, packets and world effects still need
 an in-game check.
 
@@ -197,11 +197,12 @@ an in-game check.
 |---|---|---|---|
 | `TradeMathTest` | 11 | `TradeMath` | Per-item aggregation + validation shared by the `:8767` settlement and God's `/accept` offers |
 | `BuildGuardTest` | 5 | `BuildGuard` | Sub-agent cap (4) and per-call block cap (128), cancellation (bug #7) |
-| `FlagGlowTest` | 4 | `FlagGlow` | Glow ownership: the mod clears only a glow it set itself (bug #11) |
+| `FlagGlowTest` | 4 | `FlagGlow` | Glow ownership: the mod clears only a glow it set itself, and reports it on leave so it is cleared before the save (bug #11) |
 | `GodClampsTest` | 4 | `GodClamps` | Clamps on `Reward` amount, `Punishment` strikes and `SpawnCreature` offsets (bug #6) |
 | `BlockInfoJsonTest` | 3 | `BlockInfoJson` | The `getBlockInfo` JSON shape (bug #18) |
 | `EdenRetryTest` | 3 | `EdenRetry` | Which failed `/villagers` POSTs may be re-sent: `restart` only on a refused connection (bug #16) |
-| `GibberMathTest` | 3 | `GibberMath` | Saturating revenue arithmetic (bug #10) |
+| `GibberMathTest` | 4 | `GibberMath` | Saturating revenue arithmetic; credit = the measured coin-count rise (bug #10) |
+| `GodActionQueueTest` | 4 | `GodActionQueue` | Actions drain before bulk build placements; a withdrawn action never runs (bug #7 review) |
 | `GodToolGateTest` | 3 | `GodToolGate` | MCP tools refused for a bodiless prayer or a disabled bridge (bug #8) |
 | `ImageMimeTest` | 3 | `ImageMime` | MIME sniffing of image bytes for `/prove`/`/build` (bug #9) |
 | `ItemIdsTest` | 3 | `ItemIds` | Registry-id extraction from an item string (components/NBT stripped, `minecraft:` default) (bug #6) |

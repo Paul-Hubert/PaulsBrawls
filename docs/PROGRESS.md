@@ -1546,7 +1546,24 @@ surprises. Newest first.
     "Changes since 4a8081f" section; root and eden CLAUDE.md updated. The re-verification turned up and fixed: a critic
     quarantine journaled as `engine` (now `god:critic`), the inbox reflex hint claiming every message is from God,
     two stale Java Javadocs and five stale Eden comments/messages. `index.json` regenerated (34 docs).
-  - Tests: Eden 545 (516 pass / 1 fail / 28 cancelled) → 605/605, `npm run check` green; Java 11 → 42 (10 classes).
+  - Tests: Eden 545 (516 pass / 1 fail / 28 cancelled) → 621/621, `npm run check` green; Java 11 → 47 (11 classes).
+- Review round (same session, "verify all your fixes make sense"): six adversarial reviewers re-read every fix commit
+  against the code and real runtimes. 23 commits held; 20 needed a follow-up, each fixed in its own commit with a
+  test where testable:
+  - Java: build placements on a separate bulk lane, and a timed-out God action withdrawn so it can never run late
+    (a "non exécutée" Reward used to run anyway); the mod's glow cleared before a leaving player is saved; coins not
+    credited to a dead or creative player; the idle watchdog suspended while the owner's LLM request is in flight.
+  - Eden: `chatSafe` (a newline or a `/` past mineflayer's 256-char chunk ran a command on an op'd villager); anchors
+    scan with real Vec3s (every live heal threw); the abort fence before an await's operand plus a second abort
+    protocol after settling; a quarantined stock skill re-seeded; a failed intervention no longer voids the
+    rollout; tell budgeted per pair + only unseen inbox messages shown; drives only for connected villagers; the
+    boot replay not retained; an in-flight rollout snapshotted; closed rollouts dropped from the snapshot; role
+    defaults reseeded on restart and upgraded from roles.json on old data dirs; Windows-unsafe skill names refused;
+    the avatar's chat not a player-chat event; critic quarantine actor and inbox hint (found in phase C).
+  - Left open (documented): work in flight at `/villagers restart` can write the old life into the new memory; the
+    anchor scan is a large synchronous `blockAt` sweep per spawn; sync un-awaited bot calls in a try/catch that
+    swallows the fence; a timed-out conversation turn's LLM call is not cancelled; a stationary hostile is spotted
+    only when it moves; the completed/failed ledger and the critic queue grow without bound.
 - Decisions: R73, R74 (docs/07); D-17, D-18 (docs/04); D-19 (docs/03).
 - Next: the live smoke runbook (first real `:8767` trade); in-game checks for the Java fixes (avatar vulnerability,
   `/prove`/`/build`, main-thread text building, clamps, CTF offhand); a live run to see conversations, drives and
