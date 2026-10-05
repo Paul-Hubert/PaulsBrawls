@@ -196,18 +196,9 @@ public class QueryTerrain {
             sb.append('\n');
         }
 
-        String result = sb.toString();
-
-        // TEMP — mirror the snapshot to the praying player's chat so we can eyeball
-        // what God is actually seeing. Vanilla chat is proportional, so the grid
-        // will look slightly skewed, but the pattern is still readable. Safe to
-        // call sendMessage directly here: dispatch wraps this whole execute() in
-        // runOnMain, so we're on the server thread. Remove once tuned.
-        for (String line : result.split("\n")) {
-            ChatPrinter.sendMessage(player, line);
-        }
-
-        return result;
+        // Bug #18: the TEMP debug mirror of this grid into the praying player's chat is gone — the map is for the
+        // model, and it spammed the player with dozens of lines on every QueryTerrain.
+        return sb.toString();
     }
 
     /** Maps a (dx,dz) elevation gradient to a cardinal/diagonal string. */

@@ -252,7 +252,7 @@ Algorithm (`:80-211`): constants `GRID=16`, `SHADE=" .:-=+*#%@"`, `DEFAULT_RADIU
 `< 1.5` → `flat (Δx.x across area)`, else `rising toward <E|SE|S|SW|W|NW|N|NE> (Δx.x)`. Biome from
 `world.getBiome(cx, playerY, cz)`. Output: header line, `Biome=… Y range a..b (Δn) playerY=… slope=…`, legend line,
 16 rows of `c ` cells (top row = north). All-unloaded → `QueryTerrain: la zone autour de (cx,cz) n'est pas chargée — recentre plus près du joueur.`
-**TEMP:** the whole map is also echoed line-by-line into the praying player's chat (`:201-208`).
+The map goes to the model only (bug #18 removed the TEMP line-by-line echo into the praying player's chat).
 
 ## BuildPlan (buildBot only)
 
@@ -319,7 +319,7 @@ See [mcp-gateway.md](mcp-gateway.md).
   The clamps are unit-tested; the in-world effect needs an in-game check. Only the `x` param description names the
   offset clamp.
 - `ChangeWeather` always claims success.
-- `QueryTerrain` spams the player's chat with the grid (TEMP debug).
+- ~~`QueryTerrain` spams the player's chat with the grid (TEMP debug).~~ Fixed (bug #18).
 - Gestures fire based on the global manifested flag, not the caller's ownership.
 - `CLAUDE.md` lists `BuildPlan` among the God's tools; it is only attached to `buildBot`.
 
