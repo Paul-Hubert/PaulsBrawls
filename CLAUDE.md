@@ -273,7 +273,6 @@ code-checked as-built description is [docs/system/eden/](docs/system/eden/overvi
 not run in a real boot, however well it is tested. The following are **not wired** in `main.ts`. Details and
 citations are in [docs/system/VERIFICATION-NOTES.md §6](docs/system/VERIFICATION-NOTES.md):
 
-- **Drives:** `DriveTracker` is never constructed; `behavior.drives` is unused.
 - **`combineDesks`** (and `god.authoring`, `god.gamemode`): parsed, never read.
 - **Also inert:** curriculum triggers other than `idle`, `resetDay()` for daily caps, `report_to_god` (its result is discarded), revision history (the coordinator always passes `history: []`), journal retention (`retentionDays` is not parsed, no pruning), and the R32 `wipe|migrate` admin route (doesn't exist). God state (ledger, dossiers, QA cache, directives) is RAM-only.
 

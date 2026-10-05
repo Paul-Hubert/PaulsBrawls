@@ -32,6 +32,7 @@ import { VillagerInbox } from './villagers/inbox';
 import { SubscriptionStore, type FilterContext } from './villagers/subscriptions';
 import { loadRoles, seedRoleDefaults } from './villagers/role-defaults';
 import { VillagerReactivity } from './villagers/reactivity';
+import { DriveTracker, type DriveKind, type DriveSnapshot } from './villagers/drives';
 import type { WakeupRequest } from './villagers/events';
 import { GodService } from './god/god';
 import { Curriculum, loadCurriculumPrompt, type CurriculumTrigger } from './god/curriculum';
@@ -245,7 +246,12 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
   // M5: pump the coarse 30 s clock (tick-30s) across every attached router. Unref'd so it never holds the
   // loop open; a no-op when reactivity is unwired (CI / no live bots). The emitter-side hysteresis clocks
   // (health-low/night) are signal-driven; only the polling tick-30s subscriptions need this pump.
-  const reactivityTick = reactivity ? setInterval(() => reactivity.tick(), 30_000) : undefined;
+  const reactivityTick = reactivity
+    ? setInterval(() => {
+        reactivity.tick();
+        wiring?.drives?.tick(); // B3.7: the drives decay on the same coarse clock
+      }, 30_000)
+    : undefined;
   reactivityTick?.unref();
 
   // 7. D-09 rollout recovery (boot-abandon). GodService.recoverRollouts(): every open task whose
@@ -514,6 +520,8 @@ interface GodWiring {
   tools: ToolRegistry;
   /** Per-villager reactivity (EventRouter + SubscriptionRouter). Present only with a live bot pool (M5). */
   reactivity?: VillagerReactivity;
+  /** B3.7: the optional rest/social drives (behavior.drives, live pool only) — ticked on the 30 s host clock. */
+  drives?: Drives;
 }
 
 /**
@@ -766,6 +774,7 @@ function wireGod(args: {
   //    defaults seed each villager at FIRST boot (idempotent). Only with a live pool — a CI/no-bots boot
   //    has nothing to attach to, so the store stays empty and no router is built. ──
   let reactivity: VillagerReactivity | undefined;
+  let drives: Drives | undefined;
   if (pool) {
     const roles = loadRoles();
     let seeded = 0;
@@ -852,9 +861,21 @@ function wireGod(args: {
     });
     const live = reactivity;
     signalInbox = (villager) => live.signal(villager, 'inbox');
+
+    // B3.7: the optional drives. A depleted drive wakes the villager once (hysteresis in the tracker) on the idle
+    // lane with a French hint; a conversation line heard restores `social`, a successful go-home restores `rest`.
+    if (config.behavior.drives) {
+      drives = wireDrives({
+        villagers: config.villagers.map((v) => v.name),
+        journal,
+        wakeup: (kind, villager) => {
+          void wakeup({ villager, triggers: [`besoin: ${kind === 'tired' ? 'fatigue' : 'solitude'}`], hints: [DRIVE_HINT[kind]], lane: 'idle' });
+        },
+      });
+    }
   }
 
-  return { god, curriculum, orchestrator, coordinator, library, scheduler, inboxes, memories, store, tools, ...(reactivity ? { reactivity } : {}) };
+  return { god, curriculum, orchestrator, coordinator, library, scheduler, inboxes, memories, store, tools, ...(reactivity ? { reactivity } : {}), ...(drives ? { drives } : {}) };
 }
 
 /**
@@ -891,6 +912,45 @@ export function makeTripwireHandler(deps: {
     })().catch((e: unknown) => {
       logger.warn('god', `tripwire ticket for ${skill} could not be judged: ${e instanceof Error ? e.message : String(e)}`);
     });
+  };
+}
+
+/** B3.7 — the French hint a depleted drive's wake-up carries. */
+const DRIVE_HINT: Record<DriveKind, string> = {
+  tired: 'tu es fatigué — rentre te reposer (go-home) avant de reprendre le travail',
+  lonely: 'tu te sens seul — va parler à un autre villageois (start_conversation ou tell)',
+};
+
+/** The live drives: one tracker per villager, the 30 s tick, and the admin snapshot. */
+export interface Drives {
+  tick(): void;
+  snapshot(villager: string): DriveSnapshot | undefined;
+}
+
+/**
+ * B3.7 — build one enabled DriveTracker per villager and restore them from journal facts (S2: the tracker is the
+ * only writer of its levels; it just listens): a `chat.heard` by a villager restores its `social`, a successful
+ * `skill.run` of `go-home` restores its `rest`. The caller ticks; a crossing fires `wakeup` once.
+ */
+export function wireDrives(deps: {
+  villagers: string[];
+  journal: { subscribe(fn: (e: { kind: string; actor: string; payload: unknown }) => void): unknown };
+  wakeup: (kind: DriveKind, villager: string) => void;
+}): Drives {
+  const trackers = new Map(deps.villagers.map((v) => [v, new DriveTracker({ villager: v, enabled: true, wakeup: deps.wakeup })]));
+  deps.journal.subscribe((e) => {
+    if (e.kind === 'chat.heard') {
+      trackers.get((e.payload as { hearer?: string }).hearer ?? '')?.socialize();
+    } else if (e.kind === 'skill.run') {
+      const p = e.payload as { skill?: string; villager?: string; outcome?: { ok?: boolean; value?: { home?: boolean } } };
+      if (p.skill === 'go-home' && p.outcome?.ok && p.outcome.value?.home === true) trackers.get(p.villager ?? '')?.rest();
+    }
+  });
+  return {
+    tick: () => {
+      for (const t of trackers.values()) t.tick();
+    },
+    snapshot: (villager) => trackers.get(villager)?.snapshot(),
   };
 }
 
@@ -964,6 +1024,8 @@ function villagerSummary(name: string, role: string, wiring: GodWiring | undefin
     activityKind,
     currentRun: vp?.currentRun ?? null,
     relations: (memory?.relations() ?? []).map((r) => ({ name: r.other, score: r.score })),
+    // B3.7: the rest/social drive levels when behavior.drives is on (else absent).
+    ...(wiring?.drives?.snapshot(name) ? { drives: wiring.drives.snapshot(name) } : {}),
     dossier: { competence, note: dossier ? dossier.notes.join(' · ') : '' },
   };
 }

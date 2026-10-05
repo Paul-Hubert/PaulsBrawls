@@ -29,7 +29,7 @@ actually fire** (see Gotchas) — most role defaults are inert today.
 | `FilterEvaluator` | `eden/src/villagers/subscriptions.ts:218` | clause registry, AND-composition | per router |
 | `loadRoles`/`seedRoleDefaults` | `eden/src/villagers/role-defaults.ts:46`, `:72` | first-boot seeding from `eden/roles.json` | boot |
 | `VillagerReactivity` | `eden/src/villagers/reactivity.ts:46` | assembles adapter + both routers per villager, reconnect-safe | ONE per host (only with a live pool) |
-| `DriveTracker` | `eden/src/villagers/drives.ts:52` | optional rest/social decay → `tired`/`lonely` wake-ups | **not instantiated by main.ts** |
+| `DriveTracker` | `eden/src/villagers/drives.ts:52` | optional rest/social decay → `tired`/`lonely` wake-ups | one per villager via `wireDrives` when `behavior.drives` is true and a pool exists (B3.7) |
 | `Brain` | `eden/src/villagers/brain.ts:73` | one deliberation = one scheduler slot, multi-turn tool loop | ONE per host (stateless) |
 | `ToolRegistry` | `eden/src/villagers/tools.ts:76` | the 11 villager tools; `dispatch` never throws | ONE shared per host |
 | `ContextPackBuilder` | `eden/src/villagers/context-pack.ts:133` | 8 sections, ceilings, density payload, journals `brain.wakeup` | ONE per host |
@@ -195,7 +195,7 @@ All four named skills exist as stock skills (`eden/src/skills/exemplars/index.ts
 defend-self, `:767` go-home, `:790` harvest-field). Scenario roles `crafter` and `merchant` (in `eden/scenarios/*.json`)
 have no block → `everyone` only. Seeded count per villager: 5 (everyone), guard 6 (4 everyone + 2), farmer 6, miner 6.
 
-## Drives (`villagers/drives.ts`) — optional, NOT wired
+## Drives (`villagers/drives.ts`) — optional, wired since B3.7
 
 `DriveTracker` decays `rest` and `social` from `FULL = 100` by 1 per `tick()` (defaults `restDecayPerTick`,
 `socialDecayPerTick` = 1), firing `wakeup('tired'|'lonely', villager)` ONCE when a level drops below 25
@@ -203,9 +203,13 @@ have no block → `everyone` only. Seeded count per villager: 5 (everyone), guar
 `snapshot()` returns `{rest, social}`. Inert when `enabled:false`. It deliberately does not add events to the
 `EdenEvent` union (`eden/src/villagers/drives.ts:7-14`).
 
-Config gate `behavior.drives` exists (`eden/src/config.ts:65`, default `false` at `:110`), but **nothing in
-`main.ts` constructs a `DriveTracker` or reads `config.behavior`** — the header claim "main.ts ticks one tracker per
-villager" (`eden/src/villagers/drives.ts:13-14`) is false at this commit. With 30 s ticks, a drive would take 76 ticks (~38 min) to fire.
+Config gate `behavior.drives` (default `false`). When it is true and the host has a bot pool, `wireGod` calls
+`wireDrives` (`eden/src/main.ts`, B3.7): one enabled `DriveTracker` per villager, ticked by the same 30 s host clock as
+`tick-30s` (76 ticks ≈ 38 min to fire). A crossing wakes the villager once, on the `idle` lane, through the reactive
+wake-up with trigger `besoin: fatigue|solitude` and a French hint (rest: go home; social: `start_conversation`/`tell`).
+Restoration listens to the journal: a `chat.heard` by the villager restores `social` to 100; a successful `skill.run`
+of `go-home` that returned `{home:true}` restores `rest`. The admin villager summary carries `drives: {rest, social}`
+when on. Pinned by `eden/tests/villagers-drives.test.ts` (`wireDrives`).
 
 ## Reactivity assembly (`villagers/reactivity.ts`)
 
