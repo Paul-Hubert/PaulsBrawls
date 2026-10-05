@@ -132,7 +132,7 @@ export interface SkillEngineOptions {
   macrotaskStallMs?: number;
   /** Bug #13 / D-05: after an abort, how long the engine waits for the fenced skill code to settle before it
    *  releases the bot to the next tree. Default 1000 ms. Code still awaiting a bot promise past this (a dig the
-   *  abort protocol could not cancel) is reported in the outcome; it can no longer await, loop or compose. */
+   *  abort protocol could not cancel) is reported in the outcome; it throws at its next await, loop iteration or composition. */
   abortSettleMs?: number;
 }
 
@@ -394,7 +394,10 @@ export class SkillEngine {
         // D-05: hold the bot (this tree's queue slot) until the fenced code has actually settled, bounded so a
         // promise the abort protocol could not cancel cannot wedge the bot's queue forever.
         const settled = tree ? await settleWithin(tree, this.abortSettleMs) : true;
-        const note = settled ? '' : ` — the aborted code had not settled after ${this.abortSettleMs}ms (fenced: it can no longer await, loop or compose)`;
+        // Again: anything the aborted code started during the settle window (a sync bot call after a swallowed
+        // fence) must not outlive the abort either (bug #13 review).
+        await abortActiveTasks(bot);
+        const note = settled ? '' : ` — the aborted code had not settled after ${this.abortSettleMs}ms (fenced: it throws at its next await, loop iteration or composition)`;
         outcome = { ok: false, error: abortMessage(e.abortCause) + note, errorKind: e.abortCause };
       } else {
         const err = e instanceof Error ? e : new Error(String(e));

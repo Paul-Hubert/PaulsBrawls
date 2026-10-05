@@ -402,3 +402,32 @@ test('bug #13: an aborted tree stuck on an uncancellable bot promise is reported
   const next = await h.engine.run('next', {}, MORTAL);
   assert.equal(next.outcome.ok, true, 'the bounded settle wait released the bot to the next tree');
 });
+
+// Review of bug #13: the fence ran only AFTER an await's operand was evaluated, so aborted code waking from a sleep
+// issued its next awaited bot call before throwing; and the abort protocol ran BEFORE the settle wait, so a goal set
+// in that window outlived the abort.
+test('bug #13 review: aborted code waking from an await cannot issue its next awaited bot call', async () => {
+  const h = harness();
+  seed(h.library, {
+    name: 'napper',
+    code: "async function napper(bot, a, c) { await new Promise((r) => setTimeout(r, 60)); await bot.chat('OPERAND'); return 1; }",
+  });
+  const report = await h.engine.run('napper', {}, MORTAL, { timeoutMs: 20 });
+  assert.equal(report.aborted, 'timeout');
+  await wait(120);
+  assert.deepEqual(h.bot.sentChat, [], 'the operand of the next await is never evaluated on an aborted tree');
+});
+
+test('bug #13 review: a goal set by aborted code during the settle window is cleared before the bot is released', async () => {
+  const h = harness();
+  seed(h.library, {
+    name: 'walker',
+    code: 'async function walker(bot, a, c) { try { await new Promise((r) => setTimeout(r, 40)); } catch (e) {} bot.pathfinder.setGoal(new c.Vec3(5, 64, 5)); return 1; }',
+  });
+  const report = await h.engine.run('walker', {}, MORTAL, { timeoutMs: 10 });
+  assert.equal(report.aborted, 'timeout');
+  const calls = h.bot.calls;
+  const lastSet = calls.lastIndexOf('pathfinder.setGoal');
+  assert.ok(lastSet >= 0, 'the zombie did set a goal (sync, after swallowing the fence)');
+  assert.ok(calls.lastIndexOf('pathfinder.setGoal(null)') > lastSet, 'the abort protocol ran again after the settle wait');
+});

@@ -12,7 +12,7 @@ verified_at: 98cb908
 
 **TL;DR.** `SkillEngine` (`eden/src/skills/engine.ts`) is the only executor of skill code. A skill is the
 source of **one JS function expression** `async (bot, args, ctx)`; it is acorn-parsed, every loop body gets
-`__loopBudget();` and every `await X` becomes `await __aw(X)`, then it is wrapped in `new Function` with a
+`__loopBudget();` and every `await X` becomes `__awr(await __aw((__fence(), X)))`, then it is wrapped in `new Function` with a
 shimmed scope (`process`, `require`, `sleep`, `Vec3`, `GoalNear`). Each run is serialized per bot,
 supervised by a wall clock (default 120 s, max 2 h), a 20 s no-pulse stall detector and an 8 s
 macrotask-starvation canary, and always ends in a `RunReport` journaled as `skill.run`.
@@ -140,7 +140,7 @@ context pack (`eden/src/main.ts:863`, `:829`).
 5. Push the root name onto `running`; compile + bind the root; `Promise.race([fn(bot,args,ctx0), abortPromise])`.
 6. Success → optional `validateReturn` (draft trials only) → `outcome = {ok:true, value}`.
 7. Catch: `EngineAbort` → `await abortActiveTasks(bot)`, wait up to `abortSettleMs` (default 1000) for the fenced
-   tree to settle, then `{ok:false, error: abortMessage(cause) [+ not-settled note], errorKind: cause}`;
+   tree to settle, `await abortActiveTasks(bot)` **again** (whatever the aborted code started during the wait), then `{ok:false, error: abortMessage(cause) [+ not-settled note], errorKind: cause}`;
    any other throw → `{ok:false, error: err.message, errorKind: err.name}`.
 8. Finally: clear timers/heartbeat, disarm detector, remove pulse listeners, remove interceptor, pop `running`.
 9. `worldAfter = captureSnapshot(bot)`; build the `RunReport`; journal `skill.run` (refs `runId,
@@ -268,13 +268,16 @@ authors to verify world effects; judging is the critic's job).
 ## Gotchas & known issues
 
 - ~~**Aborted code keeps running.**~~ **Fixed (bug #13):** once a tree is aborted, a *fence* makes its next
-  instrumented loop iteration (`__loopBudget`), its next `await` (`__aw`) and any `ctx.skills.run` throw the
-  abort, so it cannot keep driving the body. A loop's guard sits outside any `try` in its body, so code that
+  instrumented loop iteration (`__loopBudget`), any `ctx.skills.run`, and every `await` throw the abort — twice
+  per await: `__fence()` before the operand is evaluated (so the next awaited bot call is never issued) and `__awr`
+  the moment the await resumes (so code waking from a sleep stops before its next statement). A loop's guard sits outside any `try` in its body, so code that
   swallows the abort still cannot iterate. The root then holds the bot's queue slot until the fenced code has
   settled, bounded by `abortSettleMs` (default 1000 ms); code still parked on a bot promise the abort protocol
   could not cancel (e.g. a `dig`; `abortActiveTasks` has no `stopDigging`) gets the note `the aborted code had
-  not settled after <n>ms (fenced: …)` in the outcome and can only run straight-line code until its next await.
-  Pinned by the `bug #13` tests in `eden/tests/skills-engine.test.ts`.
+  not settled after <n>ms (fenced: …)` in the outcome. Residual: code that swallows the fence in a `try/catch`
+  can still make *synchronous, un-awaited* bot calls until its next await or loop iteration; the second
+  `abortActiveTasks` after the settle wait undoes pathfinder/pvp/collectblock/window effects started in that window
+  (review fix — the first version ran the protocol only before the wait). Pinned by the `bug #13` tests in `eden/tests/skills-engine.test.ts`.
 - **Callee frames are not raced** against the abort promise; only the root is.
 - **`ctx.log` always attributes to the root skill**, even when called from a composed callee.
 - **The chat interceptor follows the root tier**: an avatar running a mortal root that composes a divine

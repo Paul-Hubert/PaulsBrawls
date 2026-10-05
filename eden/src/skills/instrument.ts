@@ -121,7 +121,8 @@ interface Edit {
 
 /**
  * Inject `__loopBudget()` at the top of every loop body and wrap every `await EXPR` as
- * `await __aw(EXPR)` (the await resets the budget — a real yield is not a sync spin). String-splice
+ * `__awr(await __aw((__fence(), EXPR)))` (the await resets the budget — a real yield is not a sync spin; the
+ * two fences stop an aborted tree before its next awaited call and when it resumes). String-splice
  * by AST offsets, applied right-to-left so earlier offsets stay valid.
  */
 export function instrument(code: string): InstrumentResult {
@@ -149,10 +150,15 @@ export function instrument(code: string): InstrumentResult {
     ForStatement: injectLoopBody,
     ForInStatement: injectLoopBody,
     ForOfStatement: injectLoopBody,
+    // `await E` → `__awr(await __aw((__fence(), E)))`: the fence runs BEFORE the operand is evaluated (an aborted
+    // tree cannot start its next awaited bot call) and again the moment the await resumes (bug #13 review).
     AwaitExpression: (node: unknown): void => {
-      const arg = (node as AwaitNode).argument;
-      edits.push({ pos: arg.start - off, text: '__aw(', order: 0 });
-      edits.push({ pos: arg.end - off, text: ')', order: 1 });
+      const n = node as AwaitNode & { start: number; end: number };
+      const arg = n.argument;
+      edits.push({ pos: n.start - off, text: '__awr(', order: 0 });
+      edits.push({ pos: arg.start - off, text: '__aw((__fence(), ', order: 0 });
+      edits.push({ pos: arg.end - off, text: '))', order: 1 });
+      edits.push({ pos: n.end - off, text: ')', order: 1 });
     },
   });
 
@@ -178,6 +184,8 @@ export interface Shim {
   sleep: (ms: number) => Promise<void>;
   __loopBudget: () => void;
   __aw: <T>(p: T) => T;
+  __fence: () => void;
+  __awr: <T>(v: T) => T;
   /** Authored-scope global value-constructors (see the import-site note): the same module instances on
    *  `ctx`, so `new Vec3()` ≡ `new ctx.Vec3()` and `new GoalNear()` ≡ `new ctx.goals.GoalNear()`. */
   Vec3: new (x: number, y: number, z: number) => { x: number; y: number; z: number };
@@ -204,7 +212,7 @@ export function compile(code: string): CompileResult {
     // D-08: provided-scope globals ARE the shim — `new Function` is the design, not a footgun here.
     const factory = new Function(
       '__shim',
-      `"use strict";\nconst { process, require, sleep, __loopBudget, __aw, Vec3, GoalNear } = __shim;\nreturn (${inst.source});`,
+      `"use strict";\nconst { process, require, sleep, __loopBudget, __aw, __fence, __awr, Vec3, GoalNear } = __shim;\nreturn (${inst.source});`,
     ) as SkillFactory;
     return { ok: true, factory };
   } catch (e) {
@@ -242,6 +250,10 @@ function createSafeRequire(safeProcess: object): (id: string) => unknown {
 export interface LoopBudget {
   __loopBudget: () => void;
   __aw: <T>(p: T) => T;
+  /** Throws on an aborted tree — run before an await's operand is evaluated. */
+  __fence: () => void;
+  /** Throws on an aborted tree — run on an await's resumed value, before the next statement. */
+  __awr: <T>(v: T) => T;
 }
 
 /** Create a loop budget — `__loopBudget` ticks (throws past `max`), `__aw` resets it on every await.
@@ -269,6 +281,13 @@ export function createLoopBudget(
       count = 0;
       return p;
     },
+    __fence: (): void => {
+      checkAwait?.();
+    },
+    __awr: <T>(v: T): T => {
+      checkAwait?.();
+      return v;
+    },
   };
 }
 
@@ -285,6 +304,8 @@ export function makeShim(runtime: SkillRuntime, shared?: LoopBudget): Shim {
     sleep: runtime.sleep,
     __loopBudget: budget.__loopBudget,
     __aw: budget.__aw,
+    __fence: budget.__fence,
+    __awr: budget.__awr,
     Vec3: Vec3 as unknown as Shim['Vec3'],
     GoalNear: goals.GoalNear as unknown as Shim['GoalNear'],
   };
