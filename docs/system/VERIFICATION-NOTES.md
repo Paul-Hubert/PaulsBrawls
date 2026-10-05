@@ -107,8 +107,8 @@ Citations are `path:line` at `4a8081f`.
 | Claim | Code reality |
 |---|---|
 | "SQLite is the spine: journal + library index + stats + ledger + directives + subscriptions" | The only table is `journal` (`eden/src/journal/journal.ts:50-65`). Library is `library/<skill>/skill.json` + `v<N>.js`; subscriptions and memory are JSON files; God state lives in RAM only. |
-| 7-day retention for vitals / `subscription.fired` | No `retentionDays` key and no pruning code. |
-| Lag monitor logs debug at p99 ≥ 100 ms | Journals only when max ≥ 1000 ms (`eden/src/journal/lag-monitor.ts:208-217`). |
+| Configurable 7-day retention for vitals / `subscription.fired` | `journal.retentionDays` is not parsed (always the hardcoded default 7, and setting it only triggers an unknown-key warning), and no pruning code exists. |
+| Lag monitor logs debug at p99 ≥ 100 ms | Journals `system.loop-lag` only when max ≥ 1000 ms (`eden/src/journal/lag-monitor.ts:40-51`). |
 | `npm run eval` is a mock-LLM run against a real server | **Dry run**: builds and validates 4 scenarios, logs the plan, connects nothing (`eden/eval/run.ts:96-109`). `mock-llm.ts` is unused by it. |
 | pm2 via `ecosystem.config.cjs` | Gitignored and absent; `start.ps1` is just `npx tsx src/main.ts eden.json`. |
 | `admin/` and `cli/` are imported only by `main.ts` | dependency-cruiser forbids *every* importer of `cli/`, including `main.ts`. render/ and views/ are also layer 1 though the header lists only journal/config/bots. |

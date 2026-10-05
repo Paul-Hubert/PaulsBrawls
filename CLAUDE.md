@@ -368,6 +368,7 @@ architecture.
 
 | Topic | Doc |
 |---|---|
+| **Verified reference for every system (code-checked; index for MCP serving)** — start at the overview; discrepancies with this file are listed in VERIFICATION-NOTES | [docs/system/README.md](docs/system/README.md), [docs/system/VERIFICATION-NOTES.md](docs/system/VERIFICATION-NOTES.md) |
 | Eden — full design spec (reading order, 13 owner decisions) | [docs/README.md](docs/README.md) |
 | Eden — 10-minute orientation (every choice, chosen + rejected) | [docs/10-architecture-summary.md](docs/10-architecture-summary.md) |
 | Eden — build plan (M0–M7 DAG, tests, risk register) | [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) |

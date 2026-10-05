@@ -82,7 +82,7 @@ for (const file of walk(here).sort()) {
   for (const [, target] of body.matchAll(/\]\(([^)\s]+)\)/g)) {
     if (/^(https?:|mailto:|#)/.test(target)) continue;
     const path = target.split('#')[0].replace(/:\d+(-\d+)?$/, '');
-    if (path && !existsSync(resolve(dirname(file), path))) errors.push(`${rel}: broken link '${target}'`);
+    if (path && path !== 'index.json' && !existsSync(resolve(dirname(file), path))) errors.push(`${rel}: broken link '${target}'`);
   }
   // code citations like `eden/src/main.ts:570`, `ChatBot.java:241-247`: the file must exist (repo-relative path, or a
   // bare file name that is unique in the repo) and the cited line must be in range
