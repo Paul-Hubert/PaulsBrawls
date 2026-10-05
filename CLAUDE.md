@@ -185,7 +185,7 @@ clamps, idle watchdog, griefing toggle; persists to `bridge_config.properties`),
 (async, best-effort — never throws into the prayer flow), [GodBody](src/main/java/com/paul/brawl/GodBody.java)
 (semantic layer; `appear()` computes `playerPos + horizLookDir*distance + (0,height,0)` from yaw only),
 [GodActionQueue](src/main/java/com/paul/brawl/GodActionQueue.java) (`ConcurrentLinkedQueue` drained on
-`END_SERVER_TICK`, `MAX_PER_TICK=8`), [GodScheduler](src/main/java/com/paul/brawl/GodScheduler.java),
+`END_SERVER_TICK`, `MAX_PER_TICK=8` actions then `MAX_BULK_PER_TICK=8` build placements; a timed-out action is withdrawn, never run late), [GodScheduler](src/main/java/com/paul/brawl/GodScheduler.java),
 [GodSessionManager](src/main/java/com/paul/brawl/GodSessionManager.java) (busy lock + idle watchdog).
 
 Bridge contract (HTTP, localhost): `GET /health`, `POST /appear {x,y,z,facing?}` (→ `/tp`), `POST /chat {message}`

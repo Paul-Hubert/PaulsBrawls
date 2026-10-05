@@ -34,7 +34,7 @@ A player then runs the client command `/build <text>` (rest of the line); the te
 `PlaceBlock` / `PlaceLine` / `PlaceBlocks` lines (regex-scanned, executed relative to the pivot, looped until a
 reply has zero call lines) or calls the **`BuildPlan`** tool, which spawns N parallel **`BuildSubAgent`**s, each with
 its own anchor pivot, private memory and 5 automatic refinement passes (at most 4 sub-agents server-wide). Blocks are
-written with `world.setBlockState` **on the server thread**: each matched call line is one `GodActionQueue` task (bug #7).
+written with `world.setBlockState` **on the server thread**: each matched call line is one task on `GodActionQueue`'s bulk lane (bug #7), so building never delays God's actions.
 
 ## Components and where they live
 
@@ -282,7 +282,7 @@ Matching rules that matter:
 
 Scanning runs on the LLM worker thread that completed the request (`buildBot`'s `thenAccept` callback, `ChatBot.java:525`,
 and `BuildSubAgent`'s `whenComplete`, `BuildSubAgent.java:129`). Each matched call line is handed to `placeOnMain`
-(`ChatBotFunctions.java:644-654`), which submits it as one `GodActionQueue` task (≤ 8 per tick), or runs it inline when
+(`ChatBotFunctions.java:644-654`), which submits it as one task on `GodActionQueue`'s bulk lane (`submitBulk`, ≤ 8 per tick after the God actions), or runs it inline when
 already on the server thread (bug #7). `/godbody off` and server stop clear the queue, so queued placements are cancelled.
 `/block` places directly on the main thread (command context).
 
@@ -324,7 +324,7 @@ any code**.
 ## Gotchas & known issues
 
 - ~~**Off-thread world writes.**~~ **Fixed (bug #7):** `scanAndExecute` submits each matched call as one
-  `GodActionQueue` task (≤ 8 per tick) and waits up to 30 s for them before returning the count; on the server thread
+  bulk-lane `GodActionQueue` task (≤ 8 per tick, after the God actions) and waits up to 30 s for them before returning the count; on the server thread
   it runs inline. Only an in-game check proves the thread hop; the caps are unit-tested.
 - ~~**`/build` screenshot is never sent to the model**; `/build` takes one word~~ **Fixed (bug #9):** `buildBot.hasImage
   = true`; the argument is `greedyString()`.

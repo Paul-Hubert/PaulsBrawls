@@ -248,8 +248,9 @@ restores the avatar directly with `ChatBotActions.restoreAvatarOnMain` (bug #5),
   timeout. `/llm timeout <5..1800>` changes it and rebuilds the client.
 - **Main-thread hops:** 5 s (`runOnMain`, `collectDynamicContext`). On `runOnMain` timeout the tool result is
   `"Erreur côté serveur: action différée non exécutée (serveur indisponible)."`; other failure:
-  `"Erreur côté serveur lors de l'exécution de cette action."` (`ChatBotFunctions.java:510-516`). The queued action is
-  not cancelled and may still run later.
+  `"Erreur côté serveur lors de l'exécution de cette action."`. The "non exécutée" result is only returned when
+  `GodActionQueue.cancelIfNotStarted` withdrew the action, so it never runs later; an action already started is waited
+  for (see [god-body.md](god-body.md)).
 - **Wait:** 1..30 s by default; idle watchdog = `max(idleTimeoutSeconds (90), waitMaxSeconds + 5)`
   (`GodSessionManager.java:123-124`).
 

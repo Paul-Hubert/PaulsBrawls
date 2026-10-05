@@ -505,11 +505,21 @@ public class ChatBotFunctions {
      * proceed to the next tool instead of leaving an orphan.
      */
     private static String runOnMain(java.util.function.Supplier<String> body) {
+        var future = GodActionQueue.submit(body);
         try {
-            return GodActionQueue.submit(body).get(5, TimeUnit.SECONDS);
+            return future.get(5, TimeUnit.SECONDS);
         } catch (TimeoutException te) {
-            LOGGER.warn("Main-thread queue did not drain within 5s — server frozen/paused/stopping?");
-            return "Erreur côté serveur: action différée non exécutée (serveur indisponible).";
+            // Only claim "not executed" if it truly never will be: an action that already started is waited for.
+            if (GodActionQueue.cancelIfNotStarted(future)) {
+                LOGGER.warn("Main-thread queue did not drain within 5s — server frozen/paused/stopping?");
+                return "Erreur côté serveur: action différée non exécutée (serveur indisponible).";
+            }
+            try {
+                return future.get(5, TimeUnit.SECONDS);
+            } catch (Exception again) {
+                LOGGER.warn("Main-thread action started but did not finish in time: {}", again.getMessage());
+                return "Erreur côté serveur: l'action a peut-être été exécutée (résultat inconnu), ne la relance pas.";
+            }
         } catch (Exception e) {
             LOGGER.warn("Main-thread queue join failed: {}", e.getMessage(), e);
             return "Erreur côté serveur lors de l'exécution de cette action.";
@@ -647,7 +657,7 @@ public class ChatBotFunctions {
             place.run();
             return;
         }
-        pending.add(GodActionQueue.submit(() -> {
+        pending.add(GodActionQueue.submitBulk(() -> {
             place.run();
             return "ok";
         }));

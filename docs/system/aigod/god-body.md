@@ -196,15 +196,18 @@ turn without tool calls does not reset it.
 
 | Item | Value |
 |---|---|
-| Queue | `ConcurrentLinkedQueue<QueuedAction(Supplier<String> body, CompletableFuture<String> result)>` (`GodActionQueue.java:33-35`) |
-| `MAX_PER_TICK` | `8` (`GodActionQueue.java:31`) |
-| Drain | `ServerTickEvents.END_SERVER_TICK`: poll up to 8, `complete(body.get())`; a throwing body logs `queued action threw on main thread` and `completeExceptionally` (`:69-82`). Leftovers roll to the next tick, FIFO. |
-| `submit(body)` | Enqueue from any thread; returns the future. |
-| `clear()` | Polls everything, `cancel(false)` each future, returns count. Used by `/godbody off` and `SERVER_STOPPING`. |
+| Lanes | Two `ConcurrentLinkedQueue<QueuedAction>`: the **action** lane (`submit` — God tools, avatar buff/restore, context collection) and the **bulk** lane (`submitBulk` — textual build placements). Each future is a `Pending` whose `started` flag is claimed exactly once, by the drain or by a waiter that gives up. |
+| Budgets | `MAX_PER_TICK = 8` actions, then `MAX_BULK_PER_TICK = 8` placements per tick — a large BuildPlan cannot delay a God action. |
+| Drain | `drainTick()` on `ServerTickEvents.END_SERVER_TICK`: per lane, poll; skip an entry whose `started` was already claimed (withdrawn); `complete(body.get())`; a throwing body logs `queued action threw on main thread` and `completeExceptionally`. Leftovers roll to the next tick, FIFO per lane. |
+| `cancelIfNotStarted(f)` | True if the action had not started and now never will (future cancelled); false if it already ran or is running. |
+| `clear()` | Drains both lanes, cancelling every unstarted future; returns the count. Used by `/godbody off` and `SERVER_STOPPING`. |
 | Registration | `GodActionQueue.register()` from `ServerEntryPoint.java:35` |
 
-**Waiting on it**: `ChatBotFunctions.runOnMain` uses `submit(body).get(5, SECONDS)` (not `.join()`); on timeout returns
-`Erreur côté serveur: action différée non exécutée (serveur indisponible).`, on other failure
+**Waiting on it**: `ChatBotFunctions.runOnMain` uses `submit(body).get(5, SECONDS)` (not `.join()`). On timeout it
+calls `cancelIfNotStarted`: if that succeeds the action will never run and the result is
+`Erreur côté serveur: action différée non exécutée (serveur indisponible).`; if the action had already started it waits
+up to 5 s more for its real result, else returns `… l'action a peut-être été exécutée (résultat inconnu), ne la relance pas.`
+(review fix: a timed-out Reward used to run anyway after being reported as not executed, inviting a double). On other failure
 `Erreur côté serveur lors de l'exécution de cette action.` (`ChatBotFunctions.java:507-517`).
 `ChatBot.collectDynamicContext` also hops with a 5 s bound and runs the body directly if already on the server thread
 (`ChatBot.java:498-522`). **Deadlock rule:** never block on a queued future from the server thread — the drain runs on

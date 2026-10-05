@@ -64,7 +64,7 @@ chat message *sent by* the player-entity `Dieu` (Eden).
 | `LLMConfig` / `LLMCommand` | `LLMConfig.java`, `LLMCommand.java` | Provider settings, shared model + executor, `/llm`. |
 | `ImagePayload` / `ImageReceiver` / `Screenshotter` | see [images-and-client.md](images-and-client.md) | `/prove` & `/build` screenshot path. |
 | `GodSessionManager` | `GodSessionManager.java` | Single-owner avatar lock, `manifested` flag, idle watchdog. See [god-body.md](god-body.md). |
-| `GodActionQueue` | `GodActionQueue.java` | Main-thread FIFO drained on `END_SERVER_TICK`, `MAX_PER_TICK = 8` (`GodActionQueue.java:31`). |
+| `GodActionQueue` | `GodActionQueue.java` | Main-thread FIFO lanes drained on `END_SERVER_TICK`: 8 God actions then 8 build placements per tick; a waiter can withdraw an unstarted action. |
 | `GodScheduler` | `GodScheduler.java` | Background scheduler used for `Wait` deferrals and the watchdog. |
 | `GodBody` / `BotBridgeClient` / `BridgeConfig` | see [god-body.md](god-body.md) | Avatar HTTP bridge. |
 | `MCPGateway` / `MCPConfig` / `MCPCommand` | see [mcp-gateway.md](mcp-gateway.md) | Mineflayer tools over MCP-SSE. |

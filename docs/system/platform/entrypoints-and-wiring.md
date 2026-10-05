@@ -35,7 +35,7 @@ runtime order.
 | 4 | `:26` | `Money.register()` | Immediate `Registry.register(Registries.ITEM, "paulsbrawls:coin", maxCount 99)` (`Money.java:18-23`) |
 | 5 | `:30` | `FlagManager.register()` | `EntityElytraEvents.ALLOW`, `ServerLivingEntityEvents.ALLOW_DAMAGE`, `ServerTickEvents.START_WORLD_TICK`, `ServerPlayConnectionEvents.DISCONNECT` (forget the player's glow ownership) (`FlagManager.java:37,49,60,66`) |
 | 6 | `:32` | `ChatBot.register()` | Builds `godBot` (`prompt.txt`) and `buildBot` (`build_prompt.txt`) — each constructor reads its prompt file from the cwd — then the sub-registrations in the next table (`ChatBot.java:131-171`) |
-| 7 | `:35` | `GodActionQueue.register()` | `ServerTickEvents.END_SERVER_TICK` → drain up to `MAX_PER_TICK = 8` queued main-thread actions (`GodActionQueue.java:31,69-83`) |
+| 7 | `:35` | `GodActionQueue.register()` | `ServerTickEvents.END_SERVER_TICK` → drain up to `MAX_PER_TICK = 8` queued main-thread actions, then up to `MAX_BULK_PER_TICK = 8` build placements (`GodActionQueue.java:31,69-83`) |
 | 8 | `:36` | `GodScheduler.register()` | `SERVER_STARTED` **#2** → `ensureStarted()` (daemon `god-scheduler-N` thread); `SERVER_STOPPING` **#2** → `shutdown()` (`GodScheduler.java:34-58`) |
 | 9 | `:39` | `VillageCommand.register()` | `/village` command (`VillageCommand.java:42-82`) |
 | 10 | `:42` | `VillagersCommand.register()` | `/villagers` command (`VillagersCommand.java:75-114`) |
