@@ -35,36 +35,36 @@ for `buffAvatar`/`restoreAvatar`, Brigadier for `/block` & `/construction`, and 
 
 ### Item parsing
 
-`getItemFromString(String str)`, `ChatBotActions.java:119-142`:
+Two parsers (bug #6 fixed — splitting on `:` used to reject both a bare `diamond` and the component syntax the `Reward`
+tool advertises):
 
-1. `null` → log `Invalid item string: null`, return `null`.
-2. `str.split(":")`; fewer than 2 parts → `null` (so a bare `diamond` is rejected — namespace required).
-3. `Identifier.of(parts[0], parts[1])` → `Registries.ITEM.getOrEmpty(id).orElse(null)`; any exception → `null`.
-
-Only `parts[0]` and `parts[1]` are used. An id with a component suffix such as
-`minecraft:enchanted_book[minecraft:enchantments={…}]` splits into `["minecraft", "enchanted_book[minecraft", "enchantments={…}]"]`,
-`Identifier.of` rejects `enchanted_book[minecraft`, and the item resolves to `null`. **Components/NBT are never
-supported** even though the `Reward` tool description advertises them.
+- `getItemFromString(String str)` — the **registry item** only (used by `TradeOffers`): `ItemIds.baseId(str)` strips a
+  `[components]` / `{nbt}` suffix, lower-cases, defaults the namespace to `minecraft` (unit-tested, `ItemIdsTest`);
+  `Identifier.tryParse` → `Registries.ITEM.getOrEmpty(id).orElse(null)`. Blank / invalid → log `Invalid item string`, `null`.
+- `parseItemStack(server, str)` — the **full stack**, parsed exactly like `/give`: `ItemStackArgumentType.itemStack(
+  CommandRegistryAccess.of(server.getRegistryManager(), enabledFeatures)).parse(…)`, then `createStack(1, false)`.
+  So `minecraft:enchanted_book[minecraft:enchantments={levels:{…}}]` keeps its components. Syntax error → log, `null`.
+  (The component *contents* follow vanilla 1.21.1 `/give` syntax; the tool's example text is the model's guide.)
 
 ### Methods
 
 | Method | Lines | Behaviour | Returns |
 |---|---|---|---|
-| `giveItemFromString(player, itemName, amount)` | `:78-91` | Resolves item; `giveItem`. Used by `Reward`. | `"You gave the player a reward: <amount> <itemName>"` / `"Reward cancelled, item <itemName> does not exist, please try again."` |
-| `giveItem(player, Item, amount)` | `:106-108` | `player.giveItemStack(new ItemStack(item, amount))`. No clamp, no overflow drop. | void |
+| `giveItemFromString(player, itemName, amount)` | `ChatBotActions` | `Reward`. `amount < 1` → refused; else clamped to `BridgeConfig.rewardMax` (64) via `GodClamps.rewardAmount`; `parseItemStack`; gives max-size stacks with `offerOrDrop` (what does not fit is dropped at the player's feet). | `"You gave the player a reward: <n> <itemName>[ (limité à <n> sur <asked> demandés)]"` / `"Reward cancelled, amount must be at least 1 (got <a>)."` / `"Reward cancelled, item <itemName> does not exist or is malformed, please try again."` |
+| `giveItem(player, Item, amount)` | `ChatBotActions` | `player.giveItemStack(new ItemStack(item, amount))`. No clamp, no overflow drop. Only `giveGoodReward` (unused) calls it now. | void |
 | `giveItemWithCommand(player, item, amount)` | `:93-103` | Runs `/give <name> <item> <amount>` as server source. **Unused.** | `""` |
 | `giveGoodReward(player)` | `:56-58` | 10 × `Money.MONEY` (`paulsbrawls:coin`, `Money.java:19-23`). **Unused.** | void |
 | `giveBadReward(player)` | `:60-62` | One `smite`. **Unused.** | void |
 | `stripArguments(str, commandName)` | `:110-117` | **Unused and broken**: `split(regex, 1)` always yields one element, so it always returns `null`. | `null` |
 
-> ⚠ Unverified (no MC sources in checkout): with vanilla `PlayerEntity.giveItemStack`, items that do not fit in the
-> inventory are not dropped, and `amount <= 0` produces an empty stack (nothing given). `Reward` still reports success.
+> `Reward` no longer uses `giveItemStack`: `PlayerInventory.offerOrDrop` drops the overflow, and a non-positive amount is
+> refused before anything is parsed (bug #6).
 
 ## Punishment — `smite`
 
 | Method | Lines | Behaviour |
 |---|---|---|
-| `smite(player, int amount)` | `:144-149` | Loops `amount` times calling `smite(player)`. Returns `"God punished the player  <amount> times."` (two spaces). No clamp. |
+| `smite(player, int amount)` | `ChatBotActions` | Strikes `GodClamps.punishments(amount, BridgeConfig.punishmentMax)` times (0..3 by default, bug #6). Returns `"God punished the player <n> times.[ (limité à <n> sur <asked> demandés)]"`. |
 | `smite(player)` | `:151-160` | `EntityType.LIGHTNING_BOLT.create(world)`, `refreshPositionAfterTeleport(blockX, blockY, blockZ)` (block corner, not centred), `world.spawnEntity`. Null-safe on player/world. |
 
 All bolts of one call spawn in the same tick at the same position.
@@ -96,7 +96,8 @@ All bolts of one call spawn in the same tick at the same position.
 4. Not in `Registries.ENTITY_TYPE` → `"Spawn annulé : type d'entité inconnu '<entityType>'."`
 5. `clamped = max(1, min(count, max(1, BridgeConfig.spawnCountMax)))` — default cap 8 (`BridgeConfig.java:54`);
    `count <= 0` still spawns 1.
-6. `basePos = player.getBlockPos().add(x, y, z)` — offsets **unclamped**.
+6. `basePos = player.getBlockPos().add(…)` with each offset clamped to `±BridgeConfig.spawnOffsetMax` (16) by
+   `GodClamps.spawnOffset` (bug #6 — they used to be unclamped).
 7. For `i in 0..clamped-1`: position `basePos + ((i % 3) - 1, 0, ((i / 3) % 3) - 1)` (3×3 fan, repeats after 9),
    `type.create(world)`, `refreshPositionAndAngles(x+0.5, y, z+0.5, playerYaw + 180, 0)`; if
    `!BridgeConfig.creatureGriefingAllowed` (default `false`) and it is a `MobEntity`, `setCanPickUpLoot(false)`;

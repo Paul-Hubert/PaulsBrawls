@@ -59,8 +59,11 @@ API keys are stored **in plaintext**. A non-empty configured key wins over the e
 | `appearMinDistance` / `appearMaxDistance` | `1` / `6` | `appearMinHeight` / `appearMaxHeight` | `0` / `4` |
 | `waitMinSeconds` / `waitMaxSeconds` | `1` / `30` | `spawnCountMax` | `8` |
 | `creatureGriefingAllowed` | `false` | `idleTimeoutSeconds` | `90` |
+| `rewardMax` | `64` | `punishmentMax` | `3` |
+| `spawnOffsetMax` | `16` | | |
 
-Source: `BridgeConfig.java:25-60`. Semantics: [aigod/god-body.md](../aigod/god-body.md).
+Source: `BridgeConfig.java` (fields + `load`/`save`). `rewardMax`, `punishmentMax`, `spawnOffsetMax` (bug #6) have no
+`/llm bridge` subcommand; edit the file and restart. Semantics: [aigod/god-body.md](../aigod/god-body.md).
 
 ### `mcp_config.properties` — `MCPConfig` (created with defaults on first load; `run/` copy is tracked)
 

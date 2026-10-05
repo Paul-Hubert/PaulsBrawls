@@ -53,6 +53,11 @@ public class BridgeConfig {
     /** Clamp on {@code SpawnCreature.count}. */
     public int spawnCountMax = 8;
 
+    /** Bug #6: clamps on the other world-mutating God tools (applied by {@link GodClamps}). */
+    public int rewardMax = 64;
+    public int punishmentMax = 3;
+    public int spawnOffsetMax = 16;
+
     /**
      * Whether god-spawned creatures may damage terrain (creeper explosions,
      * endermen picking up blocks, etc.). Default off so a single bored prayer
@@ -85,6 +90,9 @@ public class BridgeConfig {
         p.setProperty("waitMinSeconds",           Integer.toString(waitMinSeconds));
         p.setProperty("waitMaxSeconds",           Integer.toString(waitMaxSeconds));
         p.setProperty("spawnCountMax",            Integer.toString(spawnCountMax));
+        p.setProperty("rewardMax",                Integer.toString(rewardMax));
+        p.setProperty("punishmentMax",            Integer.toString(punishmentMax));
+        p.setProperty("spawnOffsetMax",           Integer.toString(spawnOffsetMax));
         p.setProperty("creatureGriefingAllowed",  Boolean.toString(creatureGriefingAllowed));
         p.setProperty("idleTimeoutSeconds",       Integer.toString(idleTimeoutSeconds));
         try (var out = Files.newOutputStream(CONFIG_PATH)) {
@@ -116,6 +124,9 @@ public class BridgeConfig {
         waitMinSeconds          = parseInt(p.getProperty("waitMinSeconds"),       waitMinSeconds);
         waitMaxSeconds          = parseInt(p.getProperty("waitMaxSeconds"),       waitMaxSeconds);
         spawnCountMax           = parseInt(p.getProperty("spawnCountMax"),        spawnCountMax);
+        rewardMax               = parseInt(p.getProperty("rewardMax"),            rewardMax);
+        punishmentMax           = parseInt(p.getProperty("punishmentMax"),        punishmentMax);
+        spawnOffsetMax          = parseInt(p.getProperty("spawnOffsetMax"),       spawnOffsetMax);
         creatureGriefingAllowed = parseBool(p.getProperty("creatureGriefingAllowed"), creatureGriefingAllowed);
         idleTimeoutSeconds      = parseInt(p.getProperty("idleTimeoutSeconds"),   idleTimeoutSeconds);
     }
@@ -144,6 +155,9 @@ public class BridgeConfig {
             + ", appear=[" + appearMinDistance + ".." + appearMaxDistance + "], h=[" + appearMinHeight + ".." + appearMaxHeight + "]"
             + ", wait=[" + waitMinSeconds + ".." + waitMaxSeconds + "s]"
             + ", spawnMax=" + spawnCountMax
+            + ", rewardMax=" + rewardMax
+            + ", punishMax=" + punishmentMax
+            + ", spawnOffsetMax=" + spawnOffsetMax
             + ", griefing=" + creatureGriefingAllowed
             + ", idle=" + idleTimeoutSeconds + "s"
             + "}";

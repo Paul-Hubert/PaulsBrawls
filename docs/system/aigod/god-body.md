@@ -128,6 +128,7 @@ Logged at `SERVER_STARTED` as `BridgeConfig loaded: <describe()>` (`ServerEntryP
 | `appearMinHeight` / `appearMaxHeight` | double | `0.0` / `4.0` | `Appear.height` clamp | file only |
 | `waitMinSeconds` / `waitMaxSeconds` | int | `1` / `30` | `Wait` clamp; watchdog floor | `/llm bridge waitmax <1..600>` (max only) |
 | `spawnCountMax` | int | `8` | `SpawnCreature` count clamp | `/llm bridge spawnmax <1..64>` |
+| `rewardMax` / `punishmentMax` / `spawnOffsetMax` | int | `64` / `3` / `16` | `Reward` amount, `Punishment` strikes, `SpawnCreature` offset per axis (bug #6, `GodClamps`) | file only |
 | `creatureGriefingAllowed` | bool | `false` | `SpawnCreature` (`setCanPickUpLoot(false)` when off) | `/llm bridge griefing <bool>` |
 | `idleTimeoutSeconds` | int | `90` | idle watchdog | `/llm bridge idle <5..3600>` |
 

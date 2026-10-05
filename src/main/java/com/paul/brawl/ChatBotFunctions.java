@@ -39,7 +39,7 @@ public class ChatBotFunctions {
     static class Reward {
         @JsonPropertyDescription("The name of the item to give. Examples: minecraft:diamond, minecraft:enchanted_book[minecraft:enchantments={mending: 1, sharpness: 4, unbreaking: 3}]")
         public String itemName;
-        @JsonPropertyDescription("The number of items to give.")
+        @JsonPropertyDescription("The number of items to give (clamped server-side, default max 64).")
         public int amount;
 
         public String execute(ServerPlayerEntity player) {
@@ -66,7 +66,7 @@ public class ChatBotFunctions {
 
     @JsonClassDescription("Punishes the player by inflicting a number of punishments.")
     static class Punishment {
-        @JsonPropertyDescription("The number of punishments to inflict to the player.")
+        @JsonPropertyDescription("The number of punishments (lightning strikes) to inflict to the player (clamped server-side, default max 3).")
         public int amount;
 
         public String execute(ServerPlayerEntity player) {
@@ -190,7 +190,7 @@ public class ChatBotFunctions {
         public String entityType;
         @JsonPropertyDescription("How many to spawn (clamped server-side).")
         public int count;
-        @JsonPropertyDescription("Block offset from the player on the X axis (east+/west-).")
+        @JsonPropertyDescription("Block offset from the player on the X axis (east+/west-), clamped server-side (default ±16).")
         public int x;
         @JsonPropertyDescription("Block offset from the player on the Y axis (up+/down-).")
         public int y;

@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.mojang.brigadier.Command;
+import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -13,7 +14,10 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
+import net.minecraft.command.CommandRegistryAccess;
 import net.minecraft.command.argument.BlockArgumentParser;
+import net.minecraft.command.argument.ItemStackArgument;
+import net.minecraft.command.argument.ItemStackArgumentType;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LightningEntity;
@@ -75,19 +79,44 @@ public class ChatBotActions {
              + "\nThe player may accept or decline this trade.";
     }
 
+    /**
+     * Reward. Bug #6: the amount is clamped to {@code BridgeConfig.rewardMax} and the item string is parsed by the
+     * same parser as {@code /give}, so the advertised component syntax
+     * ({@code minecraft:enchanted_book[minecraft:enchantments={…}]}) and a bare {@code diamond} both work — splitting
+     * on {@code ':'} made the former fail every time. Stacks are split to the item's max size and anything that does
+     * not fit is dropped at the player's feet. Main thread only (dispatched through runOnMain).
+     */
     public static String giveItemFromString(ServerPlayerEntity player, String itemName, int amount) {
-
-        var item = getItemFromString(itemName);
-        if(item == null) {
-            return "Reward cancelled, item " + itemName + " does not exist, please try again.";
+        if (amount < 1) {
+            return "Reward cancelled, amount must be at least 1 (got " + amount + ").";
         }
+        int clamped = GodClamps.rewardAmount(amount, BridgeConfig.INSTANCE.rewardMax);
+        ItemStack template = parseItemStack(player.getServer(), itemName);
+        if (template == null) {
+            return "Reward cancelled, item " + itemName + " does not exist or is malformed, please try again.";
+        }
+        int left = clamped;
+        while (left > 0) {
+            int n = Math.min(left, Math.max(1, template.getMaxCount()));
+            player.getInventory().offerOrDrop(template.copyWithCount(n));
+            left -= n;
+        }
+        String note = clamped < amount ? " (limité à " + clamped + " sur " + amount + " demandés)" : "";
+        return "You gave the player a reward: " + clamped + " " + itemName + note;
+    }
 
-        // Caller is responsible for thread confinement — see the dispatch in
-        // ChatBotFunctions.executeFunction, which queues this on the main
-        // thread via GodActionQueue.submit().join().
-        giveItem(player, item, amount);
-
-        return "You gave the player a reward: " + amount + " " + itemName;
+    /** Parse an item string exactly like {@code /give} (namespace optional, item components allowed); null if bad. */
+    public static ItemStack parseItemStack(MinecraftServer server, String itemString) {
+        if (server == null || itemString == null || itemString.isBlank()) return null;
+        try {
+            CommandRegistryAccess access = CommandRegistryAccess.of(
+                server.getRegistryManager(), server.getSaveProperties().getEnabledFeatures());
+            ItemStackArgument arg = ItemStackArgumentType.itemStack(access).parse(new StringReader(itemString.trim()));
+            return arg.createStack(1, false);
+        } catch (CommandSyntaxException e) {
+            LOGGER.warn("Invalid item string {}: {}", itemString, e.getMessage());
+            return null;
+        }
     }
 
     public static String giveItemWithCommand(ServerPlayerEntity player, String item, int amount) {
@@ -122,18 +151,15 @@ public class ChatBotActions {
             return null;
         }
 
-        var strs = str.split(":");
-        if(strs.length < 2) {
+        // Bug #6: the registry id only — components/NBT stripped, namespace defaulted (ItemIds, unit-tested).
+        // Splitting on ':' broke "ns:item[ns:component=…]" and a bare "diamond".
+        String base = ItemIds.baseId(str);
+        Identifier id = base == null ? null : Identifier.tryParse(base);
+        if (id == null) {
             LOGGER.error("Invalid item string: " + str);
             return null;
         }
-        var nameSpace = strs[0];
-        var name = strs[1];
-
-        // Get a Minecraft Item instance from a string like "minecraft:stone"
-        Identifier id;
         try {
-            id = Identifier.of(nameSpace, name);
             return Registries.ITEM.getOrEmpty(id).orElse(null);
         } catch (Exception e) {
             LOGGER.error("Invalid item string: " + str + " Exception " + e);
@@ -141,11 +167,14 @@ public class ChatBotActions {
         }
     }
 
+    /** Bug #6: strikes are clamped to {@code BridgeConfig.punishmentMax} (any number used to land in one tick). */
     public static String smite(ServerPlayerEntity player, int amount) {
-        for(int i = 0; i<amount; i++) {
+        int strikes = GodClamps.punishments(amount, BridgeConfig.INSTANCE.punishmentMax);
+        for(int i = 0; i<strikes; i++) {
             smite(player);
         }
-        return "God punished the player  " + amount + " times.";
+        String note = strikes < amount ? " (limité à " + strikes + " sur " + amount + " demandés)" : "";
+        return "God punished the player " + strikes + " times." + note;
     }
 
     public static void smite(ServerPlayerEntity player) {
@@ -353,7 +382,10 @@ public class ChatBotActions {
         }
 
         int clamped = Math.max(1, Math.min(count, Math.max(1, BridgeConfig.INSTANCE.spawnCountMax)));
-        BlockPos basePos = player.getBlockPos().add(x, y, z);
+        // Bug #6: offsets clamped to ±spawnOffsetMax per axis (the model could spawn anywhere in the world).
+        int max = BridgeConfig.INSTANCE.spawnOffsetMax;
+        BlockPos basePos = player.getBlockPos().add(
+            GodClamps.spawnOffset(x, max), GodClamps.spawnOffset(y, max), GodClamps.spawnOffset(z, max));
 
         boolean griefAllowed = BridgeConfig.INSTANCE.creatureGriefingAllowed;
 

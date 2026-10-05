@@ -99,11 +99,11 @@ Only if `GodSessionManager.hasManifested()` (global flag — no ownership check)
 | Param | Type | Req | Description |
 |---|---|---|---|
 | `itemName` | string | yes | `The name of the item to give. Examples: minecraft:diamond, minecraft:enchanted_book[minecraft:enchantments={mending: 1, sharpness: 4, unbreaking: 3}]` |
-| `amount` | integer | yes | `The number of items to give.` |
+| `amount` | integer | yes | `The number of items to give (clamped server-side, default max 64).` |
 
-Returns `"You gave the player a reward: <amount> <itemName>"` or `"Reward cancelled, item <itemName> does not exist, please try again."`.
-`amount` is not clamped. The component-syntax example in the description **does not work** — see
-[actions-and-trades.md](actions-and-trades.md#item-parsing).
+Returns `"You gave the player a reward: <n> <itemName>[ (limité à …)]"`, or a `Reward cancelled, …` refusal. `amount` is
+clamped to `1..BridgeConfig.rewardMax`; the item string is parsed like `/give`, so the component syntax works (bug #6) —
+see [actions-and-trades.md](actions-and-trades.md#item-parsing).
 
 ## Trade
 
@@ -138,9 +138,10 @@ amount outside 1–512: `"Trade cancelled. giveAmount and takeAmount must both b
 
 | Param | Type | Req | Description |
 |---|---|---|---|
-| `amount` | integer | yes | `The number of punishments to inflict to the player.` |
+| `amount` | integer | yes | `The number of punishments (lightning strikes) to inflict to the player (clamped server-side, default max 3).` |
 
-Returns `"God punished the player  <amount> times."` (two spaces, verbatim). `amount` is **not clamped**.
+Returns `"God punished the player <n> times.[ (limité à <n> sur <asked> demandés)]"`. `amount` is clamped to
+`0..BridgeConfig.punishmentMax` (bug #6).
 
 ## ChangeWeather
 
@@ -172,11 +173,11 @@ reports success; the command result is not checked. Unit/zero caveats: [actions-
 |---|---|---|---|
 | `entityType` | string | yes | `Entity id, e.g. minecraft:zombie, minecraft:cow, minecraft:wolf` |
 | `count` | integer | yes | `How many to spawn (clamped server-side).` |
-| `x` | integer | yes | `Block offset from the player on the X axis (east+/west-).` |
+| `x` | integer | yes | `Block offset from the player on the X axis (east+/west-), clamped server-side (default ±16).` |
 | `y` | integer | yes | `Block offset from the player on the Y axis (up+/down-).` |
 | `z` | integer | yes | `Block offset from the player on the Z axis (south+/north-).` |
 
-`count` clamped to `1..BridgeConfig.spawnCountMax` (default 8); offsets unclamped. Returns
+`count` clamped to `1..BridgeConfig.spawnCountMax` (default 8); each offset to `±BridgeConfig.spawnOffsetMax` (16, bug #6). Returns
 `"God a fait apparaître <n> <entityType>[s] près du joueur[ (griefing désactivé)]."` or a `Spawn annulé : …` /
 `Impossible de spawner : …` error.
 
@@ -313,9 +314,10 @@ See [mcp-gateway.md](mcp-gateway.md).
 
 ## Gotchas & known issues
 
-- `Punishment.amount` and `Reward.amount` are unclamped (LLM-controlled lightning/item counts).
-- `SpawnCreature` offsets are unclamped (can target far/unloaded positions).
-- `Reward`'s documented component example (`minecraft:enchanted_book[...]`) always fails parsing.
+- ~~`Punishment.amount` / `Reward.amount` / `SpawnCreature` offsets unclamped; `Reward`'s component example always
+  fails~~ **Fixed (bug #6):** `GodClamps` + `BridgeConfig.rewardMax/punishmentMax/spawnOffsetMax`, `/give`-style parsing.
+  The clamps are unit-tested; the in-world effect needs an in-game check. Only the `x` param description names the
+  offset clamp.
 - `ChangeWeather` always claims success.
 - `QueryTerrain` spams the player's chat with the grid (TEMP debug).
 - Gestures fire based on the global manifested flag, not the caller's ownership.
