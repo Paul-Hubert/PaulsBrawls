@@ -163,7 +163,7 @@ Routing is fire-and-forget at the emit site; a rejected `route()` is only `logge
 Builds a **fast-tier** context pack and calls `brain.deliberate(input, { lane: req.lane, kind: 'reactive' })`:
 query = `triggers + hints`; `retrievedSkills = retriever.search(query, {tier:'mortal', k: 8})`; §6 =
 `memory.retrieve(query, 5)`; `hint = hints.join(' / ')`; `includeExemplarCode: false`; `recentEvents: []`;
-`directive/openTask: null`; §8 = the pending inbox messages via `peek()` **only when the event is `inbox`**, else `[]`
+`directive/openTask: null`; §8 = the inbox messages **not shown on an earlier wake-up** (`unseenInbox` over `peek()`, review fix — the undrained backlog used to be re-shown every time) **only when the event is `inbox`**, else `[]`
 (it never drains, D-17); `inputTokenBudget = config.llm.providers.fast.inputTokenBudget`. Errors are swallowed to
 `logger.warn`. The same function serves two non-event callers, with no `event`: a trade offer wakes its partner on
 the `conversation` lane (`eden/src/main.ts:849-851`) and a drive crossing wakes on `idle` (`eden/src/main.ts:884-893`).
@@ -337,7 +337,7 @@ rollout refs (`:174-186`).
 | memories (§6) | `retrieve(query, 5)` | `retrieve(task.goal, 6)`, once per task |
 | retrieved skills | k=8 | k=10 minus exemplars, once per task |
 | exemplar code / primitives | off | on |
-| inbox (§8) | `peek()` on an `inbox` event, else `[]` | `inboxes.get(v).drain()` each revision (`eden/src/main.ts:1292`) |
+| inbox (§8) | `unseenInbox` (`peek()` minus what was already shown) on an `inbox` event, else `[]` | `inboxes.get(v).drain()` each revision (`eden/src/main.ts:1292`) |
 | density / history | none | draft + last RunReport + last critique after the 1st revision / always `[]` |
 
 ## The inbox (`villagers/inbox.ts`, `types/inbox.ts`)

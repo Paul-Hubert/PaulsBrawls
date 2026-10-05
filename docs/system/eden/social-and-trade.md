@@ -157,7 +157,7 @@ the offer itself (propose → accept/decline, or a new counter-offer), not insid
 | Method | Refusals (French, read by the villager) | Effect |
 |---|---|---|
 | `say(v, text)` | empty; `<v> n'est pas connecté`; `tu viens de parler — attends un peu` (< 4 s) | journal `chat.said {from:v, to:'*', text}`; `sayInGame(text)` |
-| `tell(from, to, text)` | empty; to self; `<to> n'est pas un villageois` | journal `chat.said {from, to, text}`; `deliverTell` → inbox `tell` `{text, from}` as actor `villager:<from>` (raises D-17 `inbox`) |
+| `tell(from, to, text)` | empty; to self; `<to> n'est pas un villageois`; more than 3 tells to the same partner in 10 min (`tellsPerWindow`/`tellWindowMs` — review fix: each tell wakes the partner, who could tell back forever) | journal `chat.said {from, to, text}`; `deliverTell` → inbox `tell` `{text, from}` as actor `villager:<from>` (raises D-17 `inbox`) |
 | `start(a, b, topic)` | self; not a villager; either side already talking; `trop de conversations en cours (max 2)`; either offline; `<b> est trop loin pour converser` (> 16 blocks, `EARSHOT`, `eden/src/main.ts:686`) | a `Conversation` (8 turns, 60 s/turn, mirror gap 4 s) with `speakerFor` turns and villagers within 16 blocks of the initiator as eavesdroppers; runs detached; both sides are freed when it ends; a throw journals `system.error` |
 
 Every spoken line (say, tell, conversation topic) goes through `clean()` → `chatSafe()` (`eden/src/social/conversation.ts`),

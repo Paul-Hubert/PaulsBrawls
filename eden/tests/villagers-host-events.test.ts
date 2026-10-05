@@ -223,3 +223,18 @@ test('B3.6: night falls → go-home walks to the healed home anchor ($home.* tem
   assert.equal(bot.entity.position.x, 12, 'the villager walked home');
   reactivity.detach();
 });
+
+// Review fix: an inbox wake-up re-showed every undrained message (an idle villager's inbox is only drained by a
+// rollout), so each wake carried the whole backlog again. It now shows only what it has not shown before.
+test('an inbox wake-up shows only the messages not shown before', async () => {
+  const { VillagerInbox } = await import('../src/villagers/inbox');
+  const { unseenInbox } = await import('../src/main');
+  const inbox = new VillagerInbox('Firmin', new MemoryJournal());
+  const shown = new WeakSet<import('../src/types/index').InboxMessage>();
+  inbox.deliver({ from: 'villager', kind: 'tell', payload: { text: 'un' }, at: 1 });
+  assert.deepEqual(unseenInbox(inbox, shown).map((m) => (m.payload as { text: string }).text), ['un']);
+  inbox.deliver({ from: 'villager', kind: 'tell', payload: { text: 'deux' }, at: 2 });
+  assert.deepEqual(unseenInbox(inbox, shown).map((m) => (m.payload as { text: string }).text), ['deux']);
+  assert.deepEqual(unseenInbox(inbox, shown), []);
+  assert.equal(inbox.depth(), 2, 'still not drained — the rollout coordinator owns draining');
+});

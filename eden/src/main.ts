@@ -806,6 +806,7 @@ function wireGod(args: {
     // the load-bearing path). Reactive wake-ups ride the FAST tier (D-13: the strong tier's budget is for
     // novelty, not reflexes). It does NOT drain the inbox (the rollout coordinator owns directive draining).
     // The request's `event` is unused here, so trade offers can wake a villager without inventing one.
+    const inboxShown = new WeakSet<InboxMessage>(); // messages an inbox wake-up already showed (unseenInbox)
     const wakeup = async (req: Omit<WakeupRequest, 'event'> & { event?: WakeupRequest['event'] }): Promise<void> => {
       const entry = roster.get(req.villager);
       try {
@@ -835,8 +836,9 @@ function wireGod(args: {
           exemplars: [],
           includeExemplarCode: false,
           toolNames: brain.toolNames(),
-          // D-17: an `inbox` wake-up shows the pending messages (peek — the rollout coordinator still drains).
-          inbox: req.event?.type === 'inbox' ? peekInbox(inboxes.get(req.villager)) : [],
+          // D-17: an `inbox` wake-up shows the messages not shown before (peek — the rollout coordinator still drains;
+          // an idle villager's inbox is not drained, so re-showing it all on every wake grew each prompt).
+          inbox: req.event?.type === 'inbox' ? unseenInbox(inboxes.get(req.villager), inboxShown) : [],
           tier: 'fast',
           inputTokenBudget: config.llm.providers.fast.inputTokenBudget,
         };
@@ -1035,9 +1037,13 @@ export function wireDrives(deps: {
   };
 }
 
-/** The pending messages of a villager inbox without draining it (VillagerInbox.peek), else none. */
-function peekInbox(inbox: Inbox | undefined): InboxMessage[] {
-  return inbox && 'peek' in inbox ? (inbox as { peek(): InboxMessage[] }).peek() : [];
+/** The pending messages of a villager inbox not shown to it before (VillagerInbox.peek, without draining), marking
+ *  them shown. Exported for tests. */
+export function unseenInbox(inbox: Inbox | undefined, shown: WeakSet<InboxMessage>): InboxMessage[] {
+  const all = inbox && 'peek' in inbox ? (inbox as { peek(): InboxMessage[] }).peek() : [];
+  const fresh = all.filter((m) => !shown.has(m));
+  for (const m of fresh) shown.add(m);
+  return fresh;
 }
 
 /** Build the admin's villager summary (identity + persona + vitals + subscriptions + inbox depth + current

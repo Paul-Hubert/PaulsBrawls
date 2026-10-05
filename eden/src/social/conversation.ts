@@ -252,6 +252,10 @@ export interface ConversationBookOptions {
   turnDeadlineMs?: number;
   /** Minimum gap between two `say`s of one villager. Default 4 s. */
   sayMinIntervalMs?: number;
+  /** Tells one villager may send ONE partner per {@link tellWindowMs}. Default 3. */
+  tellsPerWindow?: number;
+  /** The sliding window for {@link tellsPerWindow}. Default 10 min. */
+  tellWindowMs?: number;
   now?: () => number;
 }
 
@@ -266,6 +270,8 @@ export class ConversationBook implements ConversationDesk {
   /** villager → id of the conversation it is in. */
   private readonly busy = new Map<string, string>();
   private readonly lastSay = new Map<string, number>();
+  /** "from→to" → times of recent tells (sliding window). */
+  private readonly recentTells = new Map<string, number[]>();
   private running = 0;
 
   constructor(opts: ConversationBookOptions) {
@@ -292,6 +298,17 @@ export class ConversationBook implements ConversationDesk {
     if (!line) return { ok: false, reason: 'rien à dire (texte vide)' };
     if (to === from) return { ok: false, reason: 'tu ne peux pas te parler à toi-même' };
     if (!this.o.isVillager(to)) return { ok: false, reason: `${to} n'est pas un villageois` };
+    // Each tell wakes the partner (D-17 inbox), who may tell back: budget each ordered pair so A↔B cannot wake each
+    // other forever (review fix).
+    const key = `${from}\u0000${to}`;
+    const windowMs = this.o.tellWindowMs ?? 10 * 60_000;
+    const recent = (this.recentTells.get(key) ?? []).filter((t) => this.now() - t < windowMs);
+    if (recent.length >= (this.o.tellsPerWindow ?? 3)) {
+      this.recentTells.set(key, recent);
+      return { ok: false, reason: `tu as déjà écrit plusieurs fois à ${to} — attends sa réponse ou va lui parler (start_conversation)` };
+    }
+    recent.push(this.now());
+    this.recentTells.set(key, recent);
     this.o.journal.append(`villager:${from}`, 'chat.said', { from, to, text: line });
     this.o.deliverTell(to, from, line);
     return { ok: true };

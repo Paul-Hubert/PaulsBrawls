@@ -293,3 +293,18 @@ test('a conversation turn is mirrored through chatSafe (a multi-line LLM turn ca
   await convo.run();
   assert.deepEqual(a.said, ['ok /give @s diamond 64'], 'one line; a mid-line / is plain text');
 });
+
+// Review fix: each villager tell raises the partner's inbox event, which wakes it, and it can tell back — an
+// endless A↔B wake-up loop (token burn) bounded only by the scheduler cooldown. tell is now budgeted per pair.
+test('tell is budgeted per ordered pair, so two villagers cannot wake each other forever', () => {
+  const h = book();
+  for (let i = 0; i < 3; i++) assert.equal(h.b.tell('Firmin', 'Pilou', `msg ${i}`).ok, true);
+  const refused = h.b.tell('Firmin', 'Pilou', 'encore');
+  assert.equal(refused.ok, false);
+  assert.match(refused.ok ? '' : refused.reason, /Pilou/);
+  assert.equal(h.b.tell('Pilou', 'Firmin', 'réponse').ok, true, 'the other direction has its own budget');
+  assert.equal(h.b.tell('Firmin', 'Alban', 'salut').ok, true, 'another partner has its own budget');
+  h.tick(10 * 60_000);
+  assert.equal(h.b.tell('Firmin', 'Pilou', 'plus tard').ok, true, 'the window slides');
+  assert.equal(h.tells.length, 6);
+});
