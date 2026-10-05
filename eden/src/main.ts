@@ -675,6 +675,9 @@ function wireGod(args: {
       else memories.get(to)?.remember({ kind: 'trade', text: line, tags: ['échange'] });
     },
   });
+  // B4: offers are RAM-only; close the ones a previous host left open so the trade ledger never shows them pending.
+  const orphanTrades = tradeBook.closeOrphans();
+  if (orphanTrades > 0) logger.info('trade', `boot: closed ${orphanTrades} offer(s) left open by the previous host`);
 
   // ── Conversations (D-18) — say / tell / start_conversation. Bodies come from the live pool (offline = refused),
   //    memories from the per-villager VillagerMemory (the conversation's MemoryWriter), turns from a fast-tier

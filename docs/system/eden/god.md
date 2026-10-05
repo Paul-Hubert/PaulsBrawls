@@ -352,7 +352,7 @@ Payload types: `eden/src/journal/kinds.ts:141-167`.
 - `BudgetTracker.resetDay()` is never called — "daily" caps never reset.
 - ~~QA cache in memory only; `GodState` never persisted; boot recovery a no-op~~ **Fixed (B3.9)** — the God snapshot.
   Not persisted: the critic queue (transient), the orchestrator's interrupt cooldowns and divine-assist flags (D-09
-  abandons the rollouts they belonged to), and pending trade offers.
+  abandons the rollouts they belonged to), and pending trade offers (closed at boot as `trade.failed "hôte redémarré"` — B4).
 - Rollout closes only on `admitted && success`; success with `none`/`keep-draft`, or a success running an already-active skill, keeps revising until `maxRetries`.
 - A deliberation with no draft/RunReport silently burns one of the 4 retries.
 - Orchestrator dispatch does not force its tool; if the model emits no `directive` call the task still runs (the pack falls back to `task.goal`).

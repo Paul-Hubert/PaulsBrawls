@@ -353,3 +353,30 @@ test('TradeBook (R33): a walk that throws fails the trade with the cause, withou
   assert.match(notes.at(-1)!.line, /pas réglé/);
   await server.close();
 });
+
+// B4: pending offers live in RAM. A restart used to leave every open trade.proposed without a closing event, so
+// the trade ledger showed it pending forever. closeOrphans() (main.ts calls it at boot) closes each one.
+test('B4: closeOrphans closes every trade.proposed with no settled/failed as trade.failed "hôte redémarré"', async () => {
+  const journal = new MemoryJournal();
+  const server = await FakeSettlement.start();
+  const settlement = new SettlementClient({ url: server.url, journal });
+  // A previous host: one settled, one declined, two left open when it died.
+  const prev = new TradeBook({ journal, settlement, isVillager: (n) => VILLAGERS.has(n) });
+  const settled = prev.propose(OFFER);
+  const declined = prev.propose(OFFER);
+  const open1 = prev.propose(OFFER);
+  const open2 = prev.propose({ ...OFFER, from: 'Pilou', to: 'Firmin' });
+  assert.ok(settled.ok && declined.ok && open1.ok && open2.ok);
+  await prev.answer(settled.trade.id, 'Pilou', true);
+  await prev.answer(declined.trade.id, 'Pilou', false);
+
+  const next = new TradeBook({ journal, settlement, isVillager: (n) => VILLAGERS.has(n) });
+  assert.equal(next.closeOrphans(), 2);
+  const failed = journal.query({ kinds: ['trade.failed'] }).map((e) => e.payload as { id: string; reason: string });
+  const orphans = failed.filter((p) => p.reason === 'hôte redémarré').map((p) => p.id).sort();
+  assert.deepEqual(orphans, [open1.trade.id, open2.trade.id].sort());
+  const closed = journal.query({ kinds: ['trade.failed'], ref: open2.trade.id })[0]!;
+  assert.equal(closed.actor, 'villager:Pilou', 'closed in the proposer\'s name, like an expiry');
+  assert.equal(next.closeOrphans(), 0, 'idempotent: a second boot closes nothing');
+  await server.close();
+});

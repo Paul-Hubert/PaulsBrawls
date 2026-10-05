@@ -290,6 +290,28 @@ export class TradeBook implements TradeDesk {
     return [...this.pending.values()].filter((t) => t.offer.from === villager || t.offer.to === villager);
   }
 
+  /**
+   * B4: pending offers live in RAM, so a restart loses them. Close every journaled trade.proposed that has no
+   * trade.settled / trade.failed as trade.failed {reason: "hôte redémarré"} — in the proposer's name, like an
+   * expiry — so the trade ledger never shows a dead offer as pending. main.ts calls this once at boot, before any
+   * villager can propose. Returns how many were closed (0 on a second call).
+   */
+  closeOrphans(): number {
+    const closed = new Set<string>();
+    for (const e of this.opts.journal.query({ kinds: ['trade.settled', 'trade.failed'] })) {
+      closed.add((e.payload as { id: string }).id);
+    }
+    let n = 0;
+    for (const e of this.opts.journal.query({ kinds: ['trade.proposed'] })) {
+      const p = e.payload as { id: string; from: string; to: string };
+      if (closed.has(p.id) || this.pending.has(p.id)) continue;
+      closed.add(p.id);
+      this.opts.journal.append(`villager:${p.from}`, 'trade.failed', { id: p.id, from: p.from, to: p.to, reason: 'hôte redémarré' }, { tradeId: p.id });
+      n++;
+    }
+    return n;
+  }
+
   /** Expire stale offers (journaled as trade.failed so the ledger closes them). */
   private sweep(): void {
     const t = this.now();

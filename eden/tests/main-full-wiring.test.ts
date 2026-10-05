@@ -328,3 +328,25 @@ test('B3.9: a God snapshot from another world is not restored (R32)', async () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// B4: a trade offer open when the host died is closed at the next boot (offers are RAM-only).
+test('B4: an offer left open by a previous host is closed at boot as trade.failed "hôte redémarré"', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eden-orphan-trade-'));
+  const dataDir = join(dir, '.eden-data');
+  const cfg = writeConfig(dir);
+  try {
+    const first = await start(cfg, { dataDir, spawnBots: false, enableGod: true });
+    first.journal.append('villager:Firmin', 'trade.proposed', { id: 'T1', from: 'Firmin', to: 'Alban', give: [{ item: 'coin', count: 1 }], want: [{ item: 'bread', count: 1 }] }, { tradeId: 'T1' });
+    await first.stop();
+    const second = await start(cfg, { dataDir, spawnBots: false, enableGod: true });
+    try {
+      const failed = second.journal.query({ kinds: ['trade.failed'], ref: 'T1' });
+      assert.equal(failed.length, 1);
+      assert.equal((failed[0]!.payload as { reason: string }).reason, 'hôte redémarré');
+    } finally {
+      await second.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

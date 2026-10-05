@@ -94,7 +94,7 @@ const TOKEN_HEADER = 'X-Village-Token'                                          
 | `propose(offer)` (`:234`) | Expire stale offers, then validate (`:309-323`): both parties are roster villagers (`isVillager` — a human would otherwise be swappable, the Java listener can't tell), not the same name (case-insensitive), ≤ 6 lines per side, not both empty, each `item` non-blank, each `count` an integer 1..512 (the Java caps, so a bad offer fails *before* the partner says yes), and the proposer has < 3 offers open. On success: store it with `expiresAt = now + ttlMs` (default 5 min), journal `trade.proposed`, `notify(to, "<from> te propose un échange (id …) …", 'offer')`. Nothing is POSTed. |
 | `answer(id, by, accept)` (`:254`) | Unknown/expired id → `{ok:false}`. Only the partner (`to`) may accept; the partner may decline; the proposer may withdraw (`accept:false`). Anyone else, or the proposer accepting, → `{ok:false, reason:"seul <to> peut …"}` and the offer stays open. The offer is removed **before** settling, so two concurrent accepts settle once. Decline/withdraw → `trade.failed {reason:"refusée par <to>" / "retirée par <from>"}` and `{ok:true}`. Accept → `new TradeService({reach: reachFor(offer)}).settleProposed(id, offer)`, then `notify(from, <outcome>, 'outcome')`. |
 | `pendingFor(villager)` | Live offers the villager made or received. |
-| expiry (`sweep`, `:294`) | Lazy, on every call: an expired offer is dropped and journaled `trade.failed {reason:"expirée sans réponse de <to>"}`. Offers live in RAM only — a host restart forgets them (nothing had moved). |
+| expiry (`sweep`, `:294`) | Lazy, on every call: an expired offer is dropped and journaled `trade.failed {reason:"expirée sans réponse de <to>"}`. Offers live in RAM only; at boot `main.ts` calls `closeOrphans()`, which journals `trade.failed {reason:"hôte redémarré"}` for every `trade.proposed` with no `trade.settled`/`trade.failed` (B4), so the ledger never shows a dead offer as pending. |
 
 ### Villager tools (`eden/src/villagers/tools.ts`)
 - `propose_trade {to, give:[{item,count}], want:[…]}` — proposes **as the acting villager** (`from = ctx.villager`, never an argument).
@@ -186,7 +186,7 @@ Journal payload types: `eden/src/journal/kinds.ts:176-202` (`chat.said`, `chat.h
 
 - ~~Settlement JSON field names mismatch the Java listener~~ — fixed. The body is `{botA, botB, aGives, bGives}`, pinned by tests and by a fake that runs the Java shape check. Java-side bug #2 (duplicate item lines each validated against the whole inventory) is fixed too: the listener sums lines per item before validating — see [java-integration.md](java-integration.md).
 - ~~`Conversation` is dead code in production~~ — wired (D-18). Trade is live.
-- Pending offers are RAM-only: a host restart forgets them (journaled `trade.proposed` with no close event; nothing moved).
+- ~~Pending offers are RAM-only: a host restart leaves `trade.proposed` with no close event~~ **Fixed (B4):** the offers stay RAM-only, but `TradeBook.closeOrphans()` closes each orphan at boot as `trade.failed {reason:"hôte redémarré"}`. A villager whose offer was closed this way is not told.
 - If the mod has a `settlementToken` but `EDEN_SETTLEMENT_TOKEN` is unset or different, every accepted trade fails with `settlement HTTP 401`.
 - `TRADE_REACH` (8) is a constant, not read from the mod: if the mod's `maxTradeDistance` is lowered below 8, an "in range" pair can still be refused.
 - `partner-gone` end reason is declared but never emitted.
