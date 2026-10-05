@@ -263,10 +263,10 @@ skill (`eden/src/villagers/tools.ts:1-4`). There are **no speech tools** (`say`,
 listing them. The **trade tools** exist: `propose_trade {to, give, want}`, `answer_trade {id, accept}` and
 `list_trades` reach social/'s `TradeBook` through the `types/` `TradeDesk` seam (`trade` option, wired in
 `main.ts`); see [social-and-trade.md](social-and-trade.md). Trade tools degrade to `(échange non câblé…)` when unwired. Memory/subscription tools degrade to honest stubs (`(mémoire non câblée…)`,
-`(réactivité non câblée…)`) when unwired. Memory is resolved per `ctx.villager` from the shared registry. **In the live host the
-subscription tools are always stubs**: `main.ts` builds the `ToolRegistry` without a `subscriptions` store
-(`eden/src/main.ts:593`; the `SubscriptionStore` is only created later at `:661`), so `subscribe`/`unsubscribe`/
-`list_subscriptions` return `(réactivité non câblée…)` (`eden/src/villagers/tools.ts:293-336`).
+`(réactivité non câblée…)`) when unwired. Memory is resolved per `ctx.villager` from the shared registry. In the live host
+`wireGod` builds the shared `SubscriptionStore` before the `ToolRegistry` and passes it as `subscriptions`, so
+`subscribe`/`unsubscribe`/`list_subscriptions` write the store the routers and the admin read (they were stubs
+until 2026-10-05; `tests/main-full-wiring.test.ts` drives them through `start()`).
 
 ## The context pack (`villagers/context-pack.ts`)
 

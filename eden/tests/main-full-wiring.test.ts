@@ -98,3 +98,33 @@ test('host boots WITHOUT God (default): GETs return empty, control verbs report 
   assert.equal((await postJson(port, '/pause')).status, 503);
   assert.equal((await postJson(port, '/villagers/Firmin/prompt', { text: 'x' })).status, 503);
 });
+
+/** Boot the full God-wired host (no Minecraft) in a temp dir; torn down after the test. */
+async function bootGod(t: { after: (fn: () => Promise<void>) => void }): Promise<{ host: Awaited<ReturnType<typeof start>>; dir: string }> {
+  const dir = mkdtempSync(join(tmpdir(), 'eden-wire-'));
+  const host = await start(writeConfig(dir), { dataDir: join(dir, '.eden-data'), spawnBots: false, enableGod: true });
+  t.after(async () => {
+    await host.stop();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return { host, dir };
+}
+
+const FIRMIN = { villager: 'Firmin', runner: { name: 'Firmin', role: 'farmer', tier: 'mortal' as const } };
+const call = (name: string, args: object) => ({ id: `c-${name}`, name, arguments: args });
+
+test('wiring: the villager subscription tools reach the live SubscriptionStore (no longer stubs)', async (t) => {
+  const { host } = await bootGod(t);
+  assert.ok(host.tools, 'God wired → the tool registry is exposed');
+  const created = await host.tools.dispatch(
+    call('subscribe', { on: 'hurt', handler: { kind: 'deliberate', hint: 'fuis' } }),
+    FIRMIN,
+  );
+  assert.notEqual(created.ok, false, created.content);
+  assert.doesNotMatch(created.content, /non câblée/);
+  const listed = await host.tools.dispatch(call('list_subscriptions', {}), FIRMIN);
+  assert.match(listed.content, /quand "hurt"/);
+  // The admin reads the SAME store the tool wrote (one writer, S2).
+  const firmin = (await getJson(host.adminPort, '/villagers/Firmin')).body;
+  assert.equal(firmin.subscriptions.length, 1);
+});

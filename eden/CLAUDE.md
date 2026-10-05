@@ -53,7 +53,7 @@ main.ts is the only composition root; anything not constructed there does not ru
 boot, however well it is tested. Not wired as of 4a8081f: social/'s Conversation (trade IS wired:
 propose_trade/answer_trade → TradeBook → SettlementClient), GodBody / embodiedVerdicts,
 Orchestrator.intervene, the skill tripwire (no onTripwire), the describer, anchors + verifyHashes,
-DriveTracker, combineDesks, the villager subscription tools (stubs), and every villager event
+DriveTracker, combineDesks, and every villager event
 except health/death/hurt + a 30 s tick. SQLite holds only the journal; God state is RAM-only.
 Full list with citations: docs/system/VERIFICATION-NOTES.md §6. Wiring one of these is a
 main.ts change. Update that list and the root CLAUDE.md §"Designed vs wired" with it (S8).

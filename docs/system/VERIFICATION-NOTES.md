@@ -150,7 +150,7 @@ Citations are `path:line` at `4a8081f`.
 | `report_to_god` reaches critic/orchestrator queues | Result discarded. |
 | Context pack carries recent events, mood, standing orders, config persona | §5 is always empty. The persona is hardcoded `Tu es ${name}, ${role} du village. Tu parles français.` (`eden/src/main.ts:579`). |
 | `run_skill` has a `wait` arg | Params: `name, args, timeoutMs?`. |
-| Villagers author their own subscriptions via `subscribe` | In the live host the three subscription tools are **stubs** returning `(réactivité non câblée…)`: `ToolRegistry` is built without `subscriptions` (`eden/src/main.ts:550`), before the store exists (`:618`). Only `roles.json` defaults subscribe. |
+| Villagers author their own subscriptions via `subscribe` | ~~The three subscription tools were stubs in the live host (`ToolRegistry` built before the store).~~ **Fixed:** `wireGod` builds the `SubscriptionStore` first and passes it as `subscriptions`; pinned through the composition root by `tests/main-full-wiring.test.ts`. |
 | Subscriptions auto-disable on skill quarantine | `setEnabled` has no caller. |
 | Drives tick per villager | `DriveTracker` never constructed; `behavior.drives` unused. |
 | R32 world-stamp → admin `wipe|migrate` | No admin route; `resolveQuarantine` is never called. |

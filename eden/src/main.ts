@@ -96,6 +96,9 @@ export interface EdenHost {
   /** The God service — present only when God is wired. Exposed so a direct-boot driver (e.g. a smoke
    *  harness) can inject a task via `god.addTask(...)` before handing it to the coordinator. */
   readonly god?: GodService;
+  /** The villager tool registry — present only when God is wired. Exposed so a driver (and the wiring
+   *  tests, R69) can dispatch a tool exactly as a deliberation would, through the composition root. */
+  readonly tools?: ToolRegistry;
   stop(): Promise<void>;
 }
 
@@ -438,6 +441,7 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
     journal,
     coordinator: wiring?.coordinator,
     god: wiring?.god,
+    tools: wiring?.tools,
     async stop() {
       removeProcessGuards?.();
       villageLoop?.stop();
@@ -473,6 +477,8 @@ interface GodWiring {
   memories: Map<string, VillagerMemory>;
   /** The SHARED reactivity store (sole writer of subscription state, S2) — admin reads sub counts from it. */
   store: SubscriptionStore;
+  /** The shared villager tool registry (every deliberation dispatches through it). */
+  tools: ToolRegistry;
   /** Per-villager reactivity (EventRouter + SubscriptionRouter). Present only with a live bot pool (M5). */
   reactivity?: VillagerReactivity;
 }
@@ -590,7 +596,12 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
     },
   });
 
-  const tools = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: config.skills.maxSkillLines, memoryFor, trade: tradeBook });
+  // The SHARED reactivity store (sole writer of subscription state, S2). Built BEFORE the ToolRegistry so the
+  // villager tools subscribe/unsubscribe/list_subscriptions write the same store the routers read — it used
+  // to be built after the registry, which left those three tools as "(réactivité non câblée)" stubs.
+  const store = new SubscriptionStore({ dataDir, journal });
+
+  const tools = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: config.skills.maxSkillLines, memoryFor, trade: tradeBook, subscriptions: store });
   const builder = new ContextPackBuilder({ journal });
   const brain = new Brain({ builder, tools, scheduler, client, journal });
 
@@ -650,7 +661,6 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   //    author a combat skill. The store is the SHARED sole writer of subscription state (S2); role
   //    defaults seed each villager at FIRST boot (idempotent). Only with a live pool — a CI/no-bots boot
   //    has nothing to attach to, so the store stays empty and no router is built. ──
-  const store = new SubscriptionStore({ dataDir, journal });
   let reactivity: VillagerReactivity | undefined;
   if (pool) {
     const roles = loadRoles();
@@ -733,7 +743,7 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
     });
   }
 
-  return { god, curriculum, orchestrator, coordinator, library, scheduler, inboxes, memories, store, ...(reactivity ? { reactivity } : {}) };
+  return { god, curriculum, orchestrator, coordinator, library, scheduler, inboxes, memories, store, tools, ...(reactivity ? { reactivity } : {}) };
 }
 
 /** Build the admin's villager summary (identity + persona + vitals + subscriptions + inbox depth + current
