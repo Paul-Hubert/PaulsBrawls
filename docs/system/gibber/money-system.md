@@ -4,8 +4,8 @@ title: Gibber - the coin money system
 system: gibber
 summary: The paulsbrawls:coin item, the entitlement ledger (gibbers_state NBT), salary scheduler math, /gib commands, join backlog payout, threading, edge cases and every other place coins are used.
 tags: [gibber, coin, money, salary, revenue, persistentstate, nbt, gib, gib_salary, gib_salary_period, currency]
-sources: [src/main/java/com/paul/brawl/Money.java, src/main/java/com/paul/brawl/RevenueManager.java, src/main/java/com/paul/brawl/SalaryScheduler.java, src/main/java/com/paul/brawl/PlayerPersistentState.java, src/main/java/com/paul/brawl/GibCommand.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/VillageHttpListener.java, src/main/resources/assets/paulsbrawls/models/item/coin.json, src/main/resources/assets/paulsbrawls/lang/en_us.json, src/main/resources/assets/paulsbrawls/lang/fr_fr.json, eden/src/social/trade.ts, eden/src/main.ts]
-verified_at: 4a8081f
+sources: [src/main/java/com/paul/brawl/Money.java, src/main/java/com/paul/brawl/RevenueManager.java, src/main/java/com/paul/brawl/SalaryScheduler.java, src/main/java/com/paul/brawl/PlayerPersistentState.java, src/main/java/com/paul/brawl/GibCommand.java, src/main/java/com/paul/brawl/GibberMath.java, src/main/java/com/paul/brawl/ItemIds.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/VillageHttpListener.java, src/main/resources/assets/paulsbrawls/models/item/coin.json, src/main/resources/assets/paulsbrawls/lang/en_us.json, src/main/resources/assets/paulsbrawls/lang/fr_fr.json, eden/src/social/trade.ts, eden/src/main.ts]
+verified_at: 98cb908
 ---
 
 # Gibber - the coin money system
@@ -56,19 +56,20 @@ Accessors: `getPlayerValue(uuid)` / `getGlobalValue(key)` return `getOrDefault(.
 (`:78-89`); both setters call `markDirty()` (`:82-94`) so the state is saved with the world. Malformed
 UUID keys are skipped on load (`:36-43`).
 
-## Payout algorithm — `RevenueManager.updateRevenue(uuid, server)`
+## Payout algorithm — `RevenueManager.updateRevenue(uuid, server)` (`RevenueManager.java:28-63`)
 
 ```
 player = server.getPlayerManager().getPlayer(uuid)      // online only
 if player == null: log "player is null"; return
 total = global[total_revenue]; paid = player_data[uuid] (0 if new)
 owed = GibberMath.owed(total, paid)                     // max(0, total - paid), no overflow
+if owed == 0: return
 insert owed coins as max-size stacks with PlayerInventory.insertStack, stopping when one does not fit
-player_data[uuid] = GibberMath.paidAfter(paid, inserted) // credit ONLY what landed (bug #10)
+if inserted > 0: player_data[uuid] = GibberMath.paidAfter(paid, inserted) // credit ONLY what landed (bug #10)
 if inserted < owed: log "<name>: inventory full, <n> of <owed> coin(s) still owed"
 ```
 
-`UpdateRevenueAll(server)` (`:51-55`) loops `getPlayerList()` (online players) and calls the above.
+`UpdateRevenueAll(server)` (`:65-69`) loops `getPlayerList()` (online players) and calls the above.
 
 Consequences that follow directly from this code:
 
@@ -85,18 +86,18 @@ Consequences that follow directly from this code:
 | Step | Behaviour | Source |
 |---|---|---|
 | register | `SERVER_STARTED` → `start(server)`; `SERVER_STOPPING` → `stop()` | `SalaryScheduler.java:21-28` |
-| start | Guarded by a static `started` flag. Creates `Executors.newSingleThreadScheduledExecutor()`. Reads `salary_period`; if `0`, writes `10` and uses 10. | `:41-56` |
-| schedule | `scheduleAtFixedRate(task, initialDelay = 0, period, SECONDS)` — so one salary tick fires **immediately at server start** | `:59-64` |
-| task | `server.execute(() -> giveDailyRevenue(server))` — hops to the main server thread | `:61-63` |
-| giveDailyRevenue | `total_revenue += salary_per_day`, then `UpdateRevenueAll` | `:30-39` |
-| stop | `shutdownNow()` and `started = false` (only if the executor exists and is not shut down) | `:73-78` |
-| restart | `stop(); start(server)` — used by `/gib_salary_period` | `:80-83` |
+| start | Guarded by a static `started` flag. Creates `Executors.newSingleThreadScheduledExecutor()`. Reads `salary_period`; if `0`, writes `10` and uses 10. | `:40-55` |
+| schedule | `scheduleAtFixedRate(task, initialDelay = 0, period, SECONDS)` — so one salary tick fires **immediately at server start** | `:58-63` |
+| task | `server.execute(() -> giveDailyRevenue(server))` — hops to the main server thread | `:60-62` |
+| giveDailyRevenue | `total_revenue = GibberMath.addToTotal(total, salary_per_day)` (saturating, bug #10), then `UpdateRevenueAll` | `:30-38` |
+| stop | `shutdownNow()` and `started = false` (only if the executor exists and is not shut down) | `:72-77` |
+| restart | `stop(); start(server)` — used by `/gib_salary_period` | `:79-82` |
 
 Math: after the server has been up for `t` seconds with constant settings, `total_revenue` has grown by
 `salary_per_day × (floor(t / salary_period) + 1)`. With the defaults (`salary_per_day = 0`) **no salary is
 ever paid** until an admin runs `/gib_salary <n>`; the scheduler still ticks every 10 s.
 
-`getInitialDelayToMidnight()` (`:67-71`) and the commented daily-period lines (`:47-48`) are dead code
+`getInitialDelayToMidnight()` (`:66-70`) and the commented daily-period lines (`:46-47`) are dead code
 left from a once-a-day design.
 
 ## Commands (`GibCommand.java`)
@@ -106,8 +107,8 @@ None sends chat feedback to the caller; each only writes a server log line (logg
 
 | Command | Argument type | Effect | Log line | Lines |
 |---|---|---|---|---|
-| `/gib <amount>` | `IntegerArgumentType.integer(1)` — ≥ 1 (bug #10: negatives used to be accepted) | `total_revenue = GibberMath.addToTotal(total, amount)` (saturating at `Integer.MAX_VALUE`); `UpdateRevenueAll` (online players paid now) | `gibbed <amount>` | `GibCommand.register` |
-| `/gib_salary <amount>` | `integer(0)` — ≥ 0 | `salary_per_day = amount` (takes effect on the next scheduler tick; no restart) | `gibbed salary <amount>` | `GibCommand.register` |
+| `/gib <amount>` | `IntegerArgumentType.integer(1)` — ≥ 1 (bug #10: negatives used to be accepted) | `total_revenue = GibberMath.addToTotal(total, amount)` (saturating at `Integer.MAX_VALUE`); `UpdateRevenueAll` (online players paid now) | `gibbed <amount>` | `GibCommand.java:20-42` |
+| `/gib_salary <amount>` | `integer(0)` — ≥ 0 | `salary_per_day = amount` (takes effect on the next scheduler tick; no restart) | `gibbed salary <amount>` | `:49-68` |
 | `/gib_salary_period <amount>` (seconds; the Brigadier argument is named `amount`, `GibCommand.java:76`) | `integer(1)` — min 1 | `salary_period = seconds`; `SalaryScheduler.restart(server)` (restart fires one salary tick immediately because initial delay is 0) | `gibbed salary period <seconds>` | `:72-92` |
 
 All settings are stored in `gibbers_state` and therefore **persist across restarts** (per world).
@@ -129,10 +130,10 @@ The scheduler thread comes from the default thread factory (non-daemon); it is s
 | Consumer | How it touches coins | Source |
 |---|---|---|
 | Village settlement listener (`:8767`) | `resolveItem("coin")` tries `minecraft:coin`, then falls back to `paulsbrawls:coin`; `"paulsbrawls:coin"` also resolves directly. Coins are swapped like any item. | `VillageHttpListener.java:271-282` |
-| Eden `SettlementClient` | Rewrites trade item `coin` → `paulsbrawls:coin` before POSTing the Java-shaped `{botA,botB,aGives,bGives}` body (`COIN_ITEM`, `resolveItem`, `toSettlementRequest`). Called when a villager accepts a `propose_trade` offer (`answer_trade`) — see [../eden/social-and-trade.md](../eden/social-and-trade.md). | `eden/src/social/trade.ts:40`, `:55-62`, `:332-334`; `eden/src/main.ts:556` |
-| AI God `Reward` tool | Gives any `namespace:path` item via `giveItemFromString`; `paulsbrawls:coin` works if the model names it (the persona prompt does not mention coins) | `ChatBotFunctions.java:39-48`, `ChatBotActions.java:78-91` |
-| AI God `Trade` tool + `/accept` | `getItemFromString` requires `ns:name`; the take side matches inventory stacks by registry item (`isOf`) over `main` only; amounts must be 1–512 | `TradeOffers.java:41-110`, `ChatBotActions.java:119-142` |
-| `ChatBotActions.giveGoodReward` | Gives 10 coins — **no callers** (dead code) | `ChatBotActions.java:56-58` |
+| Eden `SettlementClient` | Rewrites trade item `coin` → `paulsbrawls:coin` before POSTing the Java-shaped `{botA,botB,aGives,bGives}` body (`COIN_ITEM`, `resolveItem`, `toSettlementRequest`). Called when a villager accepts a `propose_trade` offer (`answer_trade`) — see [../eden/social-and-trade.md](../eden/social-and-trade.md). | `eden/src/social/trade.ts:40`, `:55-62`, `:354-356`; `eden/src/main.ts:642` |
+| AI God `Reward` tool | Gives any item via `giveItemFromString`, parsed like `/give` (namespace optional, components allowed) and clamped to `BridgeConfig.rewardMax` (bug #6); `paulsbrawls:coin` works if the model names it in full (a bare `coin` resolves to `minecraft:coin`) (the persona prompt does not mention coins) | `ChatBotFunctions.java:39-48`, `ChatBotActions.java:89-106` |
+| AI God `Trade` tool + `/accept` | `getItemFromString` takes the registry id via `ItemIds.baseId` (components stripped, namespace defaults to `minecraft:`, so coins must be named `paulsbrawls:coin`); the take side matches inventory stacks by registry item (`isOf`) over `main` only; amounts must be 1–512 (`MAX_TRADE_AMOUNT`) | `TradeOffers.java:41-100`, `ChatBotActions.java:148-168` |
+| `ChatBotActions.giveGoodReward` | Gives 10 coins — **no callers** (dead code) | `ChatBotActions.java:60-62` |
 
 Village bots acquire coins through the normal Gibber backlog/salary (they are players), which is what
 makes coin usable as the village currency.

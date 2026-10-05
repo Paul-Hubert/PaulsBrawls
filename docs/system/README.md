@@ -5,13 +5,14 @@ system: meta
 summary: Index of the verified, agent-oriented documentation for the whole mod and Eden — reading paths, document conventions, and how the corpus is meant to be served over MCP.
 tags: [index, readme, mcp, conventions, reading-order, manifest]
 sources: [docs/system/build-index.mjs]
-verified_at: 4a8081f
+verified_at: 98cb908
 ---
 
 # docs/system — verified reference corpus
 
 **TL;DR** — This folder documents every system in the repository: Gibber money, Capture the Flag, the AI God with its
-building agent, and Eden. Every claim was checked against the source at commit `4a8081f`, not copied from older docs.
+building agent, and Eden. Every claim was checked against the source, not copied from older docs: the whole corpus at commit `4a8081f`, and
+each doc again at the commit in its own `verified_at` (`98cb908` for the re-verified ones).
 Each file is self-contained, carries machine-readable frontmatter, and is listed in [index.json](index.json), so the
 corpus can be served to AI agents through an MCP server (one document = one resource). Where the code contradicts
 `CLAUDE.md`, `README.md` or the Eden design spec in `docs/*.md`, the code won and the difference is logged in
@@ -71,7 +72,7 @@ corpus can be served to AI agents through an MCP server (one document = one reso
 | [eden/bots-and-hardening.md](eden/bots-and-hardening.md) | Bot pool, plugins, signals, anchors, hardening, renderer |
 | [eden/god.md](eden/god.md) | Critic, curriculum and orchestrator desks, the body, the refinement loop |
 | [eden/llm-and-scheduling.md](eden/llm-and-scheduling.md) | LLM client, provider presets, scheduler lanes, budgets, embeddings |
-| [eden/villager-runtime.md](eden/villager-runtime.md) | Events, subscriptions, roles, the brain and its 14 tools, context pack |
+| [eden/villager-runtime.md](eden/villager-runtime.md) | Events, subscriptions, roles, the brain and its 17 tools, context pack |
 | [eden/villager-memory.md](eden/villager-memory.md) | Memory window and archive, retrieval scoring, world-stamp quarantine |
 | [eden/social-and-trade.md](eden/social-and-trade.md) | Conversations, typed trade, the settlement client |
 | [eden/journal-and-views.md](eden/journal-and-views.md) | SQLite journal, every journal kind, lag monitor, derived views |
@@ -83,7 +84,7 @@ corpus can be served to AI agents through an MCP server (one document = one reso
 
 - **"I need to change X"**: [00-overview.md](00-overview.md) → the system's doc → its *Gotchas & known issues* section → the cited source lines.
 - **Operating a server**: [reference/commands.md](reference/commands.md) → [reference/ports-files-config.md](reference/ports-files-config.md) → [platform/build-and-runtime.md](platform/build-and-runtime.md).
-- **Working on Eden**: [eden/overview.md](eden/overview.md) → [eden/types-and-contracts.md](eden/types-and-contracts.md) (dependency law) → the subsystem doc. Run `npm run check` in `eden/`; it needs `eden/providers.json` (copy the example).
+- **Working on Eden**: [eden/overview.md](eden/overview.md) → [eden/types-and-contracts.md](eden/types-and-contracts.md) (dependency law) → the subsystem doc. Run `npm run check` in `eden/`; it passes on a clean checkout (the live-test catalogue test reads the committed `providers.example.json`), and only `npm run live-test` needs `eden/providers.json`.
 - **Adding a tool for the Java God**: [aigod/tools-catalogue.md](aigod/tools-catalogue.md) (Java POJO tools) or [aigod/mcp-gateway.md](aigod/mcp-gateway.md) (Node MCP tools, which need no Java change).
 
 ## Document conventions
@@ -98,7 +99,7 @@ system: platform | gibber | ctf | aigod | eden | meta
 summary: one sentence (≤ 200 chars)
 tags: [keywords]
 sources: [repo-relative files the doc was verified against]
-verified_at: 4a8081f             # commit the claims were checked at
+verified_at: 98cb908             # commit the claims were checked at
 ---
 ```
 
@@ -131,7 +132,7 @@ the docs that list that file in `sources:` (`grep -l <file> docs/system -r`), up
 ## Serving over MCP (intended design)
 
 [index.json](index.json) is the manifest an MCP server reads. Each entry has `id`, `title`, `system`, `summary`,
-`tags`, `sources`, `path`, `headings` and `bytes`. A minimal server would expose:
+`tags`, `sources`, `verified_at`, `path`, `headings` and `bytes`. A minimal server would expose:
 
 | MCP primitive | Shape |
 |---|---|

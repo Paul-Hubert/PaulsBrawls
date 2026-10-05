@@ -2,10 +2,10 @@
 id: ctf.capture-the-flag
 title: Capture the Flag - FlagManager
 system: ctf
-summary: Exact rules of the CTF feature - which banners count as a Flag, drop-on-damage mechanics, elytra ban, per-tick glowing, and edge cases. All in FlagManager.java.
+summary: Exact rules of the CTF feature - which banners count as a Flag, drop-on-damage mechanics, elytra ban, per-tick glowing, and edge cases. FlagManager.java plus the FlagGlow helper.
 tags: [ctf, capture-the-flag, flag, banner, elytra, glowing, damage, FlagManager, events]
-sources: [src/main/java/com/paul/brawl/FlagManager.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/VillageHttpListener.java, README.md]
-verified_at: 4a8081f
+sources: [src/main/java/com/paul/brawl/FlagManager.java, src/main/java/com/paul/brawl/FlagGlow.java, src/test/java/com/paul/brawl/FlagGlowTest.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/VillageHttpListener.java, README.md]
+verified_at: 98cb908
 ---
 
 # Capture the Flag - FlagManager
@@ -15,21 +15,22 @@ displayed name contains the case-sensitive substring `Flag`. While a player carr
 every world tick; the mod only ever clears a glow it set), elytra flight is refused, and when they take damage
 every such banner is made unbreakable and thrown out of their inventory (bug #11 fixed both the slot scan and the
 glow clobbering). There is no team, score, base or capture logic — those
-are left to players/command blocks. Everything lives in `FlagManager.java` and is registered from
+are left to players/command blocks. Everything lives in `FlagManager.java` (with the Minecraft-free decisions in
+`FlagGlow.java`) and is registered from
 `ServerEntryPoint.java:30` (dedicated server only).
 
-## Registration (`FlagManager.register()`, `FlagManager.java:18-26`)
+## Registration (`FlagManager.register()`, `FlagManager.java:25-33`)
 
 | Order | Method | Fabric event | Line |
 |---|---|---|---|
-| 1 | `banElytra()` | `EntityElytraEvents.ALLOW` | `:29-38` |
-| 2 | `dropOnHit()` | `ServerLivingEntityEvents.ALLOW_DAMAGE` | `:41-49` |
-| 3 | `glowFlagholders()` | `ServerTickEvents.START_WORLD_TICK` + `ServerPlayConnectionEvents.DISCONNECT` | `glowFlagholders` |
+| 1 | `banElytra()` | `EntityElytraEvents.ALLOW` | `:36-45` |
+| 2 | `dropOnHit()` | `ServerLivingEntityEvents.ALLOW_DAMAGE` | `:48-56` |
+| 3 | `glowFlagholders()` | `ServerTickEvents.START_WORLD_TICK` + `ServerPlayConnectionEvents.DISCONNECT` | `:59-67` |
 
 No commands, config or persistence. The only state is the in-memory `FlagGlow` set of players whose glow the mod
 turned on (forgotten on disconnect).
 
-## What counts as a Flag — `findFlags(player)` / `checkInventory(player)`
+## What counts as a Flag — `findFlags(player)` / `checkInventory(player)` (`FlagManager.java:70-92`)
 
 ```java
 for (var slots : List.of(inv.main, inv.armor, inv.offHand))
@@ -43,7 +44,7 @@ for (var slots : List.of(inv.main, inv.armor, inv.offHand))
 | Rule | Exact behaviour |
 |---|---|
 | Item type | `instanceof net.minecraft.item.BannerItem` — any banner colour/pattern (not shields, not placed banner blocks) |
-| Name test | `FlagGlow.isFlagName` = `name.contains("Flag")` — **case-sensitive substring** (unit-tested): `Flag`, `Red Flag`, `Flags`, `MyFlagX` match; `flag`, `FLAG`, `Drapeau` do not |
+| Name test | `FlagGlow.isFlagName` = `name.contains("Flag")` (`FlagGlow.java:35-37`) — **case-sensitive substring** (unit-tested): `Flag`, `Red Flag`, `Flags`, `MyFlagX` match; `flag`, `FLAG`, `Drapeau` do not |
 | Name source | `getName()` = custom name (anvil/`custom_name` component) if set, otherwise the default item name resolved on the server; vanilla banner default names do not contain `Flag` |
 | Slots scanned | `main` (hotbar + 27 storage), then `armor` (a banner can be worn on the head), then `offHand` (bug #11 — only `main` used to be scanned) |
 | Result | `findFlags`: every matching stack in that order; `checkInventory`: the first, or `null` |
@@ -54,12 +55,12 @@ for (var slots : List.of(inv.main, inv.armor, inv.offHand))
 On every `ALLOW_DAMAGE` callback for a `ServerPlayerEntity`, for **each** stack in `findFlags(player)`:
 
 1. A null/empty stack is skipped.
-2. `item.set(DataComponentTypes.UNBREAKABLE, new UnbreakableComponent(true))` (`:79`) — marks the banner
+2. `item.set(DataComponentTypes.UNBREAKABLE, new UnbreakableComponent(true))` (`:99`) — marks the banner
    unbreakable (banners have no durability; this mainly tags it and shows an "Unbreakable" tooltip line).
-3. `player.dropItem(item.copyAndEmpty(), true, false)` (`:80`) — empties the slot and spawns the item
+3. `player.dropItem(item.copyAndEmpty(), true, false)` (`:100`) — empties the slot and spawns the item
    entity with `throwRandomly = true` (scattered like a death drop) and `retainOwnership = false` (anyone,
    including the victim, can pick it up immediately per vanilla rules).
-4. Returns `true` — **the damage itself is never cancelled** (`:47`).
+4. Returns `true` — **the damage itself is never cancelled** (`:54`).
 
 Properties of this rule:
 
@@ -73,7 +74,7 @@ Properties of this rule:
 > ⚠ Unverified: which damage checks (invulnerability, creative mode, damage cooldown) Fabric API
 > 0.116.7 performs before invoking `ALLOW_DAMAGE` — that is Fabric's mixin, not repo code.
 
-## Elytra ban — `banElytra()` (`FlagManager.java:29-38`)
+## Elytra ban — `banElytra()` (`FlagManager.java:36-45`)
 
 `EntityElytraEvents.ALLOW` handler: if the entity is a `ServerPlayerEntity` and `checkInventory` finds a
 Flag, return `false` (flight not allowed); otherwise `true`. Fabric API consults `ALLOW` when elytra flight
@@ -87,7 +88,8 @@ starts and while it continues, so picking up a Flag mid-glide should end the gli
 
 On `START_WORLD_TICK` (called once per loaded world/dimension per server tick — the lambda parameter is
 named `server` but is a `ServerWorld`), for each player in that world:
-`FlagGlow.update(uuid, hasFlag, player.isGlowing())` decides (unit-tested, `FlagGlowTest`):
+`FlagGlow.update(uuid, hasFlag, player.isGlowing())` (`FlagGlow.java:19-27`) decides and `updateGlow`
+(`FlagManager.java:105-111`) applies it (unit-tested, `FlagGlowTest`):
 
 | Has a Flag | Glowing now | Mod set it? | Action |
 |---|---|---|---|
@@ -111,13 +113,13 @@ named `server` but is a `ServerWorld`), for each player in that world:
   custom name and stays a Flag (only main/hotbar slots are tradeable). See
   [../eden/java-integration.md](../eden/java-integration.md).
 - Mineflayer bots (God avatar, Eden villagers) are `ServerPlayerEntity`s and obey all three rules.
-- Nothing else in `src/` references `FlagManager`.
+- Nothing else in `src/` references `FlagManager` (only `ServerEntryPoint` and a javadoc link in `FlagGlow`).
 
 ## How to modify
 
 | Want | Change |
 |---|---|
-| Case-insensitive / exact name | Edit the predicate at `FlagManager.java:65` |
+| Case-insensitive / exact name | Edit `FlagGlow.isFlagName` (`FlagGlow.java:35-37`; update `FlagGlowTest`) |
 | Drop only on PvP hits | In `dropOnHit`, check `source.getAttacker() instanceof PlayerEntity` before dropping |
 | Drop one Flag per hit | Use `checkInventory` instead of looping over `findFlags` in `dropOnHit` |
 

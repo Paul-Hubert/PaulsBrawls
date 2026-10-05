@@ -4,8 +4,8 @@ title: Paul's Brawls — system overview
 system: meta
 summary: Start here. The four gameplay systems, the three runtimes, how they connect, what is actually wired today vs only designed, and where to read next.
 tags: [overview, architecture, runtimes, gibber, ctf, aigod, eden, map, wiring-status]
-sources: [src/main/resources/fabric.mod.json, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, eden/src/main.ts, build.gradle]
-verified_at: 4a8081f
+sources: [src/main/resources/fabric.mod.json, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, eden/src/main.ts, build.gradle, eden/src/config.ts, eden/src/villagers/tools.ts, eden/src/villagers/brain.ts, eden/src/llm/scheduler.ts]
+verified_at: 98cb908
 ---
 
 # Paul's Brawls — system overview
@@ -14,7 +14,7 @@ verified_at: 4a8081f
 brain (**Eden**) beside it. Four systems: **Gibber** (server-wide coin money), **Capture the Flag**, the **AI God**
 (a LangChain4j `/pray` chatbot with a Mineflayer body and an LLM building agent) and **Eden** (ten LLM villagers + a
 God that writes, judges and curates a shared skill library). Everything below was checked against the code at
-commit `4a8081f`; where the code and older docs disagree, see [VERIFICATION-NOTES.md](VERIFICATION-NOTES.md).
+commit `98cb908`; where the code and older docs disagree, see [VERIFICATION-NOTES.md](VERIFICATION-NOTES.md).
 
 ## The systems at a glance
 
@@ -59,35 +59,45 @@ There are **two Gods**: the Java `/pray` God (avatar login `LLMBot`, chat prefix
 `ServerEntryPoint.onInitializeServer` registers, in order: `GibCommand`, `RevenueManager`, `SalaryScheduler`,
 `Money` (coin item), `FlagManager`, `ChatBot` (all God commands + tools), `GodActionQueue`, `GodScheduler`,
 `VillageCommand`, `VillagersCommand`; then lifecycle hooks (`SERVER_STARTED` → start `:8767`; `SERVER_STOPPING` →
-clear queue/session, stop listener) and the op-on-join hook (`LLMBot`, `Dieu`, active scenario bots). The client
+clear the action queue, restore the avatar's
+`Invulnerable` flag, cancel sub-builds, force-end the session, stop the listener) and the op-on-join hook (`LLMBot`, `Dieu`, active scenario bots). The client
 entrypoint registers `Screenshotter` (`/prove`, `/build`) and `Money`. Full detail:
 [platform/entrypoints-and-wiring.md](platform/entrypoints-and-wiring.md).
 
 ## Designed vs actually wired (read before relying on a feature)
 
-The older design docs (`docs/*.md`, `CLAUDE.md`) describe several features that exist as tested classes but are **not
-constructed or not called** by the production composition root. Agents should treat these as *not live*:
+The older design docs (`docs/*.md`) describe a few features that exist as code but are **not constructed or not
+called** by the production composition root (`eden/src/main.ts`). Most of what was unwired at `4a8081f` (speech
+tools, the reactivity signals, the God body, tripwire, describer, anchors, drives, D-09 recovery) has since been
+wired. Agents should treat the remaining rows as *not live*:
 
 | Feature | Reality in code | Where |
 |---|---|---|
-| Villager speech tools (`say`, `tell`, conversations) | Not in the tool registry; `Conversation` is never constructed. (Trade **is** wired: `propose_trade`/`answer_trade` → `:8767`, bug #1 fixed.) | [eden/social-and-trade.md](eden/social-and-trade.md) |
-| Most villager events (chat, entity-spotted, night-falls, new-day, inbox…) | The live signal bus forwards only health/death/hurt; plus a 30 s tick. Half of `roles.json` is inert. | [eden/villager-runtime.md](eden/villager-runtime.md) |
-| God body delivering verdicts, divine interventions | `GodBody` instance discarded; `intervene` never called. | [eden/god.md](eden/god.md) |
-| Critic tripwire tickets, description pass, anchors, drives, `combineDesks`, daily-cap reset, D-09 recovery | Unwired / no-op in production. | [eden/god.md](eden/god.md), [eden/skills-library.md](eden/skills-library.md) |
+| `god.authoring`, `god.gamemode` | Parsed (`eden/src/config.ts:263-267`), read nowhere else in `eden/src/`. `combineDesks` was **removed** (D-19). | [eden/god.md](eden/god.md) |
+| Curriculum triggers other than `idle` | The only production caller of the curriculum is the idle loop (`eden/src/main.ts:1483`, `trigger: 'idle'`); dawn/decompose never fire. | [eden/god.md](eden/god.md) |
+| Daily token-cap reset | `BudgetTracker.resetDay()` (`eden/src/llm/scheduler.ts:255`) has no caller. | [eden/llm-and-scheduling.md](eden/llm-and-scheduling.md) |
+| `report_to_god` | The brain collects `reportsToGod` (`eden/src/villagers/brain.ts:126-195`), but `main.ts` never reads it. | [eden/villager-runtime.md](eden/villager-runtime.md) |
+| Revision history | The coordinator always passes `history: []` (`eden/src/main.ts:1308`), so the oldest-first trim never runs. | [eden/god.md](eden/god.md) |
+| Journal retention, R32 `wipe|migrate` | `journal.retentionDays` is a fixed default (`eden/src/config.ts:353`, never pruned); the admin route does not exist. | [eden/journal-and-views.md](eden/journal-and-views.md) |
 | CI workflows (`ci.yml`, `eden-ci.yml`) | `.github/` is gitignored and absent from history. | [platform/build-and-runtime.md](platform/build-and-runtime.md) |
-| Client `/prove` | Fixed (bug #9); runs and ships the screenshot to God. In-game check only. | [aigod/images-and-client.md](aigod/images-and-client.md) |
 
-What **is** live in Eden: the bot pool, stock skills, the skill engine with its watchdogs, villager deliberation with
-the 14 tools (incl. consent-based trade settled on `:8767`), subscriptions → reflex skills / deliberation on the events that do fire, the curriculum (idle trigger) →
-orchestrator directive → villager rollout → critic verdict → library admission loop, the journal, derived views, and
-the admin API.
+What **is** live in Eden: the bot pool (with anchor healing after spawn and `library.verifyHashes()` at boot), stock
+skills, the skill engine with its watchdogs and abort fence, villager deliberation with the **17** tools
+(`eden/src/villagers/tools.ts:92-191`: skills, memory, subscriptions, consent-based trade settled on `:8767`, and the
+D-18 speech tools `say`/`tell`/`start_conversation` backed by `ConversationBook`), the D-17 reactivity signals (chat,
+entity-spotted/-lost, night-falls/new-day, inbox, health/death/hurt) plus a 30 s tick that also decays the drives,
+subscriptions → reflex skills / deliberation, the curriculum (idle trigger) → orchestrator directive (with the
+`intervene` tool through `GodBody`) → villager rollout → critic verdict (embodied when `embodiedVerdicts` is on) →
+library admission loop with the fast-tier `DescriptionPass` and the auto-quarantine tripwire, God's state persisted in
+the `snapshots` table and restored before D-09 rollout recovery, the journal, derived views replayed at boot, and the
+admin API.
 
 ## How to navigate this corpus
 
 - Every document has YAML frontmatter (`id`, `system`, `summary`, `tags`, `sources`) and is listed in
   [index.json](index.json). See [README.md](README.md) for reading paths and the MCP serving model.
 - Cross-cutting lookups: [reference/commands.md](reference/commands.md), [reference/ports-files-config.md](reference/ports-files-config.md).
-- Code citations are `path:line` at commit `4a8081f` — re-check after code changes.
+- Code citations are `path:line` at the commit in each doc's `verified_at` — re-check after code changes.
 
 ## Related
 - [README.md](README.md) · [VERIFICATION-NOTES.md](VERIFICATION-NOTES.md)

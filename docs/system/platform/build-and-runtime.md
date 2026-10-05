@@ -2,10 +2,10 @@
 id: platform.build-and-runtime
 title: Build, packaging and runtime layout of the Fabric mod
 system: platform
-summary: How the paulsbrawls Fabric mod is built (Loom, versions, jar-in-jar deps, copy tasks), what is tracked in run/, CI reality, the empty minecraft-mcp-server gitlink, supervisor/ and .claude/.
-tags: [gradle, loom, fabric, build, jar-in-jar, langchain4j, okhttp, mixins, assets, ci, run-dir, server-properties, submodule, supervisor]
-sources: [build.gradle, settings.gradle, gradle.properties, .gitignore, .gitattributes, src/main/resources/fabric.mod.json, src/main/resources/paulsbrawls.mixins.json, src/client/resources/paulsbrawls.client.mixins.json, src/main/java/com/paul/brawl/mixin/ExampleMixin.java, src/client/java/com/paul/brawl/mixin/client/ExampleClientMixin.java, src/main/resources/assets/paulsbrawls/items/coin.json, src/main/resources/assets/paulsbrawls/models/item/coin.json, src/main/resources/assets/paulsbrawls/lang/en_us.json, src/main/resources/assets/paulsbrawls/lang/fr_fr.json, run/server.properties, run/mcp_config.properties, run/eula.txt, run/prompt.txt, supervisor/SUPERVISOR.md, supervisor/check.ps1, .claude/launch.json, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/MCPGateway.java]
-verified_at: 4a8081f
+summary: How the paulsbrawls Fabric mod is built (Loom, versions, jar-in-jar deps, copy tasks), what is tracked in run/, CI reality, the Java unit tests, the empty minecraft-mcp-server gitlink, supervisor/ and .claude/.
+tags: [gradle, loom, junit, tests, fabric, build, jar-in-jar, langchain4j, okhttp, mixins, assets, ci, run-dir, server-properties, submodule, supervisor]
+sources: [build.gradle, settings.gradle, gradle.properties, .gitignore, .gitattributes, src/main/resources/fabric.mod.json, src/main/resources/paulsbrawls.mixins.json, src/client/resources/paulsbrawls.client.mixins.json, src/main/java/com/paul/brawl/mixin/ExampleMixin.java, src/client/java/com/paul/brawl/mixin/client/ExampleClientMixin.java, src/main/resources/assets/paulsbrawls/items/coin.json, src/main/resources/assets/paulsbrawls/models/item/coin.json, src/main/resources/assets/paulsbrawls/lang/en_us.json, src/main/resources/assets/paulsbrawls/lang/fr_fr.json, run/server.properties, run/mcp_config.properties, run/eula.txt, run/prompt.txt, supervisor/SUPERVISOR.md, supervisor/check.ps1, .claude/launch.json, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/test/java/com/paul/brawl/TradeMathTest.java, src/test/java/com/paul/brawl/BuildGuardTest.java, src/test/java/com/paul/brawl/FlagGlowTest.java, src/test/java/com/paul/brawl/GodClampsTest.java, src/test/java/com/paul/brawl/BlockInfoJsonTest.java, src/test/java/com/paul/brawl/EdenRetryTest.java, src/test/java/com/paul/brawl/GibberMathTest.java, src/test/java/com/paul/brawl/GodToolGateTest.java, src/test/java/com/paul/brawl/ImageMimeTest.java, src/test/java/com/paul/brawl/ItemIdsTest.java]
+verified_at: 98cb908
 ---
 
 # Build, packaging and runtime layout of the Fabric mod
@@ -14,7 +14,8 @@ verified_at: 4a8081f
 client/main source sets). LangChain4j + Jackson + OkHttp/Okio/Kotlin stdlib are shipped jar-in-jar via
 `include`. `build` is finalized by two `Copy` tasks that drop the remapped jar into Paul's local mods
 folders. In this checkout there is **no Gradle wrapper and no `.github/` directory** (both are gitignored),
-`minecraft-mcp-server/` is an **empty gitlink** (no `.gitmodules`), and the Java side has no tests.
+`minecraft-mcp-server/` is an **empty gitlink** (no `.gitmodules`), and the Java side has ten JUnit 5 suites
+for its Minecraft-free helpers (`./gradlew test`).
 
 ## Toolchain and versions
 
@@ -31,7 +32,7 @@ All versions come from `gradle.properties` and are interpolated into `build.grad
 | `maven_group` | `com.paul.paulsbrawls` | `gradle.properties:14` |
 | `archives_base_name` | `paulsbrawls` | `gradle.properties:15` |
 | Gradle JVM | `-Xmx4G`, `org.gradle.parallel=true` | `gradle.properties:2-3` |
-| Java release | `options.release = 21`, source/target `VERSION_21` | `build.gradle:104`, `build.gradle:114-115` |
+| Java release | `options.release = 21`, source/target `VERSION_21` | `build.gradle:113`, `build.gradle:123-124` |
 
 `settings.gradle` only declares plugin repositories: Fabric maven (`https://maven.fabricmc.net/`),
 Maven Central, Gradle Plugin Portal. Project repositories: `mavenCentral()` only (`build.gradle:14-16`).
@@ -53,7 +54,7 @@ Client code may reference `main` classes (e.g. `ClientEntryPoint` calls `Money.r
 
 ## Dependencies
 
-### Compile/runtime (`build.gradle:29-92`)
+### Compile/runtime (`build.gradle:29-98`)
 
 | Configuration | Artifact | Version |
 |---|---|---|
@@ -65,6 +66,10 @@ Client code may reference `main` classes (e.g. `ClientEntryPoint` calls `Money.r
 | `implementation` | `dev.langchain4j:langchain4j-open-ai` | 1.0.0 |
 | `implementation` | `dev.langchain4j:langchain4j-mcp` | 1.0.0-beta5 |
 | `implementation` | `dev.langchain4j:langchain4j-anthropic` | 1.0.0-beta5 |
+| `testImplementation` | `org.junit:junit-bom` (platform) + `org.junit.jupiter:junit-jupiter` | 5.11.4 |
+| `testRuntimeOnly` | `org.junit.platform:junit-platform-launcher` | (from the BOM) |
+
+Test dependencies (`build.gradle:94-97`) are not bundled; `test { useJUnitPlatform() }` is at `build.gradle:100-102`.
 
 ### Jar-in-jar (`include`) — the runtime closure shipped inside the mod jar
 
@@ -90,13 +95,13 @@ When bumping `langchain4j-mcp`, the comment at `build.gradle:82-83` says to re-d
 
 | Task / block | Behaviour | Lines |
 |---|---|---|
-| `processResources` | Expands `${version}` in `fabric.mod.json` from `project.version` (`1.0.0`) | `build.gradle:95-101` |
-| `java { withSourcesJar() }` | Also produces a sources jar | `build.gradle:108-116` |
-| `jar` | Bundles `LICENSE` renamed to `LICENSE_paulsbrawls` | `build.gradle:118-124` |
-| `publishing` | `mavenJava` publication, no repositories configured (no-op publish target) | `build.gradle:127-141` |
-| `copyToMods` (Copy) | Copies `remapJar` output into `mods_folder`; `onlyIf` the property exists and is not `path/to/your/mods` | `build.gradle:144-151` |
-| `copyToClientMods` (Copy) | Same for `client_mods_folder` | `build.gradle:153-160` |
-| `build.finalizedBy(...)` | Both copy tasks always run after `build` | `build.gradle:162-163` |
+| `processResources` | Expands `${version}` in `fabric.mod.json` from `project.version` (`1.0.0`) | `build.gradle:104-110` |
+| `java { withSourcesJar() }` | Also produces a sources jar | `build.gradle:117-125` |
+| `jar` | Bundles `LICENSE` renamed to `LICENSE_paulsbrawls` | `build.gradle:127-133` |
+| `publishing` | `mavenJava` publication, no repositories configured (no-op publish target) | `build.gradle:136-151` |
+| `copyToMods` (Copy) | Copies `remapJar` output into `mods_folder`; `onlyIf` the property exists and is not `path/to/your/mods` | `build.gradle:153-160` |
+| `copyToClientMods` (Copy) | Same for `client_mods_folder` | `build.gradle:162-169` |
+| `build.finalizedBy(...)` | Both copy tasks always run after `build` | `build.gradle:171-172` |
 
 Output jar name is `paulsbrawls-1.0.0.jar` (from `archives_base_name` + `mod_version`) under
 `build/libs/` (standard Loom layout; `build/` is gitignored).
@@ -160,7 +165,7 @@ the listed package and its simple name to the matching array.
 | `lang/fr_fr.json` | `"item.paulsbrawls.coin": "Pièce"` |
 | `icon.png` | 128×128 RGBA mod icon |
 
-The item itself is registered in code (`Money.java:18-24`); see
+The item itself is registered in code (`Money.java:18-23`); see
 [../gibber/money-system.md](../gibber/money-system.md).
 
 ## Gradle wrapper and IDE files are not tracked
@@ -180,7 +185,26 @@ from the repo.
 
 > ⚠ Unverified: CI workflows may exist on Paul's machine (untracked). Nothing in the tracked tree runs them.
 
-There are no Java test sources (`src/test` does not exist), and `build.gradle` applies no Jacoco plugin.
+`build.gradle` applies no Jacoco plugin, so a `jacocoTestReport` task does not exist.
+
+## Java unit tests (`src/test/java/com/paul/brawl/`)
+
+Ten JUnit 5 suites, run with `./gradlew test`. Each covers a Minecraft-free helper class in
+`src/main/java/com/paul/brawl/`; none boots Minecraft, so command trees, packets and world effects still need
+an in-game check.
+
+| Suite | `@Test`s | Class under test | What it pins |
+|---|---|---|---|
+| `TradeMathTest` | 11 | `TradeMath` | Per-item aggregation + validation shared by the `:8767` settlement and God's `/accept` offers |
+| `BuildGuardTest` | 5 | `BuildGuard` | Sub-agent cap (4) and per-call block cap (128), cancellation (bug #7) |
+| `FlagGlowTest` | 4 | `FlagGlow` | Glow ownership: the mod clears only a glow it set itself (bug #11) |
+| `GodClampsTest` | 4 | `GodClamps` | Clamps on `Reward` amount, `Punishment` strikes and `SpawnCreature` offsets (bug #6) |
+| `BlockInfoJsonTest` | 3 | `BlockInfoJson` | The `getBlockInfo` JSON shape (bug #18) |
+| `EdenRetryTest` | 3 | `EdenRetry` | Which failed `/villagers` POSTs may be re-sent: `restart` only on a refused connection (bug #16) |
+| `GibberMathTest` | 3 | `GibberMath` | Saturating revenue arithmetic (bug #10) |
+| `GodToolGateTest` | 3 | `GodToolGate` | MCP tools refused for a bodiless prayer or a disabled bridge (bug #8) |
+| `ImageMimeTest` | 3 | `ImageMime` | MIME sniffing of image bytes for `/prove`/`/build` (bug #9) |
+| `ItemIdsTest` | 3 | `ItemIds` | Registry-id extraction from an item string (components/NBT stripped, `minecraft:` default) (bug #6) |
 
 ## `run/` — the dev server working directory (`./gradlew runServer`)
 
@@ -191,7 +215,7 @@ Tracked files (`git ls-files run/`):
 | `run/server.properties` | `server-port=25599`, `query.port=25565` (note: differs from server-port), `enable-rcon=true`, `rcon.port=25575`, `rcon.password=paulsbrawls-eval`, `online-mode=false` (lets Mineflayer bots log in offline), `spawn-protection=0`, `op-permission-level=4`, `function-permission-level=2`, `difficulty=easy`, `gamemode=survival`, `pvp=true`, `allow-flight=true`, `enable-command-block=true`, `view-distance=20`, `simulation-distance=10`, `white-list=false`, `enforce-secure-profile=true` |
 | `run/eula.txt` | `eula=true` |
 | `run/mcp_config.properties` | `enabled=true`, `sse_url=http\://127.0.0.1\:8765/mcp/sse`, `timeout_seconds=60` (read by `MCPConfig`; see [../aigod/mcp-gateway.md](../aigod/mcp-gateway.md)) |
-| `run/prompt.txt` | The dev God persona — literally `do whatever I ask` (17 bytes). Differs from the 5 KB repo-root `prompt.txt`. Loaded at `ChatBot` construction from the JVM cwd (`ChatBot.java:636-641`) |
+| `run/prompt.txt` | The dev God persona — literally `do whatever I ask` (17 bytes). Differs from the 5 KB repo-root `prompt.txt`. Loaded at `ChatBot` construction from the JVM cwd (`ChatBot.java:195-198`, `readPrompt` at `:638-644`) and re-read by bare `/prompt` (`ChatCommand.java:145-146`) |
 | `run/build_prompt.txt`, `run/max_build_prompt.txt`, `run/prompt - Copy.txt` | Build sub-agent prompt + variants (only `build_prompt.txt` is read by code) |
 | `run/banned-ips.json`, `run/banned-players.json`, `run/whitelist.json` | Empty JSON arrays |
 
@@ -205,12 +229,12 @@ the server root for production):
 
 | File | Owner class | Created when |
 |---|---|---|
-| `prompt.txt`, `build_prompt.txt` | `ChatBot` | read once at registration (must pre-exist) |
+| `prompt.txt`, `build_prompt.txt` | `ChatBot` | read at registration and on bare `/prompt` (must pre-exist) |
 | `llm_config.properties` | `LLMConfig` | on `/llm …` save |
-| `bridge_config.properties` | `BridgeConfig` | on `/llm bridge …` or `/godbody on`/`off` save (`LLMCommand.java:120-170`, `ChatCommand.java:68,78`) |
+| `bridge_config.properties` | `BridgeConfig` | on `/llm bridge …` or `/godbody on`/`off` save (`LLMCommand.java:120-170`, `ChatCommand.java:72,82`) |
 | `mcp_config.properties` | `MCPConfig` | on load if missing (see aigod docs) |
 | `village_config.properties` | `VillageConfig` | only on `/village on|off` |
-| `proof_screen.png` | `ImageReceiver` (debug save, currently commented out at the call site) | — |
+| `proof_screen.png` | `ImageReceiver` (debug save; the call is commented out at `ImageReceiver.java:22`) | — |
 | `world/data/gibbers_state.dat` | `PlayerPersistentState` (Minecraft `PersistentState`) | on world save after a change |
 
 ## `minecraft-mcp-server/` — an empty gitlink
