@@ -216,7 +216,7 @@ export class GodService {
       }
       // already active/active-probation → no-op admit
     } else if (verdict.libraryAction === 'quarantine') {
-      this.library.quarantine(name, verdict.critique, version);
+      this.library.quarantine(name, verdict.critique, version, 'god:critic');
     } else if (verdict.libraryAction === 'archive') {
       this.library.archive(name, version);
     }

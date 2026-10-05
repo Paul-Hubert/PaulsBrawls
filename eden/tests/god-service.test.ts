@@ -121,3 +121,17 @@ test('M3-4 (D-12(ii)/R37): a wrongly-quarantined skill that succeeds re-enters a
   assert.equal(out.admitted, true);
   assert.equal(library.getVersion('collect-oak-logs', 1)?.status, 'active-probation', 'self-healing un-quarantine lands in active-probation (R37/R48), never straight to active');
 });
+
+// Phase C: a critic rollout verdict that quarantines a skill was journaled as actor `engine`; the decision is the
+// critic's, as with the tripwire path (B3.3), so the journal names `god:critic`.
+test('a critic quarantine verdict journals skill.quarantine as god:critic, not engine', async () => {
+  const { god, library, journal } = harness();
+  const t = task();
+  god.addTask(t);
+  const rollout = god.openRollout(t.id);
+  library.seedStock({ name: 'collect-oak-logs', summary: 's', params: { type: 'object', properties: {} }, returns: { type: 'object', properties: {} }, code: 'async function f(b,a,c){ return {ok:true}; }', author: { kind: 'stock' }, tags: ['wood'] }, 'active');
+  await god.routeVerdict(verdict({ libraryAction: 'quarantine', success: false, critique: 'casse tout' }), { rolloutId: rollout.id, draft: { name: 'collect-oak-logs', version: 1 }, task: t });
+  const q = journal.query({ kinds: ['skill.quarantine'] });
+  assert.equal(q.length, 1);
+  assert.equal(q[0]!.actor, 'god:critic');
+});

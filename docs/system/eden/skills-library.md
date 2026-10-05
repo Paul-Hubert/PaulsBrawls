@@ -59,7 +59,7 @@ working state — nothing from the library). Library mutations append journal ro
 |---|---|---|---|
 | `skill.draft` | `{name, version, author, tier, lines}` | `villager:<name>` / `god:authoring` / `engine` (stock) | `upsertDraft` (`eden/src/skills/library.ts:120-126`) — also a stock seed that changed (bug #12) |
 | `skill.admit` | `{name, version, provenance?}` | `god:critic` | `admit` (`eden/src/skills/library.ts:168-173`), `unquarantine` (no provenance, `eden/src/skills/library.ts:218-221`) |
-| `skill.quarantine` | `{name, version, reason}` | the `actor` argument, default `engine` (critic verdict, boot hash check); `god:critic` for a tripwire verdict; the admin caller's actor for the admin route | `quarantine` (`eden/src/skills/library.ts:197-200`), journaled once, before the status changes |
+| `skill.quarantine` | `{name, version, reason}` | the `actor` argument, default `engine` (boot hash check); `god:critic` for a critic verdict, rollout or tripwire (`eden/src/god/god.ts:219`, `:267`); the admin caller's actor for the admin route | `quarantine` (`eden/src/skills/library.ts:197-200`), journaled once, before the status changes |
 | `skill.archive` | `{name, version}` | `god:critic` | `archive` (`eden/src/skills/library.ts:241`) |
 | `skill.run` | full `RunReport` | `villager:<name>` or `god:body` | the engine — see [skills-engine.md](skills-engine.md) |
 | `skill.log` | `{skill, message}` | same as run | `ctx.log` |
