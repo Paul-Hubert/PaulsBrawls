@@ -9,8 +9,8 @@ export type EdenEvent =
   | { type: 'hurt'; damage: number; byEntity?: string }
   | { type: 'entity-spotted'; entity: string; distance: number }
   | { type: 'entity-lost'; entity: string }
-  | { type: 'player-chat'; player: string; text: string }
-  | { type: 'villager-chat'; villager: string; text: string }
+  | { type: 'player-chat'; player: string; text: string; distance?: number }
+  | { type: 'villager-chat'; villager: string; text: string; distance?: number }
   | { type: 'inbox' }
   | { type: 'item-received'; item: string; count: number }
   | { type: 'health-low'; health: number }

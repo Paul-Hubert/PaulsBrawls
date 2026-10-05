@@ -150,10 +150,13 @@ export class EventRouter {
       {
         raw: 'chat',
         map: (from, text, meta) => {
-          const m = (meta ?? {}) as { isVillager?: boolean };
-          return m.isVillager
+          const m = (meta ?? {}) as { isVillager?: boolean; distance?: number };
+          const e: EdenEvent = m.isVillager
             ? { type: 'villager-chat', villager: String(from ?? ''), text: String(text ?? '') }
             : { type: 'player-chat', player: String(from ?? ''), text: String(text ?? '') };
+          // The speaker's distance (bots/signals.ts) lets a `within` filter gate who is "talking to me".
+          if (typeof m.distance === 'number') e.distance = m.distance;
+          return e;
         },
       },
       {
@@ -219,7 +222,10 @@ export class EventRouter {
           this.nightPhase = phase;
           if (prev === undefined || prev === phase) return null; // first obs, or no transition
           if (phase === 'night') return { type: 'night-falls' };
-          return { type: 'new-day', day: dayOf(this.bot.time?.timeOfDay ?? 0) };
+          // mineflayer's bot.time.day is the world's day count; the narrowed seam may omit it (then 0-based from
+          // timeOfDay, which is < 24000 and so always 0).
+          const day = (this.bot.time as { day?: number } | undefined)?.day;
+          return { type: 'new-day', day: typeof day === 'number' ? day : dayOf(this.bot.time?.timeOfDay ?? 0) };
         },
       },
     ];

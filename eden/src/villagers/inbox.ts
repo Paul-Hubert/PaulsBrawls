@@ -16,17 +16,26 @@ export class VillagerInbox implements Inbox {
   constructor(
     private readonly villager: string,
     private readonly journal: JournalAppender,
+    /** Called after each delivery — main.ts raises the reactive `inbox` signal from it (D-17). */
+    private readonly onDeliver?: (m: InboxMessage) => void,
   ) {}
 
   /** Deliver a message (journaled first, ONCE, as `actor` — 05). */
   deliver(m: InboxMessage, actor = 'engine'): void {
     this.journal.append(actor, 'inbox.delivered', { to: this.villager, from: m.from, kind: m.kind }, {});
     this.messages.push(m);
+    this.onDeliver?.(m);
   }
 
   /** Hand the villager its pending messages and clear the inbox (the brain folds them into §8). */
   drain(): InboxMessage[] {
     return this.messages.splice(0, this.messages.length);
+  }
+
+  /** The pending messages, without draining them — a reactive `inbox` wake-up shows them to the villager while
+   *  the rollout coordinator stays the one that drains (D-17). */
+  peek(): InboxMessage[] {
+    return [...this.messages];
   }
 
   /** Non-destructive peek — admin /villagers shows inbox depth without draining it. */

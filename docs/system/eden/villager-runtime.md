@@ -329,22 +329,24 @@ and clears (FIFO); `depth()` is a non-destructive peek used by admin `/villagers
 | `GodService.routeVerdict` | `god` / `critique` | `{critique, success, praise}` | `eden/src/god/god.ts:186-191` |
 | Admin `POST /villagers/:name/prompt` | `villager` / `tell` | `{text, from}` | `eden/src/main.ts:393-401`, `eden/src/admin/server.ts:248-261` |
 
-The **only consumer** is the `RolloutCoordinator`, which drains at the start of each revision iteration
-(`eden/src/main.ts:941`). Nothing emits the `inbox` event, so the `everyone` inbox→deliberate reflex never fires.
+The **only drainer** is the `RolloutCoordinator`, at the start of each revision iteration. Since D-17 a delivered
+`tell` that is not a trade notice also raises the reactive `inbox` event (the `VillagerInbox` `onDeliver` hook →
+`VillagerReactivity.signal`), so the `everyone` inbox→deliberate reflex fires on admin/website prompts; that wake-up
+sees the messages through `peek()` and does not drain them. Directives and critiques do not raise it.
 
 ## Gotchas & known issues
 
-- **Most events have no live emitter.** `bots/signals.ts` forwards only `health`/`death` (+ synthetic `entityHurt`).
-  `player-chat`, `villager-chat`, `entity-spotted/-lost`, `item-received`, `block-broken-nearby`, `run-finished`,
-  `inbox`, `night-falls`, `new-day` never fire in a real boot → the `player-chat`, `inbox`, `night-falls → go-home`,
-  guard `entity-spotted`, farmer/miner `new-day` defaults are inert. Live reflexes: `hurt` (flee / guard defend),
-  `health-low`, `died`, `tick-30s`.
-- **`within` doesn't gate chat.** Only `entity-spotted` carries a distance, so `player-chat` `within: 8` passes for
-  any distance (would matter once chat is emitted).
-- **`new-day.day` is always 0**: `dayOf` divides `bot.time.timeOfDay` (0..24000) by 24000 (`eden/src/villagers/events.ts:236-238`).
+- ~~**Most events have no live emitter.**~~ **Fixed (B3.1, D-17):** chat, entity-spotted/-lost, night-falls/new-day and
+  inbox fire live (see [bots-and-hardening.md](bots-and-hardening.md)); every `roles.json` default can fire.
+  `item-received`, `block-broken-nearby` and `run-finished` still have no source.
+- ~~**`within` doesn't gate chat.**~~ **Fixed:** `player-chat`/`villager-chat` carry the speaker's `distance` (9999 when
+  the speaker is not loaded), and `eventDistance` returns it.
+- ~~**`new-day.day` is always 0**~~ **Fixed:** it is `bot.time.day` when mineflayer provides it (`dayOf` remains the
+  fallback for a seam without it).
 - **`entityKind` defaults unknown names to `player`**, and the clause returns false for non-entity events.
-- **Admin "tell" never wakes a villager**: it sits in the inbox until the next rollout revision drains it; it is
-  tagged `from:'villager'` even though a player/admin sent it.
+- ~~**Admin "tell" never wakes a villager**~~ **Fixed (D-17):** a non-trade `tell` raises the `inbox` event (when the
+  villager's bot is attached). It is still tagged `from:'villager'` even though a player/admin sent it (the journal
+  row's actor names the speaker, bug #17).
 - **Critique duplication**: `routeVerdict` delivers the critique to the inbox, and the next revision drains it into §8
   *and* carries it in the density payload.
 - **`report_to_god` goes nowhere in the host**: `reportsToGod` is never read outside `brain.ts`.

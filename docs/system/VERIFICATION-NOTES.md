@@ -145,7 +145,7 @@ Citations are `path:line` at `4a8081f`.
 | Claim | Code reality |
 |---|---|
 | Event payload shapes (docs/04) | Differ: `byEntity`, not `attacker`; chat uses `player`/`villager`; etc. (`eden/src/types/events.ts:8-22`). |
-| Edge events with hysteresis fire live | The live signal adapter forwards only health/death/hurt, plus a 30 s tick. Chat, entity-spotted, night-falls, new-day and inbox **never fire**. |
+| Edge events with hysteresis fire live | ~~The live signal adapter forwards only health/death/hurt, plus a 30 s tick.~~ **Fixed (B3.1, D-17):** chat (with speaker distance), entity-spotted/-lost (hysteresis 16/24), night-falls/new-day and inbox (on a non-trade `tell`) fire live. item-received / block-broken-nearby / run-finished still have no source. |
 | Villager tools include `say`, `tell`, conversations, trade | 14 tools: search_skills, read_skill, write_skill, run_skill, report_to_god, done, remember, recall, subscribe, unsubscribe, list_subscriptions, and the trade tools propose_trade, answer_trade, list_trades. No `say`/`tell`/conversation tools. |
 | `report_to_god` reaches critic/orchestrator queues | Result discarded. |
 | Context pack carries recent events, mood, standing orders, config persona | §5 is always empty. The persona is hardcoded `Tu es ${name}, ${role} du village. Tu parles français.` (`eden/src/main.ts:579`). |
@@ -156,7 +156,7 @@ Citations are `path:line` at `4a8081f`.
 | R32 world-stamp → admin `wipe|migrate` | No admin route; `resolveQuarantine` is never called. |
 | Relations are journal-derived only | Stored in `bots/<name>.json` (clamped ±100); a separate unclamped `RelationsView` fold also exists. |
 | `roles.json`: a duplicate role spec is skipped | It **replaces** (`eden/src/villagers/role-defaults.ts:78-82`). |
-| Admin `tell` wakes the villager | Waits for the next rollout revision drain. |
+| Admin `tell` wakes the villager | ~~Waits for the next rollout revision drain.~~ **Fixed (D-17):** it raises the reactive `inbox` event. |
 
 ## Related
 - [00-overview.md](00-overview.md) · [README.md](README.md)

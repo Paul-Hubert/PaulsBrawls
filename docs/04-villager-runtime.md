@@ -127,6 +127,21 @@ least-surprising semantics and needs no new mechanism — just the right dedup k
 reflex carries `notWhileRunning: ['defend-self']` (so a hit mid-fight doesn't restart
 it) plus a short `cooldownMs` backstop.
 
+### Decision D-17: which live signals become events, and when `inbox` fires
+
+The live adapter (`bots/signals.ts`) forwards, besides `hurt`/`health`/`death`: mineflayer `chat` (the bot's own
+lines dropped; a roster name is `villager-chat`, anyone else `player-chat`, both carrying the speaker's
+`distance` so `within` gates them — an unloaded speaker reads as 9999 blocks); `entitySpawn`/`entityMoved`/
+`entityGone` as a proximity edge WITH hysteresis (spotted on entering 16 blocks, lost only beyond 24 or on
+despawn; items, orbs and projectiles never count); and `time` (the router keeps the day/night edge). `inbox` has no
+mineflayer source: the host raises it when a **`tell`** lands (an admin/website prompt, a relayed message).
+Directives and critiques do NOT raise it — the rollout that sent them drains them on its next turn, so a second
+wake-up would duplicate that turn (R36). Trade notices do not either: `TradeBook` already wakes the partner with a
+trade-specific hint. An `inbox` wake-up shows the pending messages (`peek`) but never drains them.
+
+*Chosen over* firing `inbox` on every delivery (double work on every directive) and over adding a mineflayer-style
+emitter to the inbox (the inbox is layer 3, the adapter layer 1 — the host closure is the seam).
+
 ## The brain
 
 One deliberation = one LLM conversation: context pack → assistant turns with tool

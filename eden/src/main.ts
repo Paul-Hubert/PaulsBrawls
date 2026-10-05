@@ -566,7 +566,16 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   );
   const memoryFor = (name: string): VillagerMemory | undefined => memories.get(name);
 
-  const inboxes = new Map<string, Inbox>(config.villagers.map((v) => [v.name, new VillagerInbox(v.name, journal)]));
+  // D-17: a `tell` (an admin/website prompt, a player message relayed by God) raises the reactive `inbox` event so the
+  // villager answers now — it used to wait for the next rollout revision to drain it. Directives and critiques do
+  // NOT: the rollout that sent them drains them on its next turn. Trade notices carry their own wake-up.
+  let signalInbox: ((villager: string) => void) | undefined;
+  const inboxes = new Map<string, Inbox>(config.villagers.map((v) => [
+    v.name,
+    new VillagerInbox(v.name, journal, (m) => {
+      if (m.kind === 'tell' && (m.payload as { source?: string }).source !== 'trade') signalInbox?.(v.name);
+    }),
+  ]));
 
   // ── Trade (04 §Trade) — the SettlementClient POSTs typed offers to the mod's :8767 listener
   //    (coin→paulsbrawls:coin; R29: needs :8767 free of the dev server). The token, if the mod has one, is a
@@ -603,7 +612,7 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
     isVillager: (name) => villagerNames.has(name),
     ...(reachFor ? { reachFor } : {}),
     notify: (to, line, kind) => {
-      inboxes.get(to)?.deliver({ from: 'villager', kind: 'tell', payload: { text: line }, at: Date.now() });
+      inboxes.get(to)?.deliver({ from: 'villager', kind: 'tell', payload: { text: line, source: 'trade' }, at: Date.now() });
       if (kind === 'offer') wakeForTrade?.(to, line);
       else memories.get(to)?.remember({ kind: 'trade', text: line, tags: ['échange'] });
     },
@@ -689,7 +698,7 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
     // the load-bearing path). Reactive wake-ups ride the FAST tier (D-13: the strong tier's budget is for
     // novelty, not reflexes). It does NOT drain the inbox (the rollout coordinator owns directive draining).
     // The request's `event` is unused here, so trade offers can wake a villager without inventing one.
-    const wakeup = async (req: Omit<WakeupRequest, 'event'>): Promise<void> => {
+    const wakeup = async (req: Omit<WakeupRequest, 'event'> & { event?: WakeupRequest['event'] }): Promise<void> => {
       const entry = roster.get(req.villager);
       try {
         // R61: pre-load the top-k relevant existing skills. This path is FAST-tier with
@@ -718,7 +727,8 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
           exemplars: [],
           includeExemplarCode: false,
           toolNames: brain.toolNames(),
-          inbox: [],
+          // D-17: an `inbox` wake-up shows the pending messages (peek — the rollout coordinator still drains).
+          inbox: req.event?.type === 'inbox' ? peekInbox(inboxes.get(req.villager)) : [],
           tier: 'fast',
           inputTokenBudget: config.llm.providers.fast.inputTokenBudget,
         };
@@ -754,9 +764,16 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
       wakeup,
       vitalsFor,
     });
+    const live = reactivity;
+    signalInbox = (villager) => live.signal(villager, 'inbox');
   }
 
   return { god, curriculum, orchestrator, coordinator, library, scheduler, inboxes, memories, store, tools, ...(reactivity ? { reactivity } : {}) };
+}
+
+/** The pending messages of a villager inbox without draining it (VillagerInbox.peek), else none. */
+function peekInbox(inbox: Inbox | undefined): InboxMessage[] {
+  return inbox && 'peek' in inbox ? (inbox as { peek(): InboxMessage[] }).peek() : [];
 }
 
 /** Build the admin's villager summary (identity + persona + vitals + subscriptions + inbox depth + current

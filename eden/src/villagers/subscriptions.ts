@@ -310,9 +310,10 @@ function eventNameHaystack(event: EdenEvent): string {
   }
 }
 
-/** The self-relative distance an event carries (only entity-spotted has one today), else undefined. */
+/** The self-relative distance an event carries (entity-spotted, and a chat whose speaker is known), else undefined. */
 function eventDistance(event: EdenEvent, _ctx: FilterContext): number | undefined {
   if (event.type === 'entity-spotted') return event.distance;
+  if (event.type === 'player-chat' || event.type === 'villager-chat') return event.distance;
   return undefined;
 }
 

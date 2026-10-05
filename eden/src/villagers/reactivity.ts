@@ -40,6 +40,8 @@ export interface VillagerReactivityOptions {
 interface PerBot {
   router: EventRouter;
   detachSignals: () => void;
+  /** Emit a host-side signal (e.g. `inbox`) on this villager's bus. */
+  emit: (raw: string, ...args: unknown[]) => void;
 }
 
 /** Owns every villager's EventRouter + SubscriptionRouter; main.ts wires one per host. */
@@ -60,7 +62,7 @@ export class VillagerReactivity {
   attach(villager: string, bot: Bot): void {
     if (!this.roles.has(villager)) return;
     this.detachOne(villager); // reconnect-safe — drop the stale router bound to the previous bot instance
-    const adapter = attachReactivitySignals(bot);
+    const adapter = attachReactivitySignals(bot, { isVillager: (name) => this.roles.has(name) });
     const runner: RunnerRef = { name: villager, role: this.roles.get(villager) as string, tier: 'mortal' };
     const subRouter = new SubscriptionRouter({
       villager,
@@ -86,7 +88,15 @@ export class VillagerReactivity {
       ...(this.o.healthLowThreshold !== undefined ? { healthLowThreshold: this.o.healthLowThreshold } : {}),
     });
     router.attach();
-    this.attached.set(villager, { router, detachSignals: adapter.detach });
+    this.attached.set(villager, { router, detachSignals: adapter.detach, emit: adapter.emit });
+  }
+
+  /**
+   * Raise a host-side signal for one villager — today `inbox` (main.ts calls it when a `tell` lands, D-17). A
+   * villager whose bot is not attached (offline) gets nothing: the message waits in its inbox for the next drain.
+   */
+  signal(villager: string, raw: string, ...args: unknown[]): void {
+    this.attached.get(villager)?.emit(raw, ...args);
   }
 
   /** Pump the 30 s coarse clock across every attached router (the host arms a 30 s timer that calls this). */

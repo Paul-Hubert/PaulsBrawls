@@ -201,12 +201,21 @@ The baseline is `bot.health` at attach time (first observation never emits a hur
 reads as 20. Hostile names (27): zombie, zombie_villager, husk, drowned, skeleton, stray, wither_skeleton,
 creeper, spider, cave_spider, witch, slime, silverfish, phantom, pillager, vindicator, illusioner,
 ravager, evoker, blaze, ghast, magma_cube, zoglin, hoglin, piglin, piglin_brute, enderman
-(`eden/src/bots/signals.ts:28-33`). `detach()` removes both native listeners and clears the bus.
+(`eden/src/bots/signals.ts`). `detach()` removes every native listener and clears the bus.
 
-Only `entityHurt`, `health` and `death` are ever emitted. The EventRouter also binds `chat`,
-`entitySpotted`, `entityGone`, `itemReceived`, `blockBrokenNearby`, `runFinished`, `inbox` and `time`
-(`eden/src/villagers/events.ts:141-224`), so on a live bot **`player-chat`, `entity-spotted`, `night-falls`,
-`new-day`, `inbox` etc. never fire from this bus** (only `tick-30s` is pumped separately). Stall-detector
+Since docs/22 B3.1 (D-17) the adapter also forwards, with `attachReactivitySignals(bot, {isVillager, spotRadius=16,
+loseRadius=24})`:
+
+| Native | Bus signal | Rule |
+|---|---|---|
+| `chat(username, message)` | `chat(username, message, {isVillager, distance})` | the bot's own lines dropped; `distance` from `bot.players[u].entity.position`, `CHAT_DISTANCE_UNKNOWN` (9999) if unloaded |
+| `entitySpawn` / `entityMoved` (entity) | `entitySpotted({id, name, distance})` | once on entering ≤ `spotRadius`; types `object/orb/projectile/global/other` and the bot itself ignored |
+| `entityMoved` beyond `loseRadius`, `entityGone` | `entityGone({id, name})` | only for an entity in the spotted set (hysteresis — no flapping on the boundary) |
+| `time` | `time` | the router computes the night-falls/new-day edge from `bot.time` (`new-day.day` = `bot.time.day` when present) |
+| — (host) | `inbox` via `BotSignals.emit` | `VillagerReactivity.signal(villager, 'inbox')`, raised by `main.ts` when a non-trade `tell` lands |
+
+`itemReceived`, `blockBrokenNearby` and `runFinished` still have no source (no role subscribes to them). Pinned by
+`eden/tests/villagers-host-events.test.ts`; only a live run proves mineflayer emits the native events as modelled. Stall-detector
 pulses are a different mechanism (engine-side bot listeners, see [skills-engine.md](skills-engine.md#pulse-sources-d-10--r26--r46)).
 
 ## Anchors (`eden/src/bots/anchors.ts`) — not wired
@@ -272,8 +281,8 @@ actually sees for run evidence.
 - **AnchorService and helpers.ts are dead code at runtime** — R18 "homes snap to real ground" is
   implemented and tested but never invoked; villager config carries no home/chest.
 - **Vitals `currentRun` is always `null`** — `currentRunOf` is not passed (`engine.runningSkills` exists).
-- **Most reactivity events have no source** — the signal bus emits only hurt/health/death; `night-falls`
-  / `new-day` reflexes in `roles.json` (go-home, harvest-field) never fire live.
+- ~~**Most reactivity events have no source**~~ **Fixed (B3.1, D-17):** chat, entity-spotted/-lost, time and inbox are
+  forwarded, so every `roles.json` default can fire. item-received / block-broken-nearby / run-finished remain inert.
 - **`stampWorldId` throws on a corrupt `world.json`** (`JSON.parse` without try, `eden/src/bots/pool.ts:357`), which
   rejects `pool.start()`.
 - **`start()` is not idempotent at the pool level**: a second call without `stop()` connects a second bot
