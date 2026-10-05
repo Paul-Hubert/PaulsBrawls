@@ -19,10 +19,12 @@ sources:
   - src/main/java/com/paul/brawl/ServerEntryPoint.java
   - src/main/java/com/paul/brawl/ImageReceiver.java
   - src/main/java/com/paul/brawl/LLMConfig.java
+  - src/main/java/com/paul/brawl/GodToolGate.java
+  - src/main/java/com/paul/brawl/BuildGuard.java
   - GOD_BOT_INTEGRATION_PLAN.md
   - VERIFICATION.md
   - HIGHER_LEVEL_TOOLS.md
-verified_at: 4a8081f
+verified_at: 98cb908
 ---
 
 # AI God — Physical Body
@@ -50,9 +52,9 @@ exit, including `/godbody off` and server stop (bug #5); the bot is auto-op'd on
 | `GodActionQueue` | `src/main/java/com/paul/brawl/GodActionQueue.java` | Off-thread → main-thread FIFO drained on `END_SERVER_TICK` |
 | `GodScheduler` | `src/main/java/com/paul/brawl/GodScheduler.java` | Single daemon scheduled thread for `Wait` and the watchdog |
 | Tools `Appear`/`Vanish`/`Wait` | `ChatBotFunctions.java:89-149` | Model-facing presence/pacing |
-| Avatar helpers | `ChatBotActions.java:382-428` | `findAvatar`, `buffAvatar`, `restoreAvatar`, `dismissAvatarOnWatchdog` |
-| Session teardown | `ChatBot.java:580-587` | `endPrayerSession` |
-| Wiring | `ServerEntryPoint.java:35-74` | Queue/scheduler registration, lifecycle hooks, op-on-join |
+| Avatar helpers | `ChatBotActions.java:415-476` | `findAvatar`, `buffAvatar`, `restoreAvatar`, `restoreAvatarOnMain`, `dismissAvatarOnWatchdog` |
+| Session teardown | `ChatBot.java:582-589` | `endPrayerSession` |
+| Wiring | `ServerEntryPoint.java:35-78` | Queue/scheduler registration, lifecycle hooks, op-on-join |
 
 ## GodBody — exact math and calls
 
@@ -132,7 +134,7 @@ Logged at `SERVER_STARTED` as `BridgeConfig loaded: <describe()>` (`ServerEntryP
 | `creatureGriefingAllowed` | bool | `false` | `SpawnCreature` (`setCanPickUpLoot(false)` when off) | `/llm bridge griefing <bool>` |
 | `idleTimeoutSeconds` | int | `90` | idle watchdog | `/llm bridge idle <5..3600>` |
 
-`describe()` format: `BridgeConfig{enabled=…, url=…, bot=…, appear=[min..max], h=[min..max], wait=[min..maxs], spawnMax=…, griefing=…, idle=…s}`.
+`describe()` format (`BridgeConfig.java:151-164`): `BridgeConfig{enabled=…, url=…, bot=…, appear=[min..max], h=[min..max], wait=[min..maxs], spawnMax=…, rewardMax=…, punishMax=…, spawnOffsetMax=…, griefing=…, idle=…s}`.
 
 ## The presence tools (model-facing)
 
@@ -142,20 +144,20 @@ Logged at `SERVER_STARTED` as `BridgeConfig loaded: <describe()>` (`ServerEntryP
 | `Vanish` | none | Gate: `isActive`. `submit(restoreAvatar)` → `GodBody.vanish()` → `clearManifested()`. The session **continues** (lock kept). | Not owner: `Tu ne tiens pas le corps de Dieu — rien à faire disparaître.` Else `God a disparu.` |
 | `Wait` | `seconds` (integer, required) | Clamp to `[waitMinSeconds, waitMaxSeconds]`. No ownership gate. | `Le temps passe… N seconde(s) se sont écoulées.` |
 
-Code: `ChatBotFunctions.java:89-149`; dispatch without `runOnMain` at `ChatBotFunctions.java:430-432`.
+Code: `ChatBotFunctions.java:89-149`; dispatch without `runOnMain` at `ChatBotFunctions.java:447-449`.
 
-**Wait mechanics** (`ChatBotFunctions.java:351-389`, `ChatBot.java:320-360`): all tool calls in the batch execute
+**Wait mechanics** (`ChatBotFunctions.java:363-406`, `ChatBot.java:322-362`): all tool calls in the batch execute
 immediately; if any is `Wait`, the **largest** clamped value is used and the tool results are submitted via
 `chatBot.deferFunctionOutputs(results, player, seconds)` → `GodScheduler.schedule(...)`, then
 `GodSessionManager.resetIdleTimer(player)`. If scheduling throws or returns null, outputs are sent immediately. A new
 user message (`/pray`, `/prove`) during the wait cancels the scheduled task and flushes the withheld tool results into
 memory without firing the continuation (`flushPendingDeferral`).
 
-**Gestures** (`ChatBotFunctions.java:506-524`), fired after each tool batch only if `GodSessionManager.hasManifested()`:
+**Gestures** (`ChatBotFunctions.java:525-544`), fired after each tool batch only if `GodSessionManager.hasManifested()` and `isActive(player)`:
 `Punishment` → `lookAt(player)` + `gesture("swing")`; `Reward` → `"nod"`; `ChangeWeather` → `lookAt(player)` +
 `"summon"`; `SpawnCreature` → `"summon"`; `Trade` → `"nod"`.
 
-**Speech**: `ChatBot.printOutputs` (`ChatBot.java:621-633`) always sends `"Dieu : " + text` to the player, and also
+**Speech**: `ChatBot.printOutputs` (`ChatBot.java:623-635`) always sends `"Dieu : " + text` to the player, and also
 `GodBody.say(text)` when `needsGodTools && isActive(player) && hasManifested()`.
 
 ## GodSessionManager — busy lock and idle watchdog
@@ -165,7 +167,7 @@ State (`GodSessionManager.java:30-36`): `AtomicReference<UUID> owner`, `volatile
 
 | Method | Semantics |
 |---|---|
-| `claim(player)` (sync) | Fails (`false`) if another UUID owns it; otherwise sets owner (re-claim by same player OK) and `resetIdleTimer`. Called by `/pray` (`ChatCommand.java:97`) and by `/prove` (`ImageReceiver.java:33`, only for bots with `needsGodTools`). |
+| `claim(player)` (sync) | Fails (`false`) if another UUID owns it; otherwise sets owner (re-claim by same player OK) and `resetIdleTimer`. Called by `/pray` (`ChatCommand.java:101`) and by `/prove` (`ImageReceiver.java:33`, only for bots with `needsGodTools`). |
 | `isActive(player)` | `player.getUuid().equals(owner)` |
 | `isBusy()`, `currentOwner()` | owner != null / owner |
 | `markManifested()` / `clearManifested()` / `hasManifested()` | Global flag set by `Appear`, cleared by `Vanish` and `forceEndSession` |
@@ -176,7 +178,7 @@ State (`GodSessionManager.java:30-36`): `AtomicReference<UUID> owner`, `volatile
 Watchdog fire (`GodSessionManager.java:125-134`): if owner still equals the pinned UUID →
 `ChatBotActions.dismissAvatarOnWatchdog(pinned)` (queues `setInvulnerable(false)` on the bot found by `botUsername` + calls
 `GodBody.vanish()` directly) → `forceEndSession()`. Any in-flight LLM response for that player is then dropped and its
-memory wiped (`ChatBot.java:539-546`).
+memory wiped (`ChatBot.java:541-548`).
 
 **What resets the watchdog**: `claim` (each `/pray` / `/prove` by the owner), `Appear`, a batch containing `Wait`, and —
 since bug #8 — every tool dispatch of the owning session, before and after the call (`checkForFunctions`). A plain LLM
@@ -203,9 +205,9 @@ turn without tool calls does not reset it.
 
 **Waiting on it**: `ChatBotFunctions.runOnMain` uses `submit(body).get(5, SECONDS)` (not `.join()`); on timeout returns
 `Erreur côté serveur: action différée non exécutée (serveur indisponible).`, on other failure
-`Erreur côté serveur lors de l'exécution de cette action.` (`ChatBotFunctions.java:488-498`).
+`Erreur côté serveur lors de l'exécution de cette action.` (`ChatBotFunctions.java:507-517`).
 `ChatBot.collectDynamicContext` also hops with a 5 s bound and runs the body directly if already on the server thread
-(`ChatBot.java:496-520`). **Deadlock rule:** never block on a queued future from the server thread — the drain runs on
+(`ChatBot.java:498-522`). **Deadlock rule:** never block on a queued future from the server thread — the drain runs on
 that same thread at end of tick.
 
 Avatar helpers queued but **not awaited**: `buffAvatar` (Appear), `restoreAvatar` (Vanish, `endPrayerSession`), the
@@ -222,15 +224,15 @@ scheduler thread — anything touching the world must re-enter `GodActionQueue`.
 
 | Helper | Thread | Effect (`ChatBotActions.java`) |
 |---|---|---|
-| `findAvatar(prayingPlayer)` | any | `server.getPlayerManager().getPlayer(BridgeConfig.botUsername)` (server from the player, else the captured `SERVER`) (`:383-389`) |
-| `buffAvatar` | main (queued) | `bot.setInvulnerable(true); bot.extinguish();` → `Avatar rendu invincible.` / `Avatar introuvable (pas de buff).` (`:396-405`) |
-| `restoreAvatar` | main (queued) | `bot.setInvulnerable(false)` → `Avatar redevenu mortel.` / `Avatar introuvable.` (`:407-412`) |
-| `dismissAvatarOnWatchdog(uuid)` | scheduler | queue invuln clear + `GodBody.vanish()` |
-| `restoreAvatarOnMain(server)` | main (direct, never queued) | `bot.setInvulnerable(false)` on the avatar found by `botUsername`; used by `/godbody off` and `SERVER_STOPPING`, which have just cleared the queue (bug #5) |
+| `findAvatar(prayingPlayer)` | any | `server.getPlayerManager().getPlayer(BridgeConfig.botUsername)` (server from the player, else the captured `SERVER`) (`:416-422`) |
+| `buffAvatar` | main (queued) | `bot.setInvulnerable(true); bot.extinguish();` → `Avatar rendu invincible.` / `Avatar introuvable (pas de buff).` (`:429-438`) |
+| `restoreAvatar` | main (queued) | `bot.setInvulnerable(false)` → `Avatar redevenu mortel.` / `Avatar introuvable.` (`:440-445`) |
+| `dismissAvatarOnWatchdog(uuid)` | scheduler | queue invuln clear + `GodBody.vanish()` (`:466-476`) |
+| `restoreAvatarOnMain(server)` | main (direct, never queued) | `bot.setInvulnerable(false)` on the avatar found by `botUsername`; used by `/godbody off` and `SERVER_STOPPING`, which have just cleared the queue (bug #5) (`:454-460`) |
 
 `setInvulnerable` sets the entity's `Invulnerable` flag (persisted in entity NBT).
 
-**Op-on-join** (`ServerEntryPoint.java:61-74`): on `ServerPlayConnectionEvents.JOIN`, if the joining name equals
+**Op-on-join** (`ServerEntryPoint.java:62-78`): on `ServerPlayConnectionEvents.JOIN`, if the joining name equals
 `BridgeConfig.botUsername`, `VillageConfig.edenAvatarName` (default `Dieu`), or is in
 `VillagersCommand.activeScenarioBots`, and is not already an operator, `addToOperators(profile)` and log
 `Opped bot '<name>' on join.` Op is permanent (written to the server ops list) and never revoked. Required because
@@ -241,28 +243,28 @@ appear/vanish are done by the bot issuing `/tp` (per the plan). Only meaningful 
 
 | Path | Trigger | Restore invuln | Vanish | Lock released | Where |
 |---|---|---|---|---|---|
-| Natural terminal | God turn with no tool calls (and `isActive`) | if `hasManifested` | if `hasManifested` | yes | `ChatBot.java:565-567` → `endPrayerSession` |
+| Natural terminal | God turn with no tool calls (and `isActive`) | if `hasManifested` | if `hasManifested` | yes | `ChatBot.java:567-569` → `endPrayerSession` |
 | Deliberate `Vanish` | model tool | yes | yes | **no** (session continues, `manifested=false`) | `ChatBotFunctions.java:122-137` |
-| Depth cap | `functionCallDepth > MAX_FUNCTION_CALL_DEPTH (100)` in `sendFunctionOutputs`; chat `Dieu : (chaîne d'appels coupée — relance ta requête.)`, memory wiped | if manifested | if manifested | yes (if owner) | `ChatBot.java:287-302` |
-| LLM API error | exceptional future | if manifested | if manifested | yes (if owner) | `ChatBot.java:427-439` |
+| Depth cap | `functionCallDepth > MAX_FUNCTION_CALL_DEPTH (100)` in `sendFunctionOutputs`; chat `Dieu : (chaîne d'appels coupée — relance ta requête.)`, memory wiped | if manifested | if manifested | yes (if owner) | `ChatBot.java:289-304` |
+| LLM API error | exceptional future (`doRequest` → `logApiError`) | if manifested | if manifested | yes (if owner) | `ChatBot.java:418-420`, `:429-441` |
 | `/pray stop` | owner, perm 0; chat `Dieu : (la séance est close.)` | if manifested | if manifested | yes | `ChatCommand.java:30-39` |
 | Idle watchdog | no reset for `max(idle, waitMax+5)` s | yes (queued) | always | yes (force) | `GodSessionManager.java:125-134` |
-| `/godbody off` | admin | yes (direct, `restoreAvatarOnMain`) | always (sent before disabling) | yes (force) | `ChatCommand.java` `registerKillSwitch` |
-| Server stopping | `SERVER_STOPPING` | yes (direct, `restoreAvatarOnMain`, before players are saved) | **no** | yes (force) + queue cleared | `ServerEntryPoint.java` |
+| `/godbody off` | admin | yes (direct, `restoreAvatarOnMain`) | always (sent before disabling) | yes (force) + queue cleared + sub-builds cancelled | `ChatCommand.java:62-78` |
+| Server stopping | `SERVER_STOPPING` | yes (direct, `restoreAvatarOnMain`, before players are saved) | **no** | yes (force) + queue cleared + sub-builds cancelled | `ServerEntryPoint.java:51-60` |
 
-`endPrayerSession(player)` (`ChatBot.java:580-587`): `if hasManifested() { submit(restoreAvatar); GodBody.vanish(); }`
+`endPrayerSession(player)` (`ChatBot.java:582-589`): `if hasManifested() { submit(restoreAvatar); GodBody.vanish(); }`
 then `GodSessionManager.endSession(player)`. Idempotent.
 
 After a session ends mid-flight, responses and deferred `Wait` continuations for conversations that started bound to the
-session (`sessionBound`) are dropped and memory cleared (`ChatBot.java:278-285`, `ChatBot.java:539-546`); bodiless
+session (`sessionBound`) are dropped and memory cleared (`ChatBot.java:280-287`, `ChatBot.java:541-548`); bodiless
 conversations are answered normally.
 
 ## Commands
 
 | Command | Perm | Effect | Code |
 |---|---|---|---|
-| `/godbody off` | 2 | `GodActionQueue.clear()`, `GodBody.vanish()`, `forceEndSession()`, `enabled=false` + save; feedback `Killed god-body: N queued action(s) dropped, session released, bridge disabled.` (broadcast to ops) | `ChatCommand.java:62-73` |
-| `/godbody on` | 2 | `enabled=true` + save; `Bridge re-enabled.` | `ChatCommand.java:75-81` |
+| `/godbody off` | 2 | `GodActionQueue.clear()`, `restoreAvatarOnMain`, `BuildGuard.cancelAll()`, `GodBody.vanish()`, `forceEndSession()`, `enabled=false` + save; feedback `Killed god-body: N queued action(s) dropped, session released, bridge disabled.` (broadcast to ops) | `ChatCommand.java:62-78` |
+| `/godbody on` | 2 | `enabled=true` + save; `Bridge re-enabled.` | `ChatCommand.java:79-86` |
 | `/godbody` (bare) | 2 | no executes → incomplete command | — |
 | `/llm bridge` | 2 | print `describe()` | `LLMCommand.java:73-77` |
 | `/llm bridge enabled <bool>` | 2 | set + save + print | `:78-82`, `:118-123` |
@@ -280,8 +282,9 @@ conversations are answered normally.
   so after clearing the queue they call `ChatBotActions.restoreAvatarOnMain(server)` directly. Still true: an avatar
   that is *offline* at that moment keeps the flag it saved with. Only an in-game check proves this (no Minecraft-free
   logic to unit-test). `/godbody off` still does not call `endPrayerSession`.
-- **`/godbody off` does not disable MCP tools**: the God can still move the bot through `MCPGateway` tools (see
-  [mcp-gateway.md](mcp-gateway.md)).
+- ~~**`/godbody off` does not disable MCP tools**~~ **Fixed (bug #8):** `/godbody off` sets `enabled=false`, and
+  `GodToolGate` then refuses every MCP call (`ChatBotFunctions.java:464-467`). The MCP tool specs are still attached to
+  the request, so the model sees them and gets the refusal string (see [mcp-gateway.md](mcp-gateway.md)).
 - ~~**Watchdog is not reset per turn.**~~ **Fixed (bug #8):** every tool dispatch of the owner resets it, so a long chain
   of tool calls no longer trips it; only a single call (or LLM wait) longer than `idleTimeoutSeconds` still can.
 - ~~**Gestures ignore ownership**~~ **Fixed (bug #8):** `fireGestures` also requires `GodSessionManager.isActive(player)`.

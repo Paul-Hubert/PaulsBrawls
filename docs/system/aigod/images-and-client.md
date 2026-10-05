@@ -4,8 +4,8 @@ title: AI God — screenshots (/prove, /build), ImagePayload, client entrypoint
 system: aigod
 summary: Client /prove and /build, framebuffer capture + resize, the screenshot:image C2S payload, ImageReceiver routing into ChatBot.sendImageChatRequest, ClientEntryPoint wiring.
 tags: [aigod, client, screenshot, prove, build, imagepayload, imagereceiver, networking, customPayload, vision, clientEntryPoint, money]
-sources: [src/client/java/com/paul/brawl/Screenshotter.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, src/main/java/com/paul/brawl/ImagePayload.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/Money.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/resources/fabric.mod.json]
-verified_at: 4a8081f
+sources: [src/client/java/com/paul/brawl/Screenshotter.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, src/main/java/com/paul/brawl/ImagePayload.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/Money.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/ImageMime.java, src/main/resources/fabric.mod.json]
+verified_at: 98cb908
 ---
 
 # AI God — screenshots, ImagePayload, client entrypoint
@@ -32,8 +32,8 @@ The client never calls `ChatBot.register()`; the AI God runs only on a dedicated
 
 | Command | Lines | Arg type | Text prefix sent |
 |---|---|---|---|
-| `/prove <text>` | `registerCommands` | `StringArgumentType.greedyString()` (the rest of the line) | `"Prove : " + text` |
-| `/build <text>` | `registerCommands` | `StringArgumentType.greedyString()` | `"Build : " + text` |
+| `/prove <text>` | `registerCommands` `:51-59` | `StringArgumentType.greedyString()` (the rest of the line) | `"Prove : " + text` |
+| `/build <text>` | `registerCommands` `:62-72` | `StringArgumentType.greedyString()` | `"Build : " + text` |
 
 These are Fabric **client** commands (`ClientCommandRegistrationCallback`), executed locally — the server never sees
 the command, only the resulting payload. No permission level applies.
@@ -46,11 +46,11 @@ incomplete command and bare `/prove` threw on `getString(context, "text")`. Both
 
 ### Capture sequence
 
-1. `sendScreenshot(text)` (`:79-93`): adds chat line `Capture d'écran dans 1 seconde`, stores `text` in a static field,
+1. `sendScreenshot(text)` (`:83-97`): adds chat line `Capture d'écran dans 1 seconde`, stores `text` in a static field,
    submits a task to a single-thread executor that sleeps 1000 ms then sets static `flag = true`.
    (The delay lets the chat screen close so it is not in the capture.)
 2. `START_CLIENT_TICK` hook (`:37-41`): when `flag` is set, clears it and calls `sendScreenshotAfterDelay()`.
-3. `sendScreenshotAfterDelay()` (`:95-114`):
+3. `sendScreenshotAfterDelay()` (`:99-119`):
    - chat line `Capture d'écran prise, envoi à Dieu...`
    - `NativeImage nativeImage = ScreenshotRecorder.takeScreenshot(MinecraftClient.getInstance().getFramebuffer())`
    - `img2 = new NativeImage(854, 480, true)`; `nativeImage.resizeSubRectTo(0, 0, w, h, img2)` (whole frame,
@@ -60,7 +60,7 @@ incomplete command and bare `/prove` threw on `getString(context, "text")`. Both
 
 > ⚠ Unverified (no MC sources in checkout): `NativeImage.getBytes()` in MC 1.21.1 encodes **PNG** (via STB). The
 > server no longer assumes: `ImageMime.sniff(bytes)` reads the magic number (PNG / JPEG / GIF / WebP, default
-> `image/png`) and `ChatBot` labels the `ImageContent` with it (bug #9; `ImageMimeTest`).
+> `image/png`, `ImageMime.java:12-22`) and `ChatBot` labels the `ImageContent` with it (bug #9; `ImageMimeTest`).
 
 ## `ImagePayload` codec (`src/main/java/com/paul/brawl/ImagePayload.java`)
 
@@ -73,7 +73,7 @@ incomplete command and bare `/prove` threw on `getString(context, "text")`. Both
 | Direction | C2S only — `PayloadTypeRegistry.playC2S().register(ID, CODEC)` in `ImageReceiver.commonRegister()` (`ImageReceiver.java:14-16`) | |
 
 `commonRegister()` is invoked on the client by `Screenshotter.register()` (`Screenshotter.java:32`) and on the server
-by `ChatBot.register()` (`ChatBot.java:159`). The codec sets no explicit byte-array size limit.
+by `ChatBot.register()` (`ChatBot.java:161`). The codec sets no explicit byte-array size limit.
 
 > ⚠ Unverified: the effective maximum payload size is whatever vanilla/Fabric API 0.116.7+1.21.1 allows for C2S custom
 > payloads; a large 854×480 PNG may approach it. Not checkable here (no MC/Fabric sources).
@@ -82,7 +82,7 @@ by `ChatBot.register()` (`ChatBot.java:159`). The codec sets no explicit byte-ar
 
 - `register()` (`:18-26`): `ServerPlayNetworking.registerGlobalReceiver(ImagePayload.ID, (data, context) -> checkProof(data.image(), context.player(), data.text()))`.
 - `checkProof(bytes, player, text)` (`:28-37`):
-  1. `bot = ChatBot.getCorrectChatBot(text)` (`ChatBot.java:644-651`): text contains `"Prove :"` → `godBot`;
+  1. `bot = ChatBot.getCorrectChatBot(text)` (`ChatBot.java:646-653`): text contains `"Prove :"` → `godBot`;
      contains `"Build :"` → `buildBot`; otherwise → `godBot`.
   2. If `bot.needsGodTools` (godBot) and `!GodSessionManager.claim(player)` → private
      `"Dieu : (occupé ailleurs — je regarde ta preuve, mais sans forme.)"` (reply continues bodiless).
@@ -95,11 +95,11 @@ by `ChatBot.register()` (`ChatBot.java:159`). The codec sets no explicit byte-ar
 
 ## Into the LLM pipeline
 
-`ChatBot.sendImageChatRequest(input, bytes, player)` (`ChatBot.java:225-250`):
+`ChatBot.sendImageChatRequest(input, bytes, player)` (`ChatBot.java:227-252`):
 
 - Same bookkeeping as `/pray`: flush any pending Wait deferral, reset depth, set `sessionBound` (godBot).
 - If `hasImage` (both `godBot` and, since bug #9, `buildBot`): `UserMessage.from(TextContent.from(input),
-  ImageContent.from(base64(bytes), ImageMime.sniff(bytes)))`.
+  ImageContent.from(base64(bytes), ImageMime.sniff(bytes)))` (`ChatBot.java:239-248`; `buildBot.hasImage = true` at `ChatBot.java:138`).
 - Else: `UserMessage.from(input)` (no stock bot sets `hasImage=false` any more; `BuildSubAgent` is not a `ChatBot`).
 - Then `doRequest` — identical to a `/pray` turn ([llm-pipeline.md](llm-pipeline.md)).
 

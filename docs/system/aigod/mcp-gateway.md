@@ -11,12 +11,14 @@ sources:
   - src/main/java/com/paul/brawl/ChatBotFunctions.java
   - src/main/java/com/paul/brawl/ChatBot.java
   - src/main/java/com/paul/brawl/BridgeConfig.java
+  - src/main/java/com/paul/brawl/GodToolGate.java
+  - src/main/java/com/paul/brawl/LLMConfig.java
   - build.gradle
   - run/mcp_config.properties
   - MCP_TOOLS_VERIFICATION.md
   - verify-mcp-tools.mjs
   - HIGHER_LEVEL_TOOLS.md
-verified_at: 4a8081f
+verified_at: 98cb908
 ---
 
 # AI God — MCP Gateway
@@ -38,8 +40,8 @@ connect failures back off 30 s; dispatch failures return an error string and for
 | `MCPGateway` | `src/main/java/com/paul/brawl/MCPGateway.java` | Connection, cache, dispatch, reload, status |
 | `MCPConfig` | `src/main/java/com/paul/brawl/MCPConfig.java` | `mcp_config.properties` (enabled, URL, timeout) |
 | `MCPCommand` | `src/main/java/com/paul/brawl/MCPCommand.java` | `/mcp`, `/mcp status`, `/mcp reload` |
-| Tool list merge | `ChatBotFunctions.java:313-340` (`buildToolSpecs`) | Appends MCP specs for bots with `needsMcpTools` |
-| Dispatch fallthrough | `ChatBotFunctions.java:443-458` (`executeFunction` default arm) | Routes MCP tool calls |
+| Tool list merge | `ChatBotFunctions.java:325-352` (`buildToolSpecs`) | Appends MCP specs for bots with `needsMcpTools` |
+| Dispatch fallthrough | `ChatBotFunctions.java:460-478` (`executeFunction` default arm) | Gates (`GodToolGate`) and routes MCP tool calls |
 | Libraries | `build.gradle:48,56,84-89` | `dev.langchain4j:langchain4j-mcp:1.0.0-beta5` (jar-in-jar), OkHttp 4.12.0 + okhttp-sse + Okio 3.6.0 + Kotlin stdlib 1.9.10 included because `HttpMcpTransport` is OkHttp-based |
 
 ## Configuration — `mcp_config.properties`
@@ -52,7 +54,7 @@ Path `mcp_config.properties` relative to the JVM cwd (`MCPConfig.java:46`).
 | `sse_url` | `sseUrl` | `http://127.0.0.1:8765/mcp/sse` | Full SSE endpoint; blank value ignored. The transport discovers the POST endpoint via the SSE handshake (per the class Javadoc). |
 | `timeout_seconds` | `timeoutSeconds` | `60` | Passed to `HttpMcpTransport.Builder.timeout(...)`; unparseable → keep default |
 
-Lifecycle (`MCPConfig.java:59-122`):
+Lifecycle (`MCPConfig.java:59-121`):
 
 - Loaded once in the singleton constructor, i.e. the first time `MCPConfig` is touched (first `MCPGateway.tools()` /
   `/mcp`), **not** at server boot.
@@ -90,7 +92,7 @@ The default `sse_url` happens to match `BridgeConfig.bridgeUrl` (`http://127.0.0
    close the client, `connected = false`, **keep** the previous cached specs/names (empty on first failure).
 
 No subprocess is spawned (an earlier design used `StdioMcpTransport`; the obsolete-keys migration and some stale comments,
-e.g. `ChatBotFunctions.java:307-311`, still refer to it).
+e.g. `ChatBotFunctions.java:319-323`, still refer to it).
 
 > ⚠ Unverified: `DefaultMcpClient` defaults in `langchain4j-mcp 1.0.0-beta5` (initialization/tool-execution timeouts,
 > how a server-side `isError` result is rendered) are library behaviour, not visible in this repo.
@@ -98,13 +100,13 @@ e.g. `ChatBotFunctions.java:307-311`, still refer to it).
 ### Threads
 
 `tools()` is invoked inside `ChatBot.doRequest`'s `supplyAsync` on an `llm-worker` virtual thread
-(`ChatBot.java:400-414`) precisely so a slow/down Node process stalls only the worker, not the server tick. `/mcp reload` does
+(`ChatBot.java:402-416`) precisely so a slow/down Node process stalls only the worker, not the server tick. `/mcp reload` does
 the same since bug #18: it replies `MCP: rechargement en cours…` at once, runs `reload()` on `LLMConfig.sharedExecutor()`,
 and prints the status back on the server thread when the reconnect is done.
 
 ## Tool merge into the God's tool list
 
-`ChatBotFunctions.buildToolSpecs(needsGodTools, needsBuildPlan, needsMcpTools)` (`ChatBotFunctions.java:313-340`) builds,
+`ChatBotFunctions.buildToolSpecs(needsGodTools, needsBuildPlan, needsMcpTools)` (`ChatBotFunctions.java:325-352`) builds,
 in order:
 
 1. If `needsGodTools`: `Reward`, `Trade`, `Punishment`, `ChangeWeather`, `SpawnCreature`, `Appear`, `Vanish`, `Wait`,
@@ -113,7 +115,7 @@ in order:
 3. If `needsMcpTools`: `MCPGateway.INSTANCE.tools()` — appended as-is.
 4. If the list is non-empty: `ListTools`.
 
-Only `godBot` has `needsMcpTools = true` (`ChatBot.java:150-151`); `buildBot` and `BuildSubAgent` never see MCP tools.
+Only `godBot` has `needsMcpTools = true` (`ChatBot.java:152-153`); `buildBot` and `BuildSubAgent` never see MCP tools.
 
 - **No filtering, renaming, prefixing or de-duplication.** The MCP server's tool names and JSON schemas (as converted to
   `ToolSpecification` by langchain4j-mcp) are sent verbatim to the LLM provider.
@@ -123,11 +125,14 @@ Only `godBot` has `needsMcpTools = true` (`ChatBot.java:150-151`); `buildBot` an
 
 ## Dispatch
 
-`ChatBotFunctions.executeFunction` (`ChatBotFunctions.java:412-471`) switches on the tool name; the Java PascalCase names
+`ChatBotFunctions.executeFunction` (`ChatBotFunctions.java:429-490`) switches on the tool name; the Java PascalCase names
 match first. The `default` arm:
 
 ```java
-if (MCPGateway.INSTANCE.handlesTool(name)) yield MCPGateway.INSTANCE.execute(req);
+if (MCPGateway.INSTANCE.handlesTool(name)) {
+    String refusal = GodToolGate.mcpRefusal(BridgeConfig.INSTANCE.enabled, GodSessionManager.isActive(player));
+    yield refusal != null ? refusal : MCPGateway.INSTANCE.execute(req);
+}
 // else: "Unknown tool '<name>'. Pick from the tool specs attached to this request; do not invent names. If you are unsure what you have, call `ListTools` ..."
 ```
 
@@ -148,8 +153,9 @@ Execution characteristics:
   work happens in the Node process). It blocks that worker until the MCP call returns or times out.
 - Tool results join the other results and go back via `sendFunctionOutputs` (or a `Wait` deferral) like any Java tool.
 - Gated (bug #8): `executeFunction` asks `GodToolGate.mcpRefusal(BridgeConfig.enabled, GodSessionManager.isActive(player))`
-  first and returns its French refusal instead of calling the gateway (`Le corps de Dieu est désactivé…` /
-  `…occupé avec un autre fidèle…`). No gestures (`fireGestures` has no MCP arms). Each dispatch resets the owner's
+  first and returns its French refusal instead of calling the gateway (`Le corps de Dieu est désactivé par un
+  administrateur — cet outil est indisponible.` / `Le corps de Dieu est occupé avec un autre fidèle — cet outil ne peut
+  pas l'utiliser.`, `GodToolGate.java:14-18`). The specs are still advertised in both cases. No gestures (`fireGestures` has no MCP arms). Each dispatch resets the owner's
   idle watchdog before and after the call.
 - Results count toward `ChatBot.MAX_MEMORY_TOKENS = 16_000`; large JSON results evict older memory.
 
@@ -168,7 +174,7 @@ resets the backoff" is not implemented (success touches no state).
 
 ## Commands — `/mcp`
 
-`MCPCommand.java:29-53`.
+`MCPCommand.java:29-60`.
 
 | Command | Perm | Effect |
 |---|---|---|
@@ -200,7 +206,7 @@ resets the backoff" is not implemented (success touches no state).
   "mirrors §0" while the doc's table is §"Ground truth"; it spot-checks 9 tools.
 - `HIGHER_LEVEL_TOOLS.md` is a wishlist (it still says "22 MCP primitives"), not a description of existing tools.
 - The Java code's comment "MCP-sourced tools use kebab-case names that can never collide with the PascalCase Java POJO
-  names" (`ChatBotFunctions.java:444-446`) is a convention, not an enforced check.
+  names" (`ChatBotFunctions.java:461-463`) is a convention, not an enforced check.
 
 ## Extending
 
@@ -223,8 +229,9 @@ resets the backoff" is not implemented (success touches no state).
   duplicate names) and the Java implementation would always win dispatch.
 - **Long MCP calls vs the idle watchdog**: each dispatch resets the owner's timer before and after the call (bug #8);
   a single call longer than `idleTimeoutSeconds` can still trip it (see [god-body.md](god-body.md)).
-- CLAUDE.md's failure log line `MCP gateway start FAILED` does not exist; the real line is
-  `MCP gateway connect failed (...); will retry in 30s.` and the gateway retries automatically every 30 s.
+- The failure log line is `MCP gateway connect failed (...); will retry in 30s.` (`MCPGateway.java:246-248`); CLAUDE.md
+  now quotes it correctly (it used to name a non-existent `MCP gateway start FAILED`). The gateway retries automatically
+  every 30 s.
 
 ## Related
 
