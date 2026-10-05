@@ -46,6 +46,7 @@ const HARD_CEILING_MS = 2 * 60 * 60 * 1000; // v1's routine cap — the ultimate
  *  legitimate per-iteration synchronous burst (so a real skill is never false-aborted). */
 const MACROTASK_HEARTBEAT_MS = 100;
 const DEFAULT_MACROTASK_STALL_MS = 8_000;
+const DEFAULT_ABORT_SETTLE_MS = 1_000;
 
 // Blocker Z: real mineflayer rejects plain {x,y,z} bags — `bot.blockAt` calls `.floored()` on its
 // arg, and `mineflayer-pathfinder` calls `.isValid()` on its goal (the latter throws ASYNCHRONOUSLY
@@ -129,6 +130,10 @@ export interface SkillEngineOptions {
   /** Gap W: ms of macrotask starvation before a run is aborted from inside its loop. Default 8 s; tests
    *  lower it to assert the canary deterministically. Production never sets it. */
   macrotaskStallMs?: number;
+  /** Bug #13 / D-05: after an abort, how long the engine waits for the fenced skill code to settle before it
+   *  releases the bot to the next tree. Default 1000 ms. Code still awaiting a bot promise past this (a dig the
+   *  abort protocol could not cancel) is reported in the outcome; it can no longer await, loop or compose. */
+  abortSettleMs?: number;
 }
 
 /** The executor. One per host; owns a per-bot run queue and the compile cache. */
@@ -143,6 +148,7 @@ export class SkillEngine {
   private readonly onTripwire?: (skill: string, report: RunReport) => void;
   private readonly now: () => number;
   private readonly macrotaskStallMs: number;
+  private readonly abortSettleMs: number;
   private readonly tripwire: FailureTripwire;
   private readonly queues = new Map<string, BotRunQueue>();
   private readonly factories = new Map<string, SkillFactory>();
@@ -160,6 +166,7 @@ export class SkillEngine {
     this.onTripwire = opts.onTripwire;
     this.now = opts.now ?? Date.now;
     this.macrotaskStallMs = opts.macrotaskStallMs ?? DEFAULT_MACROTASK_STALL_MS;
+    this.abortSettleMs = opts.abortSettleMs ?? DEFAULT_ABORT_SETTLE_MS;
     this.tripwire = new FailureTripwire(opts.autoQuarantineAfter);
   }
 
@@ -279,12 +286,24 @@ export class SkillEngine {
     const heartbeatMs = Math.max(10, Math.min(MACROTASK_HEARTBEAT_MS, Math.floor(this.macrotaskStallMs / 4)));
     const heartbeat = setInterval(() => { lastTick = this.now(); }, heartbeatMs);
     unref(heartbeat);
-    const budget = createLoopBudget(undefined, () => {
-      if (this.now() - lastTick > this.macrotaskStallMs) {
-        triggerAbort('stalled');
-        throw new EngineAbort('stalled');
-      }
-    });
+    // Bug #13 (D-05): Promise.race only stops WAITING for an aborted tree, it does not stop the code. The
+    // fence makes the aborted code's next loop iteration, await or composition throw, so it cannot keep
+    // driving the body while the next tree runs. A loop's guard sits outside any try in its body, so code
+    // that catches the abort still cannot iterate again.
+    const fence = (): void => {
+      if (abortCause !== undefined) throw new EngineAbort(abortCause);
+    };
+    const budget = createLoopBudget(
+      undefined,
+      () => {
+        fence();
+        if (this.now() - lastTick > this.macrotaskStallMs) {
+          triggerAbort('stalled');
+          throw new EngineAbort('stalled');
+        }
+      },
+      fence,
+    );
 
     // R25: when the op'd avatar (divine runner) runs a MORTAL skill — a demo or a trial of
     // villager-authored code — intercept its chat and drop `/`-commands for the run's duration
@@ -333,6 +352,7 @@ export class SkillEngine {
     });
 
     const composerRun = async (calleeName: string, calleeArgs: object, depth: number): Promise<unknown> => {
+      fence(); // an aborted tree never starts a callee (bug #13)
       if (depth > this.maxCallDepth) throw new Error(`composition depth cap ${this.maxCallDepth} exceeded calling "${calleeName}"`);
       if (chain.includes(calleeName)) throw new Error(`composition cycle: ${[...chain, calleeName].join(' → ')}`);
       const callee = this.library.readRunnable(calleeName);
@@ -357,21 +377,24 @@ export class SkillEngine {
     };
 
     let outcome: RunOutcome;
+    let tree: Promise<unknown> | undefined;
     this.pushRunning(runner.name, root.version.name); // live `notWhileRunning` + vitals source
     try {
       const fn = this.compileFor(root)(makeShim({ sleep }, budget));
       chain.push(root.version.name);
-      const value = await Promise.race([
-        Promise.resolve().then(() => fn(bot, args, makeCtx(0))),
-        abortPromise,
-      ]);
+      tree = Promise.resolve().then(() => fn(bot, args, makeCtx(0)));
+      const value = await Promise.race([tree, abortPromise]);
       chain.pop();
       if (opts.validateReturn) validateReturn(value, root.manifest.returns, root.version.name);
       outcome = { ok: true, value };
     } catch (e) {
       if (e instanceof EngineAbort) {
         await abortActiveTasks(bot); // R4/R5 — the next action must not fight a zombie task
-        outcome = { ok: false, error: abortMessage(e.abortCause), errorKind: e.abortCause };
+        // D-05: hold the bot (this tree's queue slot) until the fenced code has actually settled, bounded so a
+        // promise the abort protocol could not cancel cannot wedge the bot's queue forever.
+        const settled = tree ? await settleWithin(tree, this.abortSettleMs) : true;
+        const note = settled ? '' : ` — the aborted code had not settled after ${this.abortSettleMs}ms (fenced: it can no longer await, loop or compose)`;
+        outcome = { ok: false, error: abortMessage(e.abortCause) + note, errorKind: e.abortCause };
       } else {
         const err = e instanceof Error ? e : new Error(String(e));
         outcome = { ok: false, error: err.message, errorKind: err.name };
@@ -604,6 +627,18 @@ function captureSnapshot(bot: Bot): Snapshot {
     nearbyBlocks: [],
     knownChests: [],
   };
+}
+
+/** True once `p` settles (either way), false if `ms` elapse first. Never rejects. */
+function settleWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const t = setTimeout(() => resolve(false), ms);
+    unref(t);
+    p.then(
+      () => { clearTimeout(t); resolve(true); },
+      () => { clearTimeout(t); resolve(true); },
+    );
+  });
 }
 
 function abortMessage(cause: AbortCause): string {

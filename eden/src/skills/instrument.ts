@@ -250,7 +250,11 @@ export interface LoopBudget {
  *  `count` every iteration (a microtask yield) yet NEVER drains the macrotask queue, so every timer-based
  *  supervisor (wall-clock timeout, stall detector) is starved and can't fire. `checkProgress` runs inside
  *  the loop body — the only unstarvable path — so the engine can abort a macrotask-starving loop. */
-export function createLoopBudget(max: number = DEFAULT_LOOP_BUDGET, checkProgress?: () => void): LoopBudget {
+export function createLoopBudget(
+  max: number = DEFAULT_LOOP_BUDGET,
+  checkProgress?: () => void,
+  checkAwait?: () => void,
+): LoopBudget {
   let count = 0;
   return {
     __loopBudget: (): void => {
@@ -259,7 +263,9 @@ export function createLoopBudget(max: number = DEFAULT_LOOP_BUDGET, checkProgres
     },
     // A real await is a yield, not a sync spin — reset the budget when one is reached. (A microtask-only
     // await still resets here, which is why `checkProgress` above is the load-bearing guard for gap W.)
+    // `checkAwait` lets the engine fence an ABORTED tree: its next await throws instead of acting (bug #13).
     __aw: <T>(p: T): T => {
+      checkAwait?.();
       count = 0;
       return p;
     },

@@ -46,6 +46,9 @@ function harness(opts: { stallSeconds?: number; bot?: FakeBot; macrotaskStallMs?
     maxCallDepth: 8,
     autoQuarantineAfter: 5,
     onTripwire: (skill) => tripwired.push(skill),
+    // Bug #13: keep the post-abort settle wait short here so a never-settling fake dig (D-10(iii)) still
+    // reports near stallSeconds; the production default (1 s) is exercised by the dedicated test below.
+    abortSettleMs: 100,
     ...(opts.macrotaskStallMs !== undefined ? { macrotaskStallMs: opts.macrotaskStallMs } : {}),
   });
   return { engine, library, journal, bot, tripwired };
@@ -324,4 +327,78 @@ test('D1: a stock registry lookup of an unknown item fails with a NAMED error, n
   assert.match(err, /unknown item "__nope__"/, 'the error names the offending item');
   assert.match(err, /itemsByName/, 'the error names the lookup path (D1)');
   assert.doesNotMatch(err, /Cannot read properties of undefined/, 'no cryptic undefined deref');
+});
+
+// ── Bug #13 (D-05): an aborted tree must STOP, and the next tree must not start on a body it still drives ──
+const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+test('bug #13: a timed-out loop stops acting on the bot (its next await/iteration throws)', async () => {
+  const h = harness();
+  seed(h.library, {
+    name: 'chatter',
+    code: "async function chatter(bot, a, c) { for (;;) { bot.chat('tick'); await new Promise((r) => setTimeout(r, 10)); } }",
+  });
+  const report = await h.engine.run('chatter', {}, MORTAL, { timeoutMs: 80 });
+  assert.equal(report.aborted, 'timeout');
+  const atReport = h.bot.sentChat.length;
+  await wait(150);
+  assert.equal(h.bot.sentChat.length, atReport, 'no bot action after the run reported its abort');
+});
+
+test('bug #13: aborted code that SWALLOWS the abort is still fenced (cannot keep driving the body)', async () => {
+  const h = harness();
+  seed(h.library, {
+    name: 'stubborn',
+    code: "async function stubborn(bot, a, c) { for (;;) { try { bot.chat('tick'); await new Promise((r) => setTimeout(r, 10)); } catch (e) { bot.chat('caught'); } } }",
+  });
+  const report = await h.engine.run('stubborn', {}, MORTAL, { timeoutMs: 80 });
+  assert.equal(report.aborted, 'timeout');
+  const atReport = h.bot.sentChat.length;
+  await wait(150);
+  assert.equal(h.bot.sentChat.length, atReport, 'the loop guard throws outside the try — the zombie ends');
+});
+
+test('bug #13 (D-05): a preempted tree has settled before the interrupting tree runs', async () => {
+  const h = harness();
+  seed(h.library, {
+    name: 'slow',
+    code: "async function slow(bot, a, c) { for (;;) { await new Promise((r) => setTimeout(r, 10)); bot.chat('slow'); } }",
+  });
+  seed(h.library, { name: 'quick', code: "async function quick(bot, a, c) { bot.chat('quick'); return 1; }" });
+  const first = h.engine.run('slow', {}, MORTAL);
+  await wait(40);
+  const second = await h.engine.run('quick', {}, MORTAL, { interrupt: true });
+  assert.equal((await first).aborted, 'preempted');
+  assert.equal(second.outcome.ok, true);
+  await wait(60);
+  const i = h.bot.sentChat.indexOf('quick');
+  assert.ok(i >= 0);
+  assert.deepEqual(h.bot.sentChat.slice(i + 1), [], 'the preempted tree said nothing after the new tree started');
+});
+
+test('bug #13: composing after an abort throws instead of starting a callee', async () => {
+  const h = harness();
+  seed(h.library, { name: 'leaf', code: "async function leaf(bot, a, c) { bot.chat('leaf'); return 1; }" });
+  seed(h.library, {
+    name: 'composer',
+    code: "async function composer(bot, a, c) { try { await new Promise((r) => setTimeout(r, 120)); } catch (e) {} return c.skills.run('leaf', {}); }",
+  });
+  const report = await h.engine.run('composer', {}, MORTAL, { timeoutMs: 40 });
+  assert.equal(report.aborted, 'timeout');
+  await wait(150);
+  assert.deepEqual(h.bot.sentChat, [], 'the callee never ran on the aborted tree');
+});
+
+test('bug #13: an aborted tree stuck on an uncancellable bot promise is reported, and releases the bot', async () => {
+  const bot = new FakeBot({ username: 'Firmin' });
+  bot.setBlock({ x: 1, y: 64, z: 0 }, 'stone');
+  bot.setDigMode('never'); // the abort protocol cannot cancel this promise
+  const h = harness({ stallSeconds: 0.1, bot });
+  seed(h.library, { name: 'mine', code: 'async function mine(bot, a, c) { await bot.dig(bot.blockAt({ x: 1, y: 64, z: 0 })); bot.chat("after"); return 1; }' });
+  seed(h.library, { name: 'next', code: "async function next(bot, a, c) { bot.chat('next'); return 1; }" });
+  const report = await h.engine.run('mine', {}, MORTAL);
+  assert.equal(report.aborted, 'stalled');
+  assert.match(report.outcome.ok ? '' : report.outcome.error, /had not settled after 100ms \(fenced/);
+  const next = await h.engine.run('next', {}, MORTAL);
+  assert.equal(next.outcome.ok, true, 'the bounded settle wait released the bot to the next tree');
 });
