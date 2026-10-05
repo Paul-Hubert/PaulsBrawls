@@ -41,6 +41,7 @@ interaction has a typed interface, and every non-obvious choice has a decision r
 | [18-real-villager-tests-prompt.md](18-real-villager-tests-prompt.md) | Agent **kickoff prompt** for the live (real-server + real-LLM) villager test suite |
 | [19-live-test-suite.md](19-live-test-suite.md) | The **live test suite** reference — harness architecture, assertion vocabulary, the three scenarios (farm/craft/defense), the real-mineflayer surface each exercises, and the findings log |
 | [20-live-test-process.md](20-live-test-process.md) | The **live-testing process** — the run→diagnose→fix→re-run loop, the diagnostic playbook (reading the journal, RCON ground truth, symptom→cause patterns), and the worked example that drove five fixes (W/C/D1/D2/E) |
+| [22-rework-followup-prompt.md](22-rework-followup-prompt.md) | Agent **kickoff prompt** to finish the `rework` branch: fix the open VERIFICATION-NOTES bugs, wire the designed-but-unwired Eden pieces, and re-verify `docs/system` against every change since `4a8081f` |
 
 Docs 11–12 render on GitHub, or locally without it: open the matching `.html`
 (same folder), regenerated via `node docs/render-docs.mjs`.
