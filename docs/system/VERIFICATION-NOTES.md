@@ -92,7 +92,7 @@ Driven by [docs/22-rework-followup-prompt.md](../22-rework-followup-prompt.md); 
 | Claim | Code reality |
 |---|---|
 | `buildMessageList` prepends **three** SystemMessages | **Four** when context is needed: persona plus three context messages (`ChatBot.java:451-466`). |
-| "Dedicated worker pool" / "only 4 workers" comment | Unbounded virtual-thread-per-task executor `llm-worker-N` (`LLMConfig.java:155-163`); the comment at `ChatBotFunctions.java:478-480` is stale. |
+| "Dedicated worker pool" / "only 4 workers" comment | Unbounded virtual-thread-per-task executor `llm-worker-N` (`LLMConfig.java:155-163`); the stale "only 4 workers" comment in `runOnMain` was corrected in phase C. |
 | World mutations use `GodActionQueue.submit(...).join()`, "blocks ~one tick" | `runOnMain` uses `.get(5, SECONDS)` and returns a French error string on timeout. Text-mode building now goes through the queue as well (bug #7, fixed). |
 | Providers: OpenAI, LM Studio, Ollama | Also **Anthropic** (`AnthropicChatModel`, default model `claude-opus-4-8`, `ANTHROPIC_API_KEY`) (`LLMConfig.java:73,101-107`). |
 | `OPENAI_API_KEY` is required | A non-empty `openai.apikey` in `llm_config.properties` wins over the env var; with neither, the provider *name* is sent as the key (`LLMConfig.java:170-182`). |

@@ -417,9 +417,9 @@ public class ChatBotFunctions {
 
     /**
      * Dispatch a single tool call. World-mutating tools hop onto the main
-     * thread via {@link GodActionQueue}; the {@code .join()} blocks the LLM
-     * callback thread for ~one tick, which is the existing contract — never
-     * call this on the main thread (deadlock).
+     * thread via {@link GodActionQueue}; {@link #runOnMain} blocks the LLM
+     * callback thread for ~one tick (bounded at 5 s) — never call this on the
+     * main thread (deadlock).
      *
      * <p>{@code chatBot} is the bot that owns the request — used by
      * {@link ListTools} to enumerate exactly what was attached to this turn.
@@ -494,9 +494,9 @@ public class ChatBotFunctions {
      *
      * <p>Bounded {@code .get(5, SECONDS)} so a stalled drain (server frozen,
      * paused-on-focus-lost singleplayer, {@code SERVER_STOPPING} mid-flight)
-     * can't pin an {@code llm-worker} thread forever. With only 4 workers in
-     * {@link LLMConfig#sharedExecutor()}, four such stalls would deadlock godBot
-     * until JVM restart.
+     * can't pin an {@code llm-worker} thread forever ({@link LLMConfig#sharedExecutor()}
+     * is a virtual-thread-per-task executor, so a stall leaks a thread and leaves the
+     * prayer hanging rather than deadlocking the pool).
      *
      * <p>5 s is generous: a normal tick is 50 ms and {@link GodActionQueue#MAX_PER_TICK}
      * is 8, so the queue would have to be ~800 deep to legitimately take that
