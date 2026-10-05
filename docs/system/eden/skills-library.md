@@ -290,7 +290,10 @@ pinned through `start()` by `eden/tests/main-full-wiring.test.ts`.
 - ~~**Skill names are used unsanitized as directory names**~~ **Fixed (bug #13):** `upsertDraft` calls
   `assertSkillName` first, which throws `InvalidSkillNameError` (`invalid skill name "<n>": <reason> — use
   letters, digits, '-' or '_' …`) for an empty name, `/` or `\`, `..`, a leading `.`, `:` (a Windows alternate
-  data stream) or a control character — before anything is written or journaled. `write_skill` does not catch it; the
+  data stream) or a control character, and — the owner's host is Windows (review fix) — `<>"|?*`, a trailing dot or
+  space, a reserved device name (`CON`, `NUL`, `COM1`…, with or without an extension), or a name that differs only in
+  case from an existing skill (`Go-To` would share `library/go-to/` and overwrite its files) — before anything is
+  written or journaled. `write_skill` does not catch it; the
   dispatcher's catch (`eden/src/villagers/tools.ts:241-244`) surfaces it as an `ok:false` result
   `Erreur outil "write_skill": invalid skill name …`. The rules live in `assertSkillName`
   (`eden/src/skills/library.ts:425-443`). Records already on disk are not re-validated at `load()`.

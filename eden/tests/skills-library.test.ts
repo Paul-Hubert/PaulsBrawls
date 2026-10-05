@@ -8,6 +8,7 @@ import { MemoryJournal } from './fakes/memory-journal';
 import {
   SkillLibrary,
   AllGranted,
+  InvalidSkillNameError,
   renderSignature,
   type DraftInput,
 } from '../src/skills/library';
@@ -209,4 +210,17 @@ test('bug #12: a changed stock skill is NOT seeded over an admitted villager ove
   assert.equal(library.seedStockIfChanged({ ...stock, code: stock.code + '\n// v2' }), 'overridden');
   assert.equal(library.activeVersion('go-to')?.version, mine.version, 'the admitted override stays the live version');
   assert.equal(library.versionCount('go-to'), 2);
+});
+
+// Review of bug #13's name check: the owner runs Eden on Windows, where `Go-To` and `go-to` share library/go-to/
+// (the new draft overwrote go-to's v1.js and skill.json), a trailing dot/space is dropped, and CON/NUL & <>"|?* are
+// reserved.
+test('bug #13 review: skill names that collide or misbehave on Windows are refused', () => {
+  const { library } = lib();
+  library.upsertDraft(draft({ name: 'go-to' }));
+  for (const bad of ['Go-To', 'GO-TO', 'foo.', 'foo ', 'con', 'NUL', 'com1', 'lpt9.txt', 'a<b', 'a|b', 'a?b', 'a*b', 'a"b', 'a>b']) {
+    assert.throws(() => library.upsertDraft(draft({ name: bad })), InvalidSkillNameError, bad);
+  }
+  assert.equal(library.upsertDraft(draft({ name: 'go-to' })).version, 2, 'the exact same name is a new version, not a collision');
+  assert.equal(library.upsertDraft(draft({ name: 'console' })).version, 1, 'a reserved word inside a longer name is fine');
 });

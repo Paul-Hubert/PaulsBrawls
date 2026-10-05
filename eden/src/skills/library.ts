@@ -101,6 +101,12 @@ export class SkillLibrary {
   /** Upsert a draft (owner #8: same tool creates + updates). Creates a new draft version, never reuses. */
   upsertDraft(input: DraftInput): SkillVersion {
     assertSkillName(input.name); // bug #13: the name becomes a directory under library/
+    // Windows folds case: `Go-To` would share go-to's directory and overwrite its files (review fix).
+    for (const existing of this.skills.keys()) {
+      if (existing !== input.name && existing.toLowerCase() === input.name.toLowerCase()) {
+        throw new InvalidSkillNameError(input.name, `differs only in case from the existing skill "${existing}"`);
+      }
+    }
     const record = this.skills.get(input.name) ?? { name: input.name, records: [] };
     const version = this.nextVersion(record);
     const codePath = this.writeCode(input.name, version, input.code);
@@ -443,6 +449,11 @@ export function assertSkillName(name: string): void {
   if (name.includes(':') || [...name].some((c) => c.charCodeAt(0) < 0x20)) {
     throw new InvalidSkillNameError(name, "contains ':' or a control character");
   }
+  // Windows (the owner's host): <>"|?* are illegal, a trailing dot/space is silently dropped, and the device names
+  // are reserved even with an extension (review fix).
+  if (/[<>"|?*]/.test(name)) throw new InvalidSkillNameError(name, 'contains one of < > " | ? *');
+  if (/[. ]$/.test(name)) throw new InvalidSkillNameError(name, 'ends with a dot or a space');
+  if (/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i.test(name)) throw new InvalidSkillNameError(name, 'is a reserved Windows device name');
 }
 
 function schemaType(schema: unknown): string {
