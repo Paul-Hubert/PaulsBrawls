@@ -153,7 +153,8 @@ Note `/pray stop` is a literal branch: praying the single word "stop" is impossi
 | `/block <x> <y> <z>` | 2 | `ChatBotActions.java:164-179` | Places `minecraft:stone` at the `/construction` pivot + offset. See [building.md](building.md). |
 | `/construction` | 2 | `ChatBotActions.java:181-193` | Sets the build pivot by raycast and clears the caller's `buildBot` memory. See [building.md](building.md). |
 
-Both `/prompt` forms call `getSource().getPlayer()` for the reply and NPE from the console (the override is still set).
+Both `/prompt` forms reply through `getSource().sendFeedback(…)`, so they work from the console (bug #18; they used to
+call `getSource().getPlayer()` and NPE).
 
 Related commands documented elsewhere: `/mcp`, `/mcp status` (perm 0), `/mcp reload` (perm 2) (`MCPCommand.java:32-49`)
 → [mcp-gateway.md](mcp-gateway.md); client `/prove`, `/build` → [images-and-client.md](images-and-client.md).

@@ -14,7 +14,9 @@ verified_at: 4a8081f
 checked by `.requires(source -> source.hasPermissionLevel(n))`; a command with **no** `.requires` is open to everyone
 (perm 0). Every server command is registered from `ServerEntryPoint` (a `DedicatedServerModInitializer`), so **none of
 them exist in singleplayer / Open-to-LAN** — see [platform/entrypoints-and-wiring.md](../platform/entrypoints-and-wiring.md).
-Most console invocations of player-oriented commands NPE (they call `getPlayer()`).
+From the console, `/prompt` (both forms) now replies through `sendFeedback`, and `/block` / `/construction` fail with
+vanilla's "a player is required" error (`getPlayerOrThrow`) instead of an NPE (bug #18). Other player-oriented
+commands (`/pray`, `/accept`) still assume a player.
 
 ## Server commands (Fabric mod)
 
@@ -35,9 +37,9 @@ Details: [gibber/money-system.md](../gibber/money-system.md).
 | `/pray <text…>` | 0 | `ChatCommand.java:28-41` | Greedy `MessageArgumentType`. Sends a prayer to the Java God; claims the avatar via `GodSessionManager` (bodiless if another player owns it). |
 | `/pray stop` | 0 | `ChatCommand.java:30` | Ends *your* session (owner only); chat `Dieu : (la séance est close.)`. |
 | `/accept` | 0 (no `.requires`) | `TradeOffers.java:123-127` | Accepts your pending God trade offer (RAM-only, expires after 5 min). |
-| `/prompt` | 2 | `ChatCommand.java:137-142` | Re-reads `prompt.txt` / `build_prompt.txt` for both bots, then prints the hardcoded + custom prompt (NPE from console). |
+| `/prompt` | 2 | `ChatCommand.java:137-142` | Re-reads `prompt.txt` / `build_prompt.txt` for both bots, then prints the hardcoded + custom prompt via `sendFeedback` (console-safe, bug #18). |
 | `/prompt <text…>` | 2 | `ChatCommand.java:117-119` | Sets the custom prompt (`prompt` field) on **both** `godBot` and `buildBot`; in RAM only. |
-| `/godbody off` | 2 | `ChatCommand.java:62` | Kill-switch: clears `GodActionQueue`, vanishes the avatar, force-ends the session, disables the bridge. **Does not** restore avatar vulnerability. |
+| `/godbody off` | 2 | `ChatCommand.registerKillSwitch` | Kill-switch: clears `GodActionQueue`, restores avatar vulnerability (bug #5), cancels running sub-builds (bug #7), vanishes the avatar, force-ends the session, disables the bridge. |
 | `/godbody on` | 2 | `ChatCommand.java:75` | Re-enables the bridge. Bare `/godbody` has no executor. |
 | `/llm` | 2 | `LLMCommand.java:24-25` | Root; prints current LLM config. |
 | `/llm provider <word>` | 2 | `LLMCommand.java:30-31` | `openai` \| `lmstudio` \| `ollama` \| `anthropic`. |
@@ -56,8 +58,8 @@ Details: [aigod/configuration-and-commands.md](../aigod/configuration-and-comman
 
 | Syntax | Perm | Source | Behaviour |
 |---|---|---|---|
-| `/construction` | 2 | `ChatBotActions.java:183-184` | Raycasts (100 blocks) from the player's eyes and stores the hit as the build **pivot**; wipes the build sub-agent's memory. No feedback on a miss. |
-| `/block <x> <y> <z>` | 2 | `ChatBotActions.java:166-170` | Debug: places stone at **pivot + (x,y,z)** (relative, not absolute). |
+| `/construction` | 2 | `ChatBotActions.java:183-184` | Raycasts (100 blocks) from the player's eyes and stores the hit as the build **pivot**; wipes the build sub-agent's memory. No feedback on a miss. Player-only (`getPlayerOrThrow`, bug #18). |
+| `/block <x> <y> <z>` | 2 | `ChatBotActions.java:166-170` | Debug: places stone at **pivot + (x,y,z)** (relative, not absolute). Player-only (bug #18). |
 
 Details: [aigod/building.md](../aigod/building.md).
 

@@ -128,7 +128,8 @@ public class ChatCommand {
                             ChatBot.buildBot.prompt = text.getString();
 
                             var message = "Changed prompt " + text;
-                            ChatPrinter.sendMessage(context.getSource().getPlayer(), message);
+                            // Bug #18: getPlayer() is null from the console — reply through the source instead.
+                            context.getSource().sendFeedback(() -> Text.literal(message), false);
                             LOGGER.info(message);
                             return Command.SINGLE_SUCCESS;
                         })
@@ -144,7 +145,7 @@ public class ChatCommand {
                             ChatBot.godBot.readPrompt();
                             ChatBot.buildBot.readPrompt();
                             Text text = Text.literal("Hardcoded prompt : ").append(ChatBot.godBot.hardcodedPrompt).append("\nCustom Prompt : ").append(ChatBot.godBot.prompt);
-                            context.getSource().getPlayer().sendMessage(text);
+                            context.getSource().sendFeedback(() -> text, false); // bug #18: console-safe
                             return Command.SINGLE_SUCCESS;
                         })
                     );

@@ -201,7 +201,8 @@ public class ChatBotActions {
                             int x = IntegerArgumentType.getInteger(context, "x");
                             int y = IntegerArgumentType.getInteger(context, "y");
                             int z = IntegerArgumentType.getInteger(context, "z");
-                            placeBlock(context.getSource().getPlayer(), x, y, z, "minecraft:stone");
+                            // Bug #18: player-only — getPlayerOrThrow gives the console a readable error, not an NPE.
+                            placeBlock(context.getSource().getPlayerOrThrow(), x, y, z, "minecraft:stone");
                             return Command.SINGLE_SUCCESS;
                         }))))
             );
@@ -212,10 +213,12 @@ public class ChatBotActions {
                 LiteralArgumentBuilder.<ServerCommandSource>literal("construction")
                     .requires(source -> source.hasPermissionLevel(2)) // Admin only
                     .executes(context -> {
-                        Raycaster.setLastPos(context.getSource().getPlayer());
+                        // Bug #18: player-only (it raycasts from the player's eyes) — the console gets a readable error.
+                        ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+                        Raycaster.setLastPos(player);
                         // Under LangChain4j the per-player conversation lives in the
                         // mod, so clearing the chain is just dropping the memory window.
-                        ChatBot.buildBot.clearMemory(context.getSource().getPlayer());
+                        ChatBot.buildBot.clearMemory(player);
                         return Command.SINGLE_SUCCESS;
                     })
             );

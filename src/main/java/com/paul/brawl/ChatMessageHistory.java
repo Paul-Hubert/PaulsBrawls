@@ -36,7 +36,8 @@ public class ChatMessageHistory {
 
     private static void onCommandMessage(SignedMessage message, ServerCommandSource source, MessageType.Parameters parameters) {
         String content = message.getContent().getString();
-        addMessageToHistory(source.getPlayer().getName().getString() + " command : " + content);
+        // Bug #18: a console /say or /me has no player — source.getName() is "Server" there.
+        addMessageToHistory(source.getName() + " command : " + content);
     }
 
     private static void onGameMessage(MinecraftServer server, Text text, boolean flag) {
