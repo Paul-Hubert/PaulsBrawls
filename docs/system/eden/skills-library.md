@@ -274,7 +274,9 @@ pinned through `start()` by `eden/tests/main-full-wiring.test.ts`.
 - ~~**Stock skills are re-seeded on every boot.**~~ **Fixed (bug #12):** `seedStockSkills` calls
   `seedStockIfChanged` per stock skill. It returns `unchanged` (nothing written or journaled) when the newest
   stock-authored version has the same code hash and the same seed manifest (`summary, params, returns, tags,
-  tier, exemplar` — not `description`); `overridden` when a live non-stock version is newer than that stock
+  tier, exemplar` — not `description`) **and is still live** (`active`/`active-probation`; review fix: a stock
+  version quarantined by the boot hash check or a verdict used to stay quarantined forever, so `go-to` & co. had no
+  live version — now it is healed with one fresh version); `overridden` when a live non-stock version is newer than that stock
   version (the admitted override stays live; `main.ts` logs a warning naming it); else it appends via
   `seedStock` and returns `seeded`. `seedStockSkills` returns `{seeded, unchanged, overridden}`.
 - **Overriding a stock name breaks composition until graduation.** If a villager's draft of e.g. `go-to`

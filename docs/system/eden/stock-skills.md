@@ -19,7 +19,7 @@ JS strings compiled by the engine, receiving only `(bot, args, ctx)`.
 
 ## How stock skills are used
 
-- **Seeding:** `library.seedStockIfChanged(input, 'active')` → `unchanged` (same code hash + seed manifest as the newest stock version), `overridden` (a newer live non-stock version — left alone and logged), or `seedStock` → `upsertDraft` + status `active` (no probation, D-12).
+- **Seeding:** `library.seedStockIfChanged(input, 'active')` → `unchanged` (same code hash + seed manifest as the newest stock version, which is still live — a quarantined or archived one is re-seeded once), `overridden` (a newer live non-stock version — left alone and logged), or `seedStock` → `upsertDraft` + status `active` (no probation, D-12).
   An unchanged stock skill gets no new version (see [skills-library.md](skills-library.md#gotchas--known-issues)).
 - **Exemplars (full code in prompts):** `go-to`, `mine-block`, `find-block`, `collect-blocks`,
   `craft-item`, `use-chest`, `deposit` (`eden/src/main.ts:758`). Test pins 5–7 exemplars, all mortal, each ≤ 60

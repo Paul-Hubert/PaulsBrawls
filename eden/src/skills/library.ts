@@ -146,7 +146,10 @@ export class SkillLibrary {
   seedStockIfChanged(input: DraftInput, status: 'active' | 'active-probation' = 'active'): 'seeded' | 'unchanged' | 'overridden' {
     const records = this.skills.get(input.name)?.records ?? [];
     const lastStock = [...records].reverse().find((r) => r.version.author.kind === 'stock');
-    if (lastStock && lastStock.version.codeHash === sha256(input.code) && sameSeed(lastStock.manifest, this.buildManifest(input))) {
+    // 'unchanged' only while that stock version is still live: a quarantined/archived one (the boot hash check, a
+    // critic or tripwire verdict) is healed with a fresh version, as every boot did before bug #12's fix.
+    const lastLive = lastStock?.version.status === 'active' || lastStock?.version.status === 'active-probation';
+    if (lastStock && lastLive && lastStock.version.codeHash === sha256(input.code) && sameSeed(lastStock.manifest, this.buildManifest(input))) {
       return 'unchanged';
     }
     const live = this.liveRecord(input.name);

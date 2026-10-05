@@ -187,6 +187,19 @@ test('bug #12: seedStockIfChanged appends only when the stock code/manifest chan
   assert.equal(library.activeVersion('go-to')?.version, 3);
 });
 
+// Review of bug #12: 'unchanged' was returned on a hash match alone, so a stock version quarantined by the boot hash
+// check (or a critic) stayed quarantined forever — no live go-to, every composition of it SkillNotFound.
+test('bug #12 review: a quarantined stock skill is re-seeded once, then unchanged again', () => {
+  const { library } = lib();
+  const stock = draft({ name: 'go-to', author: { kind: 'stock' } });
+  library.seedStockIfChanged(stock);
+  library.quarantine('go-to', 'code hash mismatch', 1);
+  assert.equal(library.activeVersion('go-to'), undefined, 'nothing live');
+  assert.equal(library.seedStockIfChanged(stock), 'seeded', 'heals: a fresh stock version');
+  assert.equal(library.activeVersion('go-to')?.version, 2);
+  assert.equal(library.seedStockIfChanged(stock), 'unchanged', 'and only once');
+});
+
 test('bug #12: a changed stock skill is NOT seeded over an admitted villager override', () => {
   const { library } = lib();
   const stock = draft({ name: 'go-to', author: { kind: 'stock' } });
