@@ -52,12 +52,12 @@ They copy the remapped jar into the paths set by `mods_folder` / `client_mods_fo
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
-The Java side has eighteen JUnit 5 classes (100 tests) under `src/test/java/com/paul/brawl/`, each covering a
+The Java side has nineteen JUnit 5 classes (103 tests) under `src/test/java/com/paul/brawl/`, each covering a
 Minecraft-free helper: `TradeMath`, `ImageMime`, `BuildGuard`, `GodToolGate`, `GodClamps`, `ItemIds`, `FlagGlow`,
 `GibberMath`, `BlockInfoJson`, `EdenRetry`, `GodActionQueue`, `AgentTickets`, plus `GodService` and `BuildService` (the
 world layer's rules, run against the `RecordingGodWorld` / `RecordingBuildWorld` test helpers) and the MCP contract
 tests `GodMcpServerTest` / `BuilderMcpServerTest` (the real `god`/`builder` servers on a loopback port, driven by the
-official MCP Java SDK client), `AgentClientTest`, and `AgentE2ETest` (8 tests, skipped unless `OPENCODE_BIN` points at an
+official MCP Java SDK client), `AgentClientTest`, `AgentTurnsTest`, and `AgentE2ETest` (8 tests, skipped unless `OPENCODE_BIN` points at an
 opencode binary: the real opencode + the repo's `god-agent/` config + the real MCP servers, with only the LLM scripted)
 (`./gradlew test`). The world-facing wiring around them is in-game-check only. `jacocoTestReport` fails, because Jacoco isn't applied.
 **There is no CI in this repo:** `.github/` is gitignored (`.gitignore:1`) and absent from all of git history, so
@@ -421,6 +421,8 @@ architecture.
 - **`AgentClient` forces HTTP/1.1.** The JDK `HttpClient` defaults to an h2c upgrade on plain http, and
   opencode's (Bun) server never answers it, so every call hangs until its timeout. This was found by
   `AgentE2ETest`.
+- **Minting a ticket revokes the player's earlier ticket of that kind.** Reserve the turn first (as
+  `AgentTurns.pray`/`build` do), or a refused duplicate `/build` kills the running build. Found by `AgentTurnsTest`.
 - **opencode needs an image-capable model declared** (`"attachment": true` / `modalities.input` including
   `image`). Otherwise it replaces a `/build` or `/prove` screenshot with "this model does not support image input".
 

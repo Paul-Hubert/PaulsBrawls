@@ -20,6 +20,7 @@ sources:
   - src/test/java/com/paul/brawl/AgentE2ETest.java
   - src/test/java/com/paul/brawl/ScriptedLlm.java
   - src/test/java/com/paul/brawl/AgentClientTest.java
+  - src/test/java/com/paul/brawl/AgentTurnsTest.java
   - docs/27-god-builder-mcp-design.md
 verified_at: 9406df0
 ---
@@ -57,8 +58,9 @@ and no `builder_*`. A sub-builder is offered only `builder_*`, and the builder's
 **`/pray <text>`** (`ChatCommand.onChatCommand`) and **`/prove`** (`ImageReceiver`, any text not starting with
 `Build :`) go to `AgentTurns.pray`:
 
-1. If a turn is already running for this player, they are told `Dieu : (Dieu médite encore ta dernière prière.)`.
-2. Otherwise the mod calls `GodSessionManager.claim`. If another player holds the avatar, the player is told
+1. The player's turn slot is reserved first. If a turn is already running (or being set up) for this player, they
+   are told `Dieu : (Dieu médite encore ta dernière prière.)`, and the running turn and its ticket are untouched.
+2. Then the mod calls `GodSessionManager.claim`. If another player holds the avatar, the player is told
    `Dieu : (occupé avec un autre fidèle — reviens plus tard.)` and **the agent is never called**. Unlike the
    builtin path, there is no bodiless prayer.
 3. The mod mints a god ticket (bound to the player and the session generation), then sends the god agent:
@@ -79,6 +81,9 @@ and no `builder_*`. A sub-builder is offered only `builder_*`, and the builder's
 **`/build <text>`** (client screenshot, `Build :` prefix) goes to `AgentTurns.build`:
 
 1. The sender must have a `/construction` pivot, otherwise they are told `Dieu : (aucun point de référence …)`.
+   A second `/build` while one is running is told `Dieu : (une construction est déjà en cours pour toi.)`; the slot
+   is reserved **before** minting, because minting revokes the player's earlier ticket and would kill the running
+   build.
 2. The mod mints a builder ticket. Its TTL is the larger of `ticketTtlSeconds` and `buildTurnTimeoutSeconds`.
 3. The builder agent receives the ticket, the absolute pivot, the request and the screenshot.
 4. The planner launches `sub-builder`s through `task`. Each one opens a sub-build lease, places blocks and closes
@@ -147,7 +152,9 @@ world ports). It checks:
 - killing opencode mid-turn sends the body home with a French message.
 
 Recorded results are in [docs/PROGRESS.md](../../PROGRESS.md). `AgentClientTest` covers reply parsing and the
-down path without opencode.
+down path without opencode. `AgentTurnsTest` covers the turn bookkeeping without opencode (a stand-in that holds
+each turn): a second `/build` or prayer leaves the running turn's ticket alive, and simultaneous prayers start one
+turn.
 
 ## Related
 

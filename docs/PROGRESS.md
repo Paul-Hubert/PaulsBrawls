@@ -3,6 +3,14 @@
 One dated section per session: what was done, decisions taken, what's next,
 surprises. Newest first.
 
+## 2026-10-06 — fix: a second /build no longer kills the running build (Java mod, not Eden)
+- `AgentTurns.build` minted the new builder ticket before checking for a running build, and minting revokes the
+  player's earlier ticket. A refused second `/build` therefore killed the running build: every later tool call of
+  that build was refused. Simultaneous prayers of one player had the same race. Both now reserve the player's turn
+  slot first, then claim and mint.
+- `AgentTurnsTest` (3) drives the real `AgentTurns` + `AgentClient` against a stand-in that holds each turn open.
+  Java tests: 100 → 103.
+
 ## 2026-10-06 — docs/26: God and Builder as MCP servers, thinking in opencode (Java mod, not Eden)
 - Scope: the Java AI God only ([docs/26](26-god-builder-mcp-prompt.md), design [docs/27](27-god-builder-mcp-design.md)).
   Nothing under `eden/` was touched.

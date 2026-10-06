@@ -44,6 +44,9 @@ public final class AgentTurns {
     /** An in-flight turn: the agent session it runs in (null until created) and its ticket. */
     private record Turn(String sessionId, String ticketId) {}
 
+    /** A turn being set up (claim, mint): holds the player's slot so a concurrent request is refused. */
+    private static final Turn RESERVED = new Turn(null, null);
+
     private final AgentClient client;
     private final GodService god;
     private final BuildService build;
@@ -74,21 +77,20 @@ public final class AgentTurns {
      * refused on the spot.
      */
     public Thread pray(UUID player, String name, String text, byte[] image) {
-        if (godTurns.containsKey(player)) {
+        // Reserve the turn BEFORE minting: minting revokes the player's earlier ticket, which would kill a running
+        // turn (AgentTurnsTest).
+        if (godTurns.putIfAbsent(player, RESERVED) != null) {
             tell(player, STILL_THINKING);
             return null;
         }
         if (!GodSessionManager.claim(player)) {
+            godTurns.remove(player, RESERVED);
             tell(player, BUSY);
             return null;
         }
         AgentTickets.Ticket t = tickets.mint(AgentTickets.Kind.GOD, player, GodSessionManager.generation(),
             cfg.ticketTtlSeconds * 1000L);
-        if (godTurns.putIfAbsent(player, new Turn(null, t.id())) != null) {
-            tickets.revoke(t.id());
-            tell(player, STILL_THINKING);
-            return null;
-        }
+        godTurns.put(player, new Turn(null, t.id()));
         String prompt = prayerPrompt(name, t.id(), text, image != null && image.length > 0);
         return Thread.ofVirtual().name("god-turn-" + name).start(() -> runPrayer(player, name, t, prompt, image));
     }
@@ -98,7 +100,7 @@ public final class AgentTurns {
         String sid = null;
         try {
             sid = session(godSessions, player, "Prière — " + name);
-            godTurns.computeIfPresent(player, (k, v) -> v.ticketId().equals(t.id()) ? new Turn(sid(k), t.id()) : v);
+            godTurns.computeIfPresent(player, (k, v) -> t.id().equals(v.ticketId()) ? new Turn(sid(k), t.id()) : v);
             reply = client.send(sid, cfg.godAgentName, prompt, image, Duration.ofSeconds(cfg.turnTimeoutSeconds));
         } catch (AgentClient.AgentException e) {
             reply = new AgentClient.Reply("", e.failure, e.getMessage());
@@ -142,13 +144,13 @@ public final class AgentTurns {
             tell(player, NO_PIVOT);
             return null;
         }
-        long ttl = Math.max(cfg.ticketTtlSeconds, cfg.buildTurnTimeoutSeconds) * 1000L;
-        AgentTickets.Ticket t = tickets.mint(AgentTickets.Kind.BUILDER, player, 0, ttl);
-        if (buildTurns.putIfAbsent(player, new Turn(null, t.id())) != null) {
-            tickets.revoke(t.id());
+        if (buildTurns.putIfAbsent(player, RESERVED) != null) { // before minting: see pray
             tell(player, BUILD_BUSY);
             return null;
         }
+        long ttl = Math.max(cfg.ticketTtlSeconds, cfg.buildTurnTimeoutSeconds) * 1000L;
+        AgentTickets.Ticket t = tickets.mint(AgentTickets.Kind.BUILDER, player, 0, ttl);
+        buildTurns.put(player, new Turn(null, t.id()));
         String prompt = "[Construction demandée par " + name + "]\n"
             + "Ticket de construction : " + t.id() + "\n"
             + "Pivot /construction (absolu) : x=" + origin[0] + " y=" + origin[1] + " z=" + origin[2] + "\n"
@@ -163,7 +165,7 @@ public final class AgentTurns {
         try {
             sid = session(buildSessions, player, "Construction — " + name);
             final String s = sid;
-            buildTurns.computeIfPresent(player, (k, v) -> v.ticketId().equals(t.id()) ? new Turn(s, t.id()) : v);
+            buildTurns.computeIfPresent(player, (k, v) -> t.id().equals(v.ticketId()) ? new Turn(s, t.id()) : v);
             reply = client.send(sid, cfg.builderAgentName, prompt, image, Duration.ofSeconds(cfg.buildTurnTimeoutSeconds));
         } catch (AgentClient.AgentException e) {
             reply = new AgentClient.Reply("", e.failure, e.getMessage());
