@@ -3,6 +3,60 @@
 One dated section per session: what was done, decisions taken, what's next,
 surprises. Newest first.
 
+## 2026-10-06 — docs/26: God and Builder as MCP servers, thinking in opencode (Java mod, not Eden)
+- Scope: the Java AI God only ([docs/26](26-god-builder-mcp-prompt.md), design [docs/27](27-god-builder-mcp-design.md)).
+  Nothing under `eden/` was touched.
+- Commits on `rework`:
+  - `5b27fb3`: design doc.
+  - `718214e`: world layer extracted (`GodService`/`BuildService` + ports).
+  - `6a89935`: `builder` MCP server.
+  - `9406df0`: `god` MCP server.
+  - `e6fe688`: opencode integration behind `godAgent = external`.
+- Java tests: 47 → **100** (18 classes). `gradle build` + `gradle test` were green on every commit. All 100 pass
+  with `OPENCODE_BIN` set; without it the 8 `AgentE2ETest` cases are skipped.
+- Automated evidence (no world needed), all with real code on the protocol side:
+  - MCP contract tests: the official MCP Java SDK client against the real servers.
+  - `AgentE2ETest`: real opencode 1.18.34 + the repo's `god-agent/` + the real MCP servers + `AgentTurns`; only the
+    LLM is scripted.
+  - A real dev dedicated server (`gradle runServer`, `run/`, `godAgent=external`) booted with the mod. It logged
+    `MCP servers on http://127.0.0.1:8771 (/mcp/god, /mcp/builder)`, so the SDK, Reactor and the validator load
+    under Fabric's jar-in-jar class loader.
+  - On that server, the SDK client listed both tool sets and got the ticket refusals, and a wrong token was
+    refused. opencode with the repo config reported both servers `connected`. No player was online, so no world
+    effect was exercised.
+- Surprises:
+  - The JDK `HttpClient` defaults to an h2c upgrade on plain http, which opencode's (Bun) server never answers, so
+    every call hung. `AgentClient` is pinned to HTTP/1.1.
+  - opencode drops images for a model it does not know to be image-capable (`attachment: true`).
+  - pi gained built-in MCP on 2026-09-29, which changed the comparison but not the choice (no sub-agents, and no
+    HTTP server).
+
+### In-game checklist (docs/26 §6) with `godAgent = external`
+
+Not run in this session: there was no Minecraft client, no second player and no LLM provider key in the
+environment. Every item below is **NOT RUN**. The "covered by" notes say what the automated tests show, with
+stand-ins for the world; they do not replace the in-game run.
+
+| Item | Result | Covered by (automated, world stand-in) |
+|---|---|---|
+| `/pray` from one player: God answers in French, appears, rewards, vanishes; a second player meanwhile is told God is busy and cannot trigger `god` tools | **NOT RUN** | `AgentE2ETest.aPrayerRunsThroughOpencodeIntoTheWorld`, `aSecondPlayerIsRefusedAndNeverReachesTheAgent`; `GodMcpServerTest.anotherPlayerCannotUseGodTools` |
+| Punishment, weather and spawn respect the clamps; a Reward with components (`enchanted_book[…]`) arrives intact | **NOT RUN** | `GodMcpServerTest.clampsHold`, `componentsReachTheWorldIntact` (the string reaches the world port intact; that `/give` parsing accepts it needs the game) |
+| `offer_trade` then `/accept` works; an expired offer is refused | **NOT RUN** | `GodServiceTest.tradeAmountsAreCheckedBeforeTheWorld`; `/accept` itself is unchanged code (`TradeOffers`) |
+| `/godbody off` mid-session: avatar vulnerable again, queued actions dropped, running builds stop | **NOT RUN** | `AgentE2ETest.theWatchdogPathAbortsTheAgentAndKillsTheTicket` (same `forceEndSession` path), `BuilderMcpServerTest.cancelledAndIdleSubBuildsAreClosedAndReleased`, `GodMcpServerTest.bodyToolsNeedTheBridge` |
+| Kill the agent process mid-session: the watchdog ends the session and restores the avatar; the player gets a French message | **NOT RUN** | `AgentE2ETest.theAgentProcessDyingMidTurnEndsTheEncounter` (real opencode killed after `appear`: vanish + French message + released). The broken connection ends it before the watchdog has to. |
+| `/construction` then `/build <text>` with a screenshot: sub-builds placed only through `builder`; the 4-sub-build and 128-block caps hold; the tick stays healthy | **NOT RUN** | `AgentE2ETest.aBuildPlansSubBuildersThatPlaceThroughTheBuilderServer`, `BuilderMcpServerTest.atMostFourSubBuildsServerWide`, `theBlockCapHolds`. Tick health needs the game. |
+| The Node Mineflayer MCP tools (avatar body) still work for God, unchanged | **NOT RUN** | `GodMcpServerTest.bodyToolsNeedTheBridge` (proxy + gate against a stand-in); the Node server is an empty gitlink in this checkout |
+
+- Phase 6 removal: **not done**, because the checklist has not passed. The builtin ChatBot loop, `BuildSubAgent`,
+  `LLMConfig`/`LLMCommand`, `/prompt` and the `godAgent` switch all stay. `godAgent` still defaults to `builtin`,
+  so a server that does not opt in behaves as before. The exception is `ChangeWeather`, which now refuses an
+  unknown type.
+- Next:
+  - Run the checklist on the dev server with a real provider key: two players, `god-agent/README.md` setup, and
+    `godAgent=external`.
+  - Record the results here. Only if every item passes, delete the builtin loop in a separate commit, as listed in
+    docs/27 §7.
+
 ## 2026-06-16 — R66: fix the /villagers restart duplicate-login kick storm
 - Symptom (from the live admin journal): a single bot (`Harry`) connect/kick-looped at ~1 Hz,
   reaching `system.bot-connected` every cycle BEFORE the kick, reason logged `kicked: [object Object]`.
