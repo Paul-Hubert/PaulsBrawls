@@ -1,0 +1,25 @@
+{
+  "name": "Offline players and expired tickets",
+  "description": "A player who logs out mid-turn cannot be acted on, and is acted on again when back; a ticket past its TTL is gone for good.",
+  "steps": [
+    { "pray": "alice", "as": "t" },
+    { "build": "alice", "as": "b" },
+    { "offline": "alice" },
+    { "call": "god/reward", "args": { "ticket": "${t}", "item": "minecraft:diamond", "amount": 1 },
+      "expect": { "error": true, "text": "Le joueur n'est plus connecté.", "noEffects": true } },
+    { "call": "builder/get_build_origin", "args": { "ticket": "${b}" },
+      "expect": { "error": true, "text": "Le joueur n'est plus connecté." } },
+    { "online": "alice" },
+    { "call": "god/reward", "args": { "ticket": "${t}", "item": "minecraft:diamond", "amount": 1 },
+      "expect": { "effects": ["god: give minecraft:diamond x1"] } },
+    { "unpivot": "alice" },
+    { "call": "builder/begin_sub_build", "args": { "ticket": "${b}", "anchor_x": 0, "anchor_y": 0, "anchor_z": 0 },
+      "expect": { "error": true, "contains": "/construction" } },
+    { "advance": "600s" },
+    { "call": "god/say", "args": { "ticket": "${t}", "message": "trop tard" },
+      "expect": { "error": true, "contains": "expiré", "noEffects": true } },
+    { "call": "builder/get_build_origin", "args": { "ticket": "${b}" },
+      "expect": { "error": true, "contains": "expiré" } },
+    { "state": { "liveTickets": 0 } }
+  ]
+}

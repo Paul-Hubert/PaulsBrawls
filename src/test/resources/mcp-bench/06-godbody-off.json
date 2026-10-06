@@ -1,0 +1,21 @@
+{
+  "name": "/godbody off stops a prayer and a build at once",
+  "description": "The admin kill-switch ends the avatar session, refuses every body tool and cancels running sub-builds; after /godbody on, a new prayer works.",
+  "steps": [
+    { "pray": "alice", "as": "t" },
+    { "build": "admin", "as": "b" },
+    { "call": "builder/begin_sub_build", "args": { "ticket": "${b}", "anchor_x": 0, "anchor_y": 0, "anchor_z": 0 },
+      "expect": { "capture": { "sb": "sub_build=(\\S+)" } } },
+    { "godbody": "off" },
+    { "call": "god/appear", "args": { "ticket": "${t}" }, "expect": { "error": true, "noEffects": true } },
+    { "call": "builder/place_block", "args": { "ticket": "${b}", "sub_build": "${sb}", "x": 0, "y": 0, "z": 0, "block": "minecraft:stone" },
+      "expect": { "error": true, "noEffects": true } },
+    { "state": { "busy": false, "slots": 0, "leases": 0 } },
+    { "pray": "alice", "as": "t2" },
+    { "call": "god/appear", "args": { "ticket": "${t2}" }, "expect": { "error": true, "contains": "désactivé", "noEffects": true } },
+    { "call": "god/say", "args": { "ticket": "${t2}", "message": "Je te parle sans corps." },
+      "expect": { "effects": ["god: tell Dieu : Je te parle sans corps."] } },
+    { "godbody": "on" },
+    { "call": "god/appear", "args": { "ticket": "${t2}" }, "expect": { "effects": ["god: appear 3.0 0.0 true"] } }
+  ]
+}

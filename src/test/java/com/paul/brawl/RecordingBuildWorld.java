@@ -19,6 +19,8 @@ class RecordingBuildWorld implements BuildWorld {
         "minecraft:oak_stairs[facing=north]"));
     /** One entry per placed block: "x,y,z block". */
     final List<String> placed = Collections.synchronizedList(new ArrayList<>());
+    /** The size of every place() batch that reached the world (one per tool call). */
+    final List<Integer> batches = Collections.synchronizedList(new ArrayList<>());
 
     @Override public boolean isOnline(UUID player) { return online.contains(player); }
 
@@ -32,6 +34,7 @@ class RecordingBuildWorld implements BuildWorld {
 
     @Override public CompletableFuture<String> place(UUID player, int[] origin, List<int[]> offsets, String block) {
         if (!online.contains(player)) return CompletableFuture.failedFuture(new WorldRefusal(MinecraftBuildWorld.OFFLINE));
+        batches.add(offsets.size());
         for (int[] o : offsets) placed.add((origin[0] + o[0]) + "," + (origin[1] + o[1]) + "," + (origin[2] + o[2]) + " " + block);
         return CompletableFuture.completedFuture(offsets.size() + " bloc(s) " + block + " placé(s).");
     }

@@ -154,7 +154,7 @@ world ports). It checks:
 Recorded results are in [docs/PROGRESS.md](../../PROGRESS.md). `AgentClientTest` covers reply parsing and the
 down path without opencode. `AgentTurnsTest` covers the turn bookkeeping without opencode (a stand-in that holds
 each turn): a second `/build` or prayer leaves the running turn's ticket alive, and simultaneous prayers start one
-turn.
+turn. See also the MCP test bench, [mcp-test-bench.md](mcp-test-bench.md).
 
 ## Related
 

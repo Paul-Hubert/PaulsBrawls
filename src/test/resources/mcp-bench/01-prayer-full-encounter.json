@@ -1,0 +1,25 @@
+{
+  "name": "A full prayer, as the god agent plays it",
+  "description": "alice prays; the agent reads her context, appears, rewards, speaks and ends the encounter. Every effect is exact, and the ticket dies with the session.",
+  "steps": [
+    { "pray": "alice", "as": "t" },
+    { "state": { "busy": true, "owner": "alice", "manifested": false, "liveTickets": 1 } },
+    { "call": "god/get_player_context", "args": { "ticket": "${t}" },
+      "expect": { "text": "{\"name\":\"Alice\"}", "effects": ["god: context"] } },
+    { "call": "god/appear", "args": { "ticket": "${t}", "distance": 2.5 },
+      "expect": { "text": "God a pris forme physique devant le joueur.", "effects": ["god: appear 2.5 0.0 true"] } },
+    { "state": { "manifested": true } },
+    { "call": "god/reward", "args": { "ticket": "${t}", "item": "minecraft:diamond", "amount": 2 },
+      "expect": { "text": "You gave the player a reward: 2 minecraft:diamond",
+                  "effects": ["god: give minecraft:diamond x2", "god: gesture nod"] } },
+    { "call": "god/say", "args": { "ticket": "${t}", "message": "  Va en paix.  " },
+      "expect": { "text": "Message transmis au joueur.", "effects": ["god: tell Dieu : Va en paix.", "god: speak Va en paix."] } },
+    { "call": "god/end_session", "args": { "ticket": "${t}" },
+      "expect": { "text": "Séance close.", "effects": ["god: vanish"] } },
+    { "state": { "busy": false, "manifested": false, "liveTickets": 0 } },
+    { "call": "god/say", "args": { "ticket": "${t}", "message": "encore" },
+      "expect": { "error": true, "contains": "Ticket inconnu", "noEffects": true } },
+    { "call": "god/end_session", "args": { "ticket": "${t}" },
+      "expect": { "error": true, "contains": "déjà close", "noEffects": true } }
+  ]
+}

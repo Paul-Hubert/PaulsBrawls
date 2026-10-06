@@ -117,6 +117,22 @@ dependencies {
 
 test {
 	useJUnitPlatform()
+	// MCP test bench knobs (docs/system/aigod/mcp-test-bench.md): value-fuzz iterations per tool and the seed.
+	systemProperty "mcp.bench.fuzz", findProperty("mcpFuzz") ?: "25"
+	systemProperty "mcp.bench.seed", findProperty("mcpSeed") ?: "24301"
+	systemProperty "sun.net.httpserver.nodelay", "true"
+}
+
+// Read-only smoke check of a RUNNING server's MCP endpoints (godAgent=external): tool lists, auth, Origin and ticket
+// refusals. No ticket is valid, so nothing reaches the world. Token: -PmcpToken=… or PAULSBRAWLS_MCP_TOKEN.
+tasks.register("mcpProbe", JavaExec) {
+	group = "verification"
+	description = "Probe the god/builder MCP servers of a running server (read-only)."
+	dependsOn "testClasses"
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.paul.brawl.McpLiveProbe"
+	args = [findProperty("mcpUrl") ?: "http://127.0.0.1:8771"]
+	if (findProperty("mcpToken")) environment "PAULSBRAWLS_MCP_TOKEN", findProperty("mcpToken")
 }
 
 processResources {

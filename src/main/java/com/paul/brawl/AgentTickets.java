@@ -33,8 +33,11 @@ public final class AgentTickets {
         this.clock = clock;
     }
 
-    /** Mint a ticket; any earlier ticket of the same player and kind is revoked (one live turn per player). */
-    public Ticket mint(Kind kind, UUID player, long generation, long ttlMillis) {
+    /**
+     * Mint a ticket; any earlier ticket of the same player and kind is revoked (one live turn per player).
+     * Synchronized so that concurrent mints for one player still leave exactly one live (McpConcurrencyTest).
+     */
+    public synchronized Ticket mint(Kind kind, UUID player, long generation, long ttlMillis) {
         revoke(player, kind);
         byte[] b = new byte[16];
         random.nextBytes(b);
@@ -71,7 +74,7 @@ public final class AgentTickets {
     }
 
     /** Revoke every ticket of {@code player} (null = every player) of {@code kind}. */
-    public void revoke(UUID player, Kind kind) {
+    public synchronized void revoke(UUID player, Kind kind) {
         tickets.values().removeIf(t -> t.kind() == kind && (player == null || t.player().equals(player)));
         said.retainAll(tickets.keySet());
     }

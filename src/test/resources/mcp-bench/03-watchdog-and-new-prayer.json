@@ -1,0 +1,20 @@
+{
+  "name": "The watchdog ends a session; the old ticket stays dead in the next one",
+  "description": "A session ended from the mod side (idle watchdog, /pray stop) kills its ticket, even when the same player prays again and gets a new session.",
+  "steps": [
+    { "pray": "alice", "as": "old" },
+    { "call": "god/appear", "args": { "ticket": "${old}" }, "expect": { "effects": ["god: appear 3.0 0.0 true"] } },
+    { "watchdog": true },
+    { "state": { "busy": false } },
+    { "call": "god/punish", "args": { "ticket": "${old}", "strikes": 1 },
+      "expect": { "error": true, "contains": "terminée", "noEffects": true } },
+    { "pray": "alice", "as": "new" },
+    { "call": "god/punish", "args": { "ticket": "${old}", "strikes": 1 },
+      "expect": { "error": true, "noEffects": true } },
+    { "call": "god/end_session", "args": { "ticket": "${old}" },
+      "expect": { "error": true, "noEffects": true } },
+    { "state": { "busy": true, "owner": "alice" } },
+    { "call": "god/punish", "args": { "ticket": "${new}", "strikes": 1 },
+      "expect": { "text": "God punished the player 1 times.", "effects": ["god: strike x1"] } }
+  ]
+}

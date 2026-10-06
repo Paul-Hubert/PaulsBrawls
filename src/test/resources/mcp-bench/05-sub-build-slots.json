@@ -1,0 +1,28 @@
+{
+  "name": "Four sub-builds server-wide, and dead leases give their slot back",
+  "description": "A fifth sub-build is refused; ending one frees a slot; a lease idle for the idle limit is swept on the next call.",
+  "steps": [
+    { "build": "a", "as": "ta" },
+    { "build": "b", "as": "tb" },
+    { "repeat": 4, "steps": [
+      { "call": "builder/begin_sub_build", "args": { "ticket": "${ta}", "anchor_x": "${i}", "anchor_y": 0, "anchor_z": 0 },
+        "expect": { "capture": { "last": "sub_build=(\\S+)" } } }
+    ] },
+    { "state": { "slots": 4 } },
+    { "call": "builder/begin_sub_build", "args": { "ticket": "${tb}", "anchor_x": 0, "anchor_y": 0, "anchor_z": 0 },
+      "expect": { "error": true, "contains": "tournent déjà" } },
+    { "call": "builder/end_sub_build", "args": { "ticket": "${ta}", "sub_build": "${last}" } },
+    { "call": "builder/begin_sub_build", "args": { "ticket": "${tb}", "anchor_x": 0, "anchor_y": 0, "anchor_z": 0 },
+      "expect": { "capture": { "bsb": "sub_build=(\\S+)" } } },
+    { "state": { "slots": 4 } },
+    { "comment": "b keeps working; a's three leases go idle" },
+    { "advance": "60s" },
+    { "call": "builder/place_block", "args": { "ticket": "${tb}", "sub_build": "${bsb}", "x": 0, "y": 0, "z": 0, "block": "minecraft:stone" } },
+    { "advance": "60s" },
+    { "comment": "Sweeping is lazy: a's dead leases keep their slots until the next builder call sweeps them." },
+    { "state": { "slots": 4, "leases": 4 } },
+    { "call": "builder/begin_sub_build", "args": { "ticket": "${tb}", "anchor_x": 300, "anchor_y": 0, "anchor_z": 0 },
+      "expect": { "error": true, "contains": "Ancre refusée" } },
+    { "state": { "slots": 1, "leases": 1 } }
+  ]
+}

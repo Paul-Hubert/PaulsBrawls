@@ -4,7 +4,7 @@ title: Build, packaging and runtime layout of the Fabric mod
 system: platform
 summary: How the paulsbrawls Fabric mod is built (Loom, versions, jar-in-jar deps, copy tasks), what is tracked in run/, CI reality, the Java unit tests, the empty minecraft-mcp-server gitlink, supervisor/ and .claude/.
 tags: [gradle, loom, junit, tests, fabric, build, jar-in-jar, langchain4j, okhttp, mixins, assets, ci, run-dir, server-properties, submodule, supervisor]
-sources: [build.gradle, settings.gradle, gradle.properties, .gitignore, .gitattributes, src/main/resources/fabric.mod.json, src/main/resources/paulsbrawls.mixins.json, src/client/resources/paulsbrawls.client.mixins.json, src/main/java/com/paul/brawl/mixin/ExampleMixin.java, src/client/java/com/paul/brawl/mixin/client/ExampleClientMixin.java, src/main/resources/assets/paulsbrawls/items/coin.json, src/main/resources/assets/paulsbrawls/models/item/coin.json, src/main/resources/assets/paulsbrawls/lang/en_us.json, src/main/resources/assets/paulsbrawls/lang/fr_fr.json, run/server.properties, run/mcp_config.properties, run/eula.txt, run/prompt.txt, supervisor/SUPERVISOR.md, supervisor/check.ps1, .claude/launch.json, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/test/java/com/paul/brawl/TradeMathTest.java, src/test/java/com/paul/brawl/BuildGuardTest.java, src/test/java/com/paul/brawl/FlagGlowTest.java, src/test/java/com/paul/brawl/GodClampsTest.java, src/test/java/com/paul/brawl/BlockInfoJsonTest.java, src/test/java/com/paul/brawl/EdenRetryTest.java, src/test/java/com/paul/brawl/GibberMathTest.java, src/test/java/com/paul/brawl/GodToolGateTest.java, src/test/java/com/paul/brawl/ImageMimeTest.java, src/test/java/com/paul/brawl/ItemIdsTest.java, src/test/java/com/paul/brawl/GodActionQueueTest.java]
+sources: [build.gradle, settings.gradle, gradle.properties, .gitignore, .gitattributes, src/main/resources/fabric.mod.json, src/main/resources/paulsbrawls.mixins.json, src/client/resources/paulsbrawls.client.mixins.json, src/main/java/com/paul/brawl/mixin/ExampleMixin.java, src/client/java/com/paul/brawl/mixin/client/ExampleClientMixin.java, src/main/resources/assets/paulsbrawls/items/coin.json, src/main/resources/assets/paulsbrawls/models/item/coin.json, src/main/resources/assets/paulsbrawls/lang/en_us.json, src/main/resources/assets/paulsbrawls/lang/fr_fr.json, run/server.properties, run/mcp_config.properties, run/eula.txt, run/prompt.txt, supervisor/SUPERVISOR.md, supervisor/check.ps1, .claude/launch.json, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/test/java/com/paul/brawl/TradeMathTest.java, src/test/java/com/paul/brawl/BuildGuardTest.java, src/test/java/com/paul/brawl/FlagGlowTest.java, src/test/java/com/paul/brawl/GodClampsTest.java, src/test/java/com/paul/brawl/BlockInfoJsonTest.java, src/test/java/com/paul/brawl/EdenRetryTest.java, src/test/java/com/paul/brawl/GibberMathTest.java, src/test/java/com/paul/brawl/GodToolGateTest.java, src/test/java/com/paul/brawl/ImageMimeTest.java, src/test/java/com/paul/brawl/ItemIdsTest.java, src/test/java/com/paul/brawl/GodActionQueueTest.java, src/test/java/com/paul/brawl/McpBench.java, src/test/java/com/paul/brawl/McpLiveProbe.java]
 verified_at: 98cb908
 ---
 
@@ -69,7 +69,10 @@ Client code may reference `main` classes (e.g. `ClientEntryPoint` calls `Money.r
 | `testImplementation` | `org.junit:junit-bom` (platform) + `org.junit.jupiter:junit-jupiter` | 5.11.4 |
 | `testRuntimeOnly` | `org.junit.platform:junit-platform-launcher` | (from the BOM) |
 
-Test dependencies (`build.gradle:94-97`) are not bundled; `test { useJUnitPlatform() }` is at `build.gradle:100-102`.
+Test dependencies (`build.gradle:94-97`) are not bundled. The `test { … }` block runs the JUnit Platform and passes
+the MCP test bench knobs (`-PmcpFuzz`, `-PmcpSeed`) plus `sun.net.httpserver.nodelay=true` (without it the JDK
+`HttpServer` adds ~40 ms per request). `gradle mcpProbe` (a `JavaExec` on the test classpath) probes a running
+server's MCP endpoints read-only ([aigod/mcp-test-bench.md](../aigod/mcp-test-bench.md)).
 
 ### Jar-in-jar (`include`) — the runtime closure shipped inside the mod jar
 
@@ -191,8 +194,8 @@ from the repo.
 
 ## Java unit tests (`src/test/java/com/paul/brawl/`)
 
-Nineteen JUnit 5 suites (103 `@Test`s), run with `./gradlew test`; the 8 of `AgentE2ETest` are skipped unless
-`OPENCODE_BIN` points at an opencode binary. None boots Minecraft, so command trees, packets and
+Twenty-five JUnit 5 classes (933 test cases, counting parameterized and dynamic ones), run with `./gradlew test`;
+the 8 of `AgentE2ETest` are skipped unless `OPENCODE_BIN` points at an opencode binary. None boots Minecraft, so command trees, packets and
 world effects still need an in-game check. Most cover a Minecraft-free helper class in `src/main/java/com/paul/brawl/`;
 `GodServiceTest` / `BuildServiceTest` run the world layer's rules against recording world ports
 (`RecordingGodWorld`, `RecordingBuildWorld`), and the MCP contract tests run the real `god`/`builder` servers on a
@@ -218,6 +221,12 @@ loopback port against the official MCP Java SDK client ([aigod/mcp-servers.md](.
 | `GodMcpServerTest` | 10 | `GodMcpServer` | Real MCP client: tool list, ownership and stale-session refusals, clamps, bridge gate, `wait` bound |
 | `AgentClientTest` | 3 | `AgentClient` | opencode reply parsing (final text, `info.error`), the agent-down path |
 | `AgentTurnsTest` | 3 | `AgentTurns` | A second `/build` or prayer never kills the running turn's ticket; simultaneous prayers start one turn |
+| `McpProtocolConformanceTest` | 85 | `McpHttpEndpoint`, both servers | MCP test bench: raw JSON-RPC/HTTP conformance, auth, Origin, body cap, garbage |
+| `McpToolFuzzTest` | 514 | every advertised MCP tool | MCP test bench: shape attacks refused with no effect; seeded value fuzz within the clamps |
+| `McpTicketMatrixTest` | 222 | every advertised MCP tool | MCP test bench: every tool × every wrong ticket/session/lease/pivot is refused and changes nothing |
+| `McpConcurrencyTest` | 6 | `SubBuilds`, `AgentTickets`, both servers | MCP test bench: slot races, parallel placement, session end racing callers |
+| `McpScenarioTest` | 8 | both servers | MCP test bench: one JSON scenario per file in `src/test/resources/mcp-bench/` |
+| `McpLiveProbeTest` | 3 | `McpLiveProbe` (`gradle mcpProbe`) | The read-only live probe passes on the bench and touches nothing |
 | `AgentE2ETest` | 8 | `AgentTurns`, `AgentClient`, `god-agent/` | The REAL opencode binary with the repo's agents, the real MCP servers; only the LLM (`ScriptedLlm`) and Minecraft are stand-ins. Skipped without `OPENCODE_BIN` ([aigod/external-agent.md](../aigod/external-agent.md)) |
 
 ## `run/` — the dev server working directory (`./gradlew runServer`)

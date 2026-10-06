@@ -22,6 +22,7 @@ sources:
   - src/test/java/com/paul/brawl/BuilderMcpServerTest.java
   - src/test/java/com/paul/brawl/GodMcpServerTest.java
   - src/test/java/com/paul/brawl/AgentTicketsTest.java
+  - docs/system/aigod/mcp-test-bench.md
 verified_at: 718214e
 ---
 
@@ -41,7 +42,7 @@ hop. An MCP call is untrusted input. Design: [docs/27](../../27-god-builder-mcp-
 | Start/stop | `ExternalAgent.start/stop`, called from `ServerEntryPoint` on `SERVER_STARTED` / `SERVER_STOPPING` | Nothing starts with `godAgent = builtin` (the default) |
 | Host | `AgentMcpServers.start` | JDK `HttpServer` bound to the loopback address, one virtual thread per request (`mcp-http-N`) |
 | Protocol | MCP Java SDK 2.0.1, `McpServer.sync(transport)` → `McpStatelessSyncServer` | initialize, tools/list, tools/call; tool inputs schema-validated by the SDK (`validateToolInputs(true)`) |
-| Transport | `McpHttpEndpoint` (implements `McpStatelessServerTransport`) | Streamable HTTP, stateless profile. A POST carries one JSON-RPC message. A request gets `200 application/json`, a notification gets `202`, and GET/DELETE get `405` (there is no SSE stream). Bodies are capped at 1 MiB (`413`). |
+| Transport | `McpHttpEndpoint` (implements `McpStatelessServerTransport`) | Streamable HTTP, stateless profile. A POST carries one JSON-RPC message. A request gets `200 application/json`, a notification gets `202`, and GET/DELETE get `405` (there is no SSE stream). Bodies are capped at 1 MiB (`413`). Malformed JSON is `400`; `params` the SDK cannot convert get a `-32602` error in a `200`, never a `500`. |
 | JSON | `JacksonMcpJsonMapper` + `DefaultJsonSchemaValidator`, passed explicitly | The SDK's ServiceLoader defaults are not relied on under Fabric's class loader |
 
 The SDK's own stateless transport is a servlet. `McpHttpEndpoint` reproduces its behaviour on the JDK server, so
@@ -65,7 +66,8 @@ or else from `mcpToken` in `god_agent.properties`. When both are blank, `ensureT
 **Tickets** (`AgentTickets`) are the second layer:
 - A ticket is `god-…` or `bld-…` followed by 128 random bits. It is bound to **one player UUID** and **one kind**,
   and expires after `ticketTtlSeconds` (default 1800).
-- Minting a new ticket revokes the player's previous ticket of the same kind.
+- Minting a new ticket revokes the player's previous ticket of the same kind (atomically: concurrent mints leave
+  exactly one live).
 - The agent never names a player. Every tool takes `ticket` (required) and acts on the ticket's player only.
 - A god ticket is refused by the builder, and a builder ticket by god.
 
@@ -94,7 +96,8 @@ A cancelled queue (`/godbody off`, server stop) reads "Placement annulé".
 
 **Leases** (`SubBuilds`): a lease belongs to the player of the ticket that opened it, so another build's ticket
 cannot use it. It is dropped and its slot released when:
-- it sees no call for `subBuildIdleSeconds` (default 120), so a dead agent cannot hold the slots;
+- it sees no call for `subBuildIdleSeconds` (default 120), so a dead agent cannot hold the slots. The sweep is lazy:
+  it runs on the next builder call, and `AgentTurns` also closes a build's leases when its turn ends;
 - `BuildGuard.cancelAll()` ran after it opened (`/godbody off`, server stop), so a cancelled build stays cancelled;
 - `end_sub_build` closes it.
 
@@ -170,6 +173,14 @@ client** (`McpClient.sync` + `HttpClientStreamableHttpTransport`, `McpTestClient
   - the `wait` bound;
   - an expired ticket.
 - `AgentTicketsTest` covers ticket kinds, expiry and revocation, plus the token and Origin predicates.
+
+The **MCP test bench** ([mcp-test-bench.md](mcp-test-bench.md)) goes further, from the same fixtures:
+- raw-protocol conformance;
+- schema-driven fuzzing of every advertised tool;
+- every tool × every wrong authority;
+- concurrency;
+- scenario files;
+- `gradle mcpProbe`, a read-only check of a running server.
 
 What these cannot show (anything that needs a world) is in the in-game checklist of
 [docs/26 §6](../../26-god-builder-mcp-prompt.md).

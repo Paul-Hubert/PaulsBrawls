@@ -1,0 +1,18 @@
+{
+  "name": "A second player cannot reach God's tools",
+  "description": "alice holds the avatar. bob's /pray is refused before any ticket exists; a ticket minted for him anyway (a bug elsewhere, or a forged one) opens nothing, and alice's session is untouched.",
+  "steps": [
+    { "pray": "alice", "as": "t" },
+    { "pray": "bob", "busy": true },
+    { "mint": "god", "player": "bob", "as": "bobs" },
+    { "call": "god/say", "args": { "ticket": "${bobs}", "message": "je suis Dieu" },
+      "expect": { "error": true, "contains": "terminée", "noEffects": true } },
+    { "call": "god/reward", "args": { "ticket": "god-forgedAAAAAAAAAAAAAAA", "item": "minecraft:diamond", "amount": 64 },
+      "expect": { "error": true, "contains": "Ticket inconnu", "noEffects": true } },
+    { "call": "god/end_session", "args": { "ticket": "${bobs}" },
+      "expect": { "error": true, "noEffects": true } },
+    { "state": { "busy": true, "owner": "alice" } },
+    { "call": "god/say", "args": { "ticket": "${t}", "message": "Je suis toujours là." },
+      "expect": { "effects": ["god: tell Dieu : Je suis toujours là."] } }
+  ]
+}

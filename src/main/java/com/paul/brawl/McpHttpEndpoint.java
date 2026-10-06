@@ -112,6 +112,11 @@ final class McpHttpEndpoint implements McpStatelessServerTransport, HttpHandler 
                         .block();
                 } catch (McpError e) {
                     resp = new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, req.id(), null, e.getJsonRpcError());
+                } catch (IllegalArgumentException | ClassCastException e) {
+                    // The SDK could not convert the params to the method's shape (e.g. "params": 0): the caller's
+                    // mistake, so -32602 like a schema failure, not a 500. Found by the MCP test bench.
+                    jsonError(ex, 200, req.id(), McpSchema.ErrorCodes.INVALID_PARAMS, "Invalid params for " + req.method());
+                    return;
                 } catch (RuntimeException e) {
                     LOGGER.warn("MCP request {} on {} failed: {}", req.method(), path, e.toString());
                     jsonError(ex, 500, req.id(), McpSchema.ErrorCodes.INTERNAL_ERROR, "internal error");

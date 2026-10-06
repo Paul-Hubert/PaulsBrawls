@@ -3,6 +3,31 @@
 One dated section per session: what was done, decisions taken, what's next,
 surprises. Newest first.
 
+## 2026-10-06 — MCP test bench for the god/builder servers (Java mod, not Eden)
+- What: an extensive test bench for the `god`/`builder` MCP servers ([docs/system/aigod/mcp-test-bench.md](system/aigod/mcp-test-bench.md)).
+  It has a shared fixture (`McpBench`) and six suites:
+  - raw-protocol conformance (85);
+  - schema-driven fuzzing of every advertised tool (514);
+  - every tool × every wrong authority (222);
+  - concurrency (6);
+  - JSON scenario files (8, `src/test/resources/mcp-bench/`);
+  - a tested read-only live probe, `gradle mcpProbe` (3).
+- Java tests: 103 → **933** (25 classes). All pass with `OPENCODE_BIN` set (the 8 `AgentE2ETest` included). Soak: the
+  fuzz suite at 500 iterations per tool under two more seeds (~22 000 calls), and the concurrency suites rerun 5×,
+  all green.
+- Live: a real `gradle runServer` (`godAgent=external`) under Fabric. `gradle mcpProbe` gave `ALL PASS (36 checks)`,
+  and a `"params": 0` call got `-32602` there too. `run/` was restored to its tracked state.
+- Bugs found and fixed:
+  - Unconvertible `tools/call` params came back as HTTP 500 (`-32603`). They are now `-32602` in a `200`.
+  - Concurrent `AgentTickets.mint` for one player could leave several live tickets. `mint` is now atomic.
+  - A second `/build` while one ran killed the running build. This was found while writing the concurrency suite and
+    fixed in its own commit, `ae14a12` (entry below).
+- Found, not changed:
+  - ~40 ms Nagle stall per MCP request on the JDK `HttpServer`. The tests set `sun.net.httpserver.nodelay`.
+  - Idle sub-build leases are swept lazily (on the next builder call).
+  - `GodService` refusals are `isError: false`, as the builtin ChatBot always saw them.
+- The in-game checklist of docs/26 §6 is still NOT RUN. `gradle mcpProbe` is now its preflight.
+
 ## 2026-10-06 — fix: a second /build no longer kills the running build (Java mod, not Eden)
 - `AgentTurns.build` minted the new builder ticket before checking for a running build, and minting revokes the
   player's earlier ticket. A refused second `/build` therefore killed the running build: every later tool call of

@@ -1,0 +1,25 @@
+{
+  "name": "A build, primitive by primitive",
+  "description": "Placements land at pivot + anchor + offset; a closed sub-build accepts nothing; the slot comes back.",
+  "steps": [
+    { "build": "admin", "as": "b", "pivot": [100, 64, 200] },
+    { "call": "builder/get_build_origin", "args": { "ticket": "${b}" }, "expect": { "text": "Pivot : x=100 y=64 z=200" } },
+    { "call": "builder/begin_sub_build", "args": { "ticket": "${b}", "label": "tour", "anchor_x": 10, "anchor_y": 0, "anchor_z": -5 },
+      "expect": { "contains": "ancre absolue x=110 y=64 z=195", "capture": { "sb": "sub_build=(\\S+)" } } },
+    { "state": { "slots": 1, "leases": 1 } },
+    { "call": "builder/place_block", "args": { "ticket": "${b}", "sub_build": "${sb}", "x": 1, "y": 2, "z": 3, "block": "minecraft:stone" },
+      "expect": { "text": "1 bloc(s) minecraft:stone placé(s).", "effects": ["place: 111,66,198 minecraft:stone"] } },
+    { "call": "builder/place_line", "args": { "ticket": "${b}", "sub_build": "${sb}", "x1": 0, "y1": 0, "z1": 0, "x2": 0, "y2": 2, "z2": 0, "block": "minecraft:oak_planks" },
+      "expect": { "effects": ["place: 110,64,195 minecraft:oak_planks", "place: 110,65,195 minecraft:oak_planks", "place: 110,66,195 minecraft:oak_planks"] } },
+    { "call": "builder/place_blocks", "args": { "ticket": "${b}", "sub_build": "${sb}", "xs": [0, 1], "ys": [9, 9], "zs": [0, 0], "block": "minecraft:oak_stairs[facing=north]" },
+      "expect": { "effects": ["place: 110,73,195 minecraft:oak_stairs[facing=north]", "place: 111,73,195 minecraft:oak_stairs[facing=north]"] } },
+    { "call": "builder/place_block", "args": { "ticket": "${b}", "sub_build": "${sb}", "x": 0, "y": 0, "z": 0, "block": "minecraft:unobtainium" },
+      "expect": { "error": true, "contains": "Bloc inconnu", "noEffects": true } },
+    { "call": "builder/end_sub_build", "args": { "ticket": "${b}", "sub_build": "${sb}" }, "expect": { "text": "Sous-construction fermée." } },
+    { "state": { "slots": 0, "leases": 0 } },
+    { "call": "builder/place_block", "args": { "ticket": "${b}", "sub_build": "${sb}", "x": 0, "y": 0, "z": 0, "block": "minecraft:stone" },
+      "expect": { "error": true, "contains": "begin_sub_build", "noEffects": true } },
+    { "call": "builder/end_sub_build", "args": { "ticket": "${b}", "sub_build": "${sb}" },
+      "expect": { "error": true, "contains": "déjà fermée" } }
+  ]
+}

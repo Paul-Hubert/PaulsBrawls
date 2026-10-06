@@ -3,7 +3,7 @@
   "description": "Verified reference for the Paul's Brawls Fabric mod (Gibber money, Capture the Flag, AI God + building, Eden AI village). One entry per document; each document is one MCP resource.",
   "generated_by": "docs/system/build-index.mjs",
   "uri_scheme": "paulsbrawls-docs://<id>",
-  "count": 36,
+  "count": 37,
   "documents": [
     {
       "id": "overview",
@@ -70,7 +70,7 @@
         "Serving over MCP (intended design)",
         "Related"
       ],
-      "bytes": 10056
+      "bytes": 10217
     },
     {
       "id": "verification-notes",
@@ -332,7 +332,7 @@
         "Tests",
         "Related"
       ],
-      "bytes": 10217
+      "bytes": 10286
     },
     {
       "id": "aigod.god-body",
@@ -588,7 +588,8 @@
         "src/main/java/com/paul/brawl/BuildService.java",
         "src/test/java/com/paul/brawl/BuilderMcpServerTest.java",
         "src/test/java/com/paul/brawl/GodMcpServerTest.java",
-        "src/test/java/com/paul/brawl/AgentTicketsTest.java"
+        "src/test/java/com/paul/brawl/AgentTicketsTest.java",
+        "docs/system/aigod/mcp-test-bench.md"
       ],
       "verified_at": "718214e",
       "path": "docs/system/aigod/mcp-servers.md",
@@ -601,7 +602,60 @@
         "Tests",
         "Related"
       ],
-      "bytes": 11791
+      "bytes": 12426
+    },
+    {
+      "id": "aigod.mcp-test-bench",
+      "title": "AI God — the MCP test bench (god and builder servers)",
+      "system": "aigod",
+      "summary": "The test bench for the mod's god/builder MCP servers — the McpBench fixture, the protocol-conformance, schema-fuzz, authority-matrix, concurrency and scenario-file suites, the read-only live probe (gradle mcpProbe), how to extend each, and the bugs it found.",
+      "tags": [
+        "aigod",
+        "mcp",
+        "mcp-server",
+        "test-bench",
+        "fuzzing",
+        "conformance",
+        "tickets",
+        "concurrency",
+        "scenarios",
+        "mcpprobe",
+        "junit",
+        "8771"
+      ],
+      "sources": [
+        "src/test/java/com/paul/brawl/McpBench.java",
+        "src/test/java/com/paul/brawl/McpProtocolConformanceTest.java",
+        "src/test/java/com/paul/brawl/McpToolFuzzTest.java",
+        "src/test/java/com/paul/brawl/McpTicketMatrixTest.java",
+        "src/test/java/com/paul/brawl/McpConcurrencyTest.java",
+        "src/test/java/com/paul/brawl/McpScenarioTest.java",
+        "src/test/java/com/paul/brawl/McpLiveProbe.java",
+        "src/test/java/com/paul/brawl/McpLiveProbeTest.java",
+        "src/test/java/com/paul/brawl/AgentTurnsTest.java",
+        "src/test/java/com/paul/brawl/RecordingGodWorld.java",
+        "src/test/java/com/paul/brawl/RecordingBuildWorld.java",
+        "src/test/java/com/paul/brawl/RecordingBodyTools.java",
+        "src/test/java/com/paul/brawl/McpTestClients.java",
+        "src/test/resources/mcp-bench/01-prayer-full-encounter.json",
+        "build.gradle",
+        "src/main/java/com/paul/brawl/McpHttpEndpoint.java",
+        "src/main/java/com/paul/brawl/AgentTickets.java",
+        "src/main/java/com/paul/brawl/AgentTurns.java"
+      ],
+      "verified_at": "ae14a12",
+      "path": "docs/system/aigod/mcp-test-bench.md",
+      "headings": [
+        "Running it",
+        "The fixture: `McpBench`",
+        "The suites",
+        "Scenario files (`src/test/resources/mcp-bench/*.json`)",
+        "The live probe (`gradle mcpProbe`)",
+        "Extending",
+        "What the bench found",
+        "Related"
+      ],
+      "bytes": 16011
     },
     {
       "id": "aigod.overview",
@@ -1892,7 +1946,9 @@
         "src/test/java/com/paul/brawl/GodToolGateTest.java",
         "src/test/java/com/paul/brawl/ImageMimeTest.java",
         "src/test/java/com/paul/brawl/ItemIdsTest.java",
-        "src/test/java/com/paul/brawl/GodActionQueueTest.java"
+        "src/test/java/com/paul/brawl/GodActionQueueTest.java",
+        "src/test/java/com/paul/brawl/McpBench.java",
+        "src/test/java/com/paul/brawl/McpLiveProbe.java"
       ],
       "verified_at": "98cb908",
       "path": "docs/system/platform/build-and-runtime.md",
@@ -1914,7 +1970,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 23831
+      "bytes": 25147
     },
     {
       "id": "platform.entrypoints-and-wiring",

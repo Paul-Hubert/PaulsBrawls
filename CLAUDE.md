@@ -52,14 +52,18 @@ They copy the remapped jar into the paths set by `mods_folder` / `client_mods_fo
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
-The Java side has nineteen JUnit 5 classes (103 tests) under `src/test/java/com/paul/brawl/`, each covering a
+The Java side has twenty-five JUnit 5 classes (933 test cases) under `src/test/java/com/paul/brawl/`, each covering a
 Minecraft-free helper: `TradeMath`, `ImageMime`, `BuildGuard`, `GodToolGate`, `GodClamps`, `ItemIds`, `FlagGlow`,
 `GibberMath`, `BlockInfoJson`, `EdenRetry`, `GodActionQueue`, `AgentTickets`, plus `GodService` and `BuildService` (the
 world layer's rules, run against the `RecordingGodWorld` / `RecordingBuildWorld` test helpers) and the MCP contract
 tests `GodMcpServerTest` / `BuilderMcpServerTest` (the real `god`/`builder` servers on a loopback port, driven by the
 official MCP Java SDK client), `AgentClientTest`, `AgentTurnsTest`, and `AgentE2ETest` (8 tests, skipped unless `OPENCODE_BIN` points at an
 opencode binary: the real opencode + the repo's `god-agent/` config + the real MCP servers, with only the LLM scripted)
-(`./gradlew test`). The world-facing wiring around them is in-game-check only. `jacocoTestReport` fails, because Jacoco isn't applied.
+(`./gradlew test`), plus the **MCP test bench** (`McpBench` + `Mcp*Test`: raw-protocol conformance, schema fuzzing of
+every tool, every tool × every wrong ticket, concurrency, JSON scenario files in `src/test/resources/mcp-bench/`;
+`gradle mcpProbe -PmcpToken=…` checks a running server read-only; see
+[docs/system/aigod/mcp-test-bench.md](docs/system/aigod/mcp-test-bench.md)). The world-facing
+wiring around them is in-game-check only. `jacocoTestReport` fails, because Jacoco isn't applied.
 **There is no CI in this repo:** `.github/` is gitignored (`.gitignore:1`) and absent from all of git history, so
 no workflow runs these or uploads releases. Every "CI gate" in the Eden docs means the local `npm run check`.
 
@@ -423,6 +427,8 @@ architecture.
   `AgentE2ETest`.
 - **Minting a ticket revokes the player's earlier ticket of that kind.** Reserve the turn first (as
   `AgentTurns.pray`/`build` do), or a refused duplicate `/build` kills the running build. Found by `AgentTurnsTest`.
+- **The JDK `HttpServer` stalls ~40 ms per request** (Nagle + delayed ACK) unless `sun.net.httpserver.nodelay=true`.
+  The tests set it; production does not yet, so every MCP call pays it.
 - **opencode needs an image-capable model declared** (`"attachment": true` / `modalities.input` including
   `image`). Otherwise it replaces a `/build` or `/prove` screenshot with "this model does not support image input".
 

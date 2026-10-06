@@ -61,6 +61,7 @@ corpus can be served to AI agents through an MCP server (one document = one reso
 | [aigod/mcp-gateway.md](aigod/mcp-gateway.md) | How the God reaches the Node bot's MCP tools |
 | [aigod/external-agent.md](aigod/external-agent.md) | `godAgent = external`: opencode agents, the `/pray`/`/build` trigger path, failures, setup |
 | [aigod/mcp-servers.md](aigod/mcp-servers.md) | The `god`/`builder` MCP servers the mod hosts for an external agent (`:8771`, tickets, caps) |
+| [aigod/mcp-test-bench.md](aigod/mcp-test-bench.md) | The MCP test bench: conformance, fuzz, authority matrix, concurrency, scenario files, `gradle mcpProbe` |
 
 ### Eden — the AI village (`eden/`)
 | File | Topic |
