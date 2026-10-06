@@ -27,6 +27,7 @@ Eden state is `eden/.eden-data/`. Every login name across systems must be unique
 | 8766 | Legacy v1 Node village admin (⚠ source absent) | 127.0.0.1 | Target of `/village status|pause|resume` | `VillageConfig.java:47` |
 | **8767** | JVM — `VillageHttpListener` | 127.0.0.1 | `POST /trade/execute` atomic item swap between two online players. No auth unless `settlementToken` is set. | `VillageConfig.java:31` |
 | **8771** | JVM — `AgentMcpServers` (only with `godAgent = external`) | 127.0.0.1 | MCP servers for the external God agent: `/mcp/god`, `/mcp/builder` (Streamable HTTP, stateless). Bearer token required. See [aigod/mcp-servers.md](../aigod/mcp-servers.md). | `GodAgentConfig.java:43` |
+| 4096 | opencode (`opencode serve`, external; only with `godAgent = external`) | 127.0.0.1 | The external God agent's HTTP API, called by `AgentClient` (`/session`, `/session/:id/message`, `/abort`). Basic auth with `OPENCODE_SERVER_PASSWORD`. See [aigod/external-agent.md](../aigod/external-agent.md). | `GodAgentConfig.java` (`agentUrl`) |
 | **8770** | Eden admin server | 127.0.0.1 | REST + WebSocket journal stream + static website. No auth. Target of `/villagers …`. | `VillageConfig.java:53`, `eden/src/config.ts:131` |
 | 1234 / 11434 | LM Studio / Ollama (external) | localhost | Optional local LLM providers for the Java God | `LLMConfig.java:71-72` |
 | 8088 / 8791 | `.claude/launch.json` dev helpers | — | docs static server / Eden dashboard preview (tooling only) | `.claude/launch.json` |
@@ -101,7 +102,8 @@ Source: `VillageConfig.java:23-88`. Eden's side mirrors `maxTradeDistance` as `s
 | `agentUrl` | `http://127.0.0.1:4096` | opencode server |
 | `agentUsername` / `agentPassword` | `opencode` / `""` | opencode Basic auth; `OPENCODE_SERVER_PASSWORD` wins |
 | `godAgentName` / `builderAgentName` | `god` / `builder` | opencode agent names |
-| `turnTimeoutSeconds` | `300` | cap on one agent turn |
+| `turnTimeoutSeconds` | `300` | cap on one prayer turn |
+| `buildTurnTimeoutSeconds` | `1800` | cap on one build turn (planner + sub-builders) |
 | `ticketTtlSeconds` | `1800` | lifetime of a ticket handed to the agent |
 | `subBuildIdleSeconds` | `120` | an idle sub-build lease is closed and its slot released |
 
@@ -114,6 +116,7 @@ Source: `GodAgentConfig.java`.
 | `prompt.txt` | `ChatBot.godBot` (`ChatBot.java:132`) | System persona of the Java God. No fallback if missing. `run/prompt.txt` is a dev stub. |
 | `build_prompt.txt` | `ChatBot.buildBot` (`ChatBot.java:133`) | Build-agent grammar prompt. The repo-root and `run/` copies differ. |
 | `run/max_build_prompt.txt` | nothing | never loaded |
+| `god-agent/prompts/{god,builder,sub-builder}.md` | opencode (`god-agent/opencode.json`, `{file:…}`) | The external agents' prompts with `godAgent = external`: the persona of `prompt.txt` and the rules of `build_prompt.txt` + `BuildSubAgent`'s passes, rewritten for the MCP tools. Not read by the mod. |
 
 Re-read by bare `/prompt`.
 
@@ -153,6 +156,7 @@ directives, dossiers, rollouts, QA cache), restored at boot. See [eden/journal-a
 | `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` | Java `LLMConfig.java:116-118` | Optional OpenAI headers |
 | `ANTHROPIC_API_KEY` | Java `LLMConfig.java:177` | Anthropic provider key fallback |
 | `<preset>.apiKeyEnv` (e.g. `DEEPSEEK_API_KEY`) | Eden boot | **Required** when the chosen preset names one; boot throws (R56) without it (`eden/src/main.ts:564-571`) |
+| `OPENCODE_SERVER_PASSWORD` | Java `GodAgentConfig.effectiveAgentPassword`; opencode itself | Basic-auth password of `opencode serve` (overrides `agentPassword`) |
 | `PAULSBRAWLS_MCP_TOKEN` | Java `GodAgentConfig.effectiveToken` | Bearer token of the `:8771` MCP servers (overrides `mcpToken`); the external agent sends the same value |
 | `EDEN_LIVE_RUNDIR`, `EDEN_LIVE_PROVIDER` | Eden live-test child process | Set by the parent harness |
 | `EDEN_SETTLEMENT_TOKEN` | Eden boot (`eden/src/main.ts:642`) | Sent as `X-Village-Token` on every `:8767` settlement POST. Must equal the mod's `settlementToken` in `village_config.properties` when that is set; unset/empty → no header (the mod's default). Can live in `api-keys.env` (loaded at boot when eden.json names a `provider`). |

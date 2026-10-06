@@ -73,7 +73,11 @@ public final class GodMcpServer {
                 "Parle au joueur qui prie (affiché 'Dieu : …'). Quand ton corps est apparu, ta voix résonne aussi en chat public. "
                     + "C'est ta seule façon de lui répondre.",
                 ticketOnly().str("message", "Ce que Dieu dit, en français (au plus " + GodService.MAX_SAY_CHARS + " caractères).", true),
-                session((p, a) -> ok(god.say(p, str(a, "message"))))),
+                session((p, a) -> {
+                    String out = god.say(p, str(a, "message"));
+                    tickets.markSaid(optStr(a, "ticket"));
+                    return ok(out);
+                })),
             tool("get_player_context",
                 "Le joueur qui prie (position, vie, inventaire, effets… en JSON) et l'historique récent du chat et des commandes.",
                 ticketOnly(),

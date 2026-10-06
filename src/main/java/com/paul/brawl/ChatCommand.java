@@ -27,6 +27,18 @@ public class ChatCommand {
             dispatcher.register(
                 LiteralArgumentBuilder.<ServerCommandSource>literal("pray")
                     .requires(source -> source.hasPermissionLevel(0)) // Open to everyone
+                    .then(CommandManager.literal("reset")
+                        .executes(context -> {
+                            // docs/27: forget the player's agent conversation (external) or memory (builtin).
+                            var player = context.getSource().getPlayer();
+                            if (player != null) {
+                                if (ExternalAgent.enabled()) ExternalAgent.resetGod(player.getUuid());
+                                else ChatBot.godBot.clearMemory(player);
+                                ChatPrinter.sendMessage(player, "Dieu : (je t'oublie. Prie à nouveau.)");
+                            }
+                            return Command.SINGLE_SUCCESS;
+                        })
+                    )
                     .then(CommandManager.literal("stop")
                         .executes(context -> {
                             // Player can end their own active session.
@@ -66,6 +78,7 @@ public class ChatCommand {
                             // the queue that would have carried restoreAvatar was just cleared.
                             ChatBotActions.restoreAvatarOnMain(ctx.getSource().getServer());
                             BuildGuard.cancelAll(); // bug #7: sub-builds stop at their next turn
+                            ExternalAgent.abortBuilds(); // docs/27: external build turns are aborted too
                             GodBody.vanish();
                             GodSessionManager.forceEndSession();
                             BridgeConfig.INSTANCE.enabled = false;
@@ -93,6 +106,13 @@ public class ChatCommand {
         try {
             var player = source.getPlayer();
             ChatPrinter.sendMessage(player, player.getName().getString() + " : " + input);
+
+            if (ExternalAgent.enabled()) {
+                // docs/27 §6: the external agent answers. A busy avatar is a French refusal and the
+                // prayer never reaches the agent (so no god tool can run for this player).
+                ExternalAgent.pray(player.getUuid(), player.getName().getString(), input, null);
+                return;
+            }
 
             // Try to claim the single shared avatar. If another player owns it,
             // serve the prayer bodiless (text only — God still answers, but the

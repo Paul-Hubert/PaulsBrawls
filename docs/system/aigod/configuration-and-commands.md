@@ -127,9 +127,14 @@ subcommand: they are set only by editing `bridge_config.properties` (keys of the
 | Syntax | Perm | Behaviour |
 |---|---|---|
 | `/pray <text…>` (`MessageArgumentType.message()`, greedy) | 0 | `onChatCommand` (`:91-113`): private echo `<name> : <text>`; `GodSessionManager.claim(player)`; if not owned, private `Dieu : (occupé ailleurs — je t'écoute, mais sans forme.)`; then `ChatBot.godBot.sendChatRequest(text, player)`. Exceptions are logged, not shown. |
+| `/pray reset` | 0 | Forgets the caller's conversation: `ExternalAgent.resetGod` with `godAgent = external` (the next prayer opens a fresh opencode session), else `ChatBot.godBot.clearMemory`. Private `Dieu : (je t'oublie. Prie à nouveau.)`. |
 | `/pray stop` | 0 | If the caller owns the avatar session: `ChatBot.endPrayerSession(player)` + private `Dieu : (la séance est close.)`. Otherwise silently does nothing. Does not clear memory or cancel an in-flight LLM call (its response is then dropped by the session-ended check). |
 
-Note `/pray stop` is a literal branch: praying the single word "stop" is impossible.
+Note `/pray stop` and `/pray reset` are literal branches: praying the single word "stop" or "reset" is impossible.
+
+With `godAgent = external` (`god_agent.properties`), `onChatCommand` hands the prayer to `ExternalAgent.pray`
+instead of `godBot`, and a busy avatar is a refusal rather than a bodiless answer. See
+[external-agent.md](external-agent.md).
 
 ### `/accept` (`TradeOffers.java:116-126`)
 

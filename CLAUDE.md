@@ -52,12 +52,14 @@ They copy the remapped jar into the paths set by `mods_folder` / `client_mods_fo
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
-The Java side has sixteen JUnit 5 classes (89 tests) under `src/test/java/com/paul/brawl/`, each covering a
+The Java side has eighteen JUnit 5 classes (100 tests) under `src/test/java/com/paul/brawl/`, each covering a
 Minecraft-free helper: `TradeMath`, `ImageMime`, `BuildGuard`, `GodToolGate`, `GodClamps`, `ItemIds`, `FlagGlow`,
 `GibberMath`, `BlockInfoJson`, `EdenRetry`, `GodActionQueue`, `AgentTickets`, plus `GodService` and `BuildService` (the
 world layer's rules, run against the `RecordingGodWorld` / `RecordingBuildWorld` test helpers) and the MCP contract
 tests `GodMcpServerTest` / `BuilderMcpServerTest` (the real `god`/`builder` servers on a loopback port, driven by the
-official MCP Java SDK client) (`./gradlew test`). The world-facing wiring around them is in-game-check only. `jacocoTestReport` fails, because Jacoco isn't applied.
+official MCP Java SDK client), `AgentClientTest`, and `AgentE2ETest` (8 tests, skipped unless `OPENCODE_BIN` points at an
+opencode binary: the real opencode + the repo's `god-agent/` config + the real MCP servers, with only the LLM scripted)
+(`./gradlew test`). The world-facing wiring around them is in-game-check only. `jacocoTestReport` fails, because Jacoco isn't applied.
 **There is no CI in this repo:** `.github/` is gitignored (`.gitignore:1`) and absent from all of git history, so
 no workflow runs these or uploads releases. Every "CI gate" in the Eden docs means the local `npm run check`.
 
@@ -137,6 +139,25 @@ Designed so offline players still "earn" salary and receive coins on next login:
 4. `RevenueManager.updateRevenue(uuid)` computes `totalRevenue - currentRevenue`, inserts that many `coin` items, and credits only what fit (the rest stays owed — bug #10). Totals saturate instead of wrapping; `/gib` takes `≥ 1`. Same path runs on `ServerPlayConnectionEvents.JOIN`, so offline players get their backlog at login.
 
 `PlayerPersistentState` uses Minecraft's `PersistentState` API. NBT keys: `gibbers_state` → `player_data` (UUID→int), `global_data` (string→int).
+
+### AI God — external agent mode (`godAgent = external`, docs/27)
+
+`god_agent.properties` → `godAgent = builtin` (default: everything below) or `external`. In external mode the mod
+does not think. It serves two MCP servers on `127.0.0.1:8771` (`/mcp/god`, `/mcp/builder`; MCP Java SDK 2.0.1,
+stateless, bearer token `PAULSBRAWLS_MCP_TOKEN`/`mcpToken`). `/pray`, `/prove` and `/build` become one turn of an
+**opencode** agent (`opencode serve` on `:4096`, config in [god-agent/](god-agent/README.md): agents `god`,
+`builder`, `sub-builder`), driven by `AgentTurns` through `AgentClient`.
+- **Tickets.** Every MCP call carries a ticket the mod minted for one player (`AgentTickets`). God tickets also
+  need the current avatar session (same `GodSessionManager.generation()`).
+- **Rules stay in the mod.** Every rule lives in `GodService` / `BuildService` (the world layer that the builtin
+  ChatBot uses too), `SubBuilds` (4 server-wide), `BuildGuard` and `GodToolGate`.
+- **Busy avatar.** With external, a prayer while the avatar is busy is refused (no bodiless prayer).
+- **Ending a turn.** The encounter ends when the turn returns. The watchdog, `/pray stop` and `/godbody off` abort
+  the agent's run.
+
+Reference: [docs/system/aigod/mcp-servers.md](docs/system/aigod/mcp-servers.md),
+[external-agent.md](docs/system/aigod/external-agent.md). The builtin loop below stays until the docs/26 §6 in-game
+checklist passes with external.
 
 ### AI God — LLM client (LangChain4j)
 
@@ -232,7 +253,7 @@ run **`/mcp reload`** to force a fresh `listTools()`.
 Server (permission level 2 unless noted):
 
 - `/gib <amount>` — bump global revenue, pay all online players. `/gib_salary <amount>`, `/gib_salary_period <seconds>` configure the scheduler.
-- `/pray <text>` (perm 0) — message God; claims the avatar via `GodSessionManager.claim` (bodiless if the body is owned elsewhere). `/pray stop` (perm 0) ends your session. `/accept` (perm 0) accepts a pending trade.
+- `/pray <text>` (perm 0) — message God; claims the avatar via `GodSessionManager.claim` (bodiless if the body is owned elsewhere). `/pray stop` (perm 0) ends your session. `/pray reset` (perm 0) forgets your conversation (external: the opencode session; builtin: `godBot` memory). `/accept` (perm 0) accepts a pending trade. With `godAgent = external`, `/pray`/`/prove`/`/build` go to opencode instead (see above).
 - `/prompt [text]`, `/block <x> <y> <z>`, `/construction` — prompt overlay, debug placement (pivot-relative), set build origin. `/block` and `/construction` are registered in `ChatBotActions`, not `ChatCommand`.
 - `/llm …` — provider/model/host/port/apikey/timeout/reload + `/llm bridge …`. `timeout` (5–1800 s, default 180) gates every LLM HTTP call (reasoning models exceed langchain4j's 60 s default). `/llm model` is saved but only applied after `/llm reload`.
 - `/godbody on|off` — admin kill-switch. `/mcp reload` — refresh the MCP tool catalogue (`/mcp` and `/mcp status` are perm 0).
@@ -345,7 +366,7 @@ run by `npm run check`) — imports run **strictly downward**, an upward import 
 
 - **Config:** [eden/eden.example.json](eden/eden.example.json) → `eden.json` (gitignored). Holds NO key (env-only). Sections: `minecraft`, `provider`, `villagers` (roster: `name`/`role`/`persona`/`items`; `home`/`chest` are not accepted keys — anchors are discovered in the world after spawn, R18/B3.6), `scenario` (wins over `villagers`), `god` (name/desks/budget/`embodiedVerdicts`/`godPrompt`), `behavior`, `llm` (strong/fast providers, `maxConcurrent`, cooldown), `skills`, `settlement.url` (`:8767`), `admin.port` (8770), `journal`.
 - **Data dir** `.eden-data/` (gitignored): `eden.db` (journal), `library/<skill>/skill.json` + `v*.js` (authored code), `bots/<name>.json` (memory + relations), `subscriptions/<name>.json`, `world.json` (world stamp), `llm/*.json` (transcripts).
-- **Port map** (R24 — a registry, never folklore): **8770** Eden admin (its only held port) · **8771 Java `god`/`builder` MCP servers (only with `godAgent = external`, bearer token, docs/27)** · 8765/8766 v1 (reserved while coexisting) · **8767 Java settlement (stateless per request; Eden POSTs accepted trades to it, with `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when the mod sets `settlementToken`; `./gradlew runServer` steals it, R29)** · 25565 `PaulsBrawlsVanilla` (RCON 25575, production/eval) · 25599 dev server. **Read `run/server.properties`, never assume the port (R28).**
+- **Port map** (R24 — a registry, never folklore): **8770** Eden admin (its only held port) · **8771 Java `god`/`builder` MCP servers (only with `godAgent = external`, bearer token, docs/27)** · 4096 opencode (`opencode serve`, the external God agent, Basic auth) · 8765/8766 v1 (reserved while coexisting) · **8767 Java settlement (stateless per request; Eden POSTs accepted trades to it, with `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when the mod sets `settlementToken`; `./gradlew runServer` steals it, R29)** · 25565 `PaulsBrawlsVanilla` (RCON 25575, production/eval) · 25599 dev server. **Read `run/server.properties`, never assume the port (R28).**
 - **Identity** (R12): Eden's avatar is **`Dieu`** — never v1's `LLMBot`/`GodBot`; villagers use French roster names; the eval harness namespaces every username `EvalBot*`. Minecraft kicks the second login of a name, so every login across all coexisting systems must be pairwise distinct.
 
 ### Live test suite ([docs/19](docs/19-live-test-suite.md), [docs/20](docs/20-live-test-process.md), code in [eden/live-tests/](eden/live-tests/))
@@ -396,6 +417,12 @@ architecture.
 - **If you change the skill `ctx` surface, keep the runtime object in lockstep** with what skills are told they can call — a stock/exemplar skill validated against FakeBot but wrong on real mineflayer is exactly the Z/C/E class of live-test finding.
 
 ### The Fabric mod / AI God
+
+- **`AgentClient` forces HTTP/1.1.** The JDK `HttpClient` defaults to an h2c upgrade on plain http, and
+  opencode's (Bun) server never answers it, so every call hangs until its timeout. This was found by
+  `AgentE2ETest`.
+- **opencode needs an image-capable model declared** (`"attachment": true` / `modalities.input` including
+  `image`). Otherwise it replaces a `/build` or `/prove` screenshot with "this model does not support image input".
 
 - **The God-Body avatar needs op for `/tp`.** Op-on-join is automatic for `BridgeConfig.botUsername`, Eden's `Dieu` and active scenario villagers — but only on a **real dedicated server** (the mod's server side is a `DedicatedServerModInitializer`). Op-on-join trusts usernames, which is exploitable in offline mode.
 - **`MCPGateway.ensureStarted` is best-effort.** If the SSE handshake fails (404 because the legacy bridge-only entrypoint is running instead of unified; ECONNREFUSED if no Node process), the exception is caught and godBot runs with its Java tool set only — silent in normal play. Check for `MCP gateway up — N tool(s) discovered` vs `MCP gateway connect failed (…); will retry in 30s` in the log on first `/pray`; reconnects retry automatically every 30 s.

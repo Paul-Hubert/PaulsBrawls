@@ -191,7 +191,8 @@ from the repo.
 
 ## Java unit tests (`src/test/java/com/paul/brawl/`)
 
-Sixteen JUnit 5 suites (89 `@Test`s), run with `./gradlew test`. None boots Minecraft, so command trees, packets and
+Eighteen JUnit 5 suites (100 `@Test`s), run with `./gradlew test`; the 8 of `AgentE2ETest` are skipped unless
+`OPENCODE_BIN` points at an opencode binary. None boots Minecraft, so command trees, packets and
 world effects still need an in-game check. Most cover a Minecraft-free helper class in `src/main/java/com/paul/brawl/`;
 `GodServiceTest` / `BuildServiceTest` run the world layer's rules against recording world ports
 (`RecordingGodWorld`, `RecordingBuildWorld`), and the MCP contract tests run the real `god`/`builder` servers on a
@@ -215,6 +216,8 @@ loopback port against the official MCP Java SDK client ([aigod/mcp-servers.md](.
 | `AgentTicketsTest` | 4 | `AgentTickets`, `McpHttpEndpoint` predicates | Ticket kind/expiry/revocation; bearer and Origin checks |
 | `BuilderMcpServerTest` | 10 | `BuilderMcpServer`, `SubBuilds`, `McpHttpEndpoint` | Real MCP client: tool schemas, every refusal, the 4-sub-build and 128-block caps, HTTP 401/403/405/400 |
 | `GodMcpServerTest` | 10 | `GodMcpServer` | Real MCP client: tool list, ownership and stale-session refusals, clamps, bridge gate, `wait` bound |
+| `AgentClientTest` | 3 | `AgentClient` | opencode reply parsing (final text, `info.error`), the agent-down path |
+| `AgentE2ETest` | 8 | `AgentTurns`, `AgentClient`, `god-agent/` | The REAL opencode binary with the repo's agents, the real MCP servers; only the LLM (`ScriptedLlm`) and Minecraft are stand-ins. Skipped without `OPENCODE_BIN` ([aigod/external-agent.md](../aigod/external-agent.md)) |
 
 ## `run/` — the dev server working directory (`./gradlew runServer`)
 

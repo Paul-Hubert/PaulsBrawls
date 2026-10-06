@@ -198,6 +198,7 @@ public class ChatBotActions {
                         // Under LangChain4j the per-player conversation lives in the
                         // mod, so clearing the chain is just dropping the memory window.
                         ChatBot.buildBot.clearMemory(player);
+                        ExternalAgent.resetBuild(player.getUuid()); // docs/27: a new site, a new builder conversation
                         return Command.SINGLE_SUCCESS;
                     })
             );

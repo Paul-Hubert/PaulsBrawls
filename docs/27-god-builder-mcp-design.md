@@ -1,6 +1,8 @@
 # 27 — God and Builder as MCP servers, thinking in opencode (design)
 
-> Status: **design, before code** (phase 1 of [docs/26](26-god-builder-mcp-prompt.md)). It answers the seven
+> Status: **design, written before code** (phase 1 of [docs/26](26-god-builder-mcp-prompt.md)); the "to verify" items were
+> checked in phase 5 and are marked Verified below. As built: [docs/system/aigod/mcp-servers.md](system/aigod/mcp-servers.md),
+> [external-agent.md](system/aigod/external-agent.md). It answers the seven
 > questions of docs/26 §3. Version numbers and API shapes were checked on 2026-10-06 against npm, Maven Central,
 > the opencode docs and source, and the MCP Java SDK jars. Anything still unverified is marked **to verify**,
 > and is checked by a named test in the phase that depends on it.
@@ -24,11 +26,11 @@
 |---|---|---|---|
 | Headless, driven by another process | `opencode serve`: HTTP + OpenAPI (`GET /doc`). `POST /session/:id/message` is **synchronous** (it returns the final assistant message and its parts). Also `POST /session/:id/abort` and `GET /event` (SSE). | `--mode rpc` (JSONL over stdin/stdout, one session per process) or the Node SDK. No HTTP server. | A whole Mineflayer bot framework with no prompt API to drive. |
 | MCP client | `"type":"remote"` with `url`, `headers` and `{env:VAR}` substitution. Tries Streamable HTTP, then falls back to SSE. | Built-in only since 0.99.0 (2026-09-29). stdio and Streamable HTTP, with `${ENV}` headers. The default `codemode` exposure needs `"exposure":"direct"` for normal tool calls. | none |
-| One session per player, concurrent | Many sessions in one server process. **To verify** that runs in different sessions overlap (phase-5 e2e test). | One process per player in RPC mode, or a custom Node SDK host (which is exactly the hand-written glue docs/26 forbids). | n/a |
+| One session per player, concurrent | Many sessions in one server process. Verified (phase 5): a prayer and a build in two sessions run concurrently (`AgentE2ETest`). | One process per player in RPC mode, or a custom Node SDK host (which is exactly the hand-written glue docs/26 forbids). | n/a |
 | Sub-agents (builds) | Agents in config with `mode: subagent`, launched by the built-in `task` tool. `permission.task` limits which ones. | None. "skips features like sub-agents" (README); there is only an example extension. | n/a |
-| Image input | `{"type":"file","mime":"image/png","url":"data:image/png;base64,…"}`. The source handles `data:` URLs. **To verify** end to end. | `images:[{type,data,mimeType}]` | n/a |
+| Image input | `{"type":"file","mime":"image/png","url":"data:image/png;base64,…"}`. Verified (phase 5): it reaches the model as an `image_url`, provided the model is declared image-capable (`attachment: true`); otherwise opencode substitutes a "does not support image input" note. | `images:[{type,data,mimeType}]` | n/a |
 | Providers | 75+ through the AI SDK: OpenAI, Anthropic, and LM Studio or Ollama via `@ai-sdk/openai-compatible`. | OpenAI and Anthropic built in; local models via `models.json`. | many |
-| Restricting tools | `permission` per agent (`"*": "deny"`, then allow named tools). **To verify** that it also covers MCP tool names (phase-5 test). | `--tools` globs | n/a |
+| Restricting tools | `permission` per agent (`"*": "deny"`, then allow named tools). Verified (phase 5): it covers MCP tool names (`god_*`); the god agent is offered only `god_*`, a sub-builder only `builder_*`, and `task` lists only `sub-builder`. | `--tools` globs | n/a |
 | Licence and maintenance | MIT, very active (~212k stars) | MIT, very active | MIT |
 
 **Choice: opencode.** It is the only candidate that offers, without new glue code, a localhost HTTP API with

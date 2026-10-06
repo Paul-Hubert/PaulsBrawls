@@ -3,7 +3,7 @@
   "description": "Verified reference for the Paul's Brawls Fabric mod (Gibber money, Capture the Flag, AI God + building, Eden AI village). One entry per document; each document is one MCP resource.",
   "generated_by": "docs/system/build-index.mjs",
   "uri_scheme": "paulsbrawls-docs://<id>",
-  "count": 35,
+  "count": 36,
   "documents": [
     {
       "id": "overview",
@@ -70,7 +70,7 @@
         "Serving over MCP (intended design)",
         "Related"
       ],
-      "bytes": 9908
+      "bytes": 10056
     },
     {
       "id": "verification-notes",
@@ -283,7 +283,55 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 15514
+      "bytes": 16028
+    },
+    {
+      "id": "aigod.external-agent",
+      "title": "AI God — the external agent (opencode) and godAgent = external",
+      "system": "aigod",
+      "summary": "How /pray, /prove and /build reach opencode when godAgent = external — the god-agent/ config (agents, permissions, prompts), AgentClient and AgentTurns, one session per player, failure messages, session-end aborts, install and startup, and the end-to-end test against the real opencode binary.",
+      "tags": [
+        "aigod",
+        "opencode",
+        "external-agent",
+        "godagent",
+        "agentturns",
+        "agentclient",
+        "sub-agents",
+        "builder",
+        "prayer",
+        "4096",
+        "e2e"
+      ],
+      "sources": [
+        "god-agent/opencode.json",
+        "god-agent/prompts/god.md",
+        "god-agent/prompts/builder.md",
+        "god-agent/prompts/sub-builder.md",
+        "god-agent/README.md",
+        "src/main/java/com/paul/brawl/AgentTurns.java",
+        "src/main/java/com/paul/brawl/AgentClient.java",
+        "src/main/java/com/paul/brawl/ExternalAgent.java",
+        "src/main/java/com/paul/brawl/GodAgentConfig.java",
+        "src/main/java/com/paul/brawl/ChatCommand.java",
+        "src/main/java/com/paul/brawl/ImageReceiver.java",
+        "src/main/java/com/paul/brawl/ChatBotActions.java",
+        "src/test/java/com/paul/brawl/AgentE2ETest.java",
+        "src/test/java/com/paul/brawl/ScriptedLlm.java",
+        "src/test/java/com/paul/brawl/AgentClientTest.java",
+        "docs/27-god-builder-mcp-design.md"
+      ],
+      "verified_at": "9406df0",
+      "path": "docs/system/aigod/external-agent.md",
+      "headings": [
+        "Components",
+        "The trigger path",
+        "Failures",
+        "Install and start",
+        "Tests",
+        "Related"
+      ],
+      "bytes": 9607
     },
     {
       "id": "aigod.god-body",
@@ -552,7 +600,7 @@
         "Tests",
         "Related"
       ],
-      "bytes": 11649
+      "bytes": 11791
     },
     {
       "id": "aigod.overview",
@@ -1865,7 +1913,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 23196
+      "bytes": 23686
     },
     {
       "id": "platform.entrypoints-and-wiring",
@@ -1979,7 +2027,7 @@
         "Eden — admin HTTP verbs (`127.0.0.1:8770`, no auth)",
         "Related"
       ],
-      "bytes": 10085
+      "bytes": 10499
     },
     {
       "id": "reference.ports-files-config",
@@ -2028,7 +2076,7 @@
         "Login names (must be pairwise distinct)",
         "Related"
       ],
-      "bytes": 12875
+      "bytes": 13779
     }
   ]
 }

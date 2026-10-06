@@ -23,6 +23,7 @@ Player commands:
 |---|---|
 | `/pray <text>` | Send a message to God. They may give items (`Reward`), offer a trade (`Trade`), strike you with lightning (`Punishment`), change the weather, or spawn creatures. |
 | `/pray stop` | End your active prayer session immediately. |
+| `/pray reset` | Make God forget your conversation; the next prayer starts fresh. |
 | `/accept` | Accept the pending trade. |
 | `/prove <text>` | Send a screenshot as proof of completing a quest. |
 | `/build <text>` | Send a screenshot of a site and ask God to design something there. Triggers `BuildPlan` — multiple isolated sub-agents place blocks in parallel. |
@@ -45,6 +46,20 @@ Setup:
 3. The bot joins, gets opped automatically (`ServerEntryPoint` watches for `BridgeConfig.botUsername` on join), and waits in a parking spot until God calls `Appear`. Toggle / clamp behaviour with `/llm bridge …`; kill-switch with `/godbody off`.
 
 The full architecture lives in [GOD_BOT_INTEGRATION_PLAN.md](GOD_BOT_INTEGRATION_PLAN.md). End-to-end verification checklist: [VERIFICATION.md](VERIFICATION.md).
+
+### Optional: let an external agent think (`godAgent=external`)
+
+By default God's thinking runs inside the mod (the LangChain4j `ChatBot`). With `godAgent=external` in
+`god_agent.properties`, the mod instead exposes what God and the Builder can do as two MCP servers
+(`127.0.0.1:8771`, `/mcp/god` and `/mcp/builder`, bearer token). The prayers, `/prove` and `/build` are handed
+to [opencode](https://opencode.ai) agents configured in [god-agent/](god-agent/README.md): `god`, `builder`, and
+`sub-builder` sub-agents for parallel builds. Every limit is still enforced by the mod. These are the clamps, the
+4-parallel-sub-build and 128-blocks-per-call caps, and the rule that only the praying player is affected. In this
+mode a prayer while God is busy with another player is refused rather than answered bodiless.
+
+Setup: [god-agent/README.md](god-agent/README.md). Design: [docs/27](docs/27-god-builder-mcp-design.md).
+Reference: [docs/system/aigod/external-agent.md](docs/system/aigod/external-agent.md),
+[mcp-servers.md](docs/system/aigod/mcp-servers.md).
 
 ## AI Village (Eden)
 

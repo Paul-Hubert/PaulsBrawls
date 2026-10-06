@@ -20,6 +20,8 @@ public final class AgentTickets {
     public record Ticket(String id, Kind kind, UUID player, long generation, long expiresAtMillis) {}
 
     private final Map<String, Ticket> tickets = new ConcurrentHashMap<>();
+    /** Tickets whose turn already spoke to the player through {@code say}. */
+    private final java.util.Set<String> said = ConcurrentHashMap.newKeySet();
     private final SecureRandom random = new SecureRandom();
     private final LongSupplier clock;
 
@@ -58,9 +60,20 @@ public final class AgentTickets {
         if (id != null) tickets.remove(id);
     }
 
+    /** Record that the turn holding {@code id} spoke to the player ({@code say}). */
+    public void markSaid(String id) {
+        if (id != null && tickets.containsKey(id.trim())) said.add(id.trim());
+    }
+
+    /** Whether the turn holding {@code id} spoke; forgets the mark. */
+    public boolean takeSaid(String id) {
+        return id != null && said.remove(id);
+    }
+
     /** Revoke every ticket of {@code player} (null = every player) of {@code kind}. */
     public void revoke(UUID player, Kind kind) {
         tickets.values().removeIf(t -> t.kind() == kind && (player == null || t.player().equals(player)));
+        said.retainAll(tickets.keySet());
     }
 
     public int size() {

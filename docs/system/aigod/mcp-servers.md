@@ -30,7 +30,7 @@ verified_at: 718214e
 **TL;DR.** With `godAgent = external` in `god_agent.properties`, the mod serves two MCP servers on
 `http://127.0.0.1:8771`: `/mcp/god` and `/mcp/builder`. They expose what God and the Builder can do in the
 world, and nothing else. The *thinking* (prompts, memory, tool loop, sub-agents) lives in an external agent
-(opencode; wired in docs/27 phase 5). Every rule stays in the mod: a bearer token, a ticket
+(opencode, see [external-agent.md](external-agent.md)). Every rule stays in the mod: a bearer token, a ticket
 per prayer or build, the clamps of `GodService`, the caps of `BuildService` / `BuildGuard`, and the main-thread
 hop. An MCP call is untrusted input. Design: [docs/27](../../27-god-builder-mcp-design.md).
 
@@ -176,6 +176,7 @@ What these cannot show (anything that needs a world) is in the in-game checklist
 
 ## Related
 
+- [external-agent.md](external-agent.md): the agent side (opencode config, `/pray` and `/build` with `godAgent = external`)
 - [god-body.md](god-body.md): session lock, watchdog, avatar invulnerability
 - [building.md](building.md): `BuildGuard`, the builtin build agent
 - [tools-catalogue.md](tools-catalogue.md): the builtin tool POJOs these mirror

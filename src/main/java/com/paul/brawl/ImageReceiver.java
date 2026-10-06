@@ -27,6 +27,15 @@ public class ImageReceiver {
 
     private static void checkProof(byte[] bytes, ServerPlayerEntity player, String text) {
         ChatBot bot = ChatBot.getCorrectChatBot(text);
+        if (ExternalAgent.enabled()) {
+            // docs/27 §6: /build goes to the builder agent, /prove to the god agent (same claim rules as /pray).
+            if (bot == ChatBot.buildBot) {
+                ExternalAgent.build(player.getUuid(), player.getName().getString(), text, bytes);
+            } else {
+                ExternalAgent.pray(player.getUuid(), player.getName().getString(), text, bytes);
+            }
+            return;
+        }
         // /prove rides the same encounter semantics as /pray: try to claim the
         // single shared avatar so God may Appear in response to the proof. If
         // another player holds it, the reply is simply bodiless.

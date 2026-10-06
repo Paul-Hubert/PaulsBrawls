@@ -34,8 +34,9 @@ Details: [gibber/money-system.md](../gibber/money-system.md).
 
 | Syntax | Perm | Source | Behaviour |
 |---|---|---|---|
-| `/pray <text…>` | 0 | `ChatCommand.java:28-41` | Greedy `MessageArgumentType`. Sends a prayer to the Java God; claims the avatar via `GodSessionManager` (bodiless if another player owns it). |
-| `/pray stop` | 0 | `ChatCommand.java:30` | Ends *your* session (owner only); chat `Dieu : (la séance est close.)`. |
+| `/pray <text…>` | 0 | `ChatCommand.java` | Greedy `MessageArgumentType`. Sends a prayer to the Java God; claims the avatar via `GodSessionManager` (builtin: bodiless if another player owns it; `godAgent = external`: refused, and handed to the opencode `god` agent otherwise — [aigod/external-agent.md](../aigod/external-agent.md)). |
+| `/pray stop` | 0 | `ChatCommand.java` | Ends *your* session (owner only); chat `Dieu : (la séance est close.)`. With `godAgent = external` this also aborts the agent's running turn. |
+| `/pray reset` | 0 | `ChatCommand.java` | Forgets your conversation: the external agent's session (`godAgent = external`) or `godBot`'s memory (builtin). Chat `Dieu : (je t'oublie. Prie à nouveau.)`. |
 | `/accept` | 0 (no `.requires`) | `TradeOffers.java:119-123` | Accepts your pending God trade offer (RAM-only, expires after 5 min). |
 | `/prompt` | 2 | `ChatCommand.java:142-148` | Re-reads `prompt.txt` / `build_prompt.txt` for both bots, then prints the hardcoded + custom prompt via `sendFeedback` (console-safe, bug #18). |
 | `/prompt <text…>` | 2 | `ChatCommand.java:121-123` | Sets the custom prompt (`prompt` field) on **both** `godBot` and `buildBot`; in RAM only. |
