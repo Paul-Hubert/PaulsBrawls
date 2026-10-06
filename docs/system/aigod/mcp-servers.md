@@ -10,6 +10,9 @@ sources:
   - src/main/java/com/paul/brawl/McpHttpEndpoint.java
   - src/main/java/com/paul/brawl/McpTools.java
   - src/main/java/com/paul/brawl/BuilderMcpServer.java
+  - src/main/java/com/paul/brawl/GodMcpServer.java
+  - src/main/java/com/paul/brawl/BodyTools.java
+  - src/main/java/com/paul/brawl/GatewayBodyTools.java
   - src/main/java/com/paul/brawl/AgentTickets.java
   - src/main/java/com/paul/brawl/SubBuilds.java
   - src/main/java/com/paul/brawl/GodAgentConfig.java
@@ -17,6 +20,7 @@ sources:
   - src/main/java/com/paul/brawl/GodService.java
   - src/main/java/com/paul/brawl/BuildService.java
   - src/test/java/com/paul/brawl/BuilderMcpServerTest.java
+  - src/test/java/com/paul/brawl/GodMcpServerTest.java
   - src/test/java/com/paul/brawl/AgentTicketsTest.java
 verified_at: 718214e
 ---
@@ -98,7 +102,35 @@ The builtin `BuildSubAgent` and the leases share the same 4 slots.
 
 ## The god server (`/mcp/god`)
 
-Follows in docs/27 phase 4.
+Every tool goes through `GodMcpServer.session(...)`, which refuses the call unless all of these hold:
+- the ticket resolves as a god ticket;
+- its player **owns the current avatar session** (`GodSessionManager.isOwner`);
+- the session generation is the one the ticket was minted under, so a ticket from an earlier session of the same
+  player is dead. The generation is bumped by every new claim of a free avatar and by every session end;
+- the player is online.
+
+The owner's idle watchdog is reset before and after each call (bug #8). `appear`, `vanish`, `body_tools` and
+`body_call` also need the bridge enabled (`GodToolGate.mcpRefusal`, `/godbody on|off`).
+
+| Tool | Arguments (besides `ticket`) | Calls |
+|---|---|---|
+| `say` | `message` | `GodService.say`: `Dieu : …` to the player, and spoken by the avatar when it is manifested. Capped at 1000 characters. |
+| `get_player_context` | — | `PlayerDataCollector` JSON + `ChatMessageHistory`, read on the main thread |
+| `reward` | `item`, `amount` | `GodService.reward` (≥ 1, ≤ `rewardMax`; `/give` syntax with components) |
+| `offer_trade` | `give_item`, `give_amount`, `take_item`, `take_amount` | `GodService.offerTrade` (1..512 each, items must exist; `/accept` within 5 min) |
+| `punish` | `strikes` | `GodService.punish` (≤ `punishmentMax`) |
+| `change_weather` | `weather` ∈ {clear, rain, thunder}, `duration_seconds` | `GodService.changeWeather` (0..1 000 000) |
+| `spawn_creature` | `entity`, `count`, `dx`, `dy`, `dz` | `GodService.spawnCreature` (`spawnCountMax`, ±`spawnOffsetMax`, griefing flag) |
+| `appear` | `distance?`, `height?`, `look_at_player?` | `GodService.appear` (owner gate, `BridgeConfig` clamps, invulnerable avatar) |
+| `vanish` | — | `GodService.vanish` (the session continues) |
+| `wait` | `seconds` | Clamped to `waitMinSeconds..waitMaxSeconds`, then the call sleeps. It is the only blocking tool. |
+| `query_terrain` | `center_x?`, `center_z?`, `radius?` | `GodService.queryTerrain` |
+| `body_tools` | — | The Node Mineflayer tools behind `MCPGateway` (name, description, JSON Schema) |
+| `body_call` | `tool`, `arguments?` | Runs one of them through `MCPGateway.execute`. An unknown tool name is refused. |
+| `end_session` | — | `GodService.endSession`: vanish if manifested, release the lock, revoke the ticket |
+
+The Mineflayer body is **proxied**, not handed to the agent, so `GodToolGate` still applies and the Node server is
+unchanged. There is no `ListTools`: MCP `tools/list` does that job.
 
 ## Results and errors
 
@@ -126,6 +158,17 @@ client** (`McpClient.sync` + `HttpClientStreamableHttpTransport`, `McpTestClient
   - another build's lease;
   - HTTP-level refusals: `401` with no or a bad token, `403` for a foreign Origin, `405` for GET, `400` for bad
     JSON, and the SDK client being refused.
+- `GodMcpServerTest` covers:
+  - the tool list, with no `place_*`;
+  - a full encounter;
+  - components reaching the world intact;
+  - every clamp;
+  - another player's or a forged ticket;
+  - a stale ticket from an earlier session;
+  - body tools with the bridge off;
+  - an offline player;
+  - the `wait` bound;
+  - an expired ticket.
 - `AgentTicketsTest` covers ticket kinds, expiry and revocation, plus the token and Origin predicates.
 
 What these cannot show (anything that needs a world) is in the in-game checklist of

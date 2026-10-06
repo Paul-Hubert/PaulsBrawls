@@ -48,7 +48,8 @@ class BuilderMcpServerTest {
         world.origins.put(admin, new int[] { 100, 64, 200 });
         tickets = new AgentTickets(now::get);
         subBuilds = new SubBuilds(now::get, 120_000);
-        servers = AgentMcpServers.start(0, () -> TOKEN, new BuildService(world), tickets, subBuilds);
+        servers = AgentMcpServers.start(0, () -> TOKEN, new GodService(new RecordingGodWorld(), BridgeConfig.INSTANCE),
+            new RecordingBodyTools(), () -> true, new BuildService(world), tickets, subBuilds);
         client = McpTestClients.connect(servers.port(), AgentMcpServers.BUILDER_PATH, TOKEN);
         ticket = tickets.mint(AgentTickets.Kind.BUILDER, admin, 0, 600_000).id();
     }

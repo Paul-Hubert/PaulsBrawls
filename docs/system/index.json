@@ -528,6 +528,9 @@
         "src/main/java/com/paul/brawl/McpHttpEndpoint.java",
         "src/main/java/com/paul/brawl/McpTools.java",
         "src/main/java/com/paul/brawl/BuilderMcpServer.java",
+        "src/main/java/com/paul/brawl/GodMcpServer.java",
+        "src/main/java/com/paul/brawl/BodyTools.java",
+        "src/main/java/com/paul/brawl/GatewayBodyTools.java",
         "src/main/java/com/paul/brawl/AgentTickets.java",
         "src/main/java/com/paul/brawl/SubBuilds.java",
         "src/main/java/com/paul/brawl/GodAgentConfig.java",
@@ -535,6 +538,7 @@
         "src/main/java/com/paul/brawl/GodService.java",
         "src/main/java/com/paul/brawl/BuildService.java",
         "src/test/java/com/paul/brawl/BuilderMcpServerTest.java",
+        "src/test/java/com/paul/brawl/GodMcpServerTest.java",
         "src/test/java/com/paul/brawl/AgentTicketsTest.java"
       ],
       "verified_at": "718214e",
@@ -548,7 +552,7 @@
         "Tests",
         "Related"
       ],
-      "bytes": 8625
+      "bytes": 11649
     },
     {
       "id": "aigod.overview",
@@ -1861,7 +1865,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 23049
+      "bytes": 23196
     },
     {
       "id": "platform.entrypoints-and-wiring",

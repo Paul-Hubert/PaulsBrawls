@@ -180,6 +180,24 @@ public final class GodService {
         return "God a disparu.";
     }
 
+    /**
+     * End the player's encounter (the external agent's {@code end_session}, or its turn ending): send the body
+     * home if it is out, clear its invulnerability, release the lock. The same exit as
+     * {@code ChatBot.endPrayerSession}; idempotent, and a no-op for a player who does not own the session.
+     */
+    public String endSession(UUID player) {
+        if (!GodSessionManager.isOwner(player)) return "Aucune séance active pour ce joueur.";
+        if (GodSessionManager.hasManifested()) {
+            try {
+                world.vanish(player);
+            } catch (WorldRefusal ignored) {
+                // the lock is released below whatever the main thread did
+            }
+        }
+        GodSessionManager.endSession(player);
+        return "Séance close.";
+    }
+
     /** The {@code Wait} clamp: {@code waitMinSeconds..waitMaxSeconds}. */
     public int waitSeconds(int requested) {
         return Math.max(cfg.waitMinSeconds, Math.min(requested, cfg.waitMaxSeconds));

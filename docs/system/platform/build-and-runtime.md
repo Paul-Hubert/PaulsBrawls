@@ -191,7 +191,7 @@ from the repo.
 
 ## Java unit tests (`src/test/java/com/paul/brawl/`)
 
-Fifteen JUnit 5 suites (79 `@Test`s), run with `./gradlew test`. None boots Minecraft, so command trees, packets and
+Sixteen JUnit 5 suites (89 `@Test`s), run with `./gradlew test`. None boots Minecraft, so command trees, packets and
 world effects still need an in-game check. Most cover a Minecraft-free helper class in `src/main/java/com/paul/brawl/`;
 `GodServiceTest` / `BuildServiceTest` run the world layer's rules against recording world ports
 (`RecordingGodWorld`, `RecordingBuildWorld`), and the MCP contract tests run the real `god`/`builder` servers on a
@@ -214,6 +214,7 @@ loopback port against the official MCP Java SDK client ([aigod/mcp-servers.md](.
 | `BuildServiceTest` | 6 | `BuildService`, `BuildShapes` | Line walk, 128-block cap before allocation, unknown block, no pivot, offline player |
 | `AgentTicketsTest` | 4 | `AgentTickets`, `McpHttpEndpoint` predicates | Ticket kind/expiry/revocation; bearer and Origin checks |
 | `BuilderMcpServerTest` | 10 | `BuilderMcpServer`, `SubBuilds`, `McpHttpEndpoint` | Real MCP client: tool schemas, every refusal, the 4-sub-build and 128-block caps, HTTP 401/403/405/400 |
+| `GodMcpServerTest` | 10 | `GodMcpServer` | Real MCP client: tool list, ownership and stale-session refusals, clamps, bridge gate, `wait` bound |
 
 ## `run/` — the dev server working directory (`./gradlew runServer`)
 

@@ -29,7 +29,8 @@ public final class ExternalAgent {
         cfg.ensureToken();
         subBuilds = new SubBuilds(System::currentTimeMillis, cfg.subBuildIdleSeconds * 1000L);
         try {
-            servers = AgentMcpServers.start(cfg.mcpPort, cfg::effectiveToken, BuildService.live(), TICKETS, subBuilds);
+            servers = AgentMcpServers.start(cfg.mcpPort, cfg::effectiveToken, GodService.live(), new GatewayBodyTools(),
+                () -> BridgeConfig.INSTANCE.enabled, BuildService.live(), TICKETS, subBuilds);
         } catch (Exception e) {
             LOGGER.warn("MCP servers failed to bind 127.0.0.1:{} — the external God agent cannot act: {}", cfg.mcpPort, e.toString());
             servers = null;
