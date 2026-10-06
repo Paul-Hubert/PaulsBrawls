@@ -47,6 +47,8 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 			ChatBotActions.setServer(server);
 			LOGGER.info("BridgeConfig loaded: {}", BridgeConfig.INSTANCE.describe());
 			VillageHttpListener.start(server);
+			// docs/27: the god/builder MCP servers, only when godAgent = external.
+			ExternalAgent.start();
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			GodActionQueue.clear();
@@ -55,6 +57,7 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 			ChatBotActions.restoreAvatarOnMain(server);
 			BuildGuard.cancelAll(); // bug #7: no sub-build keeps placing into a stopping world
 			GodSessionManager.forceEndSession();
+			ExternalAgent.stop();
 			ChatBotActions.setServer(null);
 			VillageHttpListener.stop();
 		});

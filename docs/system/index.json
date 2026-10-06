@@ -3,7 +3,7 @@
   "description": "Verified reference for the Paul's Brawls Fabric mod (Gibber money, Capture the Flag, AI God + building, Eden AI village). One entry per document; each document is one MCP resource.",
   "generated_by": "docs/system/build-index.mjs",
   "uri_scheme": "paulsbrawls-docs://<id>",
-  "count": 34,
+  "count": 35,
   "documents": [
     {
       "id": "overview",
@@ -70,7 +70,7 @@
         "Serving over MCP (intended design)",
         "Related"
       ],
-      "bytes": 9764
+      "bytes": 9908
     },
     {
       "id": "verification-notes",
@@ -502,6 +502,53 @@
         "Related"
       ],
       "bytes": 15362
+    },
+    {
+      "id": "aigod.mcp-servers",
+      "title": "AI God — the god and builder MCP servers (external agent)",
+      "system": "aigod",
+      "summary": "The MCP servers the mod hosts on 127.0.0.1:8771 for an external agent (opencode) — transport, bearer auth, tickets, the god and builder tool surfaces, sub-build leases, every refusal, and how they are tested with a real MCP client.",
+      "tags": [
+        "aigod",
+        "mcp",
+        "mcp-server",
+        "external-agent",
+        "opencode",
+        "tickets",
+        "builder",
+        "god",
+        "buildguard",
+        "sub-build",
+        "godagent",
+        "8771"
+      ],
+      "sources": [
+        "docs/27-god-builder-mcp-design.md",
+        "src/main/java/com/paul/brawl/AgentMcpServers.java",
+        "src/main/java/com/paul/brawl/McpHttpEndpoint.java",
+        "src/main/java/com/paul/brawl/McpTools.java",
+        "src/main/java/com/paul/brawl/BuilderMcpServer.java",
+        "src/main/java/com/paul/brawl/AgentTickets.java",
+        "src/main/java/com/paul/brawl/SubBuilds.java",
+        "src/main/java/com/paul/brawl/GodAgentConfig.java",
+        "src/main/java/com/paul/brawl/ExternalAgent.java",
+        "src/main/java/com/paul/brawl/GodService.java",
+        "src/main/java/com/paul/brawl/BuildService.java",
+        "src/test/java/com/paul/brawl/BuilderMcpServerTest.java",
+        "src/test/java/com/paul/brawl/AgentTicketsTest.java"
+      ],
+      "verified_at": "718214e",
+      "path": "docs/system/aigod/mcp-servers.md",
+      "headings": [
+        "Process and transport",
+        "Security",
+        "The builder server (`/mcp/builder`)",
+        "The god server (`/mcp/god`)",
+        "Results and errors",
+        "Tests",
+        "Related"
+      ],
+      "bytes": 8625
     },
     {
       "id": "aigod.overview",
@@ -1814,7 +1861,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 21488
+      "bytes": 23049
     },
     {
       "id": "platform.entrypoints-and-wiring",
@@ -1949,6 +1996,7 @@
         "rcon"
       ],
       "sources": [
+        "src/main/java/com/paul/brawl/GodAgentConfig.java",
         "src/main/java/com/paul/brawl/BridgeConfig.java",
         "src/main/java/com/paul/brawl/LLMConfig.java",
         "src/main/java/com/paul/brawl/MCPConfig.java",
@@ -1976,7 +2024,7 @@
         "Login names (must be pairwise distinct)",
         "Related"
       ],
-      "bytes": 11281
+      "bytes": 12875
     }
   ]
 }

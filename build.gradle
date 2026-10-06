@@ -47,6 +47,11 @@ dependencies {
 	// stable across the betas, so this pin is safe alongside langchain4j:1.0.0.
 	implementation ("dev.langchain4j:langchain4j-mcp:1.0.0-beta5")
 	implementation ("dev.langchain4j:langchain4j-anthropic:1.0.0-beta5")
+	// The god / builder MCP SERVERS (docs/27): the official MCP Java SDK, stateless server profile, Jackson 2
+	// mapper (LangChain4j already ships Jackson 2). The transport is our own JDK-HttpServer adapter
+	// (McpHttpTransport), so no servlet container is needed.
+	implementation ("io.modelcontextprotocol.sdk:mcp-core:2.0.1")
+	implementation ("io.modelcontextprotocol.sdk:mcp-json-jackson2:2.0.1")
 
 	include ("dev.langchain4j:langchain4j:1.0.0")
 	include ("dev.langchain4j:langchain4j-core:1.0.0")
@@ -63,16 +68,29 @@ dependencies {
 	// dies on boot with NCDFE com/knuddels/jtokkit/Encodings.
 	include ("com.knuddels:jtokkit:1.1.0")
 
-	// LangChain4j depends on Jackson; keep these includes so the jar-in-jar runtime
+	// LangChain4j and the MCP SDK depend on Jackson; keep these includes so the jar-in-jar runtime
 	// closure ships them. ChatBotFunctions' tool POJOs still rely on
 	// @JsonClassDescription / @JsonPropertyDescription, and JsonSchemaAdapter walks
-	// them reflectively to build LangChain4j ToolSpecifications.
-	include ("com.fasterxml.jackson.core:jackson-databind:2.19.1")
-	include ("com.fasterxml.jackson.core:jackson-core:2.19.1")
-	include ("com.fasterxml.jackson:jackson-bom:2.18.2")
-	include ("com.fasterxml.jackson.core:jackson-annotations:2.19.1")
-	include 'com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.19.1'
-	include 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.19.1'
+	// them reflectively to build LangChain4j ToolSpecifications. Versions track the resolved
+	// runtime classpath: mcp-json-jackson2 2.0.1 lifts databind/core to 2.21.1 (annotations 2.21).
+	include ("com.fasterxml.jackson.core:jackson-databind:2.21.1")
+	include ("com.fasterxml.jackson.core:jackson-core:2.21.1")
+	include ("com.fasterxml.jackson:jackson-bom:2.21.1")
+	include ("com.fasterxml.jackson.core:jackson-annotations:2.21")
+	include 'com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.21.1'
+	include 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.21.1'
+
+	// The MCP server runtime closure (docs/27 §2): the SDK, Project Reactor, and the networknt JSON-Schema
+	// validator the SDK uses for tool inputs (+ its itu / YAML deps). Re-derive with
+	// `gradle dependencies --configuration runtimeClasspath` after bumping the SDK.
+	include ("io.modelcontextprotocol.sdk:mcp-core:2.0.1")
+	include ("io.modelcontextprotocol.sdk:mcp-json-jackson2:2.0.1")
+	include ("io.projectreactor:reactor-core:3.7.0")
+	include ("org.reactivestreams:reactive-streams:1.0.4")
+	include ("com.networknt:json-schema-validator:2.0.4")
+	include ("com.ethlo.time:itu:1.14.0")
+	include ("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.1")
+	include ("org.yaml:snakeyaml:2.5")
 
 	// LangChain4j's LLM HTTP client is JDK-native (java.net.http), so the okhttp pile
 	// the OpenAI SDK once pulled in is no longer needed there. BUT langchain4j-mcp's

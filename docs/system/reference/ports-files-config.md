@@ -4,14 +4,14 @@ title: Ports, persisted files, config keys and environment variables
 system: meta
 summary: Registry of every port, runtime file (with keys/defaults), NBT store and env var used by the Fabric mod and Eden — where each lives and who reads/writes it.
 tags: [ports, config, properties, env, files, persistence, nbt, eden.json, providers.json, gitignore, rcon]
-sources: [src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/MCPConfig.java, src/main/java/com/paul/brawl/VillageConfig.java, src/main/java/com/paul/brawl/PlayerPersistentState.java, src/main/java/com/paul/brawl/ChatBot.java, run/server.properties, eden/src/config.ts, eden/eden.example.json, eden/providers.example.json, eden/.gitignore, .gitignore, eden/src/main.ts, eden/src/journal/journal.ts, eden/src/llm/client.ts, eden/eval/roster.ts]
+sources: [src/main/java/com/paul/brawl/GodAgentConfig.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/MCPConfig.java, src/main/java/com/paul/brawl/VillageConfig.java, src/main/java/com/paul/brawl/PlayerPersistentState.java, src/main/java/com/paul/brawl/ChatBot.java, run/server.properties, eden/src/config.ts, eden/eden.example.json, eden/providers.example.json, eden/.gitignore, .gitignore, eden/src/main.ts, eden/src/journal/journal.ts, eden/src/llm/client.ts, eden/eval/roster.ts]
 verified_at: 98cb908
 ---
 
 # Ports, files, config & environment
 
-**TL;DR** — Two processes hold ports you control: the JVM (Minecraft + the `:8767` settlement listener) and Eden
-(`:8770` admin). A third, the Node **unified bridge** (`:8765`, source not in this checkout), serves the Java AI-God's
+**TL;DR** — Two processes hold ports you control: the JVM (Minecraft + the `:8767` settlement listener, and with
+`godAgent = external` the `:8771` MCP servers) and Eden (`:8770` admin). A third, the Node **unified bridge** (`:8765`, source not in this checkout), serves the Java AI-God's
 avatar and MCP tools. All Java runtime config is `*.properties` in the **JVM working directory** (production
 `PaulsBrawlsVanilla\`, dev `run/`); Eden config is `eden/eden.json` + `eden/providers.json` + `eden/api-keys.env`, and
 Eden state is `eden/.eden-data/`. Every login name across systems must be unique (Minecraft kicks a duplicate).
@@ -26,6 +26,7 @@ Eden state is `eden/.eden-data/`. Every login name across systems must be unique
 | 8765 | Node unified bridge (`minecraft-mcp-server`, ⚠ source absent) | 127.0.0.1 | Java God avatar bridge HTTP + MCP-over-SSE at `/mcp/sse` | `BridgeConfig.java:30`, `MCPConfig.java:60` |
 | 8766 | Legacy v1 Node village admin (⚠ source absent) | 127.0.0.1 | Target of `/village status|pause|resume` | `VillageConfig.java:47` |
 | **8767** | JVM — `VillageHttpListener` | 127.0.0.1 | `POST /trade/execute` atomic item swap between two online players. No auth unless `settlementToken` is set. | `VillageConfig.java:31` |
+| **8771** | JVM — `AgentMcpServers` (only with `godAgent = external`) | 127.0.0.1 | MCP servers for the external God agent: `/mcp/god`, `/mcp/builder` (Streamable HTTP, stateless). Bearer token required. See [aigod/mcp-servers.md](../aigod/mcp-servers.md). | `GodAgentConfig.java:43` |
 | **8770** | Eden admin server | 127.0.0.1 | REST + WebSocket journal stream + static website. No auth. Target of `/villagers …`. | `VillageConfig.java:53`, `eden/src/config.ts:131` |
 | 1234 / 11434 | LM Studio / Ollama (external) | localhost | Optional local LLM providers for the Java God | `LLMConfig.java:71-72` |
 | 8088 / 8791 | `.claude/launch.json` dev helpers | — | docs static server / Eden dashboard preview (tooling only) | `.claude/launch.json` |
@@ -90,6 +91,22 @@ Obsolete keys dropped on load, with one warning and a rewrite of the file: `node
 
 Source: `VillageConfig.java:23-88`. Eden's side mirrors `maxTradeDistance` as `settlement.maxTradeDistance` (default 16) and walks the accepting villager to within `settlement.reach` (default 8, must be `> 0` and `<` maxTradeDistance) before settling (`eden/src/config.ts:130,326-337`). See [eden/java-integration.md](../eden/java-integration.md).
 
+### `god_agent.properties` — `GodAgentConfig` (docs/27; written on save or when a token is generated)
+
+| Key | Default | Notes |
+|---|---|---|
+| `godAgent` | `builtin` | `builtin` = the in-mod ChatBot; `external` = start the MCP servers and hand prayers/builds to the external agent |
+| `mcpPort` | `8771` | loopback port of `/mcp/god` + `/mcp/builder` |
+| `mcpToken` | `""` | bearer token; `PAULSBRAWLS_MCP_TOKEN` wins. Blank and no env var → generated (32 random bytes) and saved at start in external mode |
+| `agentUrl` | `http://127.0.0.1:4096` | opencode server |
+| `agentUsername` / `agentPassword` | `opencode` / `""` | opencode Basic auth; `OPENCODE_SERVER_PASSWORD` wins |
+| `godAgentName` / `builderAgentName` | `god` / `builder` | opencode agent names |
+| `turnTimeoutSeconds` | `300` | cap on one agent turn |
+| `ticketTtlSeconds` | `1800` | lifetime of a ticket handed to the agent |
+| `subBuildIdleSeconds` | `120` | an idle sub-build lease is closed and its slot released |
+
+Source: `GodAgentConfig.java`.
+
 ### Prompt files
 
 | File | Read by | Notes |
@@ -136,6 +153,7 @@ directives, dossiers, rollouts, QA cache), restored at boot. See [eden/journal-a
 | `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` | Java `LLMConfig.java:116-118` | Optional OpenAI headers |
 | `ANTHROPIC_API_KEY` | Java `LLMConfig.java:177` | Anthropic provider key fallback |
 | `<preset>.apiKeyEnv` (e.g. `DEEPSEEK_API_KEY`) | Eden boot | **Required** when the chosen preset names one; boot throws (R56) without it (`eden/src/main.ts:564-571`) |
+| `PAULSBRAWLS_MCP_TOKEN` | Java `GodAgentConfig.effectiveToken` | Bearer token of the `:8771` MCP servers (overrides `mcpToken`); the external agent sends the same value |
 | `EDEN_LIVE_RUNDIR`, `EDEN_LIVE_PROVIDER` | Eden live-test child process | Set by the parent harness |
 | `EDEN_SETTLEMENT_TOKEN` | Eden boot (`eden/src/main.ts:642`) | Sent as `X-Village-Token` on every `:8767` settlement POST. Must equal the mod's `settlementToken` in `village_config.properties` when that is set; unset/empty → no header (the mod's default). Can live in `api-keys.env` (loaded at boot when eden.json names a `provider`). |
 

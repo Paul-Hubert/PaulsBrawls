@@ -78,18 +78,20 @@ Test dependencies (`build.gradle:94-97`) are not bundled; `test { useJUnitPlatfo
 
 | Group | Artifacts (`include`) | Why (from comments) | Lines |
 |---|---|---|---|
-| LangChain4j | `langchain4j`, `langchain4j-core`, `langchain4j-open-ai`, `langchain4j-http-client`, `langchain4j-http-client-jdk` (all 1.0.0); `langchain4j-mcp`, `langchain4j-anthropic` (1.0.0-beta5) | LLM client + MCP client | `build.gradle:51-57` |
-| jspecify | `org.jspecify:jspecify:1.0.0` | runtime-retained `@NullMarked`/`@Nullable` from langchain4j-core | `build.gradle:60` |
-| jtokkit | `com.knuddels:jtokkit:1.1.0` | `OpenAiTokenCountEstimator` (ChatBot token budget) — without it: NCDFE `com/knuddels/jtokkit/Encodings` on boot | `build.gradle:64` |
-| Jackson | `jackson-databind` 2.19.1, `jackson-core` 2.19.1, `jackson-bom` 2.18.2, `jackson-annotations` 2.19.1, `jackson-datatype-jdk8` 2.19.1, `jackson-datatype-jsr310` 2.19.1 | LangChain4j + `@JsonClassDescription`/`@JsonPropertyDescription` on tool POJOs read by `JsonSchemaAdapter` | `build.gradle:70-75` |
-| OkHttp pile | `okhttp` 4.12.0, `okhttp-sse` 4.12.0, `okio` 3.6.0, `okio-jvm` 3.6.0, `kotlin-stdlib`/`-jdk7`/`-jdk8` 1.9.10 | `langchain4j-mcp`'s `HttpMcpTransport` is OkHttp-based; without them the first `/pray` that builds tools NCDFEs on `okhttp3/Interceptor` | `build.gradle:84-90` |
+| LangChain4j | `langchain4j`, `langchain4j-core`, `langchain4j-open-ai`, `langchain4j-http-client`, `langchain4j-http-client-jdk` (all 1.0.0); `langchain4j-mcp`, `langchain4j-anthropic` (1.0.0-beta5) | LLM client + MCP client | `build.gradle:56-62` |
+| jspecify | `org.jspecify:jspecify:1.0.0` | runtime-retained `@NullMarked`/`@Nullable` from langchain4j-core | `build.gradle:65` |
+| jtokkit | `com.knuddels:jtokkit:1.1.0` | `OpenAiTokenCountEstimator` (ChatBot token budget) — without it: NCDFE `com/knuddels/jtokkit/Encodings` on boot | `build.gradle:69` |
+| Jackson | `jackson-databind` 2.21.1, `jackson-core` 2.21.1, `jackson-bom` 2.21.1, `jackson-annotations` 2.21, `jackson-datatype-jdk8` 2.21.1, `jackson-datatype-jsr310` 2.21.1 | LangChain4j + `@JsonClassDescription`/`@JsonPropertyDescription` on tool POJOs read by `JsonSchemaAdapter`; the MCP SDK's Jackson 2 mapper (which lifts the line from 2.19 to 2.21, docs/27 phase 3) | `build.gradle:76-81` |
+| MCP server (docs/27) | `mcp-core` + `mcp-json-jackson2` 2.0.1, `reactor-core` 3.7.0, `reactive-streams` 1.0.4, `json-schema-validator` 2.0.4 (networknt), `itu` 1.14.0, `jackson-dataformat-yaml` 2.21.1, `snakeyaml` 2.5 | The `god`/`builder` MCP servers ([aigod/mcp-servers.md](../aigod/mcp-servers.md)); the transport is the JDK `HttpServer`, so no servlet container | `build.gradle:86-93` |
+| OkHttp pile | `okhttp` 4.12.0, `okhttp-sse` 4.12.0, `okio` 3.6.0, `okio-jvm` 3.6.0, `kotlin-stdlib`/`-jdk7`/`-jdk8` 1.9.10 | `langchain4j-mcp`'s `HttpMcpTransport` is OkHttp-based; without them the first `/pray` that builds tools NCDFEs on `okhttp3/Interceptor` | `build.gradle:102-108` |
 
 `MCPGateway` really does use `HttpMcpTransport` (`src/main/java/com/paul/brawl/MCPGateway.java:16`,
 `:219`). The comment at `build.gradle:43-47` still says "the stdio transport is part of this module" and
 mentions `StdioMcpTransport` — that comment is stale; the stdio transport is not used.
 
 When bumping `langchain4j-mcp`, the comment at `build.gradle:82-83` says to re-derive the OkHttp pins with
-`./gradlew dependencyInsight --dependency okhttp`.
+`./gradlew dependencyInsight --dependency okhttp`. For the MCP SDK closure, re-derive with
+`gradle dependencies --configuration runtimeClasspath` (`build.gradle:83-85`).
 
 ## Packaging tasks
 
@@ -189,9 +191,11 @@ from the repo.
 
 ## Java unit tests (`src/test/java/com/paul/brawl/`)
 
-Eleven JUnit 5 suites (47 `@Test`s), run with `./gradlew test`. Each covers a Minecraft-free helper class in
-`src/main/java/com/paul/brawl/`; none boots Minecraft, so command trees, packets and world effects still need
-an in-game check.
+Fifteen JUnit 5 suites (79 `@Test`s), run with `./gradlew test`. None boots Minecraft, so command trees, packets and
+world effects still need an in-game check. Most cover a Minecraft-free helper class in `src/main/java/com/paul/brawl/`;
+`GodServiceTest` / `BuildServiceTest` run the world layer's rules against recording world ports
+(`RecordingGodWorld`, `RecordingBuildWorld`), and the MCP contract tests run the real `god`/`builder` servers on a
+loopback port against the official MCP Java SDK client ([aigod/mcp-servers.md](../aigod/mcp-servers.md)).
 
 | Suite | `@Test`s | Class under test | What it pins |
 |---|---|---|---|
@@ -206,6 +210,10 @@ an in-game check.
 | `GodToolGateTest` | 3 | `GodToolGate` | MCP tools refused for a bodiless prayer or a disabled bridge (bug #8) |
 | `ImageMimeTest` | 3 | `ImageMime` | MIME sniffing of image bytes for `/prove`/`/build` (bug #9) |
 | `ItemIdsTest` | 3 | `ItemIds` | Registry-id extraction from an item string (components/NBT stripped, `minecraft:` default) (bug #6) |
+| `GodServiceTest` | 12 | `GodService`, `GodSessionManager` | Every God clamp/refusal, the owner gate on the body, gestures only for a manifested owner, session generations |
+| `BuildServiceTest` | 6 | `BuildService`, `BuildShapes` | Line walk, 128-block cap before allocation, unknown block, no pivot, offline player |
+| `AgentTicketsTest` | 4 | `AgentTickets`, `McpHttpEndpoint` predicates | Ticket kind/expiry/revocation; bearer and Origin checks |
+| `BuilderMcpServerTest` | 10 | `BuilderMcpServer`, `SubBuilds`, `McpHttpEndpoint` | Real MCP client: tool schemas, every refusal, the 4-sub-build and 128-block caps, HTTP 401/403/405/400 |
 
 ## `run/` — the dev server working directory (`./gradlew runServer`)
 
