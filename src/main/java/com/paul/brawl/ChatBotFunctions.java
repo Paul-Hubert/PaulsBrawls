@@ -21,7 +21,6 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 
 import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.math.MathHelper;
 
 public class ChatBotFunctions {
 
@@ -43,7 +42,7 @@ public class ChatBotFunctions {
         public int amount;
 
         public String execute(ServerPlayerEntity player) {
-            return ChatBotActions.giveItemFromString(player, itemName, amount);
+            return GodService.live().reward(player.getUuid(), itemName, amount);
         }
     }
 
@@ -59,8 +58,8 @@ public class ChatBotFunctions {
         public int takeAmount;
 
         public String execute(ServerPlayerEntity player) {
-            String bad = TradeOffers.checkAmounts(giveAmount, takeAmount); // a negative takeAmount used to duplicate items on /accept
-            return bad != null ? bad : ChatBotActions.sendTradeOffer(player, giveItemName, giveAmount, takeItemName, takeAmount);
+            // GodService checks both amounts first (a negative takeAmount used to duplicate items on /accept).
+            return GodService.live().offerTrade(player.getUuid(), giveItemName, giveAmount, takeItemName, takeAmount);
         }
     }
 
@@ -70,7 +69,7 @@ public class ChatBotFunctions {
         public int amount;
 
         public String execute(ServerPlayerEntity player) {
-            return ChatBotActions.smite(player, amount);
+            return GodService.live().punish(player.getUuid(), amount);
         }
     }
 
@@ -82,7 +81,7 @@ public class ChatBotFunctions {
         public int durationSeconds;
 
         public String execute(ServerPlayerEntity player) {
-            return ChatBotActions.changeWeather(player, weatherType, durationSeconds);
+            return GodService.live().changeWeather(player.getUuid(), weatherType, durationSeconds);
         }
     }
 
@@ -99,40 +98,15 @@ public class ChatBotFunctions {
         public Boolean lookAtPlayer;
 
         public String execute(ServerPlayerEntity player) {
-            // Ownership gate: a bodiless prayer (another player holds the
-            // avatar) must not teleport the shared body, flip its invuln, or
-            // touch the owner's watchdog.
-            if (!GodSessionManager.isActive(player)) {
-                return "Le corps de Dieu est occupé avec un autre fidèle — cette rencontre reste sans forme.";
-            }
-            BridgeConfig cfg = BridgeConfig.INSTANCE;
-            double d = (distance == null ? 3.0 : distance);
-            double h = (height   == null ? 0.0 : height);
-            boolean face = (lookAtPlayer == null || lookAtPlayer);
-            d = MathHelper.clamp(d, cfg.appearMinDistance, cfg.appearMaxDistance);
-            h = MathHelper.clamp(h, cfg.appearMinHeight,   cfg.appearMaxHeight);
-            GodBody.appear(player, d, h, face);                         // bridge, off-thread
-            GodActionQueue.submit(() -> ChatBotActions.buffAvatar(player));  // main thread
-            GodSessionManager.markManifested();
-            GodSessionManager.resetIdleTimer(player);
-            return "God a pris forme physique devant le joueur.";
+            // GodService gates on the session owner (a bodiless prayer must not move the shared body) and clamps.
+            return GodService.live().appear(player.getUuid(), distance, height, lookAtPlayer);
         }
     }
 
     @JsonClassDescription("Send God's physical body away. Call this to disappear deliberately when the encounter is over. Optional — if you stop calling tools the body vanishes automatically.")
     static class Vanish {
         public String execute(ServerPlayerEntity player) {
-            // Same ownership gate as Appear — only the session owner may send
-            // the shared body home.
-            if (!GodSessionManager.isActive(player)) {
-                return "Tu ne tiens pas le corps de Dieu — rien à faire disparaître.";
-            }
-            GodActionQueue.submit(() -> ChatBotActions.restoreAvatar(player));
-            GodBody.vanish();
-            // The body is gone but the session continues — stop routing speech
-            // and gestures through the parked bot until the next Appear.
-            GodSessionManager.clearManifested();
-            return "God a disparu.";
+            return GodService.live().vanish(player.getUuid());
         }
     }
 
@@ -142,9 +116,7 @@ public class ChatBotFunctions {
         public int seconds;
 
         public String execute(ServerPlayerEntity player) {
-            BridgeConfig cfg = BridgeConfig.INSTANCE;
-            int clamped = Math.max(cfg.waitMinSeconds, Math.min(seconds, cfg.waitMaxSeconds));
-            return "Le temps passe… " + clamped + " seconde(s) se sont écoulées.";
+            return GodService.waitMessage(GodService.live().waitSeconds(seconds));
         }
     }
 
@@ -198,7 +170,7 @@ public class ChatBotFunctions {
         public int z;
 
         public String execute(ServerPlayerEntity player) {
-            return ChatBotActions.spawnCreature(player, entityType, count, x, y, z);
+            return GodService.live().spawnCreature(player.getUuid(), entityType, count, x, y, z);
         }
     }
 
@@ -384,8 +356,7 @@ public class ChatBotFunctions {
         }
         if (results.isEmpty()) return false;
 
-        // Body choreography for the tools that just ran — best-effort, off-thread.
-        fireGestures(requests, player, results);
+        // Body choreography (nod, swing, summon) is fired by GodService after each effect.
 
         LOGGER.info("Submitting {} function call output(s) for player {} (waitSeconds={})",
             results.size(), player.getName().getString(), waitSeconds);
@@ -408,18 +379,16 @@ public class ChatBotFunctions {
     private static int extractWaitSeconds(ToolExecutionRequest req) {
         try {
             Wait w = parseArgs(req, Wait.class);
-            BridgeConfig cfg = BridgeConfig.INSTANCE;
-            return Math.max(cfg.waitMinSeconds, Math.min(w.seconds, cfg.waitMaxSeconds));
+            return GodService.live().waitSeconds(w.seconds);
         } catch (Exception e) {
             return 0;
         }
     }
 
     /**
-     * Dispatch a single tool call. World-mutating tools hop onto the main
-     * thread via {@link GodActionQueue}; {@link #runOnMain} blocks the LLM
-     * callback thread for ~one tick (bounded at 5 s) — never call this on the
-     * main thread (deadlock).
+     * Dispatch a single tool call. World tools go through {@link GodService},
+     * whose world port blocks the LLM callback thread for ~one tick (bounded at
+     * 5 s, {@link MainThread}) while the effect runs on the main thread.
      *
      * <p>{@code chatBot} is the bot that owns the request — used by
      * {@link ListTools} to enumerate exactly what was attached to this turn.
@@ -436,23 +405,25 @@ public class ChatBotFunctions {
         String name = (req == null || req.name() == null) ? "?" : req.name();
         try {
             return switch (name) {
-                case "Reward" -> runOnMain(() -> parseArgs(req, Reward.class).execute(player));
-                case "Trade" -> runOnMain(() -> parseArgs(req, Trade.class).execute(player));
-                case "Punishment" -> runOnMain(() -> parseArgs(req, Punishment.class).execute(player));
-                case "ChangeWeather" -> runOnMain(() -> parseArgs(req, ChangeWeather.class).execute(player));
-                case "SpawnCreature" -> runOnMain(() -> parseArgs(req, SpawnCreature.class).execute(player));
-                // Appear, Vanish, Wait don't mutate world/entity state from
-                // off-thread — Appear queues its own buffAvatar, Vanish queues
-                // its own restoreAvatar, Wait is a pure scheduling token.
+                // World tools go through GodService, whose world port hops to the
+                // main thread itself (MainThread.call, bounded at 5 s) and turns
+                // a timeout into a readable refusal.
+                case "Reward" -> parseArgs(req, Reward.class).execute(player);
+                case "Trade" -> parseArgs(req, Trade.class).execute(player);
+                case "Punishment" -> parseArgs(req, Punishment.class).execute(player);
+                case "ChangeWeather" -> parseArgs(req, ChangeWeather.class).execute(player);
+                case "SpawnCreature" -> parseArgs(req, SpawnCreature.class).execute(player);
                 case "Appear" -> parseArgs(req, Appear.class).execute(player);
                 case "Vanish" -> parseArgs(req, Vanish.class).execute(player);
                 case "Wait" -> parseArgs(req, Wait.class).execute(player);
                 case "BuildPlan" -> parseArgs(req, BuildPlan.class).execute(player);
                 // Read-only world inspection (heightmap + biome + block-state
-                // probes). Wrapped in runOnMain to stay consistent with every
-                // other world-touching tool and to avoid off-thread chunk
-                // loads at the edge of the loaded area.
-                case "QueryTerrain" -> runOnMain(() -> parseArgs(req, QueryTerrain.class).execute(player));
+                // probes), run on the main thread like every other world tool
+                // so it never loads chunks off-thread.
+                case "QueryTerrain" -> {
+                    QueryTerrain q = parseArgs(req, QueryTerrain.class);
+                    yield GodService.live().queryTerrain(player.getUuid(), q.centerX, q.centerZ, q.radius);
+                }
                 // Pure introspection — no world state, no main-thread hop.
                 // Reads the calling bot's flags directly and rebuilds the same
                 // spec list buildToolSpecs already produced for this request.
@@ -478,7 +449,7 @@ public class ChatBotFunctions {
             };
         } catch (Exception e) {
             // Most likely a parseArgs JSON failure on Appear/Vanish/Wait/BuildPlan
-            // (the runOnMain arms already swallow their own exceptions). Could
+            // (GodService swallows world refusals itself). Could
             // also be an NPE inside a tool's execute() that slipped past its own
             // guards. Either way: log it loudly, return a readable error so memory
             // stays balanced and the model can recover.
@@ -486,70 +457,6 @@ public class ChatBotFunctions {
                 name, e.getMessage(), e);
             return "Erreur lors de l'exécution de '" + name + "': "
                 + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-        }
-    }
-
-    /**
-     * Queue + join: returns the supplier's result run on the main server thread.
-     *
-     * <p>Bounded {@code .get(5, SECONDS)} so a stalled drain (server frozen,
-     * paused-on-focus-lost singleplayer, {@code SERVER_STOPPING} mid-flight)
-     * can't pin an {@code llm-worker} thread forever ({@link LLMConfig#sharedExecutor()}
-     * is a virtual-thread-per-task executor, so a stall leaks a thread and leaves the
-     * prayer hanging rather than deadlocking the pool).
-     *
-     * <p>5 s is generous: a normal tick is 50 ms and {@link GodActionQueue#MAX_PER_TICK}
-     * is 8, so the queue would have to be ~800 deep to legitimately take that
-     * long. On {@link TimeoutException} we return a readable error so memory
-     * stays tool-call/tool-result balanced; the model sees the failure and can
-     * proceed to the next tool instead of leaving an orphan.
-     */
-    private static String runOnMain(java.util.function.Supplier<String> body) {
-        var future = GodActionQueue.submit(body);
-        try {
-            return future.get(5, TimeUnit.SECONDS);
-        } catch (TimeoutException te) {
-            // Only claim "not executed" if it truly never will be: an action that already started is waited for.
-            if (GodActionQueue.cancelIfNotStarted(future)) {
-                LOGGER.warn("Main-thread queue did not drain within 5s — server frozen/paused/stopping?");
-                return "Erreur côté serveur: action différée non exécutée (serveur indisponible).";
-            }
-            try {
-                return future.get(5, TimeUnit.SECONDS);
-            } catch (Exception again) {
-                LOGGER.warn("Main-thread action started but did not finish in time: {}", again.getMessage());
-                return "Erreur côté serveur: l'action a peut-être été exécutée (résultat inconnu), ne la relance pas.";
-            }
-        } catch (Exception e) {
-            LOGGER.warn("Main-thread queue join failed: {}", e.getMessage(), e);
-            return "Erreur côté serveur lors de l'exécution de cette action.";
-        }
-    }
-
-    /**
-     * Best-effort body choreography. Each fire-and-forget gesture matches one
-     * tool — Punishment swings + looks at the player, Reward nods,
-     * ChangeWeather looks up, SpawnCreature does a summon pose. Plain bridge
-     * calls so they never touch world state.
-     */
-    private static void fireGestures(List<ToolExecutionRequest> requests, ServerPlayerEntity player, List<FunctionResult> results) {
-        // Bug #8: hasManifested() is global — a bodiless player's Reward used to nod the owner's body.
-        if (!GodSessionManager.hasManifested() || !GodSessionManager.isActive(player)) return;
-        for (ToolExecutionRequest req : requests) {
-            switch (req.name()) {
-                case "Punishment" -> {
-                    GodBody.lookAt(player);
-                    GodBody.gesture("swing");
-                }
-                case "Reward"        -> GodBody.gesture("nod");
-                case "ChangeWeather" -> {
-                    if (player != null) GodBody.lookAt(player); // brief glance up handled by `nod`/`summon` if desired
-                    GodBody.gesture("summon");
-                }
-                case "SpawnCreature" -> GodBody.gesture("summon");
-                case "Trade"         -> GodBody.gesture("nod");
-                default -> { /* Appear/Vanish/Wait/BuildPlan handle their own presence */ }
-            }
         }
     }
 
@@ -651,16 +558,13 @@ public class ChatBotFunctions {
         return total;
     }
 
-    private static void placeOnMain(ServerPlayerEntity player, java.util.List<java.util.concurrent.CompletableFuture<String>> pending, Runnable place) {
-        var server = player.getServer();
-        if (server == null || server.isOnThread()) {
-            place.run();
-            return;
-        }
-        pending.add(GodActionQueue.submitBulk(() -> {
-            place.run();
-            return "ok";
-        }));
+    /** Queue one textual call through {@link BuildService} at {@code pivot} (or the admin's /construction pivot). */
+    private static void placeVia(ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot, List<int[]> offsets,
+            String blockType, java.util.List<java.util.concurrent.CompletableFuture<String>> pending) {
+        net.minecraft.util.math.BlockPos origin = pivot != null ? pivot : Raycaster.getLastPos(player.getUuid());
+        if (origin == null) return; // no pivot: nothing to place against (unchanged)
+        int[] o = { origin.getX(), origin.getY(), origin.getZ() };
+        pending.add(BuildService.live().submit(player.getUuid(), o, offsets, blockType));
     }
 
     private static void awaitPlacements(java.util.List<java.util.concurrent.CompletableFuture<String>> pending) {
@@ -687,11 +591,7 @@ public class ChatBotFunctions {
                 int y = Integer.parseInt(m.group(2));
                 int z = Integer.parseInt(m.group(3));
                 String blockType = firstNonNull(m.group(4), m.group(5), m.group(6), m.group(7));
-                if (pivot == null) {
-                    placeOnMain(player, pending, () -> ChatBotActions.placeBlock(player, x, y, z, blockType));
-                } else {
-                    placeOnMain(player, pending, () -> ChatBotActions.placeBlockAt(player, pivot, x, y, z, blockType));
-                }
+                placeVia(player, pivot, List.of(new int[] { x, y, z }), blockType, pending);
                 count++;
             } catch (Exception e) {
                 LOGGER.warn("Failed to parse textual PlaceBlock call: {}", match, e);
@@ -719,11 +619,7 @@ public class ChatBotFunctions {
                     LOGGER.warn("Skipped textual PlaceLine of {} blocks (> {}): {}", blocks, BuildGuard.MAX_BLOCKS_PER_CALL, match);
                     continue;
                 }
-                if (pivot == null) {
-                    placeOnMain(player, pending, () -> ChatBotActions.placeLine(player, x, y, z, x2, y2, z2, blockType));
-                } else {
-                    placeOnMain(player, pending, () -> ChatBotActions.placeLineAt(player, pivot, x, y, z, x2, y2, z2, blockType));
-                }
+                placeVia(player, pivot, BuildShapes.line(x, y, z, x2, y2, z2), blockType, pending);
                 count++;
             } catch (Exception e) {
                 LOGGER.warn("Failed to parse textual PlaceLine call: {}", match, e);
@@ -748,11 +644,7 @@ public class ChatBotFunctions {
                     LOGGER.warn("Skipped textual PlaceBlocks of {} blocks (> {}): {}", blocks, BuildGuard.MAX_BLOCKS_PER_CALL, match);
                     continue;
                 }
-                if (pivot == null) {
-                    placeOnMain(player, pending, () -> ChatBotActions.placeBlocks(player, xs, ys, zs, blockType));
-                } else {
-                    placeOnMain(player, pending, () -> ChatBotActions.placeBlocksAt(player, pivot, xs, ys, zs, blockType));
-                }
+                placeVia(player, pivot, BuildShapes.points(xs, ys, zs), blockType, pending);
                 count++;
             } catch (Exception e) {
                 LOGGER.warn("Failed to parse textual PlaceBlocks call: {}", match, e);

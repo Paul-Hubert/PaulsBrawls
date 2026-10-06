@@ -40,8 +40,8 @@ connect failures back off 30 s; dispatch failures return an error string and for
 | `MCPGateway` | `src/main/java/com/paul/brawl/MCPGateway.java` | Connection, cache, dispatch, reload, status |
 | `MCPConfig` | `src/main/java/com/paul/brawl/MCPConfig.java` | `mcp_config.properties` (enabled, URL, timeout) |
 | `MCPCommand` | `src/main/java/com/paul/brawl/MCPCommand.java` | `/mcp`, `/mcp status`, `/mcp reload` |
-| Tool list merge | `ChatBotFunctions.java:325-352` (`buildToolSpecs`) | Appends MCP specs for bots with `needsMcpTools` |
-| Dispatch fallthrough | `ChatBotFunctions.java:460-478` (`executeFunction` default arm) | Gates (`GodToolGate`) and routes MCP tool calls |
+| Tool list merge | `ChatBotFunctions.java:297-324` (`buildToolSpecs`) | Appends MCP specs for bots with `needsMcpTools` |
+| Dispatch fallthrough | `ChatBotFunctions.java:431-449` (`executeFunction` default arm) | Gates (`GodToolGate`) and routes MCP tool calls |
 | Libraries | `build.gradle:48,56,84-89` | `dev.langchain4j:langchain4j-mcp:1.0.0-beta5` (jar-in-jar), OkHttp 4.12.0 + okhttp-sse + Okio 3.6.0 + Kotlin stdlib 1.9.10 included because `HttpMcpTransport` is OkHttp-based |
 
 ## Configuration — `mcp_config.properties`
@@ -92,7 +92,7 @@ The default `sse_url` happens to match `BridgeConfig.bridgeUrl` (`http://127.0.0
    close the client, `connected = false`, **keep** the previous cached specs/names (empty on first failure).
 
 No subprocess is spawned (an earlier design used `StdioMcpTransport`; the obsolete-keys migration and some stale comments,
-e.g. `ChatBotFunctions.java:319-323`, still refer to it).
+e.g. `ChatBotFunctions.java:291-295`, still refer to it).
 
 > ⚠ Unverified: `DefaultMcpClient` defaults in `langchain4j-mcp 1.0.0-beta5` (initialization/tool-execution timeouts,
 > how a server-side `isError` result is rendered) are library behaviour, not visible in this repo.
@@ -106,7 +106,7 @@ and prints the status back on the server thread when the reconnect is done.
 
 ## Tool merge into the God's tool list
 
-`ChatBotFunctions.buildToolSpecs(needsGodTools, needsBuildPlan, needsMcpTools)` (`ChatBotFunctions.java:325-352`) builds,
+`ChatBotFunctions.buildToolSpecs(needsGodTools, needsBuildPlan, needsMcpTools)` (`ChatBotFunctions.java:297-324`) builds,
 in order:
 
 1. If `needsGodTools`: `Reward`, `Trade`, `Punishment`, `ChangeWeather`, `SpawnCreature`, `Appear`, `Vanish`, `Wait`,
@@ -125,7 +125,7 @@ Only `godBot` has `needsMcpTools = true` (`ChatBot.java:152-153`); `buildBot` an
 
 ## Dispatch
 
-`ChatBotFunctions.executeFunction` (`ChatBotFunctions.java:429-490`) switches on the tool name; the Java PascalCase names
+`ChatBotFunctions.executeFunction` (`ChatBotFunctions.java:398-461`) switches on the tool name; the Java PascalCase names
 match first. The `default` arm:
 
 ```java
@@ -149,13 +149,13 @@ if (MCPGateway.INSTANCE.handlesTool(name)) {
 
 Execution characteristics:
 
-- Runs on the LLM worker thread that is processing the tool batch; **not** wrapped in `GodActionQueue`/`runOnMain` (the
+- Runs on the LLM worker thread that is processing the tool batch; **not** wrapped in `GodActionQueue`/`MainThread.call` (the
   work happens in the Node process). It blocks that worker until the MCP call returns or times out.
 - Tool results join the other results and go back via `sendFunctionOutputs` (or a `Wait` deferral) like any Java tool.
 - Gated (bug #8): `executeFunction` asks `GodToolGate.mcpRefusal(BridgeConfig.enabled, GodSessionManager.isActive(player))`
   first and returns its French refusal instead of calling the gateway (`Le corps de Dieu est désactivé par un
   administrateur — cet outil est indisponible.` / `Le corps de Dieu est occupé avec un autre fidèle — cet outil ne peut
-  pas l'utiliser.`, `GodToolGate.java:14-18`). The specs are still advertised in both cases. No gestures (`fireGestures` has no MCP arms). Each dispatch resets the owner's
+  pas l'utiliser.`, `GodToolGate.java:14-18`). The specs are still advertised in both cases. No gestures (only `GodService` effects fire gestures; MCP calls do not go through it). Each dispatch resets the owner's
   idle watchdog before and after the call.
 - Results count toward `ChatBot.MAX_MEMORY_TOKENS = 16_000`; large JSON results evict older memory.
 
@@ -206,7 +206,7 @@ resets the backoff" is not implemented (success touches no state).
   "mirrors §0" while the doc's table is §"Ground truth"; it spot-checks 9 tools.
 - `HIGHER_LEVEL_TOOLS.md` is a wishlist (it still says "22 MCP primitives"), not a description of existing tools.
 - The Java code's comment "MCP-sourced tools use kebab-case names that can never collide with the PascalCase Java POJO
-  names" (`ChatBotFunctions.java:461-463`) is a convention, not an enforced check.
+  names" (`ChatBotFunctions.java:432-434`) is a convention, not an enforced check.
 
 ## Extending
 

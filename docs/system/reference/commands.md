@@ -36,7 +36,7 @@ Details: [gibber/money-system.md](../gibber/money-system.md).
 |---|---|---|---|
 | `/pray <text…>` | 0 | `ChatCommand.java:28-41` | Greedy `MessageArgumentType`. Sends a prayer to the Java God; claims the avatar via `GodSessionManager` (bodiless if another player owns it). |
 | `/pray stop` | 0 | `ChatCommand.java:30` | Ends *your* session (owner only); chat `Dieu : (la séance est close.)`. |
-| `/accept` | 0 (no `.requires`) | `TradeOffers.java:123-127` | Accepts your pending God trade offer (RAM-only, expires after 5 min). |
+| `/accept` | 0 (no `.requires`) | `TradeOffers.java:119-123` | Accepts your pending God trade offer (RAM-only, expires after 5 min). |
 | `/prompt` | 2 | `ChatCommand.java:142-148` | Re-reads `prompt.txt` / `build_prompt.txt` for both bots, then prints the hardcoded + custom prompt via `sendFeedback` (console-safe, bug #18). |
 | `/prompt <text…>` | 2 | `ChatCommand.java:121-123` | Sets the custom prompt (`prompt` field) on **both** `godBot` and `buildBot`; in RAM only. |
 | `/godbody off` | 2 | `ChatCommand.java:60-62` | Kill-switch: clears `GodActionQueue`, restores avatar vulnerability (bug #5), cancels running sub-builds (bug #7), vanishes the avatar, force-ends the session, disables the bridge. |
@@ -58,8 +58,8 @@ Details: [aigod/configuration-and-commands.md](../aigod/configuration-and-comman
 
 | Syntax | Perm | Source | Behaviour |
 |---|---|---|---|
-| `/construction` | 2 | `ChatBotActions.java:213-217` | Raycasts (100 blocks) from the player's eyes and stores the hit as the build **pivot**; wipes the build sub-agent's memory. No feedback on a miss. Player-only (`getPlayerOrThrow`, bug #18). |
-| `/block <x> <y> <z>` | 2 | `ChatBotActions.java:195-205` | Debug: places stone at **pivot + (x,y,z)** (relative, not absolute). Player-only (bug #18). |
+| `/construction` | 2 | `ChatBotActions.java:192-196` | Raycasts (100 blocks) from the player's eyes and stores the hit as the build **pivot**; wipes the build sub-agent's memory. No feedback on a miss. Player-only (`getPlayerOrThrow`, bug #18). |
+| `/block <x> <y> <z>` | 2 | `ChatBotActions.java:174-184` | Debug: places stone at **pivot + (x,y,z)** (relative, not absolute). Player-only (bug #18). |
 
 Details: [aigod/building.md](../aigod/building.md).
 

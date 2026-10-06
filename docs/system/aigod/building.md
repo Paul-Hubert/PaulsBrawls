@@ -12,6 +12,11 @@ sources:
   - src/main/java/com/paul/brawl/Raycaster.java
   - src/main/java/com/paul/brawl/ChatBotFunctions.java
   - src/main/java/com/paul/brawl/ChatBotActions.java
+  - src/main/java/com/paul/brawl/BuildService.java
+  - src/main/java/com/paul/brawl/BuildWorld.java
+  - src/main/java/com/paul/brawl/MinecraftBuildWorld.java
+  - src/main/java/com/paul/brawl/BuildShapes.java
+  - src/main/java/com/paul/brawl/WorldRefusal.java
   - src/main/java/com/paul/brawl/ChatBot.java
   - src/main/java/com/paul/brawl/ChatCommand.java
   - src/main/java/com/paul/brawl/ImageReceiver.java
@@ -34,21 +39,25 @@ A player then runs the client command `/build <text>` (rest of the line); the te
 `PlaceBlock` / `PlaceLine` / `PlaceBlocks` lines (regex-scanned, executed relative to the pivot, looped until a
 reply has zero call lines) or calls the **`BuildPlan`** tool, which spawns N parallel **`BuildSubAgent`**s, each with
 its own anchor pivot, private memory and 5 automatic refinement passes (at most 4 sub-agents server-wide). Blocks are
-written with `world.setBlockState` **on the server thread**: each matched call line is one task on `GodActionQueue`'s bulk lane (bug #7), so building never delays God's actions.
+written with `world.setBlockState` **on the server thread**: each matched call line goes through `BuildService.submit`
+(128-block cap + known-block check) and becomes one task on `GodActionQueue`'s bulk lane (`MinecraftBuildWorld.place`,
+bug #7), so building never delays God's actions.
 
 ## Components and where they live
 
 | Piece | File | Role |
 |---|---|---|
-| `/construction`, `/block` commands | `src/main/java/com/paul/brawl/ChatBotActions.java:191-227` | Set pivot (and wipe buildBot memory); debug-place stone |
+| `/construction`, `/block` commands | `src/main/java/com/paul/brawl/ChatBotActions.java:170-206` | Set pivot (and wipe buildBot memory); debug-place stone |
 | Pivot store + raycast | `src/main/java/com/paul/brawl/Raycaster.java` | `HashMap<UUID, BlockPos> lastPos` (`Raycaster.java:21`) |
 | Client `/build` | `src/client/java/com/paul/brawl/Screenshotter.java:62-77` | Captures screenshot, sends `ImagePayload` with text `"Build : " + s` |
 | Routing | `ImageReceiver.java:28-37`, `ChatBot.java:646-653` | `"Build :"` substring → `ChatBot.buildBot` |
 | `buildBot` instance + flags | `ChatBot.java:131-153` | `new ChatBot("build_prompt.txt")` |
 | Main build loop | `ChatBot.java:524-575` (`setupGeneralCallback`), `ChatBot.java:364-385` (`sendTextualContinuation`) | Scan text, place, continue |
-| `BuildPlan` / `SubBuild` tool POJOs | `ChatBotFunctions.java:205-309` | Fan-out to sub-agents |
-| Textual grammar (regexes, scanners) | `ChatBotFunctions.java:556-766` | `PLACE_BLOCK_PATTERN` etc.; `placeOnMain` queue hop |
-| Placement primitives | `ChatBotActions.java:229-344` | `placeBlockAt`, `placeLineAt`, `placeBlocksAt`, `parseBlockState` |
+| `BuildPlan` / `SubBuild` tool POJOs | `ChatBotFunctions.java:177-281` | Fan-out to sub-agents |
+| Textual grammar (regexes, scanners) | `ChatBotFunctions.java:473-668` | `PLACE_BLOCK_PATTERN` etc.; `placeVia` → `BuildService.submit` |
+| Placement rules (cap, known block, wait) | `src/main/java/com/paul/brawl/BuildService.java` | `submit` (`:44-63`), `await` (`:106-121`); never throws, refusals are text |
+| Placement port + shapes | `BuildWorld.java`, `MinecraftBuildWorld.java`, `BuildShapes.java` | `place` = one `GodActionQueue.submitBulk` task; `BuildShapes.line`/`points` walk the offsets |
+| Placement primitives | `ChatBotActions.java:208-288` | `placeBlock` (`/block`), `placeAll`, `isKnownBlock`, `parseBlockState` |
 | Sub-agent worker | `src/main/java/com/paul/brawl/BuildSubAgent.java` | Isolated multi-pass loop |
 | Caps + cancel | `src/main/java/com/paul/brawl/BuildGuard.java` | 4 concurrent sub-agents, 128 blocks per call, `cancelAll()` epoch |
 | System prompt | `build_prompt.txt` (repo root) and `run/build_prompt.txt` (dev cwd) | Loaded from the JVM working dir |
@@ -92,16 +101,17 @@ lastPos[uuid] = looked-at BlockPos (or null)     ImageReceiver.checkProof → ge
 Pivot is **per player UUID**: the pivot used by `/build` is the one set by the *same* player's `/construction`.
 Since `/construction` needs perm 2, a non-op's `/build` has no pivot (see Gotchas).
 
-Other consumers of `Raycaster.getLastPos`: `BuildPlan.execute` (`ChatBotFunctions.java:229`), the pivot-less
-`placeBlock/placeLine/placeBlocks` wrappers (`ChatBotActions.java:229-254`), and `ChatBotActions.getBlockInfo`
-(`ChatBotActions.java:289-311`) — the godBot's "blocks near the player's cursor" context is actually sampled around
+Other consumers of `Raycaster.getLastPos`: `BuildPlan.execute` (`ChatBotFunctions.java:201`), the textual scanner's
+`placeVia` when no sub-agent pivot is given (`ChatBotFunctions.java:561-568`), `/block`'s `placeBlock`
+(`ChatBotActions.java:208-213`), `MinecraftBuildWorld.origin`, and `ChatBotActions.getBlockInfo`
+(`ChatBotActions.java:236-258`) — the godBot's "blocks near the player's cursor" context is actually sampled around
 this `/construction` pivot (a JSON array of `{x,y,z,block}` built by `BlockInfoJson`, bug #18; empty string if none).
 
 ### `/block <x> <y> <z>`
 
-`ChatBotActions.java:193-209`, perm 2, `IntegerArgumentType` ×3, player-only (`getPlayerOrThrow`, bug #18). Calls `placeBlock(player, x, y, z, "minecraft:stone")`,
-i.e. places stone at **pivot + (x,y,z)** (relative, not absolute). Silently does nothing without a pivot. Runs on the main
-thread (command context).
+`ChatBotActions.java:172-188`, perm 2, `IntegerArgumentType` ×3, player-only (`getPlayerOrThrow`, bug #18). Calls `placeBlock(player, x, y, z, "minecraft:stone")`,
+i.e. places stone at **pivot + (x,y,z)** (relative, not absolute) through `placeAll`. Silently does nothing without a
+pivot. Runs on the main thread (command context); it bypasses `BuildService`.
 
 ## The `buildBot`
 
@@ -159,7 +169,7 @@ Schema is generated by `JsonSchemaAdapter` from the POJOs; every annotated field
 | | `size` | string | `small/medium/large` or `XxZxY` like `8x8x12`; "stay under ~32 blocks per axis" |
 | | `purpose` | string | e.g. `dwelling`, `watchtower`; used in the label |
 
-`BuildPlan.execute(player)` (`ChatBotFunctions.java:228-304`), dispatched directly on the LLM worker (no `runOnMain`):
+`BuildPlan.execute(player)` (`ChatBotFunctions.java:200-276`), dispatched directly on the LLM worker (no main-thread hop):
 
 | Condition | Returned tool result (verbatim) |
 |---|---|
@@ -230,7 +240,7 @@ skipped with a warning, not counted).
 
 ## Textual grammar (exact)
 
-Defined in `ChatBotFunctions.java:558-589`:
+Defined in `ChatBotFunctions.java:473-506`:
 
 ```java
 INT        = "-?\\d+"
@@ -247,8 +257,8 @@ PLACE_BLOCKS_PATTERN = "PlaceBlocks" WS "\(" WS (INT_ARRAY) WS "," WS (INT_ARRAY
 | Call | Groups used | Semantics |
 |---|---|---|
 | `PlaceBlock(x, y, z, "ns:id[props]")` | 1-3 ints, block = first non-null of 4-7 | One block at pivot+(x,y,z) |
-| `PlaceLine(x1,y1,z1,x2,y2,z2, "ns:id")` | 1-6 ints, block 7-10 | `maxLen = max(1, max(|dx|,|dy|,|dz|))`; for `i=0..maxLen`: `(x + dx*i/maxLen, ...)` with Java integer division (truncation toward zero); both endpoints inclusive (`ChatBotActions.java:262-274`); skipped if more than 128 blocks (`BuildGuard.lineBlocks`) |
-| `PlaceBlocks([xs],[ys],[zs], "ns:id")` | arrays = groups 1, 3, 5 (2/4/6 are the arrays' inner groups), block 7-10 | Ints extracted with `INT_TOKEN_PATTERN`; iterates `min(len(xs),len(ys),len(zs))` — unequal lengths are silently truncated; `[]` allowed (`ChatBotActions.java:276-281`); skipped if the truncated length exceeds 128 |
+| `PlaceLine(x1,y1,z1,x2,y2,z2, "ns:id")` | 1-6 ints, block 7-10 | `maxLen = max(1, max(|dx|,|dy|,|dz|))`; for `i=0..maxLen`: `(x + dx*i/maxLen, ...)` with Java integer division (truncation toward zero); both endpoints inclusive (`BuildShapes.line`, `BuildShapes.java:19-27`, same DDA as the old `placeLineAt`); skipped if more than 128 blocks (`BuildGuard.lineBlocks`) |
+| `PlaceBlocks([xs],[ys],[zs], "ns:id")` | arrays = groups 1, 3, 5 (2/4/6 are the arrays' inner groups), block 7-10 | Ints extracted with `INT_TOKEN_PATTERN`; iterates `min(len(xs),len(ys),len(zs))` — unequal lengths are silently truncated; `[]` allowed (`BuildShapes.points`, `BuildShapes.java:29-35`); skipped if the truncated length exceeds 128 (an empty one is refused by `BuildService`: `Aucun bloc à placer.`) |
 
 Matching rules that matter:
 
@@ -257,12 +267,13 @@ Matching rules that matter:
 - Block name may be double-, single-, back-quoted or bare. Namespace/path allow only letters, digits, `_` (and `/` in the
   path); no `-`, `.`, `#tags`, or `{nbt}`. Blockstate `[...]` is optional, any chars except `]`.
 - **Execution order is by kind, not by text order**: all `PlaceBlock` matches, then all `PlaceLine`, then all
-  `PlaceBlocks` (`ChatBotFunctions.java:634-642`); the queue is FIFO, so the main thread applies them in that order. A later
+  `PlaceBlocks` (`ChatBotFunctions.java:551-559`); the queue is FIFO, so the main thread applies them in that order. A later
   kind overwrites an earlier one at the same cell.
-- The return value counts **calls**, incremented once the call is queued (or run inline), even if the block id later fails
-  to parse or no pivot exists; an exception (e.g. `Integer.parseInt` overflow) or a call over the 128-block cap skips the
-  count. `scanAndExecute` then waits up to 30 s for the queued tasks (`awaitPlacements`, `ChatBotFunctions.java:656-668`).
-- `stripTextualFunctionCalls` (`ChatBotFunctions.java:598-606`) removes matches (PlaceBlocks → PlaceLine → PlaceBlock),
+- The return value counts **calls**, incremented once the call is handed to `placeVia`, even if `BuildService` refuses
+  it (unknown block id) or no pivot exists (nothing submitted); an exception (e.g. `Integer.parseInt` overflow) or a call
+  over the 128-block cap skips the count. `scanAndExecute` then waits up to 30 s for the queued tasks
+  (`awaitPlacements`, `ChatBotFunctions.java:570-582`); the per-call reports/refusals are not shown to the model.
+- `stripTextualFunctionCalls` (`ChatBotFunctions.java:515-523`) removes matches (PlaceBlocks → PlaceLine → PlaceBlock),
   strips trailing spaces before line breaks, collapses 3+ line breaks to one blank line, trims. Unmatched call-like text is
   shown verbatim to the player.
 
@@ -270,10 +281,12 @@ Matching rules that matter:
 
 - Coordinates are **always relative** to a pivot: `pivot.add(x, y, z)`. Axes: X east+, Y up+, Z south+. Direct mode →
   `/construction` pivot of the caller; sub-agent → its `subPivot`.
-- Block parsing (`ChatBotActions.java:322-344`): `BlockArgumentParser.block(registryWrapper(BLOCK), blockType, allowNbt=false)`.
+- Block parsing (`parseBlockState(server, blockType)`, `ChatBotActions.java:267-288`): `BlockArgumentParser.block(registryWrapper(BLOCK), blockType, allowNbt=false)`.
   On `CommandSyntaxException`, if the string contains `[`, it retries with the base id (orientation lost, warn logged);
-  else returns null → nothing placed (warn `Failed to parse block ...`).
-- Write: `player.getWorld().setBlockState(pos, state)` (default flags) in `changeBlockAtPos` (`ChatBotActions.java:315-320`).
+  else returns null (warn `Failed to parse block ...`). `BuildService.submit` checks it up front through
+  `isKnownBlock` (`ChatBotActions.java:262-265`), so an unknown id is refused before anything is queued
+  (`Bloc inconnu ou mal formé : '<block>'.`); `placeAll` re-parses and throws the same `WorldRefusal`.
+- Write: `world.setBlockState(origin + offset, state)` (default flags) per offset in `placeAll` (`ChatBotActions.java:215-227`), one state parse per call.
   No bounds/protection check; the only size check is the 128-blocks-per-call cap — "keep within ~32 blocks" is prompt
   guidance only. Any existing block (including
   containers) is overwritten; no undo.
@@ -281,9 +294,10 @@ Matching rules that matter:
 ### Thread of placement
 
 Scanning runs on the LLM worker thread that completed the request (`buildBot`'s `thenAccept` callback, `ChatBot.java:525`,
-and `BuildSubAgent`'s `whenComplete`, `BuildSubAgent.java:129`). Each matched call line is handed to `placeOnMain`
-(`ChatBotFunctions.java:644-654`), which submits it as one task on `GodActionQueue`'s bulk lane (`submitBulk`, ≤ 8 per tick after the God actions), or runs it inline when
-already on the server thread (bug #7). `/godbody off` and server stop clear the queue, so queued placements are cancelled.
+and `BuildSubAgent`'s `whenComplete`, `BuildSubAgent.java:129`). Each matched call line is handed to `placeVia`
+(`ChatBotFunctions.java:561-568`) → `BuildService.submit` (`BuildService.java:44-63`) → `MinecraftBuildWorld.place`
+(`MinecraftBuildWorld.java:52-69`), which submits it as one task on `GodActionQueue`'s bulk lane (`submitBulk`, ≤ 8 per
+tick after the God actions) running `ChatBotActions.placeAll`, or runs it inline when already on the server thread (bug #7). `/godbody off` and server stop clear the queue, so queued placements are cancelled.
 `/block` places directly on the main thread (command context).
 
 ## `build_prompt.txt` contents (summary)
@@ -311,21 +325,22 @@ any code**.
 
 1. `ChatBotFunctions.java`: add a `Pattern` built from `INT`/`WS`/`BLOCK_NAME`/`INT_ARRAY`; make sure its literal name
    cannot prefix-match an existing one (e.g. `PlaceBlock` vs `PlaceBlocks` is safe only because `\(` must follow).
-2. Add a `scanX(text, player, pivot, pending)` mirroring `scanPlaceLine` (count, try/catch per match, `pivot == null` →
-   `Raycaster` pivot wrapper) and add it to `scanAndExecute`.
+2. Add a `scanX(text, player, pivot, pending)` mirroring `scanPlaceLine` (count, try/catch per match) and add it to
+   `scanAndExecute`.
 3. Add it to `stripTextualFunctionCalls` (longest names first).
-4. `ChatBotActions.java`: add `xAt(player, pivot, ...)` using `changeBlockAtPos` (and a pivot-less wrapper if direct mode
-   should support it). Route the world write through `placeOnMain(player, pending, …)` like the existing three
-   (bug #7), and check its size against `BuildGuard.withinCallCap`.
+4. `BuildShapes.java`: add the offset walk for the new shape (Minecraft-free, unit-testable), check its size against
+   `BuildGuard.withinCallCap` before allocating, and hand the offsets to `placeVia(player, pivot, offsets, block, pending)`
+   like the existing three — `BuildService`/`MinecraftBuildWorld.place`/`ChatBotActions.placeAll` need no change (bug #7).
 5. Teach the model: `build_prompt.txt` in the **runtime cwd** (and both tracked copies), the `ListTools` text-placement
-   hint (`ChatBotFunctions.java:177-182`), the continuation strings (`ChatBot.java:375-377`, `BuildSubAgent.java:168-170`),
+   hint (`ChatBotFunctions.java:149-154`), the continuation strings (`ChatBot.java:375-377`, `BuildSubAgent.java:168-170`),
    and `DEFAULT_REFINEMENTS` / the BuildPlan addendum if they name the calls.
 
 ## Gotchas & known issues
 
-- ~~**Off-thread world writes.**~~ **Fixed (bug #7):** `scanAndExecute` submits each matched call as one
-  bulk-lane `GodActionQueue` task (≤ 8 per tick, after the God actions) and waits up to 30 s for them before returning the count; on the server thread
-  it runs inline. Only an in-game check proves the thread hop; the caps are unit-tested.
+- ~~**Off-thread world writes.**~~ **Fixed (bug #7):** `scanAndExecute` submits each matched call through
+  `BuildService` as one bulk-lane `GodActionQueue` task (≤ 8 per tick, after the God actions) and waits up to 30 s for
+  them before returning the count; on the server thread it runs inline. Only an in-game check proves the thread hop; the
+  caps and refusals are unit-tested (`BuildServiceTest`, against a recording `BuildWorld`).
 - ~~**`/build` screenshot is never sent to the model**; `/build` takes one word~~ **Fixed (bug #9):** `buildBot.hasImage
   = true`; the argument is `greedyString()`.
 - **Non-ops cannot really build**: `/build` is a client command open to all, but the pivot comes from the same player's

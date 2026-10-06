@@ -4,7 +4,7 @@ title: AI God — ChatBot LLM request pipeline
 system: aigod
 summary: ChatBot internals - per-player token-window memory, per-turn message list, tool-spec assembly, the response/tool loop, Wait deferrals, depth cap, error path, threading, timeouts, provider builders.
 tags: [aigod, chatbot, langchain4j, memory, tokenwindowchatmemory, tool-loop, threading, executor, provider, openai, lmstudio, ollama, anthropic]
-sources: [src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/ImageMime.java, src/main/java/com/paul/brawl/BlockInfoJson.java, src/main/java/com/paul/brawl/LLMCommand.java, src/main/java/com/paul/brawl/GodToolGate.java, src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/PlayerDataCollector.java, src/main/java/com/paul/brawl/ChatMessageHistory.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodActionQueue.java, src/main/java/com/paul/brawl/GodScheduler.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/MCPConfig.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/ChatCommand.java, build.gradle]
+sources: [src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/GodService.java, src/main/java/com/paul/brawl/MainThread.java, src/main/java/com/paul/brawl/ImageMime.java, src/main/java/com/paul/brawl/BlockInfoJson.java, src/main/java/com/paul/brawl/LLMCommand.java, src/main/java/com/paul/brawl/GodToolGate.java, src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/PlayerDataCollector.java, src/main/java/com/paul/brawl/ChatMessageHistory.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodActionQueue.java, src/main/java/com/paul/brawl/GodScheduler.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/MCPConfig.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/ChatCommand.java, build.gradle]
 verified_at: 98cb908
 ---
 
@@ -24,7 +24,7 @@ tool calls, and either loops (`sendFunctionOutputs`), defers (`Wait`), or ends t
 | `MAX_MEMORY_TOKENS` | `16_000` | `ChatBot.java:70` |
 | `TOKEN_ESTIMATOR` | `new OpenAiTokenCountEstimator("gpt-4o")` (static, shared) | `ChatBot.java:82-83` |
 | Dynamic-context main-thread hop timeout | 5 s | `ChatBot.java:514` |
-| `runOnMain` tool hop timeout | 5 s | `ChatBotFunctions.java:509` |
+| World-tool main-thread hop timeout (`MainThread.call`) | 5 s | `MainThread.java:22` |
 | LLM HTTP timeout | `LLMConfig.timeoutSeconds`, default `180` | `LLMConfig.java:64` |
 | MCP connect / call timeout | `MCPConfig.timeoutSeconds`, default `60` | `MCPConfig.java:61` |
 | Wait clamp | `BridgeConfig.waitMinSeconds=1` .. `waitMaxSeconds=30` | `BridgeConfig.java:50-51` |
@@ -116,7 +116,7 @@ Order, every turn:
 `ChatPrinter.sendMessage` lines (all of God's text replies) are **not** captured; the avatar's public `GodBody.say`
 lines are (they are real chat from `LLMBot`).
 
-**Block info** — `ChatBotActions.getBlockInfo` (`ChatBotActions.java:289-311`) samples around
+**Block info** — `ChatBotActions.getBlockInfo` (`ChatBotActions.java:236-258`) samples around
 `Raycaster.getLastPos(uuid)`, which is only set by the admin `/construction` command, and returns
 `"Surrounding block info (offsets from the /construction pivot):\n"` + a real JSON array built by `BlockInfoJson`
 (bug #18). For any player who never ran `/construction`, it returns `""` and message 4 is just the header. Details in
@@ -124,7 +124,7 @@ lines are (they are real chat from `LLMBot`).
 
 ## Tool spec assembly
 
-`ChatBotFunctions.buildToolSpecs(needsGodTools, needsBuildPlan, needsMcpTools)` (`ChatBotFunctions.java:325-352`),
+`ChatBotFunctions.buildToolSpecs(needsGodTools, needsBuildPlan, needsMcpTools)` (`ChatBotFunctions.java:297-324`),
 called inside the worker for every request (`ChatBot.java:407`):
 
 1. `needsGodTools` → `Reward, Trade, Punishment, ChangeWeather, SpawnCreature, Appear, Vanish, Wait, QueryTerrain`
@@ -140,7 +140,7 @@ called inside the worker for every request (`ChatBot.java:407`):
 
 No tool is conditionally removed by session state: `Appear`/`Vanish` are always attached for godBot and refuse at
 execute time when the caller doesn't own the avatar; MCP tools likewise refuse at execute time when the bridge is
-disabled or the caller doesn't own the session (`GodToolGate.mcpRefusal`, bug #8, `ChatBotFunctions.java:464-467`). If the tool list is empty, `toolSpecifications` is not set
+disabled or the caller doesn't own the session (`GodToolGate.mcpRefusal`, bug #8, `ChatBotFunctions.java:435-439`). If the tool list is empty, `toolSpecifications` is not set
 (`ChatBot.java:409-412`). The request carries **only** messages + tools — no temperature, max tokens, or
 `tool_choice`. Full catalogue: [tools-catalogue.md](tools-catalogue.md).
 
@@ -178,15 +178,17 @@ Runs (via `thenAccept`, i.e. on the completing `llm-worker` thread) only for suc
 7. **Natural terminal:** `if (!willContinue && needsGodTools && GodSessionManager.isActive(player)) endPrayerSession(player)`.
 8. Any exception in the callback is `printStackTrace()`'d and swallowed.
 
-### `checkForFunctions` (`ChatBotFunctions.java:363-406`)
+### `checkForFunctions` (`ChatBotFunctions.java:335-377`)
 
 - Executes each `ToolExecutionRequest` sequentially via `executeFunction` (never throws; always yields a string) and
-  collects `FunctionResult(call, result)` records (`:361`). `GodSessionManager.resetIdleTimer(player)` is called
-  before and after every dispatch (bug #8, `:371-376`; a no-op unless the player owns the session).
-- Tracks the **longest** clamped `Wait.seconds` in the batch (`extractWaitSeconds`, `:408-416` — returns 0 on parse
-  failure, otherwise clamped to `[waitMinSeconds, waitMaxSeconds]`, so any parsed Wait defers ≥ 1 s).
-- `fireGestures` (best-effort bridge choreography; only when the avatar is manifested **and** this player owns the
-  session, `:525-527`).
+  collects `FunctionResult(call, result)` records (`:333`). `GodSessionManager.resetIdleTimer(player)` is called
+  before and after every dispatch (bug #8, `:343-348`; a no-op unless the player owns the session). World tools reach
+  the world through `GodService` → `MinecraftGodWorld` → `MainThread.call` (main thread, 5 s).
+- Tracks the **longest** clamped `Wait.seconds` in the batch (`extractWaitSeconds`, `:379-386` — returns 0 on parse
+  failure, otherwise clamped by `GodService.waitSeconds` to `[waitMinSeconds, waitMaxSeconds]`, so any parsed Wait defers ≥ 1 s).
+- No batch-level gestures any more (`fireGestures` is gone): `GodService` fires the best-effort bridge choreography
+  right after each successful effect, only when the avatar is manifested **and** this player owns the session
+  (`GodService.java:226-238`).
 - `waitSeconds > 0` → `chatBot.deferFunctionOutputs(results, player, waitSeconds)` + `GodSessionManager.resetIdleTimer`.
   Otherwise → `chatBot.sendFunctionOutputs(results, player)` immediately (next LLM turn).
 
@@ -246,13 +248,14 @@ restores the avatar directly with `ChatBotActions.restoreAvatarOnMain` (bug #5),
 
 - **LLM call:** only the provider HTTP timeout (`Duration.ofSeconds(timeoutSeconds)`); there is no future-level
   timeout. `/llm timeout <5..1800>` changes it and rebuilds the client.
-- **Main-thread hops:** 5 s (`runOnMain`, `collectDynamicContext`). On `runOnMain` timeout the tool result is
+- **Main-thread hops:** 5 s (`MainThread.call` for world tools, `collectDynamicContext`). On a `MainThread.call` timeout
+  the tool result (a `WorldRefusal` returned by `GodService`) is
   `"Erreur côté serveur: action différée non exécutée (serveur indisponible)."`; other failure:
   `"Erreur côté serveur lors de l'exécution de cette action."`. The "non exécutée" result is only returned when
   `GodActionQueue.cancelIfNotStarted` withdrew the action, so it never runs later; an action already started is waited
   for (see [god-body.md](god-body.md)).
 - **Wait:** 1..30 s by default; idle watchdog = `max(idleTimeoutSeconds (90), waitMaxSeconds + 5)`
-  (`GodSessionManager.java:123-124`).
+  (`GodSessionManager.java:186-187`).
 
 ## Provider construction (`LLMConfig.buildModel`, `LLMConfig.java:98-123`)
 
@@ -273,7 +276,7 @@ restores the avatar directly with `ChatBotActions.restoreAvatarOnMain` (bug #5),
   `ImageMime.sniff(bytes)` (`ChatBot.java:243`), which reports PNG for the client's `NativeImage` bytes. See
   [images-and-client.md](images-and-client.md).
 - ~~**Stale comment:** `ChatBotFunctions.runOnMain` says "only 4 workers in sharedExecutor"~~ — corrected in phase C;
-  the comment now describes the virtual-thread-per-task executor.
+  `runOnMain` itself is gone since docs/27 phase 2 (its hop is now `MainThread.call`).
 - **Error path is silent to the player** — a timeout or 4xx just ends the session; the player sees nothing.
 - **`/llm model` does not rebuild the cached model** (`LLMCommand.java:190-196` calls `save()` only) — the old model
   name keeps being used until `/llm reload` or another reload-triggering change / restart.

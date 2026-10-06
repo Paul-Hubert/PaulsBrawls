@@ -61,6 +61,19 @@ public final class TradeMath {
     }
 
     /** {@code true} iff {@code 1 <= amount <= max}. */
+    /**
+     * The model-facing refusal when either side of a God trade is outside {@code [1, max]}, else {@code null}.
+     * Checked when the trade is offered (builtin {@code Trade} and MCP {@code offer_trade}) and again on
+     * {@code /accept}.
+     */
+    public static String amountError(int giveAmount, int takeAmount, int max) {
+        if (!isValidAmount(giveAmount, max) || !isValidAmount(takeAmount, max)) {
+            return "Trade cancelled. giveAmount and takeAmount must both be between 1 and " + max
+                + " (got " + giveAmount + " and " + takeAmount + "). Please try again.";
+        }
+        return null;
+    }
+
     public static boolean isValidAmount(int amount, int max) {
         return amount >= 1 && amount <= max;
     }

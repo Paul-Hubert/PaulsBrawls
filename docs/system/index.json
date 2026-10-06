@@ -95,6 +95,9 @@
         "src/main/java/com/paul/brawl/VillageHttpListener.java",
         "src/main/java/com/paul/brawl/TradeOffers.java",
         "src/main/java/com/paul/brawl/TradeMath.java",
+        "src/main/java/com/paul/brawl/GodService.java",
+        "src/main/java/com/paul/brawl/MainThread.java",
+        "src/main/java/com/paul/brawl/BuildService.java",
         "eden/src/social/trade.ts",
         "eden/src/main.ts"
       ],
@@ -110,7 +113,7 @@
         "6. Eden",
         "Related"
       ],
-      "bytes": 31385
+      "bytes": 32711
     },
     {
       "id": "aigod.actions-and-trades",
@@ -137,6 +140,10 @@
         "src/main/java/com/paul/brawl/TradeOffers.java",
         "src/main/java/com/paul/brawl/TradeMath.java",
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
+        "src/main/java/com/paul/brawl/GodService.java",
+        "src/main/java/com/paul/brawl/MinecraftGodWorld.java",
+        "src/main/java/com/paul/brawl/MainThread.java",
+        "src/main/java/com/paul/brawl/WorldRefusal.java",
         "src/main/java/com/paul/brawl/ChatPrinter.java",
         "src/main/java/com/paul/brawl/BridgeConfig.java",
         "src/main/java/com/paul/brawl/Money.java",
@@ -156,7 +163,7 @@
         "Item giving",
         "Punishment — `smite`",
         "ChangeWeather",
-        "SpawnCreature — `spawnCreature(player, entityType, count, x, y, z)`",
+        "SpawnCreature — `spawnCreature(player, entityType, count, x, y, z, griefAllowed)`",
         "Block placement",
         "getBlockInfo",
         "Avatar helpers",
@@ -165,7 +172,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 18834
+      "bytes": 20882
     },
     {
       "id": "aigod.building",
@@ -194,6 +201,11 @@
         "src/main/java/com/paul/brawl/Raycaster.java",
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
         "src/main/java/com/paul/brawl/ChatBotActions.java",
+        "src/main/java/com/paul/brawl/BuildService.java",
+        "src/main/java/com/paul/brawl/BuildWorld.java",
+        "src/main/java/com/paul/brawl/MinecraftBuildWorld.java",
+        "src/main/java/com/paul/brawl/BuildShapes.java",
+        "src/main/java/com/paul/brawl/WorldRefusal.java",
         "src/main/java/com/paul/brawl/ChatBot.java",
         "src/main/java/com/paul/brawl/ChatCommand.java",
         "src/main/java/com/paul/brawl/ImageReceiver.java",
@@ -221,7 +233,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 27658
+      "bytes": 29346
     },
     {
       "id": "aigod.configuration-and-commands",
@@ -306,6 +318,10 @@
         "src/main/java/com/paul/brawl/ChatBot.java",
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
         "src/main/java/com/paul/brawl/ChatBotActions.java",
+        "src/main/java/com/paul/brawl/GodService.java",
+        "src/main/java/com/paul/brawl/MinecraftGodWorld.java",
+        "src/main/java/com/paul/brawl/MainThread.java",
+        "src/main/java/com/paul/brawl/WorldRefusal.java",
         "src/main/java/com/paul/brawl/ChatCommand.java",
         "src/main/java/com/paul/brawl/LLMCommand.java",
         "src/main/java/com/paul/brawl/ServerEntryPoint.java",
@@ -334,7 +350,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 25290
+      "bytes": 27401
     },
     {
       "id": "aigod.images-and-client",
@@ -402,6 +418,8 @@
       "sources": [
         "src/main/java/com/paul/brawl/ChatBot.java",
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
+        "src/main/java/com/paul/brawl/GodService.java",
+        "src/main/java/com/paul/brawl/MainThread.java",
         "src/main/java/com/paul/brawl/ImageMime.java",
         "src/main/java/com/paul/brawl/BlockInfoJson.java",
         "src/main/java/com/paul/brawl/LLMCommand.java",
@@ -434,7 +452,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 20604
+      "bytes": 21075
     },
     {
       "id": "aigod.mcp-gateway",
@@ -483,7 +501,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 15315
+      "bytes": 15362
     },
     {
       "id": "aigod.overview",
@@ -509,6 +527,13 @@
         "src/main/java/com/paul/brawl/ChatCommand.java",
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
         "src/main/java/com/paul/brawl/ChatBotActions.java",
+        "src/main/java/com/paul/brawl/GodService.java",
+        "src/main/java/com/paul/brawl/GodWorld.java",
+        "src/main/java/com/paul/brawl/MinecraftGodWorld.java",
+        "src/main/java/com/paul/brawl/BuildService.java",
+        "src/main/java/com/paul/brawl/MinecraftBuildWorld.java",
+        "src/main/java/com/paul/brawl/MainThread.java",
+        "src/main/java/com/paul/brawl/WorldRefusal.java",
         "src/main/java/com/paul/brawl/GodSessionManager.java",
         "src/main/java/com/paul/brawl/GodActionQueue.java",
         "src/main/java/com/paul/brawl/MCPGateway.java",
@@ -538,7 +563,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 14542
+      "bytes": 16178
     },
     {
       "id": "aigod.tools-catalogue",
@@ -565,6 +590,13 @@
       ],
       "sources": [
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
+        "src/main/java/com/paul/brawl/GodService.java",
+        "src/main/java/com/paul/brawl/GodWorld.java",
+        "src/main/java/com/paul/brawl/MinecraftGodWorld.java",
+        "src/main/java/com/paul/brawl/MainThread.java",
+        "src/main/java/com/paul/brawl/WorldRefusal.java",
+        "src/main/java/com/paul/brawl/BuildService.java",
+        "src/main/java/com/paul/brawl/BuildShapes.java",
         "src/main/java/com/paul/brawl/QueryTerrain.java",
         "src/main/java/com/paul/brawl/JsonSchemaAdapter.java",
         "src/main/java/com/paul/brawl/OptionalField.java",
@@ -583,7 +615,7 @@
       "verified_at": "98cb908",
       "path": "docs/system/aigod/tools-catalogue.md",
       "headings": [
-        "Attachment matrix (`buildToolSpecs`, `ChatBotFunctions.java:325-352`)",
+        "Attachment matrix (`buildToolSpecs`, `ChatBotFunctions.java:297-324`)",
         "Schema generation (`JsonSchemaAdapter`, `JsonSchemaAdapter.java`)",
         "Argument parsing and dispatch",
         "Reward",
@@ -603,7 +635,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 21824
+      "bytes": 24697
     },
     {
       "id": "ctf.capture-the-flag",
@@ -1676,7 +1708,9 @@
         "src/client/java/com/paul/brawl/ClientEntryPoint.java",
         "src/main/java/com/paul/brawl/ChatBotActions.java",
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
+        "src/main/java/com/paul/brawl/GodService.java",
         "src/main/java/com/paul/brawl/TradeOffers.java",
+        "src/main/java/com/paul/brawl/TradeMath.java",
         "src/main/java/com/paul/brawl/VillageHttpListener.java",
         "src/main/resources/assets/paulsbrawls/models/item/coin.json",
         "src/main/resources/assets/paulsbrawls/lang/en_us.json",
@@ -1697,7 +1731,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 12640
+      "bytes": 12868
     },
     {
       "id": "platform.build-and-runtime",

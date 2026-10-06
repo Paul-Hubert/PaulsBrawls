@@ -4,7 +4,7 @@ title: AI God — tools catalogue (ChatBotFunctions + QueryTerrain)
 system: aigod
 summary: Every Java tool the AI God can call - exact name, description, parameters, execution thread, behaviour, return strings, gating - plus JsonSchemaAdapter mapping and name-based dispatch.
 tags: [aigod, tools, function-calling, toolspecification, jsonschema, reward, trade, punishment, appear, vanish, wait, spawncreature, queryterrain, buildplan, listtools, dispatch]
-sources: [src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/QueryTerrain.java, src/main/java/com/paul/brawl/JsonSchemaAdapter.java, src/main/java/com/paul/brawl/OptionalField.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodClamps.java, src/main/java/com/paul/brawl/ItemIds.java, src/main/java/com/paul/brawl/GodToolGate.java, src/main/java/com/paul/brawl/BuildGuard.java, src/main/java/com/paul/brawl/BuildSubAgent.java, src/main/java/com/paul/brawl/TradeOffers.java]
+sources: [src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/GodService.java, src/main/java/com/paul/brawl/GodWorld.java, src/main/java/com/paul/brawl/MinecraftGodWorld.java, src/main/java/com/paul/brawl/MainThread.java, src/main/java/com/paul/brawl/WorldRefusal.java, src/main/java/com/paul/brawl/BuildService.java, src/main/java/com/paul/brawl/BuildShapes.java, src/main/java/com/paul/brawl/QueryTerrain.java, src/main/java/com/paul/brawl/JsonSchemaAdapter.java, src/main/java/com/paul/brawl/OptionalField.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodClamps.java, src/main/java/com/paul/brawl/ItemIds.java, src/main/java/com/paul/brawl/GodToolGate.java, src/main/java/com/paul/brawl/BuildGuard.java, src/main/java/com/paul/brawl/BuildSubAgent.java, src/main/java/com/paul/brawl/TradeOffers.java]
 verified_at: 98cb908
 ---
 
@@ -12,20 +12,22 @@ verified_at: 98cb908
 
 **TL;DR.** Tools are Jackson-annotated POJOs in `ChatBotFunctions.java` (+ `QueryTerrain.java`). The tool *name* is the
 class simple name; the description comes from `@JsonClassDescription`; every `@JsonPropertyDescription` field is a
-required parameter unless marked `@OptionalField`. Dispatch is a `switch` on the name in `executeFunction`; unknown
+required parameter unless marked `@OptionalField`. World tools are thin: `execute` forwards to `GodService.live()`, which
+applies the clamps/refusals and calls the `GodWorld` port (`MinecraftGodWorld` hops to the main thread through
+`MainThread.call`). Dispatch is a `switch` on the name in `executeFunction`; unknown
 names fall through to `MCPGateway` (gated on avatar ownership + bridge enabled), else an error string. Tool execution never throws — every path returns a string.
 
-## Attachment matrix (`buildToolSpecs`, `ChatBotFunctions.java:325-352`)
+## Attachment matrix (`buildToolSpecs`, `ChatBotFunctions.java:297-324`)
 
 | Tool | Group flag | godBot | buildBot | Executes on |
 |---|---|---|---|---|
-| `Reward` | `needsGodTools` | yes | no | main thread (`runOnMain`) |
+| `Reward` | `needsGodTools` | yes | no | main thread (`GodService` → `MinecraftGodWorld` → `MainThread.call`) |
 | `Trade` | `needsGodTools` | yes | no | main thread |
 | `Punishment` | `needsGodTools` | yes | no | main thread |
 | `ChangeWeather` | `needsGodTools` | yes | no | main thread |
 | `SpawnCreature` | `needsGodTools` | yes | no | main thread |
-| `Appear` | `needsGodTools` | yes | no | worker (queues its own main-thread `buffAvatar`) |
-| `Vanish` | `needsGodTools` | yes | no | worker (queues its own `restoreAvatar`) |
+| `Appear` | `needsGodTools` | yes | no | main thread (`GodBody.appear` + `buffAvatar` in one `MainThread.run`) |
+| `Vanish` | `needsGodTools` | yes | no | worker (`GodBody.vanish()`), then main thread (`restoreAvatar`) |
 | `Wait` | `needsGodTools` | yes | no | worker (pure token) |
 | `QueryTerrain` | `needsGodTools` | yes | no | main thread |
 | `BuildPlan` | `needsBuildPlan` | **no** | yes | worker |
@@ -56,38 +58,45 @@ Field declaration order from reflection determines property order (JVM-dependent
 
 ## Argument parsing and dispatch
 
-- `parseArgs(req, cls)` (`ChatBotFunctions.java:546-554`): null/blank arguments → `"{}"`; Jackson `MAPPER` with
+- `parseArgs(req, cls)` (`ChatBotFunctions.java:463-471`): null/blank arguments → `"{}"`; Jackson `MAPPER` with
   `FAIL_ON_UNKNOWN_PROPERTIES=false` (`:35-36`). Missing primitive `int` fields default to `0`; missing wrappers to
   `null`. Parse failure throws `RuntimeException("Failed to parse args for <name>: <args>")`.
-- `executeFunction(req, player, chatBot)` (`:429-490`) — `switch (name)`:
-  - `Reward/Trade/Punishment/ChangeWeather/SpawnCreature/QueryTerrain` → `runOnMain(() -> parseArgs(...).execute(player))`
-    (parse errors inside `runOnMain` surface as `"Erreur côté serveur lors de l'exécution de cette action."`).
-  - `Appear/Vanish/Wait/BuildPlan` → direct `parseArgs(...).execute(player)`.
+- `executeFunction(req, player, chatBot)` (`:398-461`) — `switch (name)`:
+  - `Reward/Trade/Punishment/ChangeWeather/SpawnCreature/Appear/Vanish/Wait/BuildPlan` → direct
+    `parseArgs(...).execute(player)`, on the LLM worker; the world tools call `GodService.live()`, whose `GodWorld` port
+    does the main-thread hop (`MainThread.call`, 5 s). A hop timeout or failure is a `WorldRefusal` that `GodService`
+    returns as the tool result (`Erreur côté serveur: action différée non exécutée (serveur indisponible).`,
+    `… l'action a peut-être été exécutée (résultat inconnu), ne la relance pas.`, or
+    `Erreur côté serveur lors de l'exécution de cette action.`, `MainThread.java:31-63`). Parse errors now land in the
+    generic catch below.
+  - `QueryTerrain` → `GodService.live().queryTerrain(uuid, centerX, centerZ, radius)` (`:423-426`), run on the main thread.
   - `ListTools` → `new ListTools().execute(chatBot)` (no args parsed).
   - default → if `MCPGateway.INSTANCE.handlesTool(name)`: `GodToolGate.mcpRefusal(BridgeConfig.enabled, isActive(player))`
     (bug #8) returns `Le corps de Dieu est désactivé par un administrateur — cet outil est indisponible.` or
     `Le corps de Dieu est occupé avec un autre fidèle — cet outil ne peut pas l'utiliser.`, otherwise
-    `MCPGateway.INSTANCE.execute(req)` (`:464-467`); else error string
+    `MCPGateway.INSTANCE.execute(req)` (`:435-439`); else error string
     `Unknown tool '<name>'. Pick from the tool specs attached to this request; do not invent names. If you are unsure what you have, call `ListTools` (no arguments) to enumerate the exact set attached to this turn.`
   - Any thrown exception → `"Erreur lors de l'exécution de '<name>': <message or exception class>"`.
-- MCP names are kebab-case and cannot collide with the PascalCase Java names (`:461-463`).
+- MCP names are kebab-case and cannot collide with the PascalCase Java names (`:432-434`).
 - Results are returned to the model as `ToolExecutionResultMessage.from(call, result)` in the same order as the calls
   (`ChatBot.java:308-310`).
 - `checkForFunctions` calls `GodSessionManager.resetIdleTimer(player)` before and after every dispatch (bug #8,
-  `:371-376`), so a long tool chain no longer trips the owner's idle watchdog.
+  `:343-348`), so a long tool chain no longer trips the owner's idle watchdog.
 
-### Post-dispatch gestures (`fireGestures`, `:525-544`)
+### Gestures (`GodService.gesture`, `GodService.java:226-238`)
 
-Only if `GodSessionManager.hasManifested()` **and** `GodSessionManager.isActive(player)` (the ownership check was
-added by bug #8, `:527`):
+`fireGestures` is gone: `GodService` fires the gesture itself right after each **successful** effect (a refused or
+failed effect gestures nothing). Only if `GodSessionManager.hasManifested()` **and** `GodSessionManager.isOwner(uuid)`
+(the ownership check was added by bug #8); best-effort, a throwing gesture never fails the effect. `look` becomes
+`GodBody.lookAt(player)` on the main thread, anything else `GodBody.gesture(kind)` (`MinecraftGodWorld.java:76-83`):
 
-| Tool | Bridge calls |
+| Tool | Gestures |
 |---|---|
-| `Punishment` | `GodBody.lookAt(player)` + `GodBody.gesture("swing")` |
-| `Reward` | `gesture("nod")` |
-| `ChangeWeather` | `lookAt(player)` + `gesture("summon")` |
-| `SpawnCreature` | `gesture("summon")` |
-| `Trade` | `gesture("nod")` |
+| `Punishment` | `look` + `swing` |
+| `Reward` | `nod` |
+| `ChangeWeather` | `look` + `summon` |
+| `SpawnCreature` | `summon` |
+| `Trade` | `nod` |
 | others | nothing |
 
 ---
@@ -100,7 +109,7 @@ added by bug #8, `:527`):
 |---|---|
 | Description | `Gives a reward to the player in the form of an item.` |
 | Gating | godBot; no ownership check (bodiless prayers can be rewarded) |
-| Calls | `ChatBotActions.giveItemFromString(player, itemName, amount)` on main thread |
+| Calls | `GodService.reward` (`GodService.java:55-72`: amount ≥ 1, clamp) → `MinecraftGodWorld.giveItem` → `ChatBotActions.giveItemStacks(player, itemName, clamped)` on main thread |
 
 | Param | Type | Req | Description |
 |---|---|---|---|
@@ -118,7 +127,7 @@ see [actions-and-trades.md](actions-and-trades.md#item-parsing).
 | | |
 |---|---|
 | Description | `Offers a trade to the player.` |
-| Calls | `TradeOffers.checkAmounts` (both amounts must be 1–512), then `ChatBotActions.sendTradeOffer(...)` on main thread → `TradeOffers.updateOffer` |
+| Calls | `GodService.offerTrade` (`GodService.java:74-93`): `TradeMath.amountError` (both amounts must be 1–512), then `MinecraftGodWorld.offerTrade` → `ChatBotActions.sendTradeOffer(...)` on main thread → `TradeOffers.updateOffer` |
 
 | Param | Type | Req | Description |
 |---|---|---|---|
@@ -140,7 +149,7 @@ amount outside 1–512: `"Trade cancelled. giveAmount and takeAmount must both b
 | | |
 |---|---|
 | Description | `Punishes the player by inflicting a number of punishments.` |
-| Calls | `ChatBotActions.smite(player, amount)` — `amount` lightning bolts at the player's block pos, same tick |
+| Calls | `GodService.punish` (clamp, `GodService.java:95-107`) → `MinecraftGodWorld.strike` → `ChatBotActions.smite(player, n)` — `n` lightning bolts at the player's block pos, same tick |
 
 | Param | Type | Req | Description |
 |---|---|---|---|
@@ -156,15 +165,17 @@ Returns `"God punished the player <n> times.[ (limité à <n> sur <asked> demand
 | | |
 |---|---|
 | Description | `Changes the weather of the player's world.` |
-| Calls | `ChatBotActions.changeWeather` → runs `/weather <weatherType.toLowerCase()> <durationSeconds>` as the server command source |
+| Calls | `GodService.changeWeather` (`GodService.java:109-124`) → `MinecraftGodWorld.setWeather` → `ChatBotActions.changeWeather` → runs `/weather <type> <seconds>` as the server command source |
 
 | Param | Type | Req | Description |
 |---|---|---|---|
 | `weatherType` | string | yes | `Type of weather to set. Examples: clear, rain, thunder` |
 | `durationSeconds` | integer | yes | `Weather duration in seconds. 0 for permanent.` |
 
-Returns `"La météo a été changée en <type> pour <n> secondes."` or `… pour une durée indéterminée.` (when ≤ 0) — always
-reports success; the command result is not checked. Unit/zero caveats: [actions-and-trades.md](actions-and-trades.md#changeweather).
+`weatherType` is trimmed and lower-cased and must be `clear`, `rain` or `thunder` (`GodService.WEATHER_TYPES`), else
+`"Météo refusée : type inconnu '<type>' (clear, rain ou thunder)."`; `durationSeconds` is clamped to `0..1 000 000`
+(`MAX_WEATHER_SECONDS`). Returns `"La météo a été changée en <type> pour <n> secondes."` or `… pour une durée indéterminée.`
+(when 0); the `/weather` command result itself is still not checked. Unit/zero caveats: [actions-and-trades.md](actions-and-trades.md#changeweather).
 
 ## SpawnCreature
 
@@ -173,7 +184,7 @@ reports success; the command result is not checked. Unit/zero caveats: [actions-
 | | |
 |---|---|
 | Description | `Spawns one or more creatures near the player. Use sparingly. Counts above the admin-configured cap are clamped silently.` |
-| Calls | `ChatBotActions.spawnCreature(player, entityType, count, x, y, z)` |
+| Calls | `GodService.spawnCreature` (clamps, `GodService.java:126-144`) → `MinecraftGodWorld.spawn` → `ChatBotActions.spawnCreature(player, entityType, n, dx, dy, dz, griefing)` |
 
 | Param | Type | Req | Description |
 |---|---|---|---|
@@ -189,12 +200,12 @@ reports success; the command result is not checked. Unit/zero caveats: [actions-
 
 ## Appear
 
-`ChatBotFunctions.java:89-120`
+`ChatBotFunctions.java:88-104` → `GodService.appear` (`GodService.java:146-165`)
 
 | | |
 |---|---|
 | Description | `Manifest God's physical body in front of the praying player. Call this when you choose to appear before acting or speaking. Use sparingly — appearing is dramatic. Optional fields default to 3 blocks ahead at ground level, facing the player.` |
-| Gating | `GodSessionManager.isActive(player)` at execute time; otherwise returns `"Le corps de Dieu est occupé avec un autre fidèle — cette rencontre reste sans forme."` |
+| Gating | `GodSessionManager.isOwner(uuid)` in `GodService.appear`; otherwise returns `"Le corps de Dieu est occupé avec un autre fidèle — cette rencontre reste sans forme."` |
 
 | Param | Type | Req | Description |
 |---|---|---|---|
@@ -203,25 +214,27 @@ reports success; the command result is not checked. Unit/zero caveats: [actions-
 | `lookAtPlayer` | boolean | optional | `Whether to turn and face the player after appearing (default true).` |
 
 Behaviour: defaults `d=3.0`, `h=0.0`, `face=true`; clamps `d` to `[appearMinDistance=1.0, appearMaxDistance=6.0]`,
-`h` to `[appearMinHeight=0.0, appearMaxHeight=4.0]` (`BridgeConfig.java:44-47`); `GodBody.appear(player,d,h,face)`
-(bridge, async); `GodActionQueue.submit(buffAvatar)`; `markManifested()`; `resetIdleTimer(player)`. Returns
-`"God a pris forme physique devant le joueur."` (even if the bridge call later fails). Geometry: [god-body.md](god-body.md).
+`h` to `[appearMinHeight=0.0, appearMaxHeight=4.0]` (`BridgeConfig.java:44-47`); `MinecraftGodWorld.appear` runs
+`GodBody.appear(player,d,h,face)` (bridge, async) + `buffAvatar` in one `MainThread.run`; then `markManifested()`;
+`resetIdleTimer(uuid)`. Returns `"God a pris forme physique devant le joueur."` (even if the bridge call later fails),
+or a `WorldRefusal` message (player offline, main-thread timeout) without manifesting. Geometry: [god-body.md](god-body.md).
 
 ## Vanish
 
-`ChatBotFunctions.java:122-137` — no parameters.
+`ChatBotFunctions.java:106-111` → `GodService.vanish` (`GodService.java:167-181`) — no parameters.
 
 | | |
 |---|---|
 | Description | `Send God's physical body away. Call this to disappear deliberately when the encounter is over. Optional — if you stop calling tools the body vanishes automatically.` |
-| Gating | `isActive(player)`; else `"Tu ne tiens pas le corps de Dieu — rien à faire disparaître."` |
+| Gating | `isOwner(uuid)`; else `"Tu ne tiens pas le corps de Dieu — rien à faire disparaître."` |
 
-Behaviour: queue `restoreAvatar`, `GodBody.vanish()`, `GodSessionManager.clearManifested()` — the **session stays
+Behaviour: `MinecraftGodWorld.vanish` calls `GodBody.vanish()` first, then `restoreAvatar(null)` through
+`MainThread.run`; then `GodSessionManager.clearManifested()` — the **session stays
 open** (lock held) until the loop ends. Returns `"God a disparu."`.
 
 ## Wait
 
-`ChatBotFunctions.java:139-149`
+`ChatBotFunctions.java:113-121`
 
 | | |
 |---|---|
@@ -231,8 +244,8 @@ open** (lock held) until the loop ends. Returns `"God a disparu."`.
 |---|---|---|---|
 | `seconds` | integer | yes | `Seconds to wait before continuing.` |
 
-`execute` only formats `"Le temps passe… <clamped> seconde(s) se sont écoulées."` with clamp
-`[waitMinSeconds, waitMaxSeconds]` (default 1..30). The actual delay is applied by `checkForFunctions`: the whole
+`execute` only formats `"Le temps passe… <clamped> seconde(s) se sont écoulées."` (`GodService.waitMessage`) with
+clamp `[waitMinSeconds, waitMaxSeconds]` (default 1..30, `GodService.waitSeconds`). The actual delay is applied by `checkForFunctions`: the whole
 batch's results are deferred by the **max** Wait in the batch via `ChatBot.deferFunctionOutputs`; non-Wait tools in
 the same batch already ran. A new user message during the wait flushes the results without calling the LLM.
 
@@ -263,18 +276,18 @@ The map goes to the model only (bug #18 removed the TEMP line-by-line echo into 
 
 ## BuildPlan (buildBot only)
 
-`ChatBotFunctions.java:205-309` — dispatches parallel `BuildSubAgent`s, at most `BuildGuard.MAX_CONCURRENT_SUB_BUILDS = 4`
-server-wide (bug #7, `:253-254`); full semantics in [building.md](building.md).
+`ChatBotFunctions.java:177-281` — dispatches parallel `BuildSubAgent`s, at most `BuildGuard.MAX_CONCURRENT_SUB_BUILDS = 4`
+server-wide (bug #7, `:225-226`); full semantics in [building.md](building.md).
 
 | | |
 |---|---|
-| Description | `Plans a multi-structure build by dispatching N independent sub-builds in parallel, each at its own anchor offset relative to the admin's /construction pivot. …` (full text at `:223`) |
+| Description | `Plans a multi-structure build by dispatching N independent sub-builds in parallel, each at its own anchor offset relative to the admin's /construction pivot. …` (full text at `:195`) |
 
 | Param | Type | Req | Description |
 |---|---|---|---|
 | `builds` | array of `SubBuild` | yes | `The list of independent sub-builds. Each becomes a separate isolated sub-agent. Order does not matter — they all run in parallel.` |
 
-`SubBuild` object (all required; description `One isolated build job inside a BuildPlan. …`, `:205`):
+`SubBuild` object (all required; description `One isolated build job inside a BuildPlan. …`, `:177`):
 `anchorX`, `anchorY`, `anchorZ` (integer offsets from the `/construction` pivot), `description`, `style`, `size`,
 `purpose` (strings). Error returns: `Aucun point de référence : l'admin doit lancer /construction avant d'utiliser BuildPlan.`,
 `BuildPlan reçu sans aucun sous-build — rien à faire.`, `Erreur interne : buildBot non initialisé. …`,
@@ -285,7 +298,7 @@ server-wide (bug #7, `:253-254`); full semantics in [building.md](building.md).
 
 ## ListTools
 
-`ChatBotFunctions.java:151-185` — no parameters.
+`ChatBotFunctions.java:123-157` — no parameters.
 
 | | |
 |---|---|
@@ -300,11 +313,11 @@ attempt (via `MCPGateway.tools()`).
 
 ## Textual placement calls (not tools)
 
-Build bots emit `PlaceBlock`, `PlaceLine`, `PlaceBlocks` as plain text; regexes at `ChatBotFunctions.java:558-587`
+Build bots emit `PlaceBlock`, `PlaceLine`, `PlaceBlocks` as plain text; regexes at `ChatBotFunctions.java:473-504`
 accept ints (incl. negative), whitespace, and block ids quoted with `"`, `'`, backticks, or bare
-(`[A-Za-z][A-Za-z0-9_]*:[A-Za-z][A-Za-z0-9_/]*` + optional `[...]` state). Each matched call becomes one
-`GodActionQueue` task (bug #7, `:627-668`); a `PlaceLine`/`PlaceBlocks` over `BuildGuard.MAX_BLOCKS_PER_CALL = 128`
-blocks is skipped. See [building.md](building.md).
+(`[A-Za-z][A-Za-z0-9_]*:[A-Za-z][A-Za-z0-9_/]*` + optional `[...]` state). Each matched call goes through
+`BuildService.submit` (cap + known-block check) and becomes one `GodActionQueue` bulk task (bug #7, `placeVia`,
+`:561-568`); a `PlaceLine`/`PlaceBlocks` over `BuildGuard.MAX_BLOCKS_PER_CALL = 128` blocks is skipped. See [building.md](building.md).
 
 ## MCP tools
 
@@ -318,9 +331,11 @@ See [mcp-gateway.md](mcp-gateway.md).
 
 1. Add a `static class Foo` in `ChatBotFunctions` with `@JsonClassDescription`, `@JsonPropertyDescription` fields
    (`@OptionalField` for optional ones), and `public String execute(ServerPlayerEntity player)` that never throws.
+   If it touches world/entity state, put the rule in a `GodService` method and the effect behind a `GodWorld` method
+   (implemented in `MinecraftGodWorld` through `MainThread.call`, throwing `WorldRefusal` on failure).
 2. Register it in `buildToolSpecs` under the right flag.
-3. Add a `case "Foo" ->` arm in `executeFunction` — wrap in `runOnMain` if it touches world/entity state.
-4. Optionally add a gesture in `fireGestures` and mention it in `prompt.txt`.
+3. Add a `case "Foo" ->` arm in `executeFunction`.
+4. Optionally fire a gesture from the `GodService` method (`gesture(player, kind)`) and mention it in `prompt.txt`.
 `ListTools` picks it up automatically.
 
 ## Gotchas & known issues
@@ -329,7 +344,8 @@ See [mcp-gateway.md](mcp-gateway.md).
   fails~~ **Fixed (bug #6):** `GodClamps` + `BridgeConfig.rewardMax/punishmentMax/spawnOffsetMax`, `/give`-style parsing.
   The clamps are unit-tested; the in-world effect needs an in-game check. Only the `x` param description names the
   offset clamp.
-- `ChangeWeather` always claims success.
+- ~~`ChangeWeather` always claims success.~~ **Fixed (docs/27 phase 2):** an unknown type is refused and the
+  duration clamped to 0..1 000 000 (`GodService.changeWeather`); the `/weather` result itself is still not checked.
 - ~~`QueryTerrain` spams the player's chat with the grid (TEMP debug).~~ Fixed (bug #18).
 - ~~Gestures fire based on the global manifested flag, not the caller's ownership.~~ **Fixed (bug #8):** ownership is
   checked too.

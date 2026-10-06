@@ -131,7 +131,7 @@ subcommand: they are set only by editing `bridge_config.properties` (keys of the
 
 Note `/pray stop` is a literal branch: praying the single word "stop" is impossible.
 
-### `/accept` (`TradeOffers.java:120-130`)
+### `/accept` (`TradeOffers.java:116-126`)
 
 `/accept` — no `requires` → perm 0. Executes the caller's pending trade. Details:
 [actions-and-trades.md](actions-and-trades.md) (section "Trades").
@@ -151,8 +151,8 @@ Note `/pray stop` is a literal branch: praying the single word "stop" is impossi
 |---|---|---|---|
 | `/prompt` | 2 | `ChatCommand.java:140-152` | Re-reads `prompt.txt` and `build_prompt.txt` (`readPrompt()` on both bots) and sends the caller `Hardcoded prompt : <godBot file text>\nCustom Prompt : <override>`. |
 | `/prompt <text…>` | 2 | `ChatCommand.java:116-138` | Sets the runtime override `prompt` on **both** `godBot` and `buildBot` (RAM only, appended after the file text with `"\n"`); replies `Changed prompt <text>`. There is no command to clear it except setting it to something else or restarting. |
-| `/block <x> <y> <z>` | 2 | `ChatBotActions.java:193-209` | Places `minecraft:stone` at the `/construction` pivot + offset. See [building.md](building.md). |
-| `/construction` | 2 | `ChatBotActions.java:211-225` | Sets the build pivot by raycast and clears the caller's `buildBot` memory. See [building.md](building.md). |
+| `/block <x> <y> <z>` | 2 | `ChatBotActions.java:172-188` | Places `minecraft:stone` at the `/construction` pivot + offset. See [building.md](building.md). |
+| `/construction` | 2 | `ChatBotActions.java:190-204` | Sets the build pivot by raycast and clears the caller's `buildBot` memory. See [building.md](building.md). |
 
 Both `/prompt` forms reply through `getSource().sendFeedback(…)`, so they work from the console (bug #18; they used to
 call `getSource().getPlayer()` and NPE). `/block` and `/construction` use `getPlayerOrThrow()` (bug #18): still
@@ -170,7 +170,7 @@ Related commands documented elsewhere: `/mcp`, `/mcp status` (perm 0), `/mcp rel
   prints the stack trace and keeps the previous value — `""` at startup. **No fallback prompt**: a missing file means
   an empty persona.
 - Read once in the constructor and on every `/prompt` (no-arg). Also used verbatim as the sub-agent system prompt base
-  by `BuildPlan` (`ChatBotFunctions.java:262-263`).
+  by `BuildPlan` (`ChatBotFunctions.java:234-235`).
 - Sent each turn as `SystemMessage(hardcodedPrompt + "\n" + prompt)` (`ChatBot.java:453`).
 - `Prompts.buildPrompt` / `Prompts.proofPrompt` (`Prompts.java:4-5`) are empty, unused statics.
 

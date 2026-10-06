@@ -92,11 +92,7 @@ public class TradeOffers {
      * {@code Trade} tool runs AND again on {@code /accept}.
      */
     public static String checkAmounts(int giveAmount, int takeAmount) {
-        if (!TradeMath.isValidAmount(giveAmount, MAX_TRADE_AMOUNT) || !TradeMath.isValidAmount(takeAmount, MAX_TRADE_AMOUNT)) {
-            return "Trade cancelled. giveAmount and takeAmount must both be between 1 and " + MAX_TRADE_AMOUNT
-                + " (got " + giveAmount + " and " + takeAmount + "). Please try again.";
-        }
-        return null;
+        return TradeMath.amountError(giveAmount, takeAmount, MAX_TRADE_AMOUNT);
     }
 
     /** Gives in max-stack-size chunks; whatever doesn't fit drops at the player's feet. */

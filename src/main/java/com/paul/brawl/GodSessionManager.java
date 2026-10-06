@@ -1,7 +1,10 @@
 package com.paul.brawl;
 
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledFuture;
+import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.slf4j.Logger;
@@ -35,6 +38,16 @@ public final class GodSessionManager {
     /** Pending idle-watchdog task — cancelled and replaced on every reset. */
     private static volatile ScheduledFuture<?> watchdog;
 
+    /**
+     * Bumped every time a free avatar is claimed and every time a session ends. An external-agent ticket records
+     * the generation it was minted under, so a ticket from an earlier session of the same player is dead
+     * (docs/27 §5).
+     */
+    private static volatile long generation = 0;
+
+    /** Called with the former owner (null if none) every time a session ends, by any path. */
+    private static final List<Consumer<UUID>> END_LISTENERS = new CopyOnWriteArrayList<>();
+
     private GodSessionManager() {}
 
     /**
@@ -44,19 +57,39 @@ public final class GodSessionManager {
      * it.
      */
     public static synchronized boolean claim(ServerPlayerEntity player) {
-        if (player == null) return false;
-        UUID id = player.getUuid();
+        return player != null && claim(player.getUuid());
+    }
+
+    /** UUID form of {@link #claim(ServerPlayerEntity)} (Minecraft-free, used by tests and the MCP servers). */
+    public static synchronized boolean claim(UUID id) {
+        if (id == null) return false;
         UUID prev = owner.get();
         if (prev != null && !prev.equals(id)) {
             return false;
         }
+        if (prev == null) generation++;
         owner.set(id);
-        resetIdleTimer(player);
+        resetIdleTimer(id);
         return true;
     }
 
     public static boolean isActive(ServerPlayerEntity player) {
-        return player != null && player.getUuid().equals(owner.get());
+        return player != null && isOwner(player.getUuid());
+    }
+
+    /** Whether {@code id} holds the avatar session right now. */
+    public static boolean isOwner(UUID id) {
+        return id != null && id.equals(owner.get());
+    }
+
+    /** The current session generation (see {@link #generation}). */
+    public static long generation() {
+        return generation;
+    }
+
+    /** Register a callback run after every session end (idle watchdog, /pray stop, /godbody off, natural end). */
+    public static void addEndListener(Consumer<UUID> listener) {
+        END_LISTENERS.add(listener);
     }
 
     public static boolean isBusy() {
@@ -90,7 +123,12 @@ public final class GodSessionManager {
      * lock state.
      */
     public static synchronized void endSession(ServerPlayerEntity player) {
-        if (player != null && !player.getUuid().equals(owner.get())) {
+        endSession(player == null ? null : player.getUuid());
+    }
+
+    /** UUID form of {@link #endSession(ServerPlayerEntity)}; null releases unconditionally. */
+    public static synchronized void endSession(UUID id) {
+        if (id != null && !id.equals(owner.get())) {
             // Another player's session is active; don't yank it out from under them.
             return;
         }
@@ -99,11 +137,19 @@ public final class GodSessionManager {
 
     /** Unconditional release — used by the admin kill-switch. */
     public static synchronized void forceEndSession() {
-        owner.set(null);
+        UUID former = owner.getAndSet(null);
         manifested = false;
+        generation++;
         if (watchdog != null) {
             watchdog.cancel(false);
             watchdog = null;
+        }
+        for (Consumer<UUID> l : END_LISTENERS) {
+            try {
+                l.accept(former);
+            } catch (RuntimeException e) {
+                LOGGER.warn("session-end listener threw: {}", e.getMessage(), e);
+            }
         }
     }
 
@@ -114,7 +160,7 @@ public final class GodSessionManager {
      * {@link #resetIdleTimer} (the error path ends the session), so the session cannot hang. Owner-only, like reset.
      */
     public static synchronized void pauseIdleTimer(ServerPlayerEntity player) {
-        if (player == null || !player.getUuid().equals(owner.get())) return;
+        if (player == null || !isOwner(player.getUuid())) return;
         if (watchdog != null) watchdog.cancel(false);
         watchdog = null;
     }
@@ -125,13 +171,18 @@ public final class GodSessionManager {
      * body around indefinitely.
      */
     public static synchronized void resetIdleTimer(ServerPlayerEntity player) {
+        if (player != null) resetIdleTimer(player.getUuid());
+    }
+
+    /** UUID form of {@link #resetIdleTimer(ServerPlayerEntity)}. */
+    public static synchronized void resetIdleTimer(UUID id) {
         // Ownership guard: only the session owner may touch the watchdog. A
         // bodiless prayer reaching this via Appear/Wait would otherwise cancel
         // the real owner's watchdog and pin a replacement to the wrong UUID
         // (whose body then no-ops on the cur.equals(pinned) check).
-        if (player == null || !player.getUuid().equals(owner.get())) return;
+        if (!isOwner(id)) return;
         if (watchdog != null) watchdog.cancel(false);
-        final UUID pinned = player.getUuid();
+        final UUID pinned = id;
         int seconds = Math.max(BridgeConfig.INSTANCE.idleTimeoutSeconds,
                                BridgeConfig.INSTANCE.waitMaxSeconds + 5);
         watchdog = GodScheduler.schedule(() -> {

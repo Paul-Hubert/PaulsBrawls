@@ -52,9 +52,10 @@ They copy the remapped jar into the paths set by `mods_folder` / `client_mods_fo
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
-The Java side has eleven JUnit 5 classes (47 tests) under `src/test/java/com/paul/brawl/`, each covering a
+The Java side has thirteen JUnit 5 classes (65 tests) under `src/test/java/com/paul/brawl/`, each covering a
 Minecraft-free helper: `TradeMath`, `ImageMime`, `BuildGuard`, `GodToolGate`, `GodClamps`, `ItemIds`, `FlagGlow`,
-`GibberMath`, `BlockInfoJson`, `EdenRetry`, `GodActionQueue` (`./gradlew test`). The world-facing wiring around them is in-game-check only. `jacocoTestReport` fails, because Jacoco isn't applied.
+`GibberMath`, `BlockInfoJson`, `EdenRetry`, `GodActionQueue`, plus `GodService` and `BuildService` (the world layer's
+rules, run against the `RecordingGodWorld` / `RecordingBuildWorld` test helpers) (`./gradlew test`). The world-facing wiring around them is in-game-check only. `jacocoTestReport` fails, because Jacoco isn't applied.
 **There is no CI in this repo:** `.github/` is gitignored (`.gitignore:1`) and absent from all of git history, so
 no workflow runs these or uploads releases. Every "CI gate" in the Eden docs means the local `npm run check`.
 
@@ -152,11 +153,11 @@ on the main thread through a bounded `GodActionQueue` hop. Then it appends the p
 Tools are Jackson-annotated POJOs in [ChatBotFunctions.java](src/main/java/com/paul/brawl/ChatBotFunctions.java) —
 `Reward`, `Trade`, `Punishment`, `ChangeWeather`, `SpawnCreature`, `Appear`, `Vanish`, `Wait`, `BuildPlan`
 (attached to `buildBot` only), `ListTools` — plus [QueryTerrain.java](src/main/java/com/paul/brawl/QueryTerrain.java) (ASCII relief map).
-`Appear`/`Vanish` are always offered; the `GodSessionManager.isActive(player)` gate runs at execution and returns a French refusal. [JsonSchemaAdapter](src/main/java/com/paul/brawl/JsonSchemaAdapter.java)
+`Appear`/`Vanish` are always offered; the owner gate runs at execution in `GodService.appear`/`vanish` (`GodSessionManager.isOwner(uuid)`) and returns a French refusal. [JsonSchemaAdapter](src/main/java/com/paul/brawl/JsonSchemaAdapter.java)
 turns them into LangChain4j `ToolSpecification`s from `@JsonClassDescription`/`@JsonPropertyDescription`;
 mark a field [`@OptionalField`](src/main/java/com/paul/brawl/OptionalField.java) to keep it off `required`.
 
-World-mutating tools dispatch through `GodActionQueue` (main thread, via `runOnMain` — see Thread safety). `Wait` defers the
+World-mutating tools call `GodService.live()` (clamps, refusals, Appear/Vanish owner gate, gestures), whose `GodWorld` port (`MinecraftGodWorld`) dispatches through `GodActionQueue` (main thread, via `MainThread.call` — see Thread safety). `Wait` defers the
 next `sendFunctionOutputs` via `GodScheduler`. `BuildPlan` needs an origin (`/construction` →
 `Raycaster.setLastPos`); sub-builds run as isolated [BuildSubAgent](src/main/java/com/paul/brawl/BuildSubAgent.java)
 instances that emit textual `PlaceBlock`/`PlaceLine`/`PlaceBlocks` (regex-scanned). Each matched call is one
@@ -197,7 +198,7 @@ the API-error branch, and `/pray stop` call `ChatBot.endPrayerSession(player)` �
 `GodBody.vanish()` + `GodSessionManager.endSession`. `/godbody off` does not call it: it clears the queue, restores
 the avatar directly (`restoreAvatarOnMain`), vanishes, calls `forceEndSession()` and disables the bridge.
 **Watchdog vs `Wait`:** the watchdog fires after `max(idleTimeoutSeconds, waitMaxSeconds+5)`
-(`GodSessionManager.java:123-124`), and `/llm bridge waitmax|idle` keep `idle > waitMax`, so a deliberate
+(`GodSessionManager.java:186-187`), and `/llm bridge waitmax|idle` keep `idle > waitMax`, so a deliberate
 `Wait` cannot trip it. The watchdog also resets around every tool dispatch of the owning session and is suspended while its LLM request is in flight (bug #8), and MCP
 tools refuse a bodiless prayer or a disabled bridge (`GodToolGate`).
 
@@ -240,7 +241,7 @@ Client (in `Screenshotter`): `/prove <text>`, `/build <text>` — screenshot + s
 
 ### Thread safety, memory, mixins
 
-- `response.thenAccept(...)` runs on the LLM worker pool, **not** the main thread. World-mutating tools go through `ChatBotFunctions.runOnMain` = `GodActionQueue.submit(...).get(5, SECONDS)`, which returns a French error string on timeout so memory stays balanced. **Never call it on the main thread** (it would wait on its own drain). Text-mode building goes through the queue too (one task per call line, bug #7).
+- `response.thenAccept(...)` runs on the LLM worker pool, **not** the main thread. World-mutating tools go through `GodService` → `MinecraftGodWorld` → `MainThread.call` = `GodActionQueue.submit(...).get(5, SECONDS)`, which throws a `WorldRefusal` with a French message on timeout (returned as the tool result, so memory stays balanced). On the server thread `MainThread.call` runs the body inline, since queueing and waiting there would wait on its own drain. Text-mode building goes through the queue too (`BuildService` → one bulk task per call line, bug #7).
 - `TokenWindowChatMemory` is not thread-safe — every `add`/`messages()` is `synchronized(memory)`. Tool-call / tool-result pairs must stay adjacent or the next request 400s.
 - Both `paulsbrawls.mixins.json` and `paulsbrawls.client.mixins.json` reference `ExampleMixin` stubs — no real mixin logic yet.
 

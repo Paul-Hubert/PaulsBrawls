@@ -4,7 +4,7 @@ title: AI God (Java /pray God) — overview
 system: aigod
 summary: What the Java AI God is, the end-to-end /pray flow, component map, the Java-God vs Eden-Dieu distinction, and where every piece of state lives.
 tags: [aigod, chatbot, pray, langchain4j, overview, god-body, llmbot, dieu, architecture]
-sources: [src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/BuildGuard.java, src/main/java/com/paul/brawl/GodToolGate.java, src/client/java/com/paul/brawl/Screenshotter.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodActionQueue.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPConfig.java, src/main/java/com/paul/brawl/VillageConfig.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/Raycaster.java, src/main/java/com/paul/brawl/ChatMessageHistory.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, eden/eden.example.json, eden/src/config.ts, prompt.txt]
+sources: [src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/BuildGuard.java, src/main/java/com/paul/brawl/GodToolGate.java, src/client/java/com/paul/brawl/Screenshotter.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/GodService.java, src/main/java/com/paul/brawl/GodWorld.java, src/main/java/com/paul/brawl/MinecraftGodWorld.java, src/main/java/com/paul/brawl/BuildService.java, src/main/java/com/paul/brawl/MinecraftBuildWorld.java, src/main/java/com/paul/brawl/MainThread.java, src/main/java/com/paul/brawl/WorldRefusal.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodActionQueue.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPConfig.java, src/main/java/com/paul/brawl/VillageConfig.java, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/Raycaster.java, src/main/java/com/paul/brawl/ChatMessageHistory.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, eden/eden.example.json, eden/src/config.ts, prompt.txt]
 verified_at: 98cb908
 ---
 
@@ -53,17 +53,20 @@ chat message *sent by* the player-entity `Dieu` (Eden).
 | `ChatBot` | `ChatBot.java` | Per-bot state (memory, depth, session-bound flags, Wait deferrals), request assembly, response callback/tool loop, `endPrayerSession`. |
 | `ChatCommand` | `ChatCommand.java` | `/pray`, `/pray stop`, `/godbody on|off`, `/prompt`. |
 | `GodClamps` / `ItemIds` / `GodToolGate` / `BuildGuard` | `GodClamps.java`, `ItemIds.java`, `GodToolGate.java`, `BuildGuard.java` | Minecraft-free limits added by bugs #6/#7/#8: Reward/Punishment/Spawn clamps, item-id parsing, MCP-tool ownership gate, sub-build and per-call block caps. |
-| `ChatBotFunctions` | `ChatBotFunctions.java` | Tool POJOs, `buildToolSpecs`, `checkForFunctions` dispatch, `runOnMain`, gestures, textual `PlaceBlock*` regex scanner (placements queued to the main thread). |
+| `ChatBotFunctions` | `ChatBotFunctions.java` | Tool POJOs (thin: world tools forward to `GodService`), `buildToolSpecs`, `checkForFunctions` dispatch, textual `PlaceBlock*` regex scanner (placements go through `BuildService`). |
+| `GodService` / `GodWorld` / `MinecraftGodWorld` | `GodService.java`, `GodWorld.java`, `MinecraftGodWorld.java` | God's world layer (docs/27 phase 2): `GodService` holds the clamps, refusals, the owner gate for `Appear`/`Vanish` and the gestures, and calls the Minecraft-free `GodWorld` port; `MinecraftGodWorld` applies effects on the main thread. Unit-tested by `GodServiceTest` with a recording world. |
+| `BuildService` / `BuildWorld` / `MinecraftBuildWorld` / `BuildShapes` | `BuildService.java`, `BuildWorld.java`, `MinecraftBuildWorld.java`, `BuildShapes.java` | Builder world layer: per-call block cap + known-block check, one bulk-lane `GodActionQueue` task per call, line/points offset walks. See [building.md](building.md). |
+| `MainThread` / `WorldRefusal` | `MainThread.java`, `WorldRefusal.java` | Bounded (5 s) main-thread hop, inline on the server thread; the refusal exception whose message the model reads. |
 | `QueryTerrain` | `QueryTerrain.java` | Tool POJO: ASCII relief map. |
 | `JsonSchemaAdapter` / `OptionalField` | `JsonSchemaAdapter.java`, `OptionalField.java` | POJO → LangChain4j `ToolSpecification`. |
-| `ChatBotActions` | `ChatBotActions.java` | World effects (give item, lightning, weather, spawn, block placement, avatar invuln), `/block`, `/construction`. |
+| `ChatBotActions` | `ChatBotActions.java` | Already-checked world effects (give item, lightning, weather, spawn, block placement, avatar invuln; failures thrown as `WorldRefusal`), `/block`, `/construction`. |
 | `TradeOffers` | `TradeOffers.java` | Pending trade per player + `/accept`. |
 | `PlayerDataCollector` | `PlayerDataCollector.java` | Per-turn player JSON snapshot. |
 | `ChatMessageHistory` | `ChatMessageHistory.java` | Rolling 40-line server chat/game log fed to the model. |
 | `ChatPrinter` | `ChatPrinter.java` | Private `player.sendMessage` helper (+ unused `broadcast`). |
 | `LLMConfig` / `LLMCommand` | `LLMConfig.java`, `LLMCommand.java` | Provider settings, shared model + executor, `/llm`. |
 | `ImagePayload` / `ImageReceiver` / `Screenshotter` | see [images-and-client.md](images-and-client.md) | `/prove` & `/build` screenshot path. |
-| `GodSessionManager` | `GodSessionManager.java` | Single-owner avatar lock, `manifested` flag, idle watchdog. See [god-body.md](god-body.md). |
+| `GodSessionManager` | `GodSessionManager.java` | Single-owner avatar lock (player and UUID forms), `manifested` flag, idle watchdog, session `generation` counter, end listeners. See [god-body.md](god-body.md). |
 | `GodActionQueue` | `GodActionQueue.java` | Main-thread FIFO lanes drained on `END_SERVER_TICK`: 8 God actions then 8 build placements per tick; a waiter can withdraw an unstarted action. |
 | `GodScheduler` | `GodScheduler.java` | Background scheduler used for `Wait` deferrals and the watchdog. |
 | `GodBody` / `BotBridgeClient` / `BridgeConfig` | see [god-body.md](god-body.md) | Avatar HTTP bridge. |
@@ -104,9 +107,9 @@ sequenceDiagram
         W->>GB: say(text)
     end
     alt response has tool calls
-        W->>Q: runOnMain(Reward/Trade/Punishment/...) (.get 5s each)
+        W->>Q: GodService → MainThread.call(Reward/Trade/Punishment/...) (.get 5s each)
         W->>MCP: execute(kebab-case tool) (only if bridge enabled & owner)
-        W->>GB: gestures (if manifested & owner)
+        W->>GB: gestures after each effect (if manifested & owner)
         alt a Wait was called
             W-->>W: GodScheduler defers sendFunctionOutputs N s
         else
@@ -120,7 +123,7 @@ sequenceDiagram
 
 Step citations: echo + claim `ChatCommand.java:91-113`; entry bookkeeping `ChatBot.java:258-269`; worker
 assembly `ChatBot.java:402-427`; context hop `ChatBot.java:498-522`; callback `ChatBot.java:524-575`; dispatch
-`ChatBotFunctions.java:363-490`; teardown `ChatBot.java:582-589`. Full detail: [llm-pipeline.md](llm-pipeline.md).
+`ChatBotFunctions.java:335-461`; teardown `ChatBot.java:582-589`. Full detail: [llm-pipeline.md](llm-pipeline.md).
 
 ### Other entry points into the same pipeline
 
@@ -140,8 +143,8 @@ assembly `ChatBot.java:402-427`; context hop `ChatBot.java:498-522`; callback `C
 | Tool-loop depth | `ChatBot.functionCallDepth` (`ChatBot.java:43`) | Reset to 0 on each user message | No |
 | "Started with the avatar" flag | `ChatBot.sessionBound` (`ChatBot.java:96`) | Set at each user entry point (godBot only) | No |
 | Pending `Wait` deferral | `ChatBot.pendingDeferrals` (`ChatBot.java:109`) | At most one per player per bot | No |
-| Avatar lock, manifested flag, watchdog | `GodSessionManager` statics (`GodSessionManager.java:30-36`) | Global, single owner | No |
-| Pending trade offer | `TradeOffers.offers: HashMap<UUID, TradeOffer>` (`TradeOffers.java:114`) | One per player, expires after 5 min | No |
+| Avatar lock, manifested flag, watchdog | `GodSessionManager` statics (`GodSessionManager.java:32-49`) | Global, single owner | No |
+| Pending trade offer | `TradeOffers.offers: HashMap<UUID, TradeOffer>` (`TradeOffers.java:110`) | One per player, expires after 5 min | No |
 | `/construction` pivot | `Raycaster.lastPos: HashMap<UUID, BlockPos>` (`Raycaster.java:21`) | Per player | No |
 | Server chat/game log | `ChatMessageHistory.messageHistory` (40 lines, `ChatMessageHistory.java:14`) | Global | No |
 | Runtime prompt override | `ChatBot.prompt` (set by `/prompt <text>`, `ChatCommand.java:127-128`) | Both bots | No |
@@ -158,7 +161,8 @@ The cwd is the server's working directory (production: the `PaulsBrawlsVanilla` 
 Commands and the `ImagePayload` receiver run on the server thread. All LLM work runs on `llm-worker-N` virtual
 threads from `LLMConfig.sharedExecutor()` (`LLMConfig.java:155-163`). The response callback (`thenAccept`) runs on
 the worker that completed the future, so tool dispatch happens off-thread; world-touching tools hop to the main
-thread through `GodActionQueue.submit(...).get(5, SECONDS)` (`ChatBotFunctions.java:507-517`). Bridge calls
+thread through `GodService` → `MinecraftGodWorld` → `MainThread.call` = `GodActionQueue.submit(...).get(5, SECONDS)`
+(`MainThread.java:31-63`; inline when already on the server thread, a `WorldRefusal` message on timeout). Bridge calls
 (`GodBody.*`) are async HTTP and never touch world state. Never call a queue-and-join from the main thread
 (`collectDynamicContext` guards this explicitly, `ChatBot.java:507-512`).
 
@@ -169,9 +173,9 @@ thread through `GodActionQueue.submit(...).get(5, SECONDS)` (`ChatBotFunctions.j
   at 16 000 tokens.
 - `endPrayerSession` does **not** clear memory — the next `/pray` continues the same conversation.
 - The Java God's chat prefix "Dieu" collides visually with Eden's avatar username `Dieu` (see table above).
-- ~~`fireGestures` checks `GodSessionManager.hasManifested()` globally, not ownership~~ **Fixed (bug #8):** it now
-  also requires `GodSessionManager.isActive(player)`, so a bodiless player's `Punishment`/`Reward` no longer moves the
-  owner's avatar (`ChatBotFunctions.java:525-527`).
+- ~~`fireGestures` checks `GodSessionManager.hasManifested()` globally, not ownership~~ **Fixed (bug #8):** the gesture
+  (now fired by `GodService.gesture`, `fireGestures` is gone) also requires `GodSessionManager.isOwner(uuid)`, so a
+  bodiless player's `Punishment`/`Reward` no longer moves the owner's avatar (`GodService.java:226-238`).
 
 ## Related
 

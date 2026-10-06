@@ -49,10 +49,10 @@ runtime order.
 |---|---|---|
 | a | `ChatMessageHistory.register()` | `ServerMessageEvents.CHAT_MESSAGE`, `COMMAND_MESSAGE`, `GAME_MESSAGE` → rolling chat log fed to the God prompt (`ChatMessageHistory.java:17-21`) |
 | b | `ChatCommand.register()` | `/pray` (perm 0, incl. `/pray stop`), `/godbody on|off` (perm 2), `/prompt <text>` and `/prompt` (perm 2; registered twice, Brigadier merges the literal) (`ChatCommand.java:26,58,119,140`) |
-| c | `ChatBotActions.register()` | `/block <x> <y> <z>` (perm 2, places stone), `/construction` (perm 2, sets build origin + clears build memory); both player-only via `getPlayerOrThrow`, so the console gets an error instead of an NPE (bug #18) (`ChatBotActions.java:56-57`, `:191-227`) |
+| c | `ChatBotActions.register()` | `/block <x> <y> <z>` (perm 2, places stone), `/construction` (perm 2, sets build origin + clears build memory); both player-only via `getPlayerOrThrow`, so the console gets an error instead of an NPE (bug #18) (`ChatBotActions.java:56-57`, `:170-206`) |
 | d | `ImageReceiver.commonRegister()` | `PayloadTypeRegistry.playC2S()` for `ImagePayload` id `screenshot:image` (`ImageReceiver.java:14-16`, `ImagePayload.java:11-13`) |
 | e | `ImageReceiver.register()` | `ServerPlayNetworking.registerGlobalReceiver(ImagePayload.ID, …)` → `ChatBot.sendImageChatRequest` (`ImageReceiver.java:18-26`) |
-| f | `TradeOffers.register()` | `/accept` (no `.requires` → perm 0) (`TradeOffers.java:120-130`) |
+| f | `TradeOffers.register()` | `/accept` (no `.requires` → perm 0) (`TradeOffers.java:116-126`) |
 | g | `LLMCommand.register()` | `/llm …` incl. `/llm bridge …` (perm 2) (`LLMCommand.java:22-25`) |
 | h | `MCPCommand.register()` | `/mcp` and `/mcp status` (no requirement), `/mcp reload` (perm 2; runs `MCPGateway.reload()` on the LLM worker pool, not the server thread, bug #18) (`MCPCommand.java:30-59`) |
 

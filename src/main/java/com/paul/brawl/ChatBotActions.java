@@ -57,52 +57,34 @@ public class ChatBotActions {
         registerCommandMessageEvent();
     }
 
-    public static void giveGoodReward(ServerPlayerEntity player) {
-        giveItem(player, Money.MONEY, 10);
-    }
-
-    public static void giveBadReward(ServerPlayerEntity player) {
-        smite(player);
-    }
-
-    public static String sendTradeOffer(ServerPlayerEntity player, String giveItemName, int giveAmount, String takeItemName, int takeAmount) {
+    /**
+     * Store the offer for {@code /accept} and show it to the player. Amounts were checked by {@link GodService};
+     * an unknown item comes back as a {@link WorldRefusal}. Main thread only.
+     */
+    public static void sendTradeOffer(ServerPlayerEntity player, String giveItemName, int giveAmount, String takeItemName, int takeAmount) {
         var error = TradeOffers.updateOffer(player, giveItemName, giveAmount, takeItemName, takeAmount);
-        if(error != null) {
-            return error;
-        }
-
+        if (error != null) throw new WorldRefusal(error);
         var message = "God has offered you a trade: \n You receive " + giveAmount + " " + giveItemName + " for " + takeAmount + " " + takeItemName + "\n Type /accept within " + (TradeOffers.OFFER_TTL_MILLIS / 60_000) + " minutes.";
         ChatPrinter.sendMessage(player, message);
-
-        return "God offered a trade to the player: God gives "
-             + giveAmount + " " + giveItemName + " for " + takeAmount + " " + takeItemName
-             + "\nThe player may accept or decline this trade.";
     }
 
     /**
-     * Reward. Bug #6: the amount is clamped to {@code BridgeConfig.rewardMax} and the item string is parsed by the
-     * same parser as {@code /give}, so the advertised component syntax
-     * ({@code minecraft:enchanted_book[minecraft:enchantments={…}]}) and a bare {@code diamond} both work — splitting
-     * on {@code ':'} made the former fail every time. Stacks are split to the item's max size and anything that does
-     * not fit is dropped at the player's feet. Main thread only (dispatched through runOnMain).
+     * Give an already-clamped amount (bug #6: {@link GodService} clamps to {@code rewardMax}). The item string is
+     * parsed by the same parser as {@code /give}, so the advertised component syntax
+     * ({@code minecraft:enchanted_book[minecraft:enchantments={…}]}) and a bare {@code diamond} both work. Stacks are
+     * split to the item's max size and anything that does not fit drops at the player's feet. Main thread only.
      */
-    public static String giveItemFromString(ServerPlayerEntity player, String itemName, int amount) {
-        if (amount < 1) {
-            return "Reward cancelled, amount must be at least 1 (got " + amount + ").";
-        }
-        int clamped = GodClamps.rewardAmount(amount, BridgeConfig.INSTANCE.rewardMax);
+    public static void giveItemStacks(ServerPlayerEntity player, String itemName, int amount) {
         ItemStack template = parseItemStack(player.getServer(), itemName);
         if (template == null) {
-            return "Reward cancelled, item " + itemName + " does not exist or is malformed, please try again.";
+            throw new WorldRefusal("Reward cancelled, item " + itemName + " does not exist or is malformed, please try again.");
         }
-        int left = clamped;
+        int left = amount;
         while (left > 0) {
             int n = Math.min(left, Math.max(1, template.getMaxCount()));
             player.getInventory().offerOrDrop(template.copyWithCount(n));
             left -= n;
         }
-        String note = clamped < amount ? " (limité à " + clamped + " sur " + amount + " demandés)" : "";
-        return "You gave the player a reward: " + clamped + " " + itemName + note;
     }
 
     /** Parse an item string exactly like {@code /give} (namespace optional, item components allowed); null if bad. */
@@ -167,14 +149,11 @@ public class ChatBotActions {
         }
     }
 
-    /** Bug #6: strikes are clamped to {@code BridgeConfig.punishmentMax} (any number used to land in one tick). */
-    public static String smite(ServerPlayerEntity player, int amount) {
-        int strikes = GodClamps.punishments(amount, BridgeConfig.INSTANCE.punishmentMax);
-        for(int i = 0; i<strikes; i++) {
+    /** {@code strikes} lightning bolts on the player (already clamped by {@link GodService}). Main thread only. */
+    public static void smite(ServerPlayerEntity player, int strikes) {
+        for (int i = 0; i < strikes; i++) {
             smite(player);
         }
-        String note = strikes < amount ? " (limité à " + strikes + " sur " + amount + " demandés)" : "";
-        return "God punished the player " + strikes + " times." + note;
     }
 
     public static void smite(ServerPlayerEntity player) {
@@ -226,60 +205,28 @@ public class ChatBotActions {
 
     }
 
-    public static void placeLine(ServerPlayerEntity player, int x, int y, int z, int x2, int y2, int z2, String blockType) {
-
-        BlockPos pos = Raycaster.getLastPos(player.getUuid());
-
-        if(pos == null) return;
-
-        placeLineAt(player, pos, x, y, z, x2, y2, z2, blockType);
-    }
-
+    /** {@code /block}: one block at an offset from the admin's {@code /construction} pivot (no pivot → nothing). */
     public static void placeBlock(ServerPlayerEntity player, int x, int y, int z, String blockType) {
-
         BlockPos pos = Raycaster.getLastPos(player.getUuid());
-
-        if(pos == null) return;
-
-        placeBlockAt(player, pos, x, y, z, blockType);
+        if (pos == null) return;
+        placeAll(player, pos, java.util.List.of(new int[] { x, y, z }), blockType);
     }
 
-    public static void placeBlocks(ServerPlayerEntity player, int[] x, int[] y, int[] z, String blockType) {
-
-        BlockPos pos = Raycaster.getLastPos(player.getUuid());
-
-        if(pos == null) return;
-
-        placeBlocksAt(player, pos, x, y, z, blockType);
-    }
-
-    public static void placeBlockAt(ServerPlayerEntity player, BlockPos pivot, int x, int y, int z, String blockType) {
-        if (pivot == null) return;
-        // BlockPos.add(int, int, int) already returns a new BlockPos — no copy needed.
-        changeBlockAtPos(player, blockType, pivot.add(x, y, z));
-    }
-
-    public static void placeLineAt(ServerPlayerEntity player, BlockPos pivot, int x, int y, int z, int x2, int y2, int z2, String blockType) {
-        if (pivot == null) return;
-        int dx = x2 - x;
-        int dy = y2 - y;
-        int dz = z2 - z;
-        int maxLen = Math.max(1, Math.max(Math.abs(dx), Math.max(Math.abs(dy), Math.abs(dz))));
-        for (int i = 0; i <= maxLen; i++) {
-            int X = x + dx * i / maxLen;
-            int Y = y + dy * i / maxLen;
-            int Z = z + dz * i / maxLen;
-            changeBlockAtPos(player, blockType, pivot.add(X, Y, Z));
+    /**
+     * Set {@code blockType} at {@code origin + offset} for every offset, in the player's world. The caps (bug #7,
+     * {@link BuildGuard}) were applied by {@link BuildService}; an unparseable block is a {@link WorldRefusal}.
+     * Main thread only. Returns how many blocks were set.
+     */
+    public static int placeAll(ServerPlayerEntity player, BlockPos origin, java.util.List<int[]> offsets, String blockType) {
+        BlockState state = parseBlockState(player.getServer(), blockType);
+        if (state == null) throw new WorldRefusal("Bloc inconnu ou mal formé : '" + blockType + "'.");
+        World world = player.getWorld();
+        for (int[] o : offsets) {
+            // BlockPos.add(int, int, int) already returns a new BlockPos — no copy needed.
+            world.setBlockState(origin.add(o[0], o[1], o[2]), state);
         }
+        return offsets.size();
     }
-
-    public static void placeBlocksAt(ServerPlayerEntity player, BlockPos pivot, int[] x, int[] y, int[] z, String blockType) {
-        if (pivot == null) return;
-        for (int i = 0; i < Math.min(x.length, Math.min(y.length, z.length)); i++) {
-            changeBlockAtPos(player, blockType, pivot.add(x[i], y[i], z[i]));
-        }
-    }
-
 
     /**
      * The topmost non-air block of each column in a 3×3 area around the admin's {@code /construction} pivot, as
@@ -312,16 +259,14 @@ public class ChatBotActions {
 
 
 
-    public static void changeBlockAtPos(ServerPlayerEntity player, String blockType, BlockPos pos) {
-        if (pos == null) return;
-        BlockState state = parseBlockState(player, blockType);
-        if (state == null) return;
-        player.getWorld().setBlockState(pos, state);
+    /** Whether {@code blockType} parses like {@code /setblock} does (registries are frozen, so any thread). */
+    public static boolean isKnownBlock(MinecraftServer server, String blockType) {
+        return parseBlockState(server, blockType) != null;
     }
 
-    private static BlockState parseBlockState(ServerPlayerEntity player, String blockType) {
-        if (blockType == null || player.getServer() == null) return null;
-        RegistryWrapper<Block> wrapper = player.getServer().getRegistryManager()
+    private static BlockState parseBlockState(MinecraftServer server, String blockType) {
+        if (blockType == null || server == null) return null;
+        RegistryWrapper<Block> wrapper = server.getRegistryManager()
             .getWrapperOrThrow(RegistryKeys.BLOCK);
         try {
             return BlockArgumentParser.block(wrapper, blockType, false).blockState();
@@ -344,54 +289,36 @@ public class ChatBotActions {
     }
 
 
-    public static String changeWeather(ServerPlayerEntity player, String weatherType, int durationSeconds) {
+    /** {@code /weather <type> <seconds>}; type and duration were validated by {@link GodService}. Main thread only. */
+    public static void changeWeather(ServerPlayerEntity player, String weatherType, int durationSeconds) {
         if (player == null || player.getServer() == null) {
-            return "Impossible de changer la météo : joueur ou serveur invalide.";
+            throw new WorldRefusal("Impossible de changer la météo : joueur ou serveur invalide.");
         }
-        String command = "/weather " + weatherType.toLowerCase() + " " + durationSeconds;
-        player.getServer().getCommandManager().executeWithPrefix(
-            player.getServer().getCommandSource(),
-            command
-        );
-        return "La météo a été changée en " + weatherType + " pour " + (durationSeconds > 0 ? durationSeconds + " secondes." : "une durée indéterminée.");
+        String command = "/weather " + weatherType.toLowerCase(java.util.Locale.ROOT) + " " + durationSeconds;
+        player.getServer().getCommandManager().executeWithPrefix(player.getServer().getCommandSource(), command);
     }
 
     /**
-     * Spawn {@code count} of {@code entityType} near {@code player} at a block
-     * offset. Runs server-side (no bridge dependency) — picked because the
-     * MCP server has no /summon tool and a single canonical path avoids
-     * drift. Must run on the main thread (see GOD_BOT_INTEGRATION_PLAN.md §6a,
-     * §7); caller is expected to wrap via {@link GodActionQueue}.
+     * Spawn {@code count} of {@code entityType} at a block offset from {@code player}; count and offsets were
+     * clamped by {@link GodService}. Runs server-side (no bridge dependency) — picked because the MCP server has no
+     * /summon tool and a single canonical path avoids drift. Main thread only (GOD_BOT_INTEGRATION_PLAN.md §6a,
+     * §7). Returns how many spawned.
      */
-    public static String spawnCreature(ServerPlayerEntity player, String entityType, int count, int x, int y, int z) {
+    public static int spawnCreature(ServerPlayerEntity player, String entityType, int count, int x, int y, int z, boolean griefAllowed) {
         if (player == null || !(player.getWorld() instanceof ServerWorld world)) {
-            return "Impossible de spawner : joueur ou monde invalide.";
+            throw new WorldRefusal("Impossible de spawner : joueur ou monde invalide.");
         }
-        if (entityType == null || entityType.isBlank()) {
-            return "Spawn annulé : entityType vide.";
-        }
-
-        Identifier id;
-        try {
-            id = Identifier.of(entityType.trim());
-        } catch (Exception e) {
-            return "Spawn annulé : identifiant invalide '" + entityType + "'.";
+        Identifier id = Identifier.tryParse(entityType.trim());
+        if (id == null) {
+            throw new WorldRefusal("Spawn annulé : identifiant invalide '" + entityType + "'.");
         }
         EntityType<?> type = Registries.ENTITY_TYPE.getOrEmpty(id).orElse(null);
         if (type == null) {
-            return "Spawn annulé : type d'entité inconnu '" + entityType + "'.";
+            throw new WorldRefusal("Spawn annulé : type d'entité inconnu '" + entityType + "'.");
         }
-
-        int clamped = Math.max(1, Math.min(count, Math.max(1, BridgeConfig.INSTANCE.spawnCountMax)));
-        // Bug #6: offsets clamped to ±spawnOffsetMax per axis (the model could spawn anywhere in the world).
-        int max = BridgeConfig.INSTANCE.spawnOffsetMax;
-        BlockPos basePos = player.getBlockPos().add(
-            GodClamps.spawnOffset(x, max), GodClamps.spawnOffset(y, max), GodClamps.spawnOffset(z, max));
-
-        boolean griefAllowed = BridgeConfig.INSTANCE.creatureGriefingAllowed;
-
+        BlockPos basePos = player.getBlockPos().add(x, y, z);
         int spawned = 0;
-        for (int i = 0; i < clamped; i++) {
+        for (int i = 0; i < count; i++) {
             // Fan creatures out by ±1 block so a count > 1 doesn't stack at one pos.
             BlockPos spawnPos = basePos.add((i % 3) - 1, 0, (i / 3) % 3 - 1);
             Entity entity = type.create(world);
@@ -408,8 +335,7 @@ public class ChatBotActions {
             }
             if (world.spawnEntity(entity)) spawned++;
         }
-        return "God a fait apparaître " + spawned + " " + entityType + (spawned > 1 ? "s" : "")
-            + " près du joueur" + (griefAllowed ? "" : " (griefing désactivé)") + ".";
+        return spawned;
     }
 
     /** Looks up the bot avatar by the configured username, or null if not joined. */
