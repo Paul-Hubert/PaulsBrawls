@@ -98,6 +98,7 @@ public final class VillageHttpListener {
         }
         int port = VillageConfig.INSTANCE.listenerPort;
         try {
+            JdkHttpServers.tcpNoDelay();
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         } catch (IOException e) {
             LOGGER.warn("Village settlement listener failed to bind 127.0.0.1:{}: {}", port, e.getMessage());

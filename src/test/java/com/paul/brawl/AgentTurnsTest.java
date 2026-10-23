@@ -49,6 +49,7 @@ class AgentTurnsTest {
         private final HttpServer http;
 
         HeldAgent() throws IOException {
+            JdkHttpServers.tcpNoDelay();
             http = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
             http.createContext("/session", this::handle);
             http.setExecutor(Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory()));

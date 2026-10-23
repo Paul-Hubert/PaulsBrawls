@@ -70,8 +70,8 @@ Client code may reference `main` classes (e.g. `ClientEntryPoint` calls `Money.r
 | `testRuntimeOnly` | `org.junit.platform:junit-platform-launcher` | (from the BOM) |
 
 Test dependencies (`build.gradle:94-97`) are not bundled. The `test { … }` block runs the JUnit Platform and passes
-the MCP test bench knobs (`-PmcpFuzz`, `-PmcpSeed`) plus `sun.net.httpserver.nodelay=true` (without it the JDK
-`HttpServer` adds ~40 ms per request). `gradle mcpProbe` (a `JavaExec` on the test classpath) probes a running
+the MCP test bench knobs (`-PmcpFuzz`, `-PmcpSeed`). It no longer sets `sun.net.httpserver.nodelay`: the code
+does (`JdkHttpServers.tcpNoDelay()`, see [aigod/mcp-servers.md](../aigod/mcp-servers.md)). `gradle mcpProbe` (a `JavaExec` on the test classpath) probes a running
 server's MCP endpoints read-only ([aigod/mcp-test-bench.md](../aigod/mcp-test-bench.md)).
 
 ### Jar-in-jar (`include`) — the runtime closure shipped inside the mod jar

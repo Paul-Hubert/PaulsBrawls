@@ -46,6 +46,7 @@ final class ScriptedLlm implements AutoCloseable {
     private final HttpServer http;
 
     ScriptedLlm() throws IOException {
+        JdkHttpServers.tcpNoDelay();
         http = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         http.createContext("/v1/chat/completions", this::complete);
         http.createContext("/v1/models", ex -> reply(ex, 200, "{\"object\":\"list\",\"data\":[{\"id\":\"mock\",\"object\":\"model\"}]}"));

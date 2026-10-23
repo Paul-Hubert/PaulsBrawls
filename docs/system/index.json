@@ -575,6 +575,7 @@
         "docs/27-god-builder-mcp-design.md",
         "src/main/java/com/paul/brawl/AgentMcpServers.java",
         "src/main/java/com/paul/brawl/McpHttpEndpoint.java",
+        "src/main/java/com/paul/brawl/JdkHttpServers.java",
         "src/main/java/com/paul/brawl/McpTools.java",
         "src/main/java/com/paul/brawl/BuilderMcpServer.java",
         "src/main/java/com/paul/brawl/GodMcpServer.java",
@@ -602,7 +603,7 @@
         "Tests",
         "Related"
       ],
-      "bytes": 12426
+      "bytes": 12706
     },
     {
       "id": "aigod.mcp-test-bench",
@@ -632,6 +633,8 @@
         "src/test/java/com/paul/brawl/McpScenarioTest.java",
         "src/test/java/com/paul/brawl/McpLiveProbe.java",
         "src/test/java/com/paul/brawl/McpLiveProbeTest.java",
+        "src/test/java/com/paul/brawl/McpTcpNoDelayTest.java",
+        "src/test/java/com/paul/brawl/McpLatencyMain.java",
         "src/test/java/com/paul/brawl/AgentTurnsTest.java",
         "src/test/java/com/paul/brawl/RecordingGodWorld.java",
         "src/test/java/com/paul/brawl/RecordingBuildWorld.java",
@@ -655,7 +658,7 @@
         "What the bench found",
         "Related"
       ],
-      "bytes": 16011
+      "bytes": 16370
     },
     {
       "id": "aigod.overview",
@@ -1970,7 +1973,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 25147
+      "bytes": 25198
     },
     {
       "id": "platform.entrypoints-and-wiring",

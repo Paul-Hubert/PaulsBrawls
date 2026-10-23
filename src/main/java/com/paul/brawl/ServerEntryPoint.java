@@ -14,7 +14,8 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 
 	@Override
 	public void onInitializeServer() {
-
+		// Before any JDK HttpServer exists (:8767 settlement, :8771 MCP): the JDK reads this once (JdkHttpServers).
+		JdkHttpServers.tcpNoDelay();
 
 		// Money
 		GibCommand.register();

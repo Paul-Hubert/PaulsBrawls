@@ -13,6 +13,8 @@ sources:
   - src/test/java/com/paul/brawl/McpScenarioTest.java
   - src/test/java/com/paul/brawl/McpLiveProbe.java
   - src/test/java/com/paul/brawl/McpLiveProbeTest.java
+  - src/test/java/com/paul/brawl/McpTcpNoDelayTest.java
+  - src/test/java/com/paul/brawl/McpLatencyMain.java
   - src/test/java/com/paul/brawl/AgentTurnsTest.java
   - src/test/java/com/paul/brawl/RecordingGodWorld.java
   - src/test/java/com/paul/brawl/RecordingBuildWorld.java
@@ -50,9 +52,10 @@ stand-ins.
 | A running server (read-only) | `gradle mcpProbe -PmcpToken=<mcpToken> [-PmcpUrl=http://127.0.0.1:8771]` (token defaults to `PAULSBRAWLS_MCP_TOKEN`) |
 | With the real opencode as well | `OPENCODE_BIN=…/node_modules/.bin/opencode gradle test …` (see [external-agent.md](external-agent.md)) |
 
-`gradle test` sets `sun.net.httpserver.nodelay=true` (`build.gradle`, `test { … }`). Without it, the JDK
-`HttpServer` adds ~40 ms of Nagle/delayed-ACK stall to every request, and the fuzz suite takes ~50 s instead of ~5 s.
-The server code is the same either way.
+The JDK `HttpServer` adds ~40 ms of Nagle/delayed-ACK stall to every request unless
+`sun.net.httpserver.nodelay` is true when the JVM's first `HttpServer` is created. The code sets it
+(`JdkHttpServers.tcpNoDelay()`, in production and in every test stand-in), so `build.gradle` no longer does; without
+it the fuzz suite takes ~50 s instead of ~5 s.
 
 ## The fixture: `McpBench`
 
@@ -175,7 +178,7 @@ dev server (`godAgent=external`) gave `ALL PASS (36 checks)`.
 | A `tools/call` whose `params` the SDK cannot convert (`"params": 0`, `[1]`, `"x"`…) escaped as an `IllegalArgumentException` and came back as **HTTP 500**, `-32603` | `McpHttpEndpoint` answers `-32602 Invalid params` in a `200` (a regression test is in the conformance suite) |
 | `AgentTickets.mint` was revoke-then-put, so concurrent mints for one player could leave several live tickets | `mint` and `revoke(player, kind)` are synchronized; exactly one stays live |
 | `AgentTurns.build` minted the new ticket **before** checking for a running build. Minting revokes the player's earlier ticket, so a second `/build` while one was running was refused **and killed the running build** (every later tool call of that build was refused). Simultaneous prayers of one player had the same race. | `AgentTurns` reserves the player's turn slot first, then claims and mints (`ae14a12`, `AgentTurnsTest`) |
-| Each MCP request pays ~40 ms of Nagle/delayed-ACK stall on the JDK `HttpServer`: a build of 500 `place_*` calls spends ~20 s waiting on TCP | Not changed in production (enabling `sun.net.httpserver.nodelay` would also affect the `:8767` listener); the tests set it |
+| Each MCP request pays ~40 ms of Nagle/delayed-ACK stall on the JDK `HttpServer`: a build of 500 `place_*` calls spends ~20 s waiting on TCP | `JdkHttpServers.tcpNoDelay()` runs first in `ServerEntryPoint` and before every `HttpServer.create`. The JDK reads the property once per JVM, so `McpTcpNoDelayTest` measures in a fresh JVM: ~3 ms per request vs ~44 ms with Nagle. The `:8767` listener gets the same bytes without the stall. |
 | Idle sub-build leases are swept **lazily**, on the next builder call, so until then their slots stay taken for the builtin `BuildSubAgent` too | Not changed. `AgentTurns` closes a build's leases when its turn ends, so a stale lease lives at most one build turn. Pinned by `05-sub-build-slots`. |
 | `god` refusals that come from `GodService` (an unknown item, "Trade cancelled…", reward amount 0) come back with `isError: false`, unlike the builder, which flags every non-placement | Not changed: it is how the builtin ChatBot always saw them (see [mcp-servers.md](mcp-servers.md#results-and-errors)). The scenarios pin the texts. |
 

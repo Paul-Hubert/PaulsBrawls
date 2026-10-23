@@ -8,6 +8,7 @@ sources:
   - docs/27-god-builder-mcp-design.md
   - src/main/java/com/paul/brawl/AgentMcpServers.java
   - src/main/java/com/paul/brawl/McpHttpEndpoint.java
+  - src/main/java/com/paul/brawl/JdkHttpServers.java
   - src/main/java/com/paul/brawl/McpTools.java
   - src/main/java/com/paul/brawl/BuilderMcpServer.java
   - src/main/java/com/paul/brawl/GodMcpServer.java
@@ -40,7 +41,7 @@ hop. An MCP call is untrusted input. Design: [docs/27](../../27-god-builder-mcp-
 | Concern | Where | What |
 |---|---|---|
 | Start/stop | `ExternalAgent.start/stop`, called from `ServerEntryPoint` on `SERVER_STARTED` / `SERVER_STOPPING` | Nothing starts with `godAgent = builtin` (the default) |
-| Host | `AgentMcpServers.start` | JDK `HttpServer` bound to the loopback address, one virtual thread per request (`mcp-http-N`) |
+| Host | `AgentMcpServers.start` | JDK `HttpServer` bound to the loopback address, one virtual thread per request (`mcp-http-N`). TCP_NODELAY via `JdkHttpServers.tcpNoDelay()` (set first thing in `ServerEntryPoint`: the JDK reads `sun.net.httpserver.nodelay` once, at the JVM's first `HttpServer`), so a request does not wait ~40 ms on Nagle + delayed ACK |
 | Protocol | MCP Java SDK 2.0.1, `McpServer.sync(transport)` → `McpStatelessSyncServer` | initialize, tools/list, tools/call; tool inputs schema-validated by the SDK (`validateToolInputs(true)`) |
 | Transport | `McpHttpEndpoint` (implements `McpStatelessServerTransport`) | Streamable HTTP, stateless profile. A POST carries one JSON-RPC message. A request gets `200 application/json`, a notification gets `202`, and GET/DELETE get `405` (there is no SSE stream). Bodies are capped at 1 MiB (`413`). Malformed JSON is `400`; `params` the SDK cannot convert get a `-32602` error in a `200`, never a `500`. |
 | JSON | `JacksonMcpJsonMapper` + `DefaultJsonSchemaValidator`, passed explicitly | The SDK's ServiceLoader defaults are not relied on under Fabric's class loader |

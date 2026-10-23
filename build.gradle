@@ -120,7 +120,6 @@ test {
 	// MCP test bench knobs (docs/system/aigod/mcp-test-bench.md): value-fuzz iterations per tool and the seed.
 	systemProperty "mcp.bench.fuzz", findProperty("mcpFuzz") ?: "25"
 	systemProperty "mcp.bench.seed", findProperty("mcpSeed") ?: "24301"
-	systemProperty "sun.net.httpserver.nodelay", "true"
 }
 
 // Read-only smoke check of a RUNNING server's MCP endpoints (godAgent=external): tool lists, auth, Origin and ticket

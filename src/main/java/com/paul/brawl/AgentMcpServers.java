@@ -48,6 +48,7 @@ public final class AgentMcpServers implements AutoCloseable {
         JacksonMcpJsonMapper mapper = new JacksonMcpJsonMapper(om);
         DefaultJsonSchemaValidator validator = new DefaultJsonSchemaValidator(om);
 
+        JdkHttpServers.tcpNoDelay(); // ~40 ms per request otherwise (Nagle + delayed ACK)
         HttpServer http = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 0);
         McpHttpEndpoint builderEndpoint = new McpHttpEndpoint(BUILDER_PATH, mapper, token);
         BuilderMcpServer builder = new BuilderMcpServer(builderEndpoint, mapper, validator, build, tickets, subBuilds);

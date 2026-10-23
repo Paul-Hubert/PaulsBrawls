@@ -427,8 +427,10 @@ architecture.
   `AgentE2ETest`.
 - **Minting a ticket revokes the player's earlier ticket of that kind.** Reserve the turn first (as
   `AgentTurns.pray`/`build` do), or a refused duplicate `/build` kills the running build. Found by `AgentTurnsTest`.
-- **The JDK `HttpServer` stalls ~40 ms per request** (Nagle + delayed ACK) unless `sun.net.httpserver.nodelay=true`.
-  The tests set it; production does not yet, so every MCP call pays it.
+- **The JDK `HttpServer` stalls ~40 ms per request** (Nagle + delayed ACK) unless `sun.net.httpserver.nodelay=true`,
+  which the JDK reads ONCE, when the JVM's first `HttpServer` is created. `JdkHttpServers.tcpNoDelay()` sets it
+  first thing in `ServerEntryPoint` (and again before every `HttpServer.create`, tests included).
+  `McpTcpNoDelayTest` measures it in a fresh JVM (~3 ms vs ~44 ms per request).
 - **opencode needs an image-capable model declared** (`"attachment": true` / `modalities.input` including
   `image`). Otherwise it replaces a `/build` or `/prove` screenshot with "this model does not support image input".
 
