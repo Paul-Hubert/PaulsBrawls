@@ -109,3 +109,6 @@ run/config/worldedit/worldedit.properties
 ## Secrets — never track (holds a live LLM provider API key)
 ##############################
 run/llm_config.properties
+
+# Log4j output of test JVMs started in the repo root (gradle test, McpLatencyMain)
+/logs/
