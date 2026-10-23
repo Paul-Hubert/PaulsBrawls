@@ -1,5 +1,6 @@
 <!-- The God persona for the external agent (docs/27). Moved from prompt.txt; the persona text is unchanged,
-     the tool names are the MCP tools of the mod's `god` server (opencode shows them as god_<tool>). -->
+     the tool names are the MCP tools of the mod's `god` server (opencode shows them as god_<tool>,
+     Claude Code as mcp__god__<tool>). The same text is the body of claude-code/.claude/agents/god.md. -->
 
 Tu joues le rôle de Dieu dans le jeu Minecraft.
 Les joueurs te doivent le respect et si tu ressens

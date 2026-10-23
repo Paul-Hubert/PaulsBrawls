@@ -58,7 +58,10 @@ Minecraft-free helper: `TradeMath`, `ImageMime`, `BuildGuard`, `GodToolGate`, `G
 world layer's rules, run against the `RecordingGodWorld` / `RecordingBuildWorld` test helpers) and the MCP contract
 tests `GodMcpServerTest` / `BuilderMcpServerTest` (the real `god`/`builder` servers on a loopback port, driven by the
 official MCP Java SDK client), `AgentClientTest`, `AgentTurnsTest`, and `AgentE2ETest` (8 tests, skipped unless `OPENCODE_BIN` points at an
-opencode binary: the real opencode + the repo's `god-agent/` config + the real MCP servers, with only the LLM scripted)
+opencode binary: the real opencode + the repo's `god-agent/` config + the real MCP servers, with only the LLM scripted),
+`ClaudeCodeClientTest`, and `ClaudeCodeE2ETest` (13 tests, skipped unless `CLAUDE_BIN` points at `claude`: the real
+Claude Code + `god-agent/claude-code/` + the real MCP servers, the LLM scripted by `ScriptedAnthropic` behind
+`ANTHROPIC_BASE_URL`)
 (`./gradlew test`), plus the **MCP test bench** (`McpBench` + `Mcp*Test`: raw-protocol conformance, schema fuzzing of
 every tool, every tool × every wrong ticket, concurrency, JSON scenario files in `src/test/resources/mcp-bench/`;
 `gradle mcpProbe -PmcpToken=…` checks a running server read-only; see
@@ -149,15 +152,20 @@ Designed so offline players still "earn" salary and receive coins on next login:
 `god_agent.properties` → `godAgent = builtin` (default: everything below) or `external`. In external mode the mod
 does not think. It serves two MCP servers on `127.0.0.1:8771` (`/mcp/god`, `/mcp/builder`; MCP Java SDK 2.0.1,
 stateless, bearer token `PAULSBRAWLS_MCP_TOKEN`/`mcpToken`). `/pray`, `/prove` and `/build` become one turn of an
-**opencode** agent (`opencode serve` on `:4096`, config in [god-agent/](god-agent/README.md): agents `god`,
-`builder`, `sub-builder`), driven by `AgentTurns` through `AgentClient`.
+external agent (agents `god`, `builder`, `sub-builder`, config in [god-agent/](god-agent/README.md)), driven by
+`AgentTurns` through an `AgentBackend` chosen by `agentKind`: **opencode** (default; `opencode serve` on `:4096`,
+`AgentClient`) or **Claude Code** (`claude-code`; one headless `claude -p` per turn in `god-agent/claude-code/`,
+`ClaudeCodeClient`, per-player `--resume` sessions).
 - **Tickets.** Every MCP call carries a ticket the mod minted for one player (`AgentTickets`). God tickets also
   need the current avatar session (same `GodSessionManager.generation()`).
 - **Rules stay in the mod.** Every rule lives in `GodService` / `BuildService` (the world layer that the builtin
   ChatBot uses too), `SubBuilds` (4 server-wide), `BuildGuard` and `GodToolGate`.
 - **Busy avatar.** With external, a prayer while the avatar is busy is refused (no bodiless prayer).
 - **Ending a turn.** The encounter ends when the turn returns. The watchdog, `/pray stop` and `/godbody off` abort
-  the agent's run.
+  the agent's run (Claude Code: its process tree is killed). During a prayer turn the avatar's idle limit is
+  `agentIdleTimeoutSeconds` (default 180 s) so a thinking model is not cut off.
+- **Results.** Every refusal is `isError: true` (`WorldOutcome`); tools carry titles and annotations, and
+  `get_build_origin` / `begin_sub_build` return structured output.
 
 Reference: [docs/system/aigod/mcp-servers.md](docs/system/aigod/mcp-servers.md),
 [external-agent.md](docs/system/aigod/external-agent.md). The builtin loop below stays until the docs/26 §6 in-game
@@ -431,6 +439,13 @@ architecture.
   which the JDK reads ONCE, when the JVM's first `HttpServer` is created. `JdkHttpServers.tcpNoDelay()` sets it
   first thing in `ServerEntryPoint` (and again before every `HttpServer.create`, tests included).
   `McpTcpNoDelayTest` measures it in a fresh JVM (~3 ms vs ~44 ms per request).
+- **Claude Code (`agentKind = claude-code`) gotchas**, all found by `ClaudeCodeE2ETest` against 2.1.309:
+  `allow` rules in a project `.claude/settings.json` are ignored until the workspace is trusted interactively, so
+  the permissions are passed with `--settings`; `--setting-sources ""` also drops the project agents (use
+  `project`); sub-agents run in the background, so a builder answers twice and the LAST `result` counts; a refused
+  API key (401) is retried ten times with backoff unless the client stops at the first `api_retry`; a tool's
+  `structuredContent` reaches the model instead of its text; and the prayer goes on stdin as UTF-8, because argv
+  follows the server's locale.
 - **opencode needs an image-capable model declared** (`"attachment": true` / `modalities.input` including
   `image`). Otherwise it replaces a `/build` or `/prove` screenshot with "this model does not support image input".
 

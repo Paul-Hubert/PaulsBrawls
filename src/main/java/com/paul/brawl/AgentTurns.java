@@ -14,7 +14,7 @@ import org.slf4j.LoggerFactory;
  * <ul>
  *   <li><b>Prayer</b> ({@code /pray}, {@code /prove}): claim the avatar (busy → a French refusal, the agent is never
  *       called, so the second player cannot reach a {@code god} tool), mint a god ticket, send the prayer to the
- *       {@code god} agent in the player's own opencode session, wait for the turn. If the turn never spoke through
+ *       {@code god} agent in the player's own agent session (opencode or Claude Code, {@link AgentBackend}), wait for the turn. If the turn never spoke through
  *       {@code say}, its final text is said instead. Then the encounter ends (vanish + release), as the builtin
  *       ChatBot ends it when the model stops calling tools.</li>
  *   <li><b>Build</b> ({@code /build}): needs the sender's {@code /construction} pivot; mints a builder ticket, sends
@@ -47,7 +47,7 @@ public final class AgentTurns {
     /** A turn being set up (claim, mint): holds the player's slot so a concurrent request is refused. */
     private static final Turn RESERVED = new Turn(null, null);
 
-    private final AgentClient client;
+    private final AgentBackend client;
     private final GodService god;
     private final BuildService build;
     private final AgentTickets tickets;
@@ -56,11 +56,11 @@ public final class AgentTurns {
 
     private final Map<UUID, Turn> godTurns = new ConcurrentHashMap<>();
     private final Map<UUID, Turn> buildTurns = new ConcurrentHashMap<>();
-    /** One opencode session per player and agent: the agent keeps the conversation (its memory). */
+    /** One agent session per player and agent: the agent keeps the conversation (its memory). */
     private final Map<UUID, String> godSessions = new ConcurrentHashMap<>();
     private final Map<UUID, String> buildSessions = new ConcurrentHashMap<>();
 
-    public AgentTurns(AgentClient client, GodService god, BuildService build, AgentTickets tickets, SubBuilds subBuilds,
+    public AgentTurns(AgentBackend client, GodService god, BuildService build, AgentTickets tickets, SubBuilds subBuilds,
             GodAgentConfig cfg) {
         this.client = client;
         this.god = god;
@@ -98,14 +98,14 @@ public final class AgentTurns {
     }
 
     private void runPrayer(UUID player, String name, AgentTickets.Ticket t, String prompt, byte[] image) {
-        AgentClient.Reply reply;
+        AgentBackend.Reply reply;
         String sid = null;
         try {
             sid = session(godSessions, player, "Prière — " + name);
             godTurns.computeIfPresent(player, (k, v) -> t.id().equals(v.ticketId()) ? new Turn(sid(k), t.id()) : v);
             reply = client.send(sid, cfg.godAgentName, prompt, image, Duration.ofSeconds(cfg.turnTimeoutSeconds));
-        } catch (AgentClient.AgentException e) {
-            reply = new AgentClient.Reply("", e.failure, e.getMessage());
+        } catch (AgentBackend.AgentException e) {
+            reply = new AgentBackend.Reply("", e.failure, e.getMessage());
         }
         boolean stillMine = GodSessionManager.isOwner(player) && GodSessionManager.generation() == t.generation();
         boolean spoke = tickets.takeSaid(t.id());
@@ -113,8 +113,8 @@ public final class AgentTurns {
         godTurns.remove(player);
         if (!reply.ok()) {
             LOGGER.warn("God agent turn for {} failed ({}): {}", name, reply.failure(), reply.detail());
-            if (reply.failure() == AgentClient.Failure.TIMEOUT && sid != null) client.abort(sid);
-            if (reply.failure() != AgentClient.Failure.TIMEOUT) godSessions.remove(player); // start clean next time
+            if (reply.failure() == AgentBackend.Failure.TIMEOUT && sid != null) client.abort(sid);
+            if (reply.failure() != AgentBackend.Failure.TIMEOUT) godSessions.remove(player); // start clean next time
             tell(player, stillMine ? failureMessage(reply.failure()) : ENDED);
         } else if (stillMine && !spoke && !reply.text().isBlank()) {
             god.say(player, reply.text());
@@ -162,15 +162,15 @@ public final class AgentTurns {
     }
 
     private void runBuild(UUID player, String name, AgentTickets.Ticket t, String prompt, byte[] image) {
-        AgentClient.Reply reply;
+        AgentBackend.Reply reply;
         String sid = null;
         try {
             sid = session(buildSessions, player, "Construction — " + name);
             final String s = sid;
             buildTurns.computeIfPresent(player, (k, v) -> t.id().equals(v.ticketId()) ? new Turn(s, t.id()) : v);
             reply = client.send(sid, cfg.builderAgentName, prompt, image, Duration.ofSeconds(cfg.buildTurnTimeoutSeconds));
-        } catch (AgentClient.AgentException e) {
-            reply = new AgentClient.Reply("", e.failure, e.getMessage());
+        } catch (AgentBackend.AgentException e) {
+            reply = new AgentBackend.Reply("", e.failure, e.getMessage());
         }
         boolean live = tickets.resolve(t.id(), AgentTickets.Kind.BUILDER) != null; // false once aborted
         tickets.revoke(t.id());
@@ -178,8 +178,8 @@ public final class AgentTurns {
         buildTurns.remove(player);
         if (!reply.ok()) {
             LOGGER.warn("Builder agent turn for {} failed ({}): {}", name, reply.failure(), reply.detail());
-            if (reply.failure() == AgentClient.Failure.TIMEOUT && sid != null) client.abort(sid);
-            if (reply.failure() != AgentClient.Failure.TIMEOUT) buildSessions.remove(player);
+            if (reply.failure() == AgentBackend.Failure.TIMEOUT && sid != null) client.abort(sid);
+            if (reply.failure() != AgentBackend.Failure.TIMEOUT) buildSessions.remove(player);
             tell(player, live ? failureMessage(reply.failure()) : "Dieu : (construction arrêtée.)");
         } else if (!reply.text().isBlank()) {
             tell(player, "Dieu : " + reply.text());
@@ -227,7 +227,7 @@ public final class AgentTurns {
 
     // -- helpers ---------------------------------------------------------------------------------------------------
 
-    private String session(Map<UUID, String> sessions, UUID player, String title) throws AgentClient.AgentException {
+    private String session(Map<UUID, String> sessions, UUID player, String title) throws AgentBackend.AgentException {
         String sid = sessions.get(player);
         if (sid != null) return sid;
         sid = client.createSession(title);
@@ -243,7 +243,7 @@ public final class AgentTurns {
         }
     }
 
-    static String failureMessage(AgentClient.Failure f) {
+    static String failureMessage(AgentBackend.Failure f) {
         return switch (f) {
             case DOWN -> DOWN;
             case TIMEOUT -> TIMEOUT;

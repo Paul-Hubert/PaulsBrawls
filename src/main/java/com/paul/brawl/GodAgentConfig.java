@@ -16,7 +16,8 @@ import org.slf4j.LoggerFactory;
  *
  * <p>{@link #godAgent} is the switch of docs/26 §1: {@code builtin} (default) keeps today's in-mod ChatBot;
  * {@code external} starts the {@code god}/{@code builder} MCP servers and hands {@code /pray}, {@code /prove} and
- * {@code /build} to opencode.
+ * {@code /build} to an external agent: {@link #agentKind} {@code opencode} (default, {@code opencode serve}) or
+ * {@code claude-code} (headless {@code claude -p}, one process per turn).
  */
 public class GodAgentConfig {
 
@@ -32,12 +33,18 @@ public class GodAgentConfig {
     public static final String BUILTIN = "builtin";
     public static final String EXTERNAL = "external";
 
+    public static final String OPENCODE = "opencode";
+    public static final String CLAUDE_CODE = "claude-code";
+
     public static final GodAgentConfig INSTANCE = new GodAgentConfig(CONFIG_PATH);
 
     private final Path path;
 
     /** {@code builtin} or {@code external}. */
     public String godAgent = BUILTIN;
+
+    /** Which external agent runs the turns: {@code opencode} or {@code claude-code}. */
+    public String agentKind = OPENCODE;
 
     /** Loopback port of the god/builder MCP servers ({@code /mcp/god}, {@code /mcp/builder}). */
     public int mcpPort = 8771;
@@ -51,7 +58,12 @@ public class GodAgentConfig {
     /** opencode Basic-auth password; {@value #AGENT_PASSWORD_ENV} wins when set. Blank = no auth header. */
     public String agentPassword = "";
 
-    /** opencode agent names (see god-agent/opencode.json). */
+    /** Claude Code ({@code agentKind = claude-code}): the executable, the agent directory, the model (blank = default). */
+    public String claudeBin = "claude";
+    public String claudeDir = "god-agent/claude-code";
+    public String claudeModel = "";
+
+    /** Agent names: opencode agents (god-agent/opencode.json) or Claude Code agents (claude-code/.claude/agents/). */
     public String godAgentName = "god";
     public String builderAgentName = "builder";
 
@@ -83,6 +95,10 @@ public class GodAgentConfig {
         return EXTERNAL.equalsIgnoreCase(godAgent);
     }
 
+    public boolean claudeCode() {
+        return CLAUDE_CODE.equalsIgnoreCase(agentKind);
+    }
+
     /** The token in force: the env var if set, else the saved one. */
     public synchronized String effectiveToken() {
         String env = System.getenv(TOKEN_ENV);
@@ -109,11 +125,15 @@ public class GodAgentConfig {
     public synchronized void save() {
         Properties p = new Properties();
         p.setProperty("godAgent", godAgent);
+        p.setProperty("agentKind", agentKind);
         p.setProperty("mcpPort", Integer.toString(mcpPort));
         p.setProperty("mcpToken", mcpToken);
         p.setProperty("agentUrl", agentUrl);
         p.setProperty("agentUsername", agentUsername);
         p.setProperty("agentPassword", agentPassword);
+        p.setProperty("claudeBin", claudeBin);
+        p.setProperty("claudeDir", claudeDir);
+        p.setProperty("claudeModel", claudeModel);
         p.setProperty("godAgentName", godAgentName);
         p.setProperty("builderAgentName", builderAgentName);
         p.setProperty("turnTimeoutSeconds", Integer.toString(turnTimeoutSeconds));
@@ -122,7 +142,7 @@ public class GodAgentConfig {
         p.setProperty("ticketTtlSeconds", Integer.toString(ticketTtlSeconds));
         p.setProperty("subBuildIdleSeconds", Integer.toString(subBuildIdleSeconds));
         try (var out = Files.newOutputStream(path)) {
-            p.store(out, "External God agent (opencode) + god/builder MCP servers — docs/27");
+            p.store(out, "External God agent (opencode or Claude Code) + god/builder MCP servers — docs/27");
         } catch (IOException e) {
             LOGGER.warn("Failed to save {}: {}", path, e.getMessage());
         }
@@ -138,11 +158,15 @@ public class GodAgentConfig {
             return;
         }
         godAgent = p.getProperty("godAgent", godAgent).trim();
+        agentKind = p.getProperty("agentKind", agentKind).trim();
         mcpPort = parseInt(p.getProperty("mcpPort"), mcpPort);
         mcpToken = p.getProperty("mcpToken", mcpToken).trim();
         agentUrl = p.getProperty("agentUrl", agentUrl).trim();
         agentUsername = p.getProperty("agentUsername", agentUsername).trim();
         agentPassword = p.getProperty("agentPassword", agentPassword);
+        claudeBin = p.getProperty("claudeBin", claudeBin).trim();
+        claudeDir = p.getProperty("claudeDir", claudeDir).trim();
+        claudeModel = p.getProperty("claudeModel", claudeModel).trim();
         godAgentName = p.getProperty("godAgentName", godAgentName).trim();
         builderAgentName = p.getProperty("builderAgentName", builderAgentName).trim();
         turnTimeoutSeconds = parseInt(p.getProperty("turnTimeoutSeconds"), turnTimeoutSeconds);
@@ -155,7 +179,10 @@ public class GodAgentConfig {
     public String describe() {
         return "GodAgentConfig{godAgent=" + godAgent + ", mcpPort=" + mcpPort
             + ", mcpToken=" + (effectiveToken().isBlank() ? "unset" : "set")
-            + ", agentUrl=" + agentUrl + ", agents=" + godAgentName + "/" + builderAgentName
+            + ", agentKind=" + agentKind
+            + (claudeCode() ? ", claude=" + claudeBin + " in " + claudeDir + (claudeModel.isBlank() ? "" : " model " + claudeModel)
+                : ", agentUrl=" + agentUrl)
+            + ", agents=" + godAgentName + "/" + builderAgentName
             + ", turnTimeout=" + turnTimeoutSeconds + "s, agentIdle=" + agentIdleTimeoutSeconds
             + "s, buildTurnTimeout=" + buildTurnTimeoutSeconds + "s}";
     }

@@ -1,15 +1,25 @@
 ---
 id: aigod.external-agent
-title: AI God — the external agent (opencode) and godAgent = external
+title: AI God — the external agent (opencode or Claude Code) and godAgent = external
 system: aigod
-summary: How /pray, /prove and /build reach opencode when godAgent = external — the god-agent/ config (agents, permissions, prompts), AgentClient and AgentTurns, one session per player, failure messages, session-end aborts, install and startup, and the end-to-end test against the real opencode binary.
-tags: [aigod, opencode, external-agent, godagent, agentturns, agentclient, sub-agents, builder, prayer, 4096, e2e]
+summary: How /pray, /prove and /build reach the external agent when godAgent = external — opencode (god-agent/opencode.json, AgentClient) or Claude Code (god-agent/claude-code/, ClaudeCodeClient, agentKind = claude-code) — AgentTurns and the AgentBackend contract, one session per player, failure messages, session-end aborts, install and startup, and the end-to-end tests against the real opencode and claude binaries.
+tags: [aigod, opencode, claude-code, external-agent, godagent, agentkind, agentturns, agentclient, agentbackend, claudecodeclient, sub-agents, builder, prayer, 4096, e2e]
 sources:
   - god-agent/opencode.json
   - god-agent/prompts/god.md
   - god-agent/prompts/builder.md
   - god-agent/prompts/sub-builder.md
   - god-agent/README.md
+  - god-agent/claude-code/.mcp.json
+  - god-agent/claude-code/settings.json
+  - god-agent/claude-code/.claude/agents/god.md
+  - god-agent/claude-code/.claude/agents/builder.md
+  - god-agent/claude-code/.claude/agents/sub-builder.md
+  - src/main/java/com/paul/brawl/AgentBackend.java
+  - src/main/java/com/paul/brawl/ClaudeCodeClient.java
+  - src/test/java/com/paul/brawl/ClaudeCodeE2ETest.java
+  - src/test/java/com/paul/brawl/ClaudeCodeClientTest.java
+  - src/test/java/com/paul/brawl/ScriptedAnthropic.java
   - src/main/java/com/paul/brawl/AgentTurns.java
   - src/main/java/com/paul/brawl/AgentClient.java
   - src/main/java/com/paul/brawl/ExternalAgent.java
@@ -28,8 +38,10 @@ verified_at: 9406df0
 # AI God — the external agent
 
 **TL;DR.** With `godAgent = external` (`god_agent.properties`), the mod stops thinking.
-- `/pray`, `/prove` and `/build` each become one **turn** of an **opencode** agent (`opencode serve`, `:4096`),
-  in the player's own opencode session.
+- `/pray`, `/prove` and `/build` each become one **turn** of an external agent, in the player's own session.
+  `agentKind` picks it: **opencode** (default; `opencode serve` on `:4096`, `AgentClient`) or **Claude Code**
+  (`claude-code`; one headless `claude -p` process per turn, `ClaudeCodeClient`). Both implement `AgentBackend`, so
+  `AgentTurns` is the same for both.
 - The agent acts only through the mod's MCP servers ([mcp-servers.md](mcp-servers.md)), with a ticket the mod
   hands it.
 - The builtin LangChain4j `ChatBot` stays as the default (`builtin`) until the in-game checklist of
@@ -47,6 +59,53 @@ verified_at: 9406df0
 | `AgentClient` | `AgentClient.java` | `POST /session`, `POST /session/:id/message` (synchronous: returns when the turn's tool loop ends), `POST /session/:id/abort`. Basic auth (`agentUsername` / `agentPassword` or `OPENCODE_SERVER_PASSWORD`). **HTTP/1.1 is forced**: the JDK client otherwise asks for an h2c upgrade that opencode's server never answers, and every call hangs. |
 | `AgentTurns` | `AgentTurns.java` (Minecraft-free) | One turn per player and kind; turns run on virtual threads |
 | `ExternalAgent` | `ExternalAgent.java` | Lifecycle: tickets, leases, MCP servers and turns, started on `SERVER_STARTED` in external mode |
+
+### Claude Code (`agentKind = claude-code`)
+
+| Piece | Where | Role |
+|---|---|---|
+| MCP config | `god-agent/claude-code/.mcp.json` | The two HTTP servers; `url` is `${PAULSBRAWLS_MCP_URL:-http://127.0.0.1:8771}/mcp/…`, header `Authorization: Bearer ${PAULSBRAWLS_MCP_TOKEN}`. The mod sets both variables for the process (`mcpPort`, the effective token). |
+| Settings | `god-agent/claude-code/settings.json`, passed with `--settings` | `permissions.defaultMode: dontAsk`; allow `mcp__god`, `mcp__builder`, `Agent(sub-builder)`; deny `Bash`, `Edit`, `Write`, `Read`, `Glob`, `Grep`, `NotebookEdit`, `WebFetch`, `WebSearch`. It is not in `.claude/settings.json` because Claude Code ignores a project file's `allow` rules until the workspace is trusted interactively. A run with the allow list removed gets every MCP call denied, which shows the file is read. |
+| Agents | `god-agent/claude-code/.claude/agents/{god,builder,sub-builder}.md` | Frontmatter `tools:` `mcp__god__*` / `Agent(sub-builder), mcp__builder__*` / `mcp__builder__*`; the body is **exactly** `god-agent/prompts/<agent>.md` (`ClaudeCodeClientTest` fails on drift). The main agent is chosen with `--agent`. |
+| `ClaudeCodeClient` | `ClaudeCodeClient.java` | One process per turn, in the agent directory (`claudeDir`). See below. |
+
+The command (checked with Claude Code 2.1.309):
+
+```
+claude -p --input-format stream-json --output-format stream-json --verbose --agent <god|builder>
+       --mcp-config <dir>/.mcp.json --strict-mcp-config --settings <dir>/settings.json
+       --setting-sources project --permission-mode dontAsk (--session-id <uuid> | --resume <uuid>) [--model <claudeModel>]
+```
+
+- **Isolation.** `--strict-mcp-config` loads only the two servers. `--setting-sources project` keeps out the
+  server user's own settings, hooks and `CLAUDE.md` memory, while still loading the project agents. With `--agent`,
+  the system prompt is Claude Code's one-line SDK preamble plus the agent's prompt. The god agent is offered exactly
+  the 14 `mcp__god__*` tools; the builder gets `Agent` (only `sub-builder` listed) plus `mcp__builder__*`; a
+  sub-builder gets only `mcp__builder__*` (`ClaudeCodeE2ETest`).
+- **Input.** One stream-json user message on stdin, written as UTF-8, never on the command line (argv encoding
+  follows the server's locale, and a French prayer could arrive as `Pri?re`). The `/prove` or `/build` screenshot
+  is a base64 `image` block, which reaches the model as an image.
+- **Sessions.** `createSession` mints a UUID. The first turn uses `--session-id`; after the process's `system/init`
+  the next turn uses `--resume`, so the player's conversation continues. `/pray reset` (a new id) starts fresh.
+  Claude Code keeps the transcripts under the server user's `~/.claude/projects/`.
+- **Result.** The `result` text of the LAST `result` message. Claude Code runs sub-agents in the background: the
+  planner answers once when it launches them, and again when Claude Code wakes it with their completion; the
+  process exits after that, and the last answer is the one told to the admin.
+- **Failures.** The binary cannot start, or a server in `system/init.mcp_servers` is `failed`/`needs-auth`
+  (the turn is killed rather than answered without tools), or the process dies without a result → `DOWN`.
+  No exit within the timeout → the process tree is killed, `TIMEOUT`. An error result, an aborted turn, or an
+  `api_retry` with HTTP 401/403 (Claude Code would retry a refused key ten times with backoff) → `ERROR`. Other API
+  errors (429, 5xx) are left to Claude Code's own retries, within the timeout.
+- **Abort** (`/pray stop`, the watchdog, `/godbody off`) kills the session's process and its descendants.
+- **Auth.** Whatever the `claude` CLI uses for the server's user: a `claude` login, or `ANTHROPIC_API_KEY` in the
+  server's environment. The mod adds only `PAULSBRAWLS_MCP_TOKEN` and `PAULSBRAWLS_MCP_URL`, and removes
+  `CLAUDECODE` (so a server started from a Claude Code session does not look nested).
+
+What Claude Code does with the tools' metadata: titles are shown, and a tool with structured output
+(`begin_sub_build`, `get_build_origin`) reaches the model as its `structuredContent` JSON instead of the text. The
+prompts work with either.
+
+### opencode (`agentKind = opencode`, default)
 
 opencode names MCP tools `<server>_<tool>` (`god_say`, `builder_place_line`). This was verified against opencode
 1.18.34: with this config, the god agent is offered **only** `god_*` tools, with no bash, edit, read or webfetch
@@ -92,7 +151,8 @@ and no `builder_*`. A sub-builder is offered only `builder_*`, and the builder's
    `Dieu : …`.
 
 **Memory**:
-- Each player has one opencode session per agent; the agent keeps the conversation.
+- Each player has one agent session per agent (an opencode session, or a Claude Code conversation resumed with
+  `--resume`); the agent keeps the conversation.
 - `/pray reset` forgets the god session (in builtin mode it clears `godBot`'s memory).
 - `/construction` forgets the builder session, as it already clears `buildBot`'s memory.
 - A turn that failed with DOWN or ERROR also drops its session, so the next one starts clean.
@@ -130,7 +190,19 @@ prayer is unaffected (`AgentTurnsTest.aPrayerTurnGivesTheAgentsModelTheLongerIdl
 
 ## Install and start
 
-See `god-agent/README.md`. In short:
+See `god-agent/README.md`. With Claude Code:
+
+1. Install Claude Code (checked with 2.1.309) and log in as the server's user (`claude`, then `/login`), or put
+   `ANTHROPIC_API_KEY` in the server's environment.
+2. Copy `god-agent/claude-code/` next to the server (or point `claudeDir` at it).
+3. In `god_agent.properties`: `godAgent=external`, `agentKind=claude-code`, and optionally `claudeBin` (default
+   `claude` on PATH), `claudeDir` (default `god-agent/claude-code`) and `claudeModel` (blank = Claude Code's
+   default). Restart the server. No other process is needed.
+4. To check the servers by hand: `claude mcp add --transport http god http://127.0.0.1:8771/mcp/god --header
+   "Authorization: Bearer $PAULSBRAWLS_MCP_TOKEN"` (and the same for `builder`) in any scratch directory, then
+   `claude mcp list` should show both `✔ Connected`. `gradle mcpProbe` checks them without Claude Code.
+
+With opencode:
 
 1. `npm i -g opencode-ai` (checked with 1.18.34).
 2. Provide the provider key (e.g. `OPENAI_API_KEY`) in opencode's environment, and set `model` in
@@ -145,6 +217,26 @@ The MCP servers start with the server. opencode retries the MCP connection itsel
 `curl -u opencode:$OPENCODE_SERVER_PASSWORD http://127.0.0.1:4096/mcp` should show both `connected`.
 
 ## Tests
+
+`ClaudeCodeE2ETest` (13 tests) runs only when `CLAUDE_BIN` points at the `claude` executable. It runs the **real**
+Claude Code with a copy of the repo's `god-agent/claude-code/` (unchanged), the **real** MCP servers and the
+**real** `AgentTurns` / `ClaudeCodeClient`, each process with an isolated HOME and no inherited environment. The
+LLM is `ScriptedAnthropic`, an Anthropic Messages API script (streaming SSE, `tool_use` blocks) reached through
+`ANTHROPIC_BASE_URL` with a dummy key. It checks:
+- a prayer reaches the world and ends the encounter; the god agent is offered only the 14 `mcp__god__*` tools, its
+  prompt is the system prompt, and French text arrives intact;
+- a silent turn is spoken for it; a `/prove` image reaches the model;
+- the second prayer resumes the first one's conversation, and `/pray reset` starts a fresh one;
+- a second player never reaches the agent;
+- a build runs planner → `Agent` → sub-builder → `place_line` (5 blocks at the right absolute positions), with
+  the screenshot reaching the planner, only `sub-builder` offered as a sub-agent, and the planner's last answer told;
+- a prayer and a build run concurrently in separate processes;
+- an unstartable binary and unreachable MCP servers are `DOWN`, a refused API key is `ERROR` at once;
+- a watchdog-style end kills the process; a turn over the timeout is killed (`TIMEOUT`); the process dying mid-turn
+  sends the body home with a French message.
+
+`ClaudeCodeClientTest` covers the command line, the stdin message, result and stream parsing, the config switch,
+and that the Claude Code agents' bodies equal `god-agent/prompts/*.md`.
 
 `AgentE2ETest` runs only when `OPENCODE_BIN` points at an opencode binary. It starts:
 - the **real** `opencode serve`, with a copy of `god-agent/` where only the model and the URLs are changed;

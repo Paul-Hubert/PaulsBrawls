@@ -19,31 +19,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * The mod's client for the external agent's HTTP server — {@code opencode serve} (docs/27 §6). Three calls:
+ * The mod's client for the external agent's HTTP server — {@code opencode serve} (docs/27 §6), the
+ * {@code agentKind = opencode} {@link AgentBackend}. Three calls:
  * create a session, send one message and wait for the whole agent turn ({@code POST /session/:id/message} is
  * synchronous: it returns once the tool loop has finished), and abort a running turn. Blocking; callers run it on a
  * virtual thread, never the server thread. Minecraft-free.
  */
-public final class AgentClient {
-
-    /** What went wrong, so the caller can pick the French message (docs/27 §6 failure table). */
-    public enum Failure { DOWN, TIMEOUT, ERROR }
-
-    /** One agent turn: the final assistant text, or a failure with its detail (for the log). */
-    public record Reply(String text, Failure failure, String detail) {
-        static Reply ok(String text) { return new Reply(text, null, null); }
-        static Reply fail(Failure f, String detail) { return new Reply("", f, detail); }
-        public boolean ok() { return failure == null; }
-    }
-
-    /** Thrown by {@link #createSession} when the agent cannot be reached or refuses. */
-    public static final class AgentException extends Exception {
-        final Failure failure;
-        AgentException(Failure failure, String message) {
-            super(message);
-            this.failure = failure;
-        }
-    }
+public final class AgentClient implements AgentBackend {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -62,6 +44,7 @@ public final class AgentClient {
     }
 
     /** {@code POST /session}; returns the new session id. */
+    @Override
     public String createSession(String title) throws AgentException {
         Map<String, Object> body = Map.of("title", title);
         HttpResponse<String> r = send(post("/session", body, Duration.ofSeconds(30)));
@@ -78,6 +61,7 @@ public final class AgentClient {
      * {@code POST /session/:id/message} with {@code agent}, one text part and an optional PNG/JPEG part (sent as a
      * {@code data:} URL file part), waiting at most {@code timeout} for the whole turn.
      */
+    @Override
     public Reply send(String sessionId, String agent, String text, byte[] image, Duration timeout) {
         List<Map<String, Object>> parts = new ArrayList<>();
         parts.add(Map.of("type", "text", "text", text));
@@ -99,6 +83,7 @@ public final class AgentClient {
     }
 
     /** {@code POST /session/:id/abort}; best-effort. */
+    @Override
     public void abort(String sessionId) {
         try {
             send(post("/session/" + sessionId + "/abort", Map.of(), Duration.ofSeconds(10)));

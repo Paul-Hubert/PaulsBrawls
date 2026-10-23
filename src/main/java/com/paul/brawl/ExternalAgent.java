@@ -7,7 +7,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Runtime of the {@code godAgent = external} mode (docs/27): the ticket book, the sub-build leases, the loopback
- * MCP servers and the {@link AgentTurns} that hand prayers and builds to opencode. Started on
+ * MCP servers and the {@link AgentTurns} that hand prayers and builds to the external agent (opencode or Claude
+ * Code, {@code agentKind}). Started on
  * {@code SERVER_STARTED} and stopped on {@code SERVER_STOPPING}; with {@code builtin} it starts nothing and
  * {@link #enabled()} is false, so every caller keeps the in-mod ChatBot path.
  */
@@ -44,8 +45,7 @@ public final class ExternalAgent {
             LOGGER.warn("MCP servers failed to bind 127.0.0.1:{} — the external God agent cannot act: {}", cfg.mcpPort, e.toString());
             servers = null;
         }
-        AgentClient client = new AgentClient(cfg.agentUrl, cfg.agentUsername, cfg.effectiveAgentPassword());
-        turns = new AgentTurns(client, GodService.live(), BuildService.live(), TICKETS, subBuilds, cfg);
+        turns = new AgentTurns(backend(cfg), GodService.live(), BuildService.live(), TICKETS, subBuilds, cfg);
         if (!listening) {
             GodSessionManager.addEndListener(former -> {
                 AgentTurns t = turns;
@@ -53,6 +53,16 @@ public final class ExternalAgent {
             });
             listening = true;
         }
+    }
+
+    /** opencode over HTTP, or Claude Code headless with the MCP token and URL in its environment. */
+    static AgentBackend backend(GodAgentConfig cfg) {
+        if (cfg.claudeCode()) {
+            return new ClaudeCodeClient(cfg.claudeBin, java.nio.file.Path.of(cfg.claudeDir), cfg.claudeModel,
+                java.util.Map.of(GodAgentConfig.TOKEN_ENV, cfg.effectiveToken(),
+                    ClaudeCodeClient.MCP_URL_ENV, "http://127.0.0.1:" + cfg.mcpPort));
+        }
+        return new AgentClient(cfg.agentUrl, cfg.agentUsername, cfg.effectiveAgentPassword());
     }
 
     public static synchronized void stop() {

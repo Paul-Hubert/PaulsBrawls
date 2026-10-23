@@ -283,20 +283,24 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 16028
+      "bytes": 16050
     },
     {
       "id": "aigod.external-agent",
-      "title": "AI God — the external agent (opencode) and godAgent = external",
+      "title": "AI God — the external agent (opencode or Claude Code) and godAgent = external",
       "system": "aigod",
-      "summary": "How /pray, /prove and /build reach opencode when godAgent = external — the god-agent/ config (agents, permissions, prompts), AgentClient and AgentTurns, one session per player, failure messages, session-end aborts, install and startup, and the end-to-end test against the real opencode binary.",
+      "summary": "How /pray, /prove and /build reach the external agent when godAgent = external — opencode (god-agent/opencode.json, AgentClient) or Claude Code (god-agent/claude-code/, ClaudeCodeClient, agentKind = claude-code) — AgentTurns and the AgentBackend contract, one session per player, failure messages, session-end aborts, install and startup, and the end-to-end tests against the real opencode and claude binaries.",
       "tags": [
         "aigod",
         "opencode",
+        "claude-code",
         "external-agent",
         "godagent",
+        "agentkind",
         "agentturns",
         "agentclient",
+        "agentbackend",
+        "claudecodeclient",
         "sub-agents",
         "builder",
         "prayer",
@@ -309,6 +313,16 @@
         "god-agent/prompts/builder.md",
         "god-agent/prompts/sub-builder.md",
         "god-agent/README.md",
+        "god-agent/claude-code/.mcp.json",
+        "god-agent/claude-code/settings.json",
+        "god-agent/claude-code/.claude/agents/god.md",
+        "god-agent/claude-code/.claude/agents/builder.md",
+        "god-agent/claude-code/.claude/agents/sub-builder.md",
+        "src/main/java/com/paul/brawl/AgentBackend.java",
+        "src/main/java/com/paul/brawl/ClaudeCodeClient.java",
+        "src/test/java/com/paul/brawl/ClaudeCodeE2ETest.java",
+        "src/test/java/com/paul/brawl/ClaudeCodeClientTest.java",
+        "src/test/java/com/paul/brawl/ScriptedAnthropic.java",
         "src/main/java/com/paul/brawl/AgentTurns.java",
         "src/main/java/com/paul/brawl/AgentClient.java",
         "src/main/java/com/paul/brawl/ExternalAgent.java",
@@ -332,7 +346,7 @@
         "Tests",
         "Related"
       ],
-      "bytes": 11478
+      "bytes": 19296
     },
     {
       "id": "aigod.god-body",
@@ -2141,7 +2155,7 @@
         "Login names (must be pairwise distinct)",
         "Related"
       ],
-      "bytes": 14044
+      "bytes": 15252
     }
   ]
 }

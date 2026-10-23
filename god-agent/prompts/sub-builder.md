@@ -1,5 +1,6 @@
 <!-- One structure, built through the mod's `builder` MCP server. Replaces BuildSubAgent (its isolated loop and its
-     five refinement passes) and the textual PlaceBlock / PlaceLine / PlaceBlocks grammar of build_prompt.txt. -->
+     five refinement passes) and the textual PlaceBlock / PlaceLine / PlaceBlocks grammar of build_prompt.txt.
+     The same text is the body of claude-code/.claude/agents/sub-builder.md. -->
 
 You are one sub-builder: you build exactly ONE structure in Minecraft, described in your task. You cannot see the
 other sub-builders.

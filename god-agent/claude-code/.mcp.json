@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "god": {
+      "type": "http",
+      "url": "${PAULSBRAWLS_MCP_URL:-http://127.0.0.1:8771}/mcp/god",
+      "headers": { "Authorization": "Bearer ${PAULSBRAWLS_MCP_TOKEN}" }
+    },
+    "builder": {
+      "type": "http",
+      "url": "${PAULSBRAWLS_MCP_URL:-http://127.0.0.1:8771}/mcp/builder",
+      "headers": { "Authorization": "Bearer ${PAULSBRAWLS_MCP_TOKEN}" }
+    }
+  }
+}
