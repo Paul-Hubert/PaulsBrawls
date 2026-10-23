@@ -110,10 +110,23 @@ The player never waits forever and the avatar is never left out.
 | `/godbody off` during a build | `Dieu : (construction arrêtée.)` | `BuildGuard.cancelAll` kills the leases; `ExternalAgent.abortBuilds` revokes tickets and aborts the runs |
 | MCP servers failed to bind / not started | `Dieu : (le lien avec l'au-delà est rompu …)` | nothing reaches the agent |
 
-The idle watchdog keeps running during an external turn and every `god` tool call resets it. A turn whose model
-is silent for longer than `max(idleTimeoutSeconds, waitMaxSeconds + 5)` (90 s by default) is therefore ended by
-the mod. A reasoning model that thinks longer than that between two tool calls needs a larger `idleTimeoutSeconds`
-(`/llm bridge idle`).
+The idle watchdog keeps running during an external turn, and every `god` tool call resets it. It stays the
+backstop against an untrusted agent that went quiet, but with a longer fuse: `AgentTurns.pray` raises the
+session's idle limit to `agentIdleTimeoutSeconds` (`god_agent.properties`, default 180 s; never below the builtin
+`max(idleTimeoutSeconds, waitMaxSeconds + 5)`, 90 s by default) through `GodSessionManager.setAgentIdleTimeout`.
+A reasoning model may therefore think up to 3 minutes between two tool calls; the whole turn is still capped by
+`turnTimeoutSeconds`. The limit is per session: the session's end restores the builtin limit, so a later builtin
+prayer is unaffected (`AgentTurnsTest.aPrayerTurnGivesTheAgentsModelTheLongerIdleLimit`).
+
+### Known limits (deliberately left)
+
+- **The say fallback.** When a turn never called `say` (or every `say` it made was refused), its final assistant
+  text is said to the player as `Dieu : …`. The prompts tell the agent to speak only through `say` and to end
+  without text, so this only catches an agent that answered in plain text. If the model ends with meta-commentary
+  ("I rewarded the player"), the player reads it. The mod does not try to detect such text: any language or style
+  check would be a string heuristic. A turn that spoke through `say` never has its final text repeated.
+- **No bodiless prayer.** A prayer while the avatar is busy is refused instead of answered without a body, because
+  the god tools act only for the session owner. This is the docs/27 design, not a bug.
 
 ## Install and start
 

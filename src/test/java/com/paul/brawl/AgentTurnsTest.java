@@ -1,6 +1,7 @@
 package com.paul.brawl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -164,6 +165,24 @@ class AgentTurnsTest {
         first.join(10_000);
         assertTrue(world.calls.contains("tell Dieu : Fini."), "the unspoken final text is said: " + world.calls);
         assertTrue(!GodSessionManager.isBusy(), "the encounter ends with the turn");
+    }
+
+    @Test
+    void aPrayerTurnGivesTheAgentsModelTheLongerIdleLimit() throws Exception {
+        int builtin = GodSessionManager.idleTimeoutSeconds();
+        assertEquals(Math.max(BridgeConfig.INSTANCE.idleTimeoutSeconds, BridgeConfig.INSTANCE.waitMaxSeconds + 5), builtin);
+        Thread t = turns.pray(alice, "Alice", "réfléchis", null);
+        ticketOfTurn(1);
+        assertEquals(Math.max(builtin, 180), GodSessionManager.idleTimeoutSeconds(),
+            "while the agent's turn runs, the watchdog allows agentIdleTimeoutSeconds between two god calls");
+        GodSessionManager.resetIdleTimer(alice); // what every god tool call does
+        assertEquals(Math.max(builtin, 180), GodSessionManager.idleTimeoutSeconds(), "a tool call keeps the longer fuse");
+        agent.release.countDown();
+        t.join(10_000);
+        assertFalse(GodSessionManager.isBusy());
+        assertEquals(builtin, GodSessionManager.idleTimeoutSeconds(), "the session's end restores the builtin limit");
+        assertTrue(GodSessionManager.claim(alice));
+        assertEquals(builtin, GodSessionManager.idleTimeoutSeconds(), "a builtin prayer keeps the builtin limit");
     }
 
     @Test

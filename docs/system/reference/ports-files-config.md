@@ -103,6 +103,7 @@ Source: `VillageConfig.java:23-88`. Eden's side mirrors `maxTradeDistance` as `s
 | `agentUsername` / `agentPassword` | `opencode` / `""` | opencode Basic auth; `OPENCODE_SERVER_PASSWORD` wins |
 | `godAgentName` / `builderAgentName` | `god` / `builder` | opencode agent names |
 | `turnTimeoutSeconds` | `300` | cap on one prayer turn |
+| `agentIdleTimeoutSeconds` | `180` | the avatar's idle watchdog during a prayer turn (time allowed between two `god` calls); never below the builtin `max(idleTimeoutSeconds, waitMaxSeconds + 5)` |
 | `buildTurnTimeoutSeconds` | `1800` | cap on one build turn (planner + sub-builders) |
 | `ticketTtlSeconds` | `1800` | lifetime of a ticket handed to the agent |
 | `subBuildIdleSeconds` | `120` | an idle sub-build lease is closed and its slot released (swept on every builder call and every `clamp(idle/4, 1 s, 30 s)`) |

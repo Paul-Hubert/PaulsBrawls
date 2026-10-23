@@ -183,7 +183,9 @@ State (`GodSessionManager.java:32-49`): `AtomicReference<UUID> owner`, `volatile
 | `endSession(player)` / `endSession(UUID)` (sync) | No-op if the id is not the owner (null releases unconditionally); else `forceEndSession()` (`:125-134`) |
 | `forceEndSession()` (sync) | `owner = null`, `manifested = false`, `generation++`, cancel watchdog, then run every end listener (a throwing one is logged) (`:139-154`). Manages lock state only — no vanish/restore. |
 | `pauseIdleTimer(player)` (sync) | Owner only: cancel the watchdog while an LLM request is in flight. |
-| `resetIdleTimer(player)` / `resetIdleTimer(UUID)` (sync) | Ignored unless the id is the owner. Cancels the old watchdog; schedules a new one after `max(idleTimeoutSeconds, waitMaxSeconds + 5)` seconds (`:186-187`). |
+| `resetIdleTimer(player)` / `resetIdleTimer(UUID)` (sync) | Ignored unless the id is the owner. Cancels the old watchdog; schedules a new one after `idleTimeoutSeconds()` seconds. |
+| `idleTimeoutSeconds()` | `max(idleTimeoutSeconds, waitMaxSeconds + 5)`, or the current session's agent limit if longer |
+| `setAgentIdleTimeout(UUID, seconds)` (sync) | Owner only: raise the current session's idle limit (an external agent's turn, `agentIdleTimeoutSeconds`, see [external-agent.md](external-agent.md#failures)). Never lowers the builtin limit; cleared by every session end and every claim of a free avatar. |
 
 Watchdog fire (`GodSessionManager.java:188-196`): if owner still equals the pinned UUID →
 `ChatBotActions.dismissAvatarOnWatchdog(pinned)` (queues `setInvulnerable(false)` on the bot found by `botUsername` + calls

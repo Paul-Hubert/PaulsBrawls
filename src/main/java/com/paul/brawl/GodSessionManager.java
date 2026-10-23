@@ -45,6 +45,12 @@ public final class GodSessionManager {
      */
     private static volatile long generation = 0;
 
+    /**
+     * The idle limit of the CURRENT session when an external agent drives it (docs/27, {@code agentIdleTimeoutSeconds}),
+     * 0 = the default limit. Cleared by every session end and every new claim of a free avatar.
+     */
+    private static volatile int idleOverrideSeconds = 0;
+
     /** Called with the former owner (null if none) every time a session ends, by any path. */
     private static final List<Consumer<UUID>> END_LISTENERS = new CopyOnWriteArrayList<>();
 
@@ -67,7 +73,10 @@ public final class GodSessionManager {
         if (prev != null && !prev.equals(id)) {
             return false;
         }
-        if (prev == null) generation++;
+        if (prev == null) {
+            generation++;
+            idleOverrideSeconds = 0;
+        }
         owner.set(id);
         resetIdleTimer(id);
         return true;
@@ -139,6 +148,7 @@ public final class GodSessionManager {
     public static synchronized void forceEndSession() {
         UUID former = owner.getAndSet(null);
         manifested = false;
+        idleOverrideSeconds = 0;
         generation++;
         if (watchdog != null) {
             watchdog.cancel(false);
@@ -166,6 +176,25 @@ public final class GodSessionManager {
     }
 
     /**
+     * Raise the current session's idle limit to {@code seconds} while an external agent's turn runs (docs/27): the
+     * agent's model may think longer than {@code idleTimeoutSeconds} between two tool calls, and every {@code god}
+     * call re-arms the watchdog, so pausing it once would not survive the first call. The watchdog stays the
+     * backstop (the agent is untrusted), with a longer fuse; the turn itself is capped by {@code turnTimeoutSeconds}.
+     * Owner only; never lowers the default limit; reset by the session's end.
+     */
+    public static synchronized void setAgentIdleTimeout(UUID id, int seconds) {
+        if (!isOwner(id)) return;
+        idleOverrideSeconds = Math.max(0, seconds);
+        resetIdleTimer(id);
+    }
+
+    /** The current session's idle limit: {@code max(idleTimeoutSeconds, waitMaxSeconds + 5)}, or the agent's if longer. */
+    public static int idleTimeoutSeconds() {
+        int base = Math.max(BridgeConfig.INSTANCE.idleTimeoutSeconds, BridgeConfig.INSTANCE.waitMaxSeconds + 5);
+        return Math.max(base, idleOverrideSeconds);
+    }
+
+    /**
      * Cancel and reschedule the idle watchdog. Called from {@link #claim} and
      * from the per-turn hooks in {@link ChatBot} so a chatty session keeps the
      * body around indefinitely.
@@ -183,8 +212,7 @@ public final class GodSessionManager {
         if (!isOwner(id)) return;
         if (watchdog != null) watchdog.cancel(false);
         final UUID pinned = id;
-        int seconds = Math.max(BridgeConfig.INSTANCE.idleTimeoutSeconds,
-                               BridgeConfig.INSTANCE.waitMaxSeconds + 5);
+        int seconds = idleTimeoutSeconds();
         watchdog = GodScheduler.schedule(() -> {
             UUID cur = owner.get();
             if (cur == null || !cur.equals(pinned)) return;

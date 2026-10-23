@@ -150,9 +150,11 @@ server-side and is the only blocking tool.
   - for `appear`/`vanish`/`body_*`, the bridge is enabled.
 
   The agent never names a player. It can only reach the one its ticket names.
-- **Idle watchdog.** It runs as today (`max(idleTimeoutSeconds, waitMaxSeconds+5)`) and every `god` call resets
-  it. It is **not** paused while the agent thinks, unlike the builtin path. The agent is an untrusted process, so
-  the watchdog is the backstop that always ends a session that went quiet. When it fires it does what it does
+- **Idle watchdog.** It runs as today and every `god` call resets it. It is **not** paused while the agent thinks,
+  unlike the builtin path. The agent is an untrusted process, so the watchdog is the backstop that always ends a
+  session that went quiet. Its limit during an agent turn is `agentIdleTimeoutSeconds` (default 180 s, never below
+  the builtin `max(idleTimeoutSeconds, waitMaxSeconds+5)`), so a reasoning model may think longer than 90 s between
+  two calls (as built after the bench review, 2026-10-23). When it fires it does what it does
   today (restore invulnerability, vanish, release), kills the ticket, and asks opencode to abort that session's
   run.
 - **Agent dies mid-session.** The mod's `POST /session/:id/message` fails: the connection is refused or reset.

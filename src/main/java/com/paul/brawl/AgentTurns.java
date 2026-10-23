@@ -88,6 +88,8 @@ public final class AgentTurns {
             tell(player, BUSY);
             return null;
         }
+        // The agent's model may think longer than the builtin idle limit between two god calls (docs/27 §5).
+        GodSessionManager.setAgentIdleTimeout(player, cfg.agentIdleTimeoutSeconds);
         AgentTickets.Ticket t = tickets.mint(AgentTickets.Kind.GOD, player, GodSessionManager.generation(),
             cfg.ticketTtlSeconds * 1000L);
         godTurns.put(player, new Turn(null, t.id()));

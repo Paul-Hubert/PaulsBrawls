@@ -58,6 +58,13 @@ public class GodAgentConfig {
     /** Hard cap on one prayer turn (one POST /session/:id/message to the god agent). */
     public int turnTimeoutSeconds = 300;
 
+    /**
+     * The avatar's idle watchdog during a prayer turn: how long the agent may go without a {@code god} tool call
+     * (its model thinking) before the mod ends the encounter. Never below the builtin limit
+     * ({@code max(idleTimeoutSeconds, waitMaxSeconds + 5)}); {@link #turnTimeoutSeconds} still caps the whole turn.
+     */
+    public int agentIdleTimeoutSeconds = 180;
+
     /** Hard cap on one build turn (the builder agent and all its sub-builders). */
     public int buildTurnTimeoutSeconds = 1800;
 
@@ -110,6 +117,7 @@ public class GodAgentConfig {
         p.setProperty("godAgentName", godAgentName);
         p.setProperty("builderAgentName", builderAgentName);
         p.setProperty("turnTimeoutSeconds", Integer.toString(turnTimeoutSeconds));
+        p.setProperty("agentIdleTimeoutSeconds", Integer.toString(agentIdleTimeoutSeconds));
         p.setProperty("buildTurnTimeoutSeconds", Integer.toString(buildTurnTimeoutSeconds));
         p.setProperty("ticketTtlSeconds", Integer.toString(ticketTtlSeconds));
         p.setProperty("subBuildIdleSeconds", Integer.toString(subBuildIdleSeconds));
@@ -138,6 +146,7 @@ public class GodAgentConfig {
         godAgentName = p.getProperty("godAgentName", godAgentName).trim();
         builderAgentName = p.getProperty("builderAgentName", builderAgentName).trim();
         turnTimeoutSeconds = parseInt(p.getProperty("turnTimeoutSeconds"), turnTimeoutSeconds);
+        agentIdleTimeoutSeconds = parseInt(p.getProperty("agentIdleTimeoutSeconds"), agentIdleTimeoutSeconds);
         buildTurnTimeoutSeconds = parseInt(p.getProperty("buildTurnTimeoutSeconds"), buildTurnTimeoutSeconds);
         ticketTtlSeconds = parseInt(p.getProperty("ticketTtlSeconds"), ticketTtlSeconds);
         subBuildIdleSeconds = parseInt(p.getProperty("subBuildIdleSeconds"), subBuildIdleSeconds);
@@ -147,7 +156,8 @@ public class GodAgentConfig {
         return "GodAgentConfig{godAgent=" + godAgent + ", mcpPort=" + mcpPort
             + ", mcpToken=" + (effectiveToken().isBlank() ? "unset" : "set")
             + ", agentUrl=" + agentUrl + ", agents=" + godAgentName + "/" + builderAgentName
-            + ", turnTimeout=" + turnTimeoutSeconds + "s, buildTurnTimeout=" + buildTurnTimeoutSeconds + "s}";
+            + ", turnTimeout=" + turnTimeoutSeconds + "s, agentIdle=" + agentIdleTimeoutSeconds
+            + "s, buildTurnTimeout=" + buildTurnTimeoutSeconds + "s}";
     }
 
     private static int parseInt(String s, int fallback) {
