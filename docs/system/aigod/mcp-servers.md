@@ -50,6 +50,21 @@ hop. An MCP call is untrusted input. Design: [docs/27](../../27-god-builder-mcp-
 The SDK's own stateless transport is a servlet. `McpHttpEndpoint` reproduces its behaviour on the JDK server, so
 no servlet container is shipped.
 
+**Clients.** Checked with opencode 1.18.34 and **Claude Code 2.1.309** (`claude mcp add --transport http god
+http://127.0.0.1:8771/mcp/god --header "Authorization: Bearer $PAULSBRAWLS_MCP_TOKEN"`, then `claude mcp list`:
+connected). What Claude Code sends, and how it is served (`McpClaudeCodeInteropTest`):
+- a `server/discover` probe of the 2026-07-28 draft spec first. The SDK answers `-32601 Method not found`, and
+  Claude Code falls back to `initialize` with protocol `2025-11-25`, which the SDK accepts as is;
+- `MCP-Protocol-Version` on every later request. The header is **not** validated: the discovery probe carries
+  `2026-07-28`, and a `400` there could stop the fallback. The version is negotiated in `initialize`;
+- a `GET` for a server-to-client SSE stream, refused with `405` (there is none), which it accepts;
+- `_meta.claudecode/toolUseId` and a `progressToken` in `tools/call` params, which are ignored (no progress
+  notifications);
+- with no `Authorization` header configured: after the `401`, OAuth discovery (`/.well-known/…`) and dynamic
+  registration (`POST /register`), all plain `404`s. `claude mcp list` then reports "Dynamic Client Registration
+  rejected (HTTP 404)", which means the header is missing. A wrong token is reported as "Server rejected the
+  configured Authorization header (HTTP 401)" with this server's message.
+
 ## Security
 
 Requests are checked in this order (`McpHttpEndpoint.handle`):

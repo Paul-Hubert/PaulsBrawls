@@ -604,7 +604,7 @@
         "Tests",
         "Related"
       ],
-      "bytes": 13658
+      "bytes": 15020
     },
     {
       "id": "aigod.mcp-test-bench",
@@ -637,6 +637,7 @@
         "src/test/java/com/paul/brawl/McpTcpNoDelayTest.java",
         "src/test/java/com/paul/brawl/McpLatencyMain.java",
         "src/test/java/com/paul/brawl/SubBuildsSweeperTest.java",
+        "src/test/java/com/paul/brawl/McpClaudeCodeInteropTest.java",
         "src/test/java/com/paul/brawl/AgentTurnsTest.java",
         "src/test/java/com/paul/brawl/RecordingGodWorld.java",
         "src/test/java/com/paul/brawl/RecordingBuildWorld.java",
@@ -660,7 +661,7 @@
         "What the bench found",
         "Related"
       ],
-      "bytes": 17055
+      "bytes": 18214
     },
     {
       "id": "aigod.overview",
