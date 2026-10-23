@@ -95,6 +95,21 @@ class BuilderMcpServerTest {
     }
 
     @Test
+    void theSdkClientSeesTitlesHintsAndStructuredOutput() {
+        Map<String, McpSchema.Tool> tools = client.listTools().tools().stream()
+            .collect(Collectors.toMap(McpSchema.Tool::name, t -> t));
+        assertEquals("Placer une ligne de blocs", tools.get("place_line").title());
+        assertEquals(Boolean.TRUE, tools.get("get_block_info").annotations().readOnlyHint());
+        assertEquals(Boolean.TRUE, tools.get("place_line").annotations().destructiveHint(), "placing overwrites blocks");
+        McpSchema.CallToolResult r = call(client, "begin_sub_build", args("anchor_x", 1, "anchor_y", 2, "anchor_z", 3));
+        assertFalse(r.isError(), text(r));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sc = (Map<String, Object>) r.structuredContent();
+        assertEquals(List.of(101, 66, 203), List.of(sc.get("anchor_x"), sc.get("anchor_y"), sc.get("anchor_z")));
+        assertTrue(text(r).startsWith("sub_build=" + sc.get("sub_build") + " "), text(r));
+    }
+
+    @Test
     void aSubBuildPlacesRelativeToItsAnchor() {
         String sb = begin(10, 0, -5);
         McpSchema.CallToolResult r = call(client, "place_block", args("sub_build", sb, "x", 1, "y", 2, "z", 3, "block", "minecraft:stone"));

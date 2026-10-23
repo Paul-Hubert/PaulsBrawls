@@ -88,6 +88,25 @@ or else from `mcpToken` in `god_agent.properties`. When both are blank, `ensureT
 - The agent never names a player. Every tool takes `ticket` (required) and acts on the ticket's player only.
 - A god ticket is refused by the builder, and a builder ticket by god.
 
+## Tool metadata (for an LLM client)
+
+Every tool carries, besides its French description (`McpTools.Meta`):
+- a **title** (French, e.g. "Placer une ligne de blocs"), shown by clients such as Claude Code;
+- **annotations**: `readOnlyHint` (Claude Code may run read-only tools concurrently), `destructiveHint` (may
+  overwrite or harm), `idempotentHint` (repeating adds nothing) and `openWorldHint: false` (the Minecraft world is
+  a closed domain). They are hints for the client, never authority: every check stays in the mod.
+
+| Server | Read-only | Destructive | Idempotent writes |
+|---|---|---|---|
+| god | `get_player_context`, `query_terrain`, `body_tools`, `wait` | `punish`, `change_weather`, `spawn_creature`, `body_call` | `offer_trade` (replaces the pending offer), `change_weather`, `appear`, `vanish`, `end_session` |
+| builder | `get_build_origin`, `get_block_info`, `query_terrain` | `place_block`, `place_line`, `place_blocks` (they overwrite blocks) | the three `place_*`, `end_sub_build` |
+
+**Structured output.** `get_build_origin` (`{x, y, z}`) and `begin_sub_build` (`{sub_build, anchor_x, anchor_y,
+anchor_z}`, the anchor absolute) declare an `outputSchema` and return `structuredContent` next to the same facts in
+the text, so a client that ignores structured output loses nothing. The SDK validates the structured content
+against the schema before it leaves the server; a refusal is a plain `isError` text without it. The other tools
+return text only: their results are prose for the model, not data to compute with.
+
 ## The builder server (`/mcp/builder`)
 
 All coordinates are integer block offsets. The pivot is the `/construction` point of the player whose `/build`

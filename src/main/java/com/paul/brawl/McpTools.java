@@ -11,7 +11,8 @@ import io.modelcontextprotocol.spec.McpSchema;
 
 /**
  * Small helpers shared by {@link GodMcpServer} and {@link BuilderMcpServer}: hand-written JSON Schemas (no
- * reflection, so the advertised schema is exactly what is checked), argument reading, and text results.
+ * reflection, so the advertised schema is exactly what is checked), the agent-facing metadata of a tool
+ * ({@link Meta}: title, MCP annotations, output schema), argument reading, and results.
  */
 final class McpTools {
 
@@ -77,11 +78,60 @@ final class McpTools {
         }
     }
 
-    static SyncToolSpecification tool(String name, String description, Schema schema,
+    /**
+     * What an LLM client is told about a tool besides its description: a human title and the MCP annotations
+     * (Claude Code, for one, runs read-only tools concurrently and shows titles). The hints describe the Minecraft
+     * world the mod owns, a closed domain, so {@code openWorldHint} is false for every tool. A tool with an
+     * {@code outputSchema} returns {@code structuredContent} next to the same text (clients that ignore structured
+     * output lose nothing); the SDK checks it against the schema before it leaves the server.
+     */
+    record Meta(String title, boolean readOnly, boolean destructive, boolean idempotent, Map<String, Object> outputSchema) {
+
+        /** Reads the world, changes nothing. */
+        static Meta read(String title) {
+            return new Meta(title, true, false, true, null);
+        }
+
+        /** Changes the world: {@code destructive} if it may overwrite or harm, {@code idempotent} if repeating it adds nothing. */
+        static Meta write(String title, boolean destructive, boolean idempotent) {
+            return new Meta(title, false, destructive, idempotent, null);
+        }
+
+        Meta output(Map<String, Object> schema) {
+            return new Meta(title, readOnly, destructive, idempotent, schema);
+        }
+
+        McpSchema.ToolAnnotations annotations() {
+            return new McpSchema.ToolAnnotations(title, readOnly, readOnly ? null : destructive, idempotent, false, null);
+        }
+    }
+
+    /** A closed object schema for structured output: every listed property required. */
+    static Map<String, Object> outputObject(Map<String, Object> properties) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("type", "object");
+        m.put("properties", properties);
+        m.put("required", List.copyOf(properties.keySet()));
+        m.put("additionalProperties", false);
+        return m;
+    }
+
+    static Map<String, Object> intProp(String description) {
+        return Map.of("type", "integer", "description", description);
+    }
+
+    static Map<String, Object> strProp(String description) {
+        return Map.of("type", "string", "description", description);
+    }
+
+    static SyncToolSpecification tool(String name, Meta meta, String description, Schema schema,
             Function<Map<String, Object>, McpSchema.CallToolResult> body) {
-        McpSchema.Tool t = McpSchema.Tool.builder(name, schema.build())
+        McpSchema.Tool.Builder tb = McpSchema.Tool.builder(name, schema.build())
+            .title(meta.title())
             .description(description)
-            .build();
+            .annotations(meta.annotations());
+        if (meta.outputSchema() != null) tb.outputSchema(meta.outputSchema());
+        McpSchema.Tool t = tb.build();
         return SyncToolSpecification.builder()
             .tool(t)
             .callHandler((ctx, req) -> {
@@ -100,6 +150,11 @@ final class McpTools {
 
     static McpSchema.CallToolResult ok(String text) {
         return McpSchema.CallToolResult.builder().addTextContent(text == null ? "" : text).isError(false).build();
+    }
+
+    /** A success with the same facts twice: the text the model reads, and {@code structured} for the output schema. */
+    static McpSchema.CallToolResult ok(String text, Map<String, Object> structured) {
+        return McpSchema.CallToolResult.builder().addTextContent(text).structuredContent(structured).isError(false).build();
     }
 
     /** A world-layer outcome: {@code isError} exactly when it was refused. */

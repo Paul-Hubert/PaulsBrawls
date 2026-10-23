@@ -94,7 +94,7 @@ sequential).
 
 | Suite | Cases | What it proves |
 |---|---|---|
-| `McpProtocolConformanceTest` | 85 | The wire protocol, raw. Both endpoints: `initialize` (server name, instructions, tools capability, version negotiation for an unknown version), `ping`, `-32601` for an unknown method, an unknown tool is an error not a crash, a well-formed `tools/list` (names, descriptions, closed schemas, typed properties). Notifications get `202` with no body. String and number ids are echoed. Malformed messages (bad JSON, batches, a response, no method) get `400` with a JSON-RPC error. Bad `tools/call` params get `-32602` in a `200`. 200 garbage messages leave the server up and the world untouched. HTTP: only POST, exact paths (`404` for `/mcp/godx`, `/mcp/god/`, `/mcp/GOD`…), the 1 MiB cap to the byte. Auth: 10 bad `Authorization` forms are `401`, the scheme is case-insensitive, auth comes before the method check, a blank configured token refuses everyone, the token is read per request (rotation). Origin: 8 foreign forms are `403` (`null`, `localhost.evil.example`, `127.0.0.1.nip.io`, LAN, `[::2]`…) and 5 loopback forms pass. A closed server refuses connections, and UTF-8 text (accents, emoji, quotes, control characters) round-trips intact. |
+| `McpProtocolConformanceTest` | 85 | The wire protocol, raw. Both endpoints: `initialize` (server name, instructions, tools capability, version negotiation for an unknown version), `ping`, `-32601` for an unknown method, an unknown tool is an error not a crash, a well-formed `tools/list` (names, descriptions, closed schemas, typed properties). Notifications get `202` with no body. String and number ids are echoed. Malformed messages (bad JSON, batches, a response, no method) get `400` with a JSON-RPC error. Bad `tools/call` params get `-32602` in a `200`. 200 garbage messages leave the server up and the world untouched. HTTP: only POST, exact paths (`404` for `/mcp/godx`, `/mcp/god/`, `/mcp/GOD`…), the 1 MiB cap to the byte. Auth: 10 bad `Authorization` forms are `401`, the scheme is case-insensitive, auth comes before the method check, a blank configured token refuses everyone, the token is read per request (rotation). Origin: 8 foreign forms are `403` (`null`, `localhost.evil.example`, `127.0.0.1.nip.io`, LAN, `[::2]`…) and 5 loopback forms pass. A closed server refuses connections, and UTF-8 text (accents, emoji, quotes, control characters) round-trips intact. Every tool has a title and complete annotations (`openWorldHint` false), and the structured results of `get_build_origin` / `begin_sub_build` validate against their output schemas, with the same facts in the text. |
 | `McpToolFuzzTest` | 514 | **Every** advertised tool, discovered from `tools/list` (a new tool is fuzzed with no edit). *Shape attacks*: each required argument missing, each argument of each wrong JSON type or `null`, an undeclared argument. Each must be refused with no effect on the world. A *baseline* check proves the valid call passes the schema, so the refusals mean something. *Value fuzz*: seeded random edge values (0, ±1, int limits, 127/128/129, 511/512/513, 10⁶±1, ±1e308, empty, huge and control-character strings, `/op @a`, `${jndi:…}`, `§` codes, forbidden blocks and mobs, 0/128/129/400-element arrays). The server must answer an envelope (never `-32603`, never "Erreur côté serveur"), stay up, and keep every effect within the invariants. The block count told to the agent must equal what was placed. |
 | `McpTicketMatrixTest` | 222 | **Every tool × every wrong authority**. Both servers: a forged ticket, an empty one, the other server's ticket, an expired one, a revoked one, one superseded by a newer ticket, an offline player. God only: a session ended by the watchdog, a stale ticket after the same player prays again, bob's ticket while alice holds the avatar, the body disabled (body tools). Builder only: another build's sub-build, a closed one, a cancelled one (`/godbody off`), an idle-expired one, a forged id, no `/construction` pivot. Each cell must be refused and leave the world, the avatar owner, the session generation and the slot count untouched. A refused call may sweep a dead lease, but never takes a slot. `end_session` may answer "déjà close" instead of an error, but changes nothing. |
 | `McpConcurrencyTest` | 6 | 32 simultaneous `begin_sub_build` → exactly 4 win, and the losers are told why. Concurrent `end_sub_build` returns every slot exactly once. 4 sub-builds × 30 parallel `place_line` lose no block and duplicate none. 40 SDK clients connect and list at once. A session end racing 8 spamming callers: nothing started after the end is accepted, and only session refusals come back. A prayer and 3 builds run side by side without touching each other's state. 32 concurrent mints for one player leave exactly one live ticket. |
@@ -155,20 +155,24 @@ The `expect` keys are:
 
 `McpLiveProbe` is the preflight of the in-game checklist ([docs/26 §6](../../26-god-builder-mcp-prompt.md)). It
 runs against the server you are about to test, with its real token. It never holds a valid ticket, so nothing it
-sends can reach the world, and it is safe on a populated server. It runs 36 checks:
+sends can reach the world, and it is safe on a populated server. It runs 42 checks:
 - both endpoints initialize, with the right server names;
 - `tools/list` is exactly the 14 god and 8 builder tools, each requiring `ticket`;
+- every tool has a title and annotations, exactly the expected tools are read-only (`GOD_READ_ONLY`,
+  `BUILDER_READ_ONLY`), and exactly `get_build_origin` and `begin_sub_build` declare an output schema;
 - no token and a wrong token get `401`, a foreign Origin gets `403`, GET gets `405`;
 - every tool refuses a forged ticket.
 
 It prints one `PASS`/`FAIL` line per check and exits 0 only if all pass. The run against a real `gradle runServer`
-dev server (`godAgent=external`) gave `ALL PASS (36 checks)`.
+dev server (`godAgent=external`) gave `ALL PASS (36 checks)` before the tool metadata existed (2026-10-06); see
+[docs/PROGRESS.md](../../PROGRESS.md) for the latest run.
 
 ## Extending
 
 - **A new MCP tool** joins the fuzz and the ticket matrix automatically. Add it to
   `McpLiveProbe.GOD_TOOLS`/`BUILDER_TOOLS`, which pin the exact surface (a tool appearing or vanishing must be a
-  decision). If it takes an argument name `McpBench.validValue` does not know, add a valid value there; a
+  decision), give it a `McpTools.Meta` (title and hints; a read-only one also goes in `*_READ_ONLY`, a structured
+  one in `BUILDER_STRUCTURED`). If it takes an argument name `McpBench.validValue` does not know, add a valid value there; a
   `string` defaults to `"fuzz"`. If it has a clamp, add the clamp to `assertWorldInvariants` and a scenario to
   `07-clamps`.
 - **A new authority rule** (a new way to be refused) is one `Condition` in `McpTicketMatrixTest.conditions()`.

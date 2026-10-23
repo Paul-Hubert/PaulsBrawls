@@ -24,7 +24,7 @@ class McpLiveProbeTest {
             String out = buf.toString(StandardCharsets.UTF_8);
             assertEquals(List.of(), failed, out);
             assertTrue(out.contains("ALL PASS"), out);
-            assertEquals(2 * 7 + McpLiveProbe.GOD_TOOLS.size() + McpLiveProbe.BUILDER_TOOLS.size(),
+            assertEquals(2 * 10 + McpLiveProbe.GOD_TOOLS.size() + McpLiveProbe.BUILDER_TOOLS.size(),
                 out.lines().filter(l -> l.startsWith("PASS ")).count(), out);
             assertTrue(bench.snapshot().isEmpty(), "the probe reached the world: " + bench.snapshot());
             assertEquals(bench.player("alice"), GodSessionManager.currentOwner());

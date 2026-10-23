@@ -21,6 +21,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * defaults to {@code PAULSBRAWLS_MCP_TOKEN}). It never holds a valid ticket, so nothing it sends can reach the world:
  * <ul>
  *   <li>both endpoints initialize and list exactly the expected tools, each requiring a ticket;</li>
+ *   <li>every tool has a title and annotations, exactly the expected tools are read-only, and the structured
+ *       tools declare an output schema;</li>
  *   <li>no token, a wrong token and a foreign Origin are refused; GET is 405;</li>
  *   <li>every tool refuses a forged ticket.</li>
  * </ul>
@@ -33,6 +35,12 @@ public final class McpLiveProbe {
         "get_player_context", "offer_trade", "punish", "query_terrain", "reward", "say", "spawn_creature", "vanish", "wait");
     static final Set<String> BUILDER_TOOLS = Set.of("begin_sub_build", "end_sub_build", "get_block_info", "get_build_origin",
         "place_block", "place_blocks", "place_line", "query_terrain");
+
+    /** Tools annotated {@code readOnlyHint: true} (an LLM client may run them concurrently, they change nothing). */
+    static final Set<String> GOD_READ_ONLY = Set.of("body_tools", "get_player_context", "query_terrain", "wait");
+    static final Set<String> BUILDER_READ_ONLY = Set.of("get_block_info", "get_build_origin", "query_terrain");
+    /** Tools that declare an {@code outputSchema} and return {@code structuredContent}. */
+    static final Set<String> BUILDER_STRUCTURED = Set.of("begin_sub_build", "get_build_origin");
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -64,13 +72,14 @@ public final class McpLiveProbe {
     /** Run every check; returns the failed ones (empty = all passed). */
     List<String> run() {
         out.println("MCP probe of " + base + " (read-only: no valid ticket is ever sent)");
-        endpoint("god", AgentMcpServers.GOD_PATH, GOD_TOOLS, "god-");
-        endpoint("builder", AgentMcpServers.BUILDER_PATH, BUILDER_TOOLS, "bld-");
+        endpoint("god", AgentMcpServers.GOD_PATH, GOD_TOOLS, "god-", GOD_READ_ONLY, Set.of());
+        endpoint("builder", AgentMcpServers.BUILDER_PATH, BUILDER_TOOLS, "bld-", BUILDER_READ_ONLY, BUILDER_STRUCTURED);
         out.println((failures.isEmpty() ? "ALL PASS" : failures.size() + " FAILED") + " (" + checks + " checks)");
         return failures;
     }
 
-    private void endpoint(String name, String path, Set<String> expected, String prefix) {
+    private void endpoint(String name, String path, Set<String> expected, String prefix, Set<String> readOnly,
+            Set<String> structured) {
         check(name + ": initialize", () -> {
             JsonNode r = rpc(path, token, "initialize", Map.of("protocolVersion", "2025-06-18", "capabilities", Map.of(),
                 "clientInfo", Map.of("name", "mcp-probe", "version", "1")));
@@ -93,6 +102,27 @@ public final class McpLiveProbe {
                 if (!t.path("inputSchema").path("required").toString().contains("\"ticket\"")) return t.path("name").asText();
             }
             return null;
+        });
+        check(name + ": every tool has a title and annotations", () -> {
+            if (tools.isEmpty()) return "no tool listed";
+            for (JsonNode t : tools) {
+                JsonNode a = t.path("annotations");
+                if (t.path("title").asText().isBlank() || !a.has("readOnlyHint") || !a.has("idempotentHint")
+                        || !a.has("openWorldHint")) {
+                    return t.path("name").asText() + ": " + t;
+                }
+            }
+            return null;
+        });
+        check(name + ": read-only hints are exactly " + new TreeSet<>(readOnly), () -> {
+            Set<String> got = new TreeSet<>();
+            for (JsonNode t : tools) if (t.path("annotations").path("readOnlyHint").asBoolean(false)) got.add(t.path("name").asText());
+            return got.equals(new TreeSet<>(readOnly)) ? null : "got " + got;
+        });
+        check(name + ": output schemas exactly on " + new TreeSet<>(structured), () -> {
+            Set<String> got = new TreeSet<>();
+            for (JsonNode t : tools) if (t.has("outputSchema")) got.add(t.path("name").asText());
+            return got.equals(new TreeSet<>(structured)) ? null : "got " + got;
         });
         check(name + ": no token -> 401", () -> status(post(path, null, null)) == 401 ? null : "not refused");
         check(name + ": wrong token -> 401", () -> status(post(path, "probe-wrong-" + System.nanoTime(), null)) == 401 ? null : "not refused");

@@ -7,7 +7,12 @@ import static com.paul.brawl.McpTools.optInt;
 import static com.paul.brawl.McpTools.optStr;
 import static com.paul.brawl.McpTools.result;
 import static com.paul.brawl.McpTools.str;
+import static com.paul.brawl.McpTools.intProp;
+import static com.paul.brawl.McpTools.outputObject;
+import static com.paul.brawl.McpTools.strProp;
 import static com.paul.brawl.McpTools.tool;
+
+import com.paul.brawl.McpTools.Meta;
 
 import java.util.List;
 import java.util.Map;
@@ -30,6 +35,16 @@ import io.modelcontextprotocol.spec.McpSchema;
 public final class BuilderMcpServer {
 
     static final String TICKET_DOC = "Le ticket de construction donné dans la demande (commence par 'bld-').";
+
+    /** Structured output of {@code get_build_origin}: the pivot's absolute coordinates. */
+    static final Map<String, Object> ORIGIN_OUT = outputObject(Map.of(
+        "x", intProp("X absolu du pivot."), "y", intProp("Y absolu du pivot."), "z", intProp("Z absolu du pivot.")));
+
+    /** Structured output of {@code begin_sub_build}: the lease id and its absolute anchor. */
+    static final Map<String, Object> SUB_BUILD_OUT = outputObject(new java.util.LinkedHashMap<>(Map.of(
+        "sub_build", strProp("L'identifiant à passer aux place_* et à end_sub_build."),
+        "anchor_x", intProp("X absolu de l'ancre."), "anchor_y", intProp("Y absolu de l'ancre."),
+        "anchor_z", intProp("Z absolu de l'ancre."))));
 
     private final BuildService build;
     private final AgentTickets tickets;
@@ -62,25 +77,26 @@ public final class BuilderMcpServer {
     private List<SyncToolSpecification> tools() {
         String block = "Bloc Minecraft comme pour /setblock, ex. minecraft:oak_planks ou minecraft:oak_stairs[facing=north].";
         return List.of(
-            tool("get_build_origin",
+            tool("get_build_origin", Meta.read("Pivot de construction").output(ORIGIN_OUT),
                 "Coordonnées absolues du pivot /construction de l'admin (l'origine de toutes les ancres).",
                 McpTools.Schema.object().str("ticket", TICKET_DOC, true),
                 withTicket((p, a) -> {
                     int[] o = build.origin(p);
-                    return o == null ? error(noOrigin()) : ok("Pivot : x=" + o[0] + " y=" + o[1] + " z=" + o[2]);
+                    return o == null ? error(noOrigin()) : ok("Pivot : x=" + o[0] + " y=" + o[1] + " z=" + o[2],
+                        Map.of("x", o[0], "y", o[1], "z", o[2]));
                 })),
-            tool("get_block_info",
+            tool("get_block_info", Meta.read("Sol autour du pivot"),
                 "Les blocs de surface des 3×3 colonnes autour du pivot, en décalages depuis le pivot (JSON).",
                 McpTools.Schema.object().str("ticket", TICKET_DOC, true),
                 withTicket((p, a) -> build.origin(p) == null ? error(noOrigin()) : result(build.blockInfo(p)))),
-            tool("query_terrain",
+            tool("query_terrain", Meta.read("Carte du relief"),
                 "Carte ASCII 16×16 du relief autour du joueur (ou d'un centre absolu à moins de 128 blocs), avec biome et pente.",
                 McpTools.Schema.object().str("ticket", TICKET_DOC, true)
                     .integer("center_x", "X absolu du centre (défaut : le joueur).", false)
                     .integer("center_z", "Z absolu du centre (défaut : le joueur).", false)
                     .integer("radius", "Demi-largeur en blocs, 8..64 (défaut 32).", false),
                 withTicket((p, a) -> result(build.queryTerrain(p, optInt(a, "center_x"), optInt(a, "center_z"), optInt(a, "radius"))))),
-            tool("begin_sub_build",
+            tool("begin_sub_build", Meta.write("Ouvrir une sous-construction", false, false).output(SUB_BUILD_OUT),
                 "Ouvre une sous-construction à une ancre décalée du pivot (±" + SubBuilds.MAX_ANCHOR_OFFSET
                     + " par axe). Retourne l'identifiant sub_build à passer aux place_*. Au plus "
                     + BuildGuard.MAX_CONCURRENT_SUB_BUILDS + " ouvertes sur tout le serveur ; une sous-construction sans appel pendant "
@@ -97,9 +113,10 @@ public final class BuilderMcpServer {
                         integer(a, "anchor_x"), integer(a, "anchor_y"), integer(a, "anchor_z"));
                     if (r.lease() == null) return error(r.refusal());
                     int[] an = r.lease().anchor();
-                    return ok("sub_build=" + r.lease().id() + " ancre absolue x=" + an[0] + " y=" + an[1] + " z=" + an[2]);
+                    return ok("sub_build=" + r.lease().id() + " ancre absolue x=" + an[0] + " y=" + an[1] + " z=" + an[2],
+                        Map.of("sub_build", r.lease().id(), "anchor_x", an[0], "anchor_y", an[1], "anchor_z", an[2]));
                 })),
-            tool("place_block",
+            tool("place_block", Meta.write("Placer un bloc", true, true),
                 "Place un bloc à un décalage (x, y, z) depuis l'ancre de la sous-construction.",
                 McpTools.Schema.object().str("ticket", TICKET_DOC, true)
                     .str("sub_build", "L'identifiant rendu par begin_sub_build.", true)
@@ -109,7 +126,7 @@ public final class BuilderMcpServer {
                     .str("block", block, true),
                 withLease((p, l, a) -> build.place(p, l.anchor(),
                     List.of(new int[] { integer(a, "x"), integer(a, "y"), integer(a, "z") }), str(a, "block")))),
-            tool("place_line",
+            tool("place_line", Meta.write("Placer une ligne de blocs", true, true),
                 "Place une ligne droite de blocs entre deux décalages depuis l'ancre (au plus "
                     + BuildGuard.MAX_BLOCKS_PER_CALL + " blocs).",
                 McpTools.Schema.object().str("ticket", TICKET_DOC, true)
@@ -120,7 +137,7 @@ public final class BuilderMcpServer {
                 withLease((p, l, a) -> build.placeLine(p, l.anchor(),
                     integer(a, "x1"), integer(a, "y1"), integer(a, "z1"),
                     integer(a, "x2"), integer(a, "y2"), integer(a, "z2"), str(a, "block")))),
-            tool("place_blocks",
+            tool("place_blocks", Meta.write("Placer des blocs", true, true),
                 "Place le même bloc à plusieurs décalages depuis l'ancre : xs[i], ys[i], zs[i] (tableaux de même longueur, au plus "
                     + BuildGuard.MAX_BLOCKS_PER_CALL + ").",
                 McpTools.Schema.object().str("ticket", TICKET_DOC, true)
@@ -136,7 +153,7 @@ public final class BuilderMcpServer {
                     }
                     return build.place(p, l.anchor(), BuildShapes.points(xs, ys, zs), str(a, "block"));
                 })),
-            tool("end_sub_build",
+            tool("end_sub_build", Meta.write("Fermer la sous-construction", false, true),
                 "Ferme la sous-construction et libère sa place pour une autre.",
                 McpTools.Schema.object().str("ticket", TICKET_DOC, true)
                     .str("sub_build", "L'identifiant rendu par begin_sub_build.", true),

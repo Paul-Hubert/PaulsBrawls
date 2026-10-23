@@ -97,6 +97,11 @@ class McpProtocolConformanceTest {
             String name = t.path("name").asText();
             assertTrue(name.matches("[a-z_]{2,64}"), "tool name usable by every agent: " + name);
             assertFalse(t.path("description").asText().isBlank(), name + " has a description");
+            assertFalse(t.path("title").asText().isBlank(), name + " has a title");
+            JsonNode a = t.path("annotations");
+            assertTrue(a.path("readOnlyHint").isBoolean() && a.path("idempotentHint").isBoolean(), name + " annotations: " + a);
+            assertFalse(a.path("openWorldHint").asBoolean(true), name + ": the Minecraft world is a closed domain");
+            if (!a.path("readOnlyHint").asBoolean()) assertTrue(a.path("destructiveHint").isBoolean(), name + " says if it destroys");
             JsonNode s = t.path("inputSchema");
             assertEquals("object", s.path("type").asText(), name);
             assertFalse(s.path("additionalProperties").asBoolean(true), name + " closes its schema");
@@ -108,6 +113,45 @@ class McpProtocolConformanceTest {
                 assertTrue(p.getValue().has("description"), name + "." + p.getKey() + " has a description");
             }
         }
+    }
+
+    /** Structured output: the SDK-validated structuredContent matches the advertised schema, and the text says the same. */
+    @Test
+    void structuredResultsMatchTheirOutputSchema() throws Exception {
+        var validator = new io.modelcontextprotocol.json.schema.jackson2.DefaultJsonSchemaValidator(
+            new com.fasterxml.jackson.databind.ObjectMapper());
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        Map<String, JsonNode> outSchemas = new java.util.HashMap<>();
+        for (JsonNode t : bench.rpc(AgentMcpServers.BUILDER_PATH, "tools/list", Map.of()).path("result").path("tools")) {
+            if (t.has("outputSchema")) outSchemas.put(t.path("name").asText(), t.path("outputSchema"));
+        }
+        assertEquals(java.util.Set.of("get_build_origin", "begin_sub_build"), outSchemas.keySet());
+        String ticket = bench.builderTicket("alice"); // pivot 100 64 200
+
+        JsonNode origin = bench.rawCall(AgentMcpServers.BUILDER_PATH, "get_build_origin", Map.of("ticket", ticket)).path("result");
+        assertEquals(om.readTree("{\"x\":100,\"y\":64,\"z\":200}"), origin.path("structuredContent"));
+        assertEquals("Pivot : x=100 y=64 z=200", origin.path("content").path(0).path("text").asText(), "text kept for clients without structured output");
+
+        JsonNode sb = bench.rawCall(AgentMcpServers.BUILDER_PATH, "begin_sub_build",
+            Map.of("ticket", ticket, "anchor_x", 4, "anchor_y", 0, "anchor_z", -3)).path("result");
+        JsonNode sc = sb.path("structuredContent");
+        assertTrue(sc.path("sub_build").asText().startsWith("sb-"), sb.toString());
+        assertEquals(104, sc.path("anchor_x").asInt());
+        assertEquals(64, sc.path("anchor_y").asInt());
+        assertEquals(197, sc.path("anchor_z").asInt());
+        assertTrue(sb.path("content").path(0).path("text").asText().startsWith("sub_build=" + sc.path("sub_build").asText()));
+        for (var e : Map.of("get_build_origin", origin, "begin_sub_build", sb).entrySet()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> schema = om.convertValue(outSchemas.get(e.getKey()), Map.class);
+            var v = validator.validate(schema, om.convertValue(e.getValue().path("structuredContent"), Map.class));
+            assertTrue(v.valid(), e.getKey() + ": " + v.errorMessage());
+        }
+
+        // A refusal of a structured tool is a plain isError text, with no structured content.
+        bench.buildWorld.origins.clear();
+        JsonNode refused = bench.rawCall(AgentMcpServers.BUILDER_PATH, "get_build_origin", Map.of("ticket", ticket)).path("result");
+        assertTrue(refused.path("isError").asBoolean(), refused.toString());
+        assertFalse(refused.has("structuredContent") && !refused.path("structuredContent").isNull(), refused.toString());
     }
 
     @Test

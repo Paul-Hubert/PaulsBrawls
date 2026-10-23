@@ -598,13 +598,14 @@
       "headings": [
         "Process and transport",
         "Security",
+        "Tool metadata (for an LLM client)",
         "The builder server (`/mcp/builder`)",
         "The god server (`/mcp/god`)",
         "Results and errors",
         "Tests",
         "Related"
       ],
-      "bytes": 15020
+      "bytes": 16561
     },
     {
       "id": "aigod.mcp-test-bench",
@@ -661,7 +662,7 @@
         "What the bench found",
         "Related"
       ],
-      "bytes": 18214
+      "bytes": 18873
     },
     {
       "id": "aigod.overview",
