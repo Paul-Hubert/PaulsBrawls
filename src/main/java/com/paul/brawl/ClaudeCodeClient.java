@@ -139,6 +139,7 @@ public final class ClaudeCodeClient implements AgentBackend {
         if (cleanEnvironment) pb.environment().clear();
         pb.environment().remove("CLAUDECODE"); // a server started from a Claude Code session must not look nested
         pb.environment().putAll(env);
+        bypassProxyForLoopback(pb.environment());
         Process p;
         try {
             p = pb.start();
@@ -180,6 +181,21 @@ public final class ClaudeCodeClient implements AgentBackend {
             return Reply.fail(Failure.DOWN, "claude exited with code " + p.exitValue() + " and no result" + (err.isEmpty() ? "" : ": " + err));
         }
         return parseResult(r);
+    }
+
+    /**
+     * The MCP servers are on loopback: with {@code HTTPS_PROXY}/{@code HTTP_PROXY} set for the model API, Claude Code
+     * would send them through the proxy too and fail to connect (found on a live run). Loopback is added to
+     * {@code NO_PROXY} and {@code no_proxy}, keeping whatever they held. Package-private for tests.
+     */
+    static void bypassProxyForLoopback(Map<String, String> env) {
+        String current = env.getOrDefault("NO_PROXY", env.getOrDefault("no_proxy", ""));
+        List<String> hosts = new ArrayList<>();
+        for (String h : current.split(",")) if (!h.isBlank()) hosts.add(h.trim());
+        for (String h : List.of("127.0.0.1", "localhost", "::1")) if (!hosts.contains(h)) hosts.add(h);
+        String merged = String.join(",", hosts);
+        env.put("NO_PROXY", merged);
+        env.put("no_proxy", merged);
     }
 
     /** A {@code result} message → the reply (package-private for tests). */

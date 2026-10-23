@@ -98,8 +98,10 @@ claude -p --input-format stream-json --output-format stream-json --verbose --age
   errors (429, 5xx) are left to Claude Code's own retries, within the timeout.
 - **Abort** (`/pray stop`, the watchdog, `/godbody off`) kills the session's process and its descendants.
 - **Auth.** Whatever the `claude` CLI uses for the server's user: a `claude` login, or `ANTHROPIC_API_KEY` in the
-  server's environment. The mod adds only `PAULSBRAWLS_MCP_TOKEN` and `PAULSBRAWLS_MCP_URL`, and removes
-  `CLAUDECODE` (so a server started from a Claude Code session does not look nested).
+  server's environment. The mod adds `PAULSBRAWLS_MCP_TOKEN` and `PAULSBRAWLS_MCP_URL`, adds `127.0.0.1`,
+  `localhost` and `::1` to `NO_PROXY`/`no_proxy` (with `HTTPS_PROXY` set for the model API, Claude Code sent the
+  loopback MCP calls to the proxy and reported `god` as failed; found on the live run), and removes `CLAUDECODE` (so
+  a server started from a Claude Code session does not look nested).
 
 What Claude Code does with the tools' metadata: titles are shown, and a tool with structured output
 (`begin_sub_build`, `get_build_origin`) reaches the model as its `structuredContent` JSON instead of the text. The

@@ -96,6 +96,19 @@ class ClaudeCodeClientTest {
     }
 
     @Test
+    void loopbackBypassesAnyProxy() {
+        Map<String, String> env = new java.util.HashMap<>(Map.of("HTTPS_PROXY", "http://proxy:3128", "no_proxy", "corp.example, 10.*"));
+        ClaudeCodeClient.bypassProxyForLoopback(env);
+        assertEquals("corp.example,10.*,127.0.0.1,localhost,::1", env.get("NO_PROXY"));
+        assertEquals(env.get("NO_PROXY"), env.get("no_proxy"));
+        Map<String, String> empty = new java.util.HashMap<>();
+        ClaudeCodeClient.bypassProxyForLoopback(empty);
+        assertEquals("127.0.0.1,localhost,::1", empty.get("NO_PROXY"));
+        ClaudeCodeClient.bypassProxyForLoopback(empty);
+        assertEquals("127.0.0.1,localhost,::1", empty.get("NO_PROXY"), "idempotent");
+    }
+
+    @Test
     void aMissingBinaryOrDirectoryIsDown() throws Exception {
         Path dir = Files.createTempDirectory("cc-client");
         try {

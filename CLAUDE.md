@@ -444,8 +444,9 @@ architecture.
   the permissions are passed with `--settings`; `--setting-sources ""` also drops the project agents (use
   `project`); sub-agents run in the background, so a builder answers twice and the LAST `result` counts; a refused
   API key (401) is retried ten times with backoff unless the client stops at the first `api_retry`; a tool's
-  `structuredContent` reaches the model instead of its text; and the prayer goes on stdin as UTF-8, because argv
-  follows the server's locale.
+  `structuredContent` reaches the model instead of its text; the prayer goes on stdin as UTF-8, because argv
+  follows the server's locale; and with `HTTPS_PROXY` set, the loopback MCP calls went to the proxy (found live),
+  so `ClaudeCodeClient` adds loopback to `NO_PROXY`.
 - **opencode needs an image-capable model declared** (`"attachment": true` / `modalities.input` including
   `image`). Otherwise it replaces a `/build` or `/prove` screenshot with "this model does not support image input".
 
