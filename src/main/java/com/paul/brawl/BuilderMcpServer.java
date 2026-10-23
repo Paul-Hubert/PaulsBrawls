@@ -5,6 +5,7 @@ import static com.paul.brawl.McpTools.integer;
 import static com.paul.brawl.McpTools.ok;
 import static com.paul.brawl.McpTools.optInt;
 import static com.paul.brawl.McpTools.optStr;
+import static com.paul.brawl.McpTools.result;
 import static com.paul.brawl.McpTools.str;
 import static com.paul.brawl.McpTools.tool;
 
@@ -71,14 +72,14 @@ public final class BuilderMcpServer {
             tool("get_block_info",
                 "Les blocs de surface des 3×3 colonnes autour du pivot, en décalages depuis le pivot (JSON).",
                 McpTools.Schema.object().str("ticket", TICKET_DOC, true),
-                withTicket((p, a) -> build.origin(p) == null ? error(noOrigin()) : ok(build.blockInfo(p)))),
+                withTicket((p, a) -> build.origin(p) == null ? error(noOrigin()) : result(build.blockInfo(p)))),
             tool("query_terrain",
                 "Carte ASCII 16×16 du relief autour du joueur (ou d'un centre absolu à moins de 128 blocs), avec biome et pente.",
                 McpTools.Schema.object().str("ticket", TICKET_DOC, true)
                     .integer("center_x", "X absolu du centre (défaut : le joueur).", false)
                     .integer("center_z", "Z absolu du centre (défaut : le joueur).", false)
                     .integer("radius", "Demi-largeur en blocs, 8..64 (défaut 32).", false),
-                withTicket((p, a) -> ok(build.queryTerrain(p, optInt(a, "center_x"), optInt(a, "center_z"), optInt(a, "radius"))))),
+                withTicket((p, a) -> result(build.queryTerrain(p, optInt(a, "center_x"), optInt(a, "center_z"), optInt(a, "radius"))))),
             tool("begin_sub_build",
                 "Ouvre une sous-construction à une ancre décalée du pivot (±" + SubBuilds.MAX_ANCHOR_OFFSET
                     + " par axe). Retourne l'identifiant sub_build à passer aux place_*. Au plus "
@@ -156,7 +157,7 @@ public final class BuilderMcpServer {
 
     @FunctionalInterface
     interface LeaseBody {
-        String apply(UUID player, SubBuilds.Lease lease, Map<String, Object> args);
+        WorldOutcome apply(UUID player, SubBuilds.Lease lease, Map<String, Object> args);
     }
 
     /** Resolve the builder ticket and check the player is online, then run the body. */
@@ -176,9 +177,7 @@ public final class BuilderMcpServer {
         return withTicket((p, a) -> {
             SubBuilds.Result r = subBuilds.use(optStr(a, "sub_build"), p);
             if (r.lease() == null) return error(r.refusal());
-            String out = body.apply(p, r.lease(), a);
-            boolean placed = out.endsWith("placé(s).");
-            return placed ? ok(out) : error(out);
+            return result(body.apply(p, r.lease(), a));
         });
     }
 }

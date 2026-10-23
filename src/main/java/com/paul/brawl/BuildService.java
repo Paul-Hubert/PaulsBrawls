@@ -10,7 +10,8 @@ import java.util.concurrent.TimeoutException;
 /**
  * The Builder's world layer (docs/27 §4–5): the per-call block cap and block validation in front of a
  * {@link BuildWorld}. The builtin textual scanner ({@code ChatBotFunctions}) and the {@code builder} MCP server both
- * place through it. Never throws: refusals are returned as text (or as a completed future holding the text).
+ * place through it. Never throws: refusals are returned as refused {@link WorldOutcome}s (or a completed future
+ * holding one). A placement is {@code done} only when its main-thread task completed.
  */
 public final class BuildService {
 
@@ -45,32 +46,35 @@ public final class BuildService {
      * Validate and queue one placement call; the future holds the report or the refusal. Bug #7: one call places
      * at most {@link BuildGuard#MAX_BLOCKS_PER_CALL} blocks, as ONE main-thread task on the bulk lane.
      */
-    public CompletableFuture<String> submit(UUID player, int[] origin, List<int[]> offsets, String block) {
+    public CompletableFuture<WorldOutcome> submit(UUID player, int[] origin, List<int[]> offsets, String block) {
         if (origin == null) {
-            return CompletableFuture.completedFuture(
-                "Aucun point de référence : l'admin doit lancer /construction avant de construire.");
+            return refusedNow("Aucun point de référence : l'admin doit lancer /construction avant de construire.");
         }
-        if (offsets.isEmpty()) return CompletableFuture.completedFuture("Aucun bloc à placer.");
-        if (!BuildGuard.withinCallCap(offsets.size())) return CompletableFuture.completedFuture(overCap(offsets.size()));
+        if (offsets.isEmpty()) return refusedNow("Aucun bloc à placer.");
+        if (!BuildGuard.withinCallCap(offsets.size())) return refusedNow(overCap(offsets.size()));
         if (block == null || block.isBlank() || !world.isKnownBlock(block.trim())) {
-            return CompletableFuture.completedFuture("Bloc inconnu ou mal formé : '" + block + "'.");
+            return refusedNow("Bloc inconnu ou mal formé : '" + block + "'.");
         }
         try {
-            return world.place(player, origin, offsets, block.trim());
+            return world.place(player, origin, offsets, block.trim()).thenApply(WorldOutcome::done);
         } catch (WorldRefusal r) {
-            return CompletableFuture.completedFuture(r.getMessage());
+            return refusedNow(r.getMessage());
         }
     }
 
+    private static CompletableFuture<WorldOutcome> refusedNow(String text) {
+        return CompletableFuture.completedFuture(WorldOutcome.refused(text));
+    }
+
     /** {@link #submit}, then wait (bounded) so the caller's next step sees the blocks. */
-    public String place(UUID player, int[] origin, List<int[]> offsets, String block) {
+    public WorldOutcome place(UUID player, int[] origin, List<int[]> offsets, String block) {
         return await(submit(player, origin, offsets, block));
     }
 
     /** {@code PlaceLine}: the size is checked before any position is allocated. */
-    public String placeLine(UUID player, int[] origin, int x, int y, int z, int x2, int y2, int z2, String block) {
+    public WorldOutcome placeLine(UUID player, int[] origin, int x, int y, int z, int x2, int y2, int z2, String block) {
         long n = BuildGuard.lineBlocks(x, y, z, x2, y2, z2);
-        if (!BuildGuard.withinCallCap(n)) return overCap(n);
+        if (!BuildGuard.withinCallCap(n)) return WorldOutcome.refused(overCap(n));
         return place(player, origin, BuildShapes.line(x, y, z, x2, y2, z2), block);
     }
 
@@ -82,19 +86,19 @@ public final class BuildService {
         }
     }
 
-    public String blockInfo(UUID player) {
+    public WorldOutcome blockInfo(UUID player) {
         try {
-            return world.blockInfo(player);
+            return WorldOutcome.done(world.blockInfo(player));
         } catch (WorldRefusal r) {
-            return r.getMessage();
+            return WorldOutcome.refused(r.getMessage());
         }
     }
 
-    public String queryTerrain(UUID player, Integer centerX, Integer centerZ, Integer radius) {
+    public WorldOutcome queryTerrain(UUID player, Integer centerX, Integer centerZ, Integer radius) {
         try {
-            return world.queryTerrain(player, centerX, centerZ, radius);
+            return WorldOutcome.done(world.queryTerrain(player, centerX, centerZ, radius));
         } catch (WorldRefusal r) {
-            return r.getMessage();
+            return WorldOutcome.refused(r.getMessage());
         }
     }
 
@@ -104,19 +108,19 @@ public final class BuildService {
     }
 
     /** Wait for a placement; a cancelled queue (/godbody off, server stop) or a timeout is reported, not thrown. */
-    public static String await(CompletableFuture<String> f) {
+    public static WorldOutcome await(CompletableFuture<WorldOutcome> f) {
         try {
             return f.get(PLACE_WAIT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException te) {
-            return "Placement toujours en file après " + PLACE_WAIT_SECONDS + " s (serveur gelé ou arrêté ?).";
+            return WorldOutcome.refused("Placement toujours en file après " + PLACE_WAIT_SECONDS + " s (serveur gelé ou arrêté ?).");
         } catch (ExecutionException ee) {
-            return ee.getCause() instanceof WorldRefusal r ? r.getMessage()
-                : "Erreur côté serveur pendant le placement.";
+            return WorldOutcome.refused(ee.getCause() instanceof WorldRefusal r ? r.getMessage()
+                : "Erreur côté serveur pendant le placement.");
         } catch (java.util.concurrent.CancellationException ce) {
-            return "Placement annulé (construction arrêtée par un administrateur ou par l'arrêt du serveur).";
+            return WorldOutcome.refused("Placement annulé (construction arrêtée par un administrateur ou par l'arrêt du serveur).");
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            return "Placement interrompu.";
+            return WorldOutcome.refused("Placement interrompu.");
         }
     }
 }

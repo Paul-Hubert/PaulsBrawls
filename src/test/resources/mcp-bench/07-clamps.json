@@ -1,12 +1,12 @@
 {
   "name": "Every clamp holds whatever the agent asks",
-  "description": "Over-large rewards, strikes, spawns, weather and trades are cut to the server limits (BridgeConfig defaults: reward 64, strikes 3, spawn 8 within 16 blocks).",
+  "description": "Over-large rewards, strikes, spawns, weather and trades are cut to the server limits (BridgeConfig defaults: reward 64, strikes 3, spawn 8 within 16 blocks); a clamped call succeeds, a refused one is isError.",
   "steps": [
     { "pray": "alice", "as": "t" },
     { "call": "god/reward", "args": { "ticket": "${t}", "item": "minecraft:diamond", "amount": 100000 },
       "expect": { "contains": "limité à 64 sur 100000", "effects": ["god: give minecraft:diamond x64"] } },
     { "call": "god/reward", "args": { "ticket": "${t}", "item": "minecraft:diamond", "amount": 0 },
-      "expect": { "contains": "at least 1", "noEffects": true } },
+      "expect": { "error": true, "contains": "at least 1", "noEffects": true } },
     { "call": "god/punish", "args": { "ticket": "${t}", "strikes": 99 },
       "expect": { "contains": "limité à 3 sur 99", "effects": ["god: strike x3"] } },
     { "call": "god/spawn_creature", "args": { "ticket": "${t}", "entity": "minecraft:zombie", "count": 500, "dx": 9999, "dy": -9999, "dz": 3 },
@@ -16,12 +16,17 @@
     { "call": "god/change_weather", "args": { "ticket": "${t}", "weather": "snow", "duration_seconds": 10 },
       "expect": { "error": true, "noEffects": true } },
     { "call": "god/offer_trade", "args": { "ticket": "${t}", "give_item": "minecraft:diamond", "give_amount": 1, "take_item": "minecraft:dirt", "take_amount": 9999 },
-      "expect": { "contains": "Trade cancelled.", "noEffects": true } },
+      "expect": { "error": true, "contains": "Trade cancelled.", "noEffects": true } },
     { "call": "god/appear", "args": { "ticket": "${t}", "distance": 1000, "height": -50, "look_at_player": false },
       "expect": { "effects": ["god: appear 6.0 0.0 false"] } },
     { "call": "god/wait", "args": { "ticket": "${t}", "seconds": -10 },
       "expect": { "text": "Le temps passe… 1 seconde(s) se sont écoulées." } },
     { "call": "god/reward", "args": { "ticket": "${t}", "item": "minecraft:not_an_item", "amount": 1 },
-      "expect": { "contains": "does not exist", "noEffects": true } }
+      "expect": { "error": true, "contains": "does not exist", "noEffects": true } },
+    { "comment": "A clamp is not a refusal (the effect happened, isError false); a GodService refusal is isError true." },
+    { "call": "god/spawn_creature", "args": { "ticket": "${t}", "entity": "minecraft:ender_dragon", "count": 1, "dx": 0, "dy": 0, "dz": 0 },
+      "expect": { "error": true, "contains": "inconnu", "noEffects": true } },
+    { "call": "god/offer_trade", "args": { "ticket": "${t}", "give_item": "minecraft:nope", "give_amount": 1, "take_item": "minecraft:dirt", "take_amount": 1 },
+      "expect": { "error": true, "noEffects": true } }
   ]
 }

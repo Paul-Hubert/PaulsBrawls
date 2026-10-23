@@ -43,19 +43,19 @@ class BuildServiceTest {
 
     @Test
     void placementsAreRelativeToTheOrigin() {
-        String out = build.place(admin, origin, List.of(new int[] { 1, 0, 2 }), "minecraft:stone");
-        assertEquals("1 bloc(s) minecraft:stone placé(s).", out);
+        WorldOutcome out = build.place(admin, origin, List.of(new int[] { 1, 0, 2 }), "minecraft:stone");
+        assertEquals(WorldOutcome.done("1 bloc(s) minecraft:stone placé(s)."), out);
         assertEquals(List.of("101,64,-18 minecraft:stone"), world.placed);
     }
 
     @Test
     void refusalsNeverReachTheWorld() {
-        assertTrue(build.place(admin, null, List.of(new int[] { 0, 0, 0 }), "minecraft:stone").startsWith("Aucun point de référence"));
-        assertTrue(build.place(admin, origin, List.of(new int[] { 0, 0, 0 }), "minecraft:unobtainium").startsWith("Bloc inconnu"));
-        assertTrue(build.placeLine(admin, origin, 0, 0, 0, 1_000_000, 0, 0, "minecraft:stone").startsWith("Appel refusé : 1000001 blocs"),
-            "a huge line is refused before any position is allocated");
+        assertRefused(build.place(admin, null, List.of(new int[] { 0, 0, 0 }), "minecraft:stone"), "Aucun point de référence");
+        assertRefused(build.place(admin, origin, List.of(new int[] { 0, 0, 0 }), "minecraft:unobtainium"), "Bloc inconnu");
+        assertRefused(build.placeLine(admin, origin, 0, 0, 0, 1_000_000, 0, 0, "minecraft:stone"), "Appel refusé : 1000001 blocs");
         int[] xs = new int[BuildGuard.MAX_BLOCKS_PER_CALL + 1];
-        assertTrue(build.place(admin, origin, BuildShapes.points(xs, xs, xs), "minecraft:stone").startsWith("Appel refusé"));
+        assertRefused(build.place(admin, origin, BuildShapes.points(xs, xs, xs), "minecraft:stone"), "Appel refusé");
+        assertRefused(build.place(admin, origin, List.of(), "minecraft:stone"), "Aucun bloc");
         assertTrue(world.placed.isEmpty());
     }
 
@@ -69,6 +69,20 @@ class BuildServiceTest {
     @Test
     void anOfflinePlayerIsReported() {
         world.online.clear();
-        assertEquals(MinecraftBuildWorld.OFFLINE, build.place(admin, origin, List.of(new int[] { 0, 0, 0 }), "minecraft:stone"));
+        assertEquals(WorldOutcome.refused(MinecraftBuildWorld.OFFLINE), build.place(admin, origin, List.of(new int[] { 0, 0, 0 }), "minecraft:stone"));
+    }
+
+    @Test
+    void aCancelledOrStuckPlacementIsARefusalNotASuccess() {
+        java.util.concurrent.CompletableFuture<WorldOutcome> cancelled = new java.util.concurrent.CompletableFuture<>();
+        cancelled.cancel(false);
+        assertRefused(BuildService.await(cancelled), "Placement annulé");
+        assertRefused(BuildService.await(java.util.concurrent.CompletableFuture.failedFuture(new WorldRefusal("Hors ligne."))), "Hors ligne.");
+    }
+
+    /** A refusal is typed (the builder server's isError no longer sniffs the text for "placé(s)."). */
+    private static void assertRefused(WorldOutcome o, String prefix) {
+        assertTrue(o.refused(), "not flagged as a refusal: " + o);
+        assertTrue(o.text().startsWith(prefix), o.text());
     }
 }

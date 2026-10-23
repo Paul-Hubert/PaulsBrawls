@@ -20,6 +20,7 @@ sources:
   - src/main/java/com/paul/brawl/ExternalAgent.java
   - src/main/java/com/paul/brawl/GodService.java
   - src/main/java/com/paul/brawl/BuildService.java
+  - src/main/java/com/paul/brawl/WorldOutcome.java
   - src/test/java/com/paul/brawl/BuilderMcpServerTest.java
   - src/test/java/com/paul/brawl/GodMcpServerTest.java
   - src/test/java/com/paul/brawl/AgentTicketsTest.java
@@ -140,10 +141,18 @@ unchanged. There is no `ListTools`: MCP `tools/list` does that job.
 
 ## Results and errors
 
-A tool returns one text content. Refusals from the server layer have `isError: true`: bad ticket, ended session,
-offline player, disabled bridge, bad arguments, an unknown body tool, no pivot, a lease refusal, or a placement
-that did not place. The model can read all of them. The `GodService` texts (clamp notes, "Trade cancelled…") come
-back as ordinary results, exactly as the builtin ChatBot sees them. A tool that throws becomes
+A tool returns one text content. **Every refusal is `isError: true`**, and the model can read all of them:
+- from the server layer: bad ticket, ended session, offline player, disabled bridge, bad arguments, an unknown body
+  tool, no pivot, a lease refusal;
+- from the world layer: `GodService` and `BuildService` return a typed `WorldOutcome(text, refused)`, and
+  `McpTools.result` maps `refused` to `isError`. That covers an unknown item or entity, "Trade cancelled…", a reward
+  amount below 1, an unknown weather type, the owner gate of `appear`/`vanish`, a blank `say`, a world refusal
+  (offline, unknown block), and a placement that was refused, cancelled, failed or is still queued after 30 s.
+
+A **clamp is not a refusal**: the effect happened, the result is `isError: false`, and its text says what was
+limited ("limité à 64 sur 100000"). The texts are exactly what the builtin ChatBot reads (it uses only
+`WorldOutcome.text()`), and no success is detected by parsing text. A refused `say` does not count as having spoken
+to the player (the turn's final text is then said for it). A tool that throws becomes
 `isError: "Erreur côté serveur pendant '<tool>'."` and is logged. It is never a protocol error.
 
 ## Tests

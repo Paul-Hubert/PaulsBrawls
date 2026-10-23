@@ -587,6 +587,7 @@
         "src/main/java/com/paul/brawl/ExternalAgent.java",
         "src/main/java/com/paul/brawl/GodService.java",
         "src/main/java/com/paul/brawl/BuildService.java",
+        "src/main/java/com/paul/brawl/WorldOutcome.java",
         "src/test/java/com/paul/brawl/BuilderMcpServerTest.java",
         "src/test/java/com/paul/brawl/GodMcpServerTest.java",
         "src/test/java/com/paul/brawl/AgentTicketsTest.java",
@@ -603,7 +604,7 @@
         "Tests",
         "Related"
       ],
-      "bytes": 12920
+      "bytes": 13658
     },
     {
       "id": "aigod.mcp-test-bench",
@@ -659,7 +660,7 @@
         "What the bench found",
         "Related"
       ],
-      "bytes": 16828
+      "bytes": 17055
     },
     {
       "id": "aigod.overview",
@@ -749,6 +750,7 @@
       "sources": [
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
         "src/main/java/com/paul/brawl/GodService.java",
+        "src/main/java/com/paul/brawl/WorldOutcome.java",
         "src/main/java/com/paul/brawl/GodWorld.java",
         "src/main/java/com/paul/brawl/MinecraftGodWorld.java",
         "src/main/java/com/paul/brawl/MainThread.java",
@@ -793,7 +795,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 24697
+      "bytes": 24989
     },
     {
       "id": "ctf.capture-the-flag",

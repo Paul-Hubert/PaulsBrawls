@@ -34,9 +34,10 @@ class GodServiceTest {
 
     @Test
     void rewardIsClampedAndKeepsComponents() {
-        String out = god.reward(alice, "minecraft:diamond", 1000);
+        WorldOutcome out = god.reward(alice, "minecraft:diamond", 1000);
         assertEquals(List.of("give minecraft:diamond x" + BridgeConfig.INSTANCE.rewardMax), world.calls);
-        assertTrue(out.contains("limité à " + BridgeConfig.INSTANCE.rewardMax + " sur 1000"), out);
+        assertTrue(out.ok(), "a clamp is not a refusal: the reward was given");
+        assertTrue(out.text().contains("limité à " + BridgeConfig.INSTANCE.rewardMax + " sur 1000"), out.text());
 
         String book = "minecraft:enchanted_book[minecraft:enchantments={levels:{\"minecraft:sharpness\":5}}]";
         god.reward(alice, book, 1);
@@ -45,35 +46,44 @@ class GodServiceTest {
 
     @Test
     void rewardRefusalsNeverReachTheWorld() {
-        assertTrue(god.reward(alice, "minecraft:diamond", 0).startsWith("Reward cancelled, amount must be at least 1"));
-        assertTrue(god.reward(alice, " ", 3).startsWith("Reward cancelled, item"));
+        assertRefused(god.reward(alice, "minecraft:diamond", 0), "Reward cancelled, amount must be at least 1");
+        assertRefused(god.reward(alice, " ", 3), "Reward cancelled, item");
         assertTrue(world.calls.isEmpty());
-        assertTrue(god.reward(alice, "minecraft:nope", 3).contains("does not exist"), "the world's refusal is the result");
+        WorldOutcome unknown = god.reward(alice, "minecraft:nope", 3);
+        assertTrue(unknown.refused() && unknown.text().contains("does not exist"), "the world's refusal is the result: " + unknown);
+    }
+
+    /** Every refusal is typed as one (the MCP side turns it into isError), with the text the builtin always saw. */
+    private static void assertRefused(WorldOutcome o, String prefix) {
+        assertTrue(o.refused(), "not flagged as a refusal: " + o);
+        assertTrue(o.text().startsWith(prefix), o.text());
     }
 
     @Test
     void tradeAmountsAreCheckedBeforeTheWorld() {
-        assertTrue(god.offerTrade(alice, "minecraft:diamond", 1, "minecraft:dirt", -5).startsWith("Trade cancelled."));
-        assertTrue(god.offerTrade(alice, "minecraft:diamond", 513, "minecraft:dirt", 1).startsWith("Trade cancelled."));
+        assertRefused(god.offerTrade(alice, "minecraft:diamond", 1, "minecraft:dirt", -5), "Trade cancelled.");
+        assertRefused(god.offerTrade(alice, "minecraft:diamond", 513, "minecraft:dirt", 1), "Trade cancelled.");
+        assertRefused(god.offerTrade(alice, " ", 1, "minecraft:dirt", 1), "Trade cancelled.");
         assertTrue(world.calls.isEmpty());
-        assertTrue(god.offerTrade(alice, "minecraft:diamond", 2, "minecraft:dirt", 64).startsWith("God offered a trade"));
+        WorldOutcome ok = god.offerTrade(alice, "minecraft:diamond", 2, "minecraft:dirt", 64);
+        assertTrue(ok.ok() && ok.text().startsWith("God offered a trade"), ok.toString());
         assertEquals(List.of("trade 2 minecraft:diamond for 64 minecraft:dirt"), world.calls);
     }
 
     @Test
     void punishmentIsClamped() {
-        String out = god.punish(alice, 50);
+        WorldOutcome out = god.punish(alice, 50);
         assertEquals(List.of("strike x" + BridgeConfig.INSTANCE.punishmentMax), world.calls);
-        assertTrue(out.contains("limité à"), out);
+        assertTrue(out.ok() && out.text().contains("limité à"), out.toString());
         god.punish(alice, -4);
         assertEquals("strike x0", world.calls.get(1), "a negative count strikes nobody");
     }
 
     @Test
     void weatherTypeIsValidatedAndDurationClamped() {
-        assertTrue(god.changeWeather(alice, "snow", 10).startsWith("Météo refusée"));
+        assertRefused(god.changeWeather(alice, "snow", 10), "Météo refusée");
         assertTrue(world.calls.isEmpty());
-        god.changeWeather(alice, "THUNDER", 5_000_000);
+        assertTrue(god.changeWeather(alice, "THUNDER", 5_000_000).ok());
         god.changeWeather(alice, "rain", -3);
         assertEquals(List.of("weather thunder " + GodService.MAX_WEATHER_SECONDS, "weather rain 0"), world.calls);
     }
@@ -84,22 +94,23 @@ class GodServiceTest {
         god.spawnCreature(alice, "minecraft:zombie", 99, 1000, -1000, 3);
         assertEquals(List.of("spawn minecraft:zombie x" + BridgeConfig.INSTANCE.spawnCountMax
             + " at " + max + "," + (-max) + ",3"), world.calls);
-        assertTrue(god.spawnCreature(alice, "", 1, 0, 0, 0).startsWith("Spawn annulé"));
-        assertTrue(god.spawnCreature(alice, "minecraft:dragon", 1, 0, 0, 0).contains("inconnu"));
+        assertRefused(god.spawnCreature(alice, "", 1, 0, 0, 0), "Spawn annulé");
+        WorldOutcome dragon = god.spawnCreature(alice, "minecraft:dragon", 1, 0, 0, 0);
+        assertTrue(dragon.refused() && dragon.text().contains("inconnu"), dragon.toString());
     }
 
     @Test
     void onlyTheSessionOwnerMovesTheBody() {
         assertTrue(GodSessionManager.claim(alice));
-        assertTrue(god.appear(bob, null, null, null).contains("occupé"), "a bodiless player cannot summon the body");
-        assertTrue(god.vanish(bob).contains("ne tiens pas"));
+        assertRefused(god.appear(bob, null, null, null), "Le corps de Dieu est occupé");
+        assertRefused(god.vanish(bob), "Tu ne tiens pas");
         assertTrue(world.calls.isEmpty());
 
-        assertEquals("God a pris forme physique devant le joueur.", god.appear(alice, 99.0, -5.0, null));
+        assertEquals(WorldOutcome.done("God a pris forme physique devant le joueur."), god.appear(alice, 99.0, -5.0, null));
         assertEquals("appear " + BridgeConfig.INSTANCE.appearMaxDistance + " " + BridgeConfig.INSTANCE.appearMinHeight + " true",
             world.calls.get(0), "distance and height are clamped");
         assertTrue(GodSessionManager.hasManifested());
-        assertEquals("God a disparu.", god.vanish(alice));
+        assertEquals(WorldOutcome.done("God a disparu."), god.vanish(alice));
         assertFalse(GodSessionManager.hasManifested());
     }
 
@@ -118,14 +129,14 @@ class GodServiceTest {
 
     @Test
     void sayTellsThePlayerAndSpeaksOnlyWhenManifested() {
-        assertEquals("Message transmis au joueur.", god.say(alice, "  Approche, mortel.  "));
+        assertEquals(WorldOutcome.done("Message transmis au joueur."), god.say(alice, "  Approche, mortel.  "));
         assertEquals(List.of("tell Dieu : Approche, mortel."), world.calls);
         GodSessionManager.claim(alice);
         god.appear(alice, null, null, null);
         world.calls.clear();
         god.say(alice, "Tremble.");
         assertEquals(List.of("tell Dieu : Tremble.", "speak Tremble."), world.calls);
-        assertTrue(god.say(alice, "   ").startsWith("Message vide"));
+        assertRefused(god.say(alice, "   "), "Message vide");
         god.say(alice, "x".repeat(5000));
         assertEquals("tell Dieu : " + "x".repeat(GodService.MAX_SAY_CHARS), world.calls.get(2));
     }
@@ -133,8 +144,9 @@ class GodServiceTest {
     @Test
     void anOfflinePlayerIsARefusalNotACrash() {
         world.online.remove(alice);
-        assertEquals(MinecraftBuildWorld.OFFLINE, god.punish(alice, 1));
-        assertEquals(MinecraftBuildWorld.OFFLINE, god.playerContext(alice));
+        assertEquals(WorldOutcome.refused(MinecraftBuildWorld.OFFLINE), god.punish(alice, 1));
+        assertEquals(WorldOutcome.refused(MinecraftBuildWorld.OFFLINE), god.playerContext(alice));
+        assertEquals(WorldOutcome.refused(MinecraftBuildWorld.OFFLINE), god.say(alice, "Où es-tu ?"));
     }
 
     @Test

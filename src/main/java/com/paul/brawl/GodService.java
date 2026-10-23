@@ -7,7 +7,8 @@ import java.util.UUID;
 /**
  * God's world layer (docs/27 §5): every clamp and refusal in front of a {@link GodWorld}, with no LLM types and no
  * Minecraft types. The builtin {@code ChatBot} tools and the {@code god} MCP server both call it, so a rule exists
- * once. Results are the strings the model reads. A method never throws: a {@link WorldRefusal} becomes its message.
+ * once. Results are {@link WorldOutcome}s: the text the model reads (the builtin ChatBot reads only that) and whether
+ * the call was refused. A method never throws: a {@link WorldRefusal} becomes a refused outcome with its message.
  *
  * <p>What is NOT here: who may call. The builtin path serves bodiless prayers (anyone may be rewarded), while the
  * MCP server only accepts the session owner's ticket (docs/27 §5). Only {@link #appear} and
@@ -53,80 +54,80 @@ public final class GodService {
     // -- effects -------------------------------------------------------------------------------------------------
 
     /** Bug #6: amount at least 1, clamped to {@code rewardMax}; the item string is parsed like {@code /give}. */
-    public String reward(UUID player, String item, int amount) {
+    public WorldOutcome reward(UUID player, String item, int amount) {
         if (amount < 1) {
-            return "Reward cancelled, amount must be at least 1 (got " + amount + ").";
+            return WorldOutcome.refused("Reward cancelled, amount must be at least 1 (got " + amount + ").");
         }
         if (item == null || item.isBlank()) {
-            return "Reward cancelled, item " + item + " does not exist or is malformed, please try again.";
+            return WorldOutcome.refused("Reward cancelled, item " + item + " does not exist or is malformed, please try again.");
         }
         int clamped = GodClamps.rewardAmount(amount, cfg.rewardMax);
         try {
             world.giveItem(player, item, clamped);
         } catch (WorldRefusal r) {
-            return r.getMessage();
+            return WorldOutcome.refused(r.getMessage());
         }
         gesture(player, "nod");
         String note = clamped < amount ? " (limité à " + clamped + " sur " + amount + " demandés)" : "";
-        return "You gave the player a reward: " + clamped + " " + item + note;
+        return WorldOutcome.done("You gave the player a reward: " + clamped + " " + item + note);
     }
 
     /** Both amounts in 1..{@link TradeOffers#MAX_TRADE_AMOUNT}; both items must exist; {@code /accept} re-checks. */
-    public String offerTrade(UUID player, String giveItem, int giveAmount, String takeItem, int takeAmount) {
+    public WorldOutcome offerTrade(UUID player, String giveItem, int giveAmount, String takeItem, int takeAmount) {
         String bad = TradeMath.amountError(giveAmount, takeAmount, TradeOffers.MAX_TRADE_AMOUNT);
-        if (bad != null) return bad;
+        if (bad != null) return WorldOutcome.refused(bad);
         if (giveItem == null || giveItem.isBlank()) {
-            return "Trade cancelled. " + giveItem + " was not a correct item. Please try again.";
+            return WorldOutcome.refused("Trade cancelled. " + giveItem + " was not a correct item. Please try again.");
         }
         if (takeItem == null || takeItem.isBlank()) {
-            return "Trade cancelled. " + takeItem + " was not a correct item. Please try again.";
+            return WorldOutcome.refused("Trade cancelled. " + takeItem + " was not a correct item. Please try again.");
         }
         try {
             world.offerTrade(player, giveItem, giveAmount, takeItem, takeAmount);
         } catch (WorldRefusal r) {
-            return r.getMessage();
+            return WorldOutcome.refused(r.getMessage());
         }
         gesture(player, "nod");
-        return "God offered a trade to the player: God gives "
+        return WorldOutcome.done("God offered a trade to the player: God gives "
              + giveAmount + " " + giveItem + " for " + takeAmount + " " + takeItem
-             + "\nThe player may accept or decline this trade.";
+             + "\nThe player may accept or decline this trade.");
     }
 
     /** Bug #6: strikes clamped to {@code punishmentMax} (any number used to land in one tick). */
-    public String punish(UUID player, int strikes) {
+    public WorldOutcome punish(UUID player, int strikes) {
         int n = GodClamps.punishments(strikes, cfg.punishmentMax);
         try {
             world.strike(player, n);
         } catch (WorldRefusal r) {
-            return r.getMessage();
+            return WorldOutcome.refused(r.getMessage());
         }
         gesture(player, "look");
         gesture(player, "swing");
         String note = n < strikes ? " (limité à " + n + " sur " + strikes + " demandés)" : "";
-        return "God punished the player " + n + " times." + note;
+        return WorldOutcome.done("God punished the player " + n + " times." + note);
     }
 
     /** Only clear, rain or thunder; duration clamped to 0..{@link #MAX_WEATHER_SECONDS} (0 = vanilla default). */
-    public String changeWeather(UUID player, String type, int seconds) {
+    public WorldOutcome changeWeather(UUID player, String type, int seconds) {
         String t = type == null ? "" : type.trim().toLowerCase(Locale.ROOT);
         if (!WEATHER_TYPES.contains(t)) {
-            return "Météo refusée : type inconnu '" + type + "' (clear, rain ou thunder).";
+            return WorldOutcome.refused("Météo refusée : type inconnu '" + type + "' (clear, rain ou thunder).");
         }
         int s = GodClamps.clamp(seconds, 0, MAX_WEATHER_SECONDS);
         try {
             world.setWeather(player, t, s);
         } catch (WorldRefusal r) {
-            return r.getMessage();
+            return WorldOutcome.refused(r.getMessage());
         }
         gesture(player, "look");
         gesture(player, "summon");
-        return "La météo a été changée en " + t + " pour " + (s > 0 ? s + " secondes." : "une durée indéterminée.");
+        return WorldOutcome.done("La météo a été changée en " + t + " pour " + (s > 0 ? s + " secondes." : "une durée indéterminée."));
     }
 
     /** Count clamped to 1..{@code spawnCountMax}; each offset to ±{@code spawnOffsetMax}; griefing per config. */
-    public String spawnCreature(UUID player, String entity, int count, int dx, int dy, int dz) {
+    public WorldOutcome spawnCreature(UUID player, String entity, int count, int dx, int dy, int dz) {
         if (entity == null || entity.isBlank()) {
-            return "Spawn annulé : entityType vide.";
+            return WorldOutcome.refused("Spawn annulé : entityType vide.");
         }
         int n = GodClamps.clamp(count, 1, Math.max(1, cfg.spawnCountMax));
         int max = cfg.spawnOffsetMax;
@@ -136,20 +137,20 @@ public final class GodService {
             spawned = world.spawn(player, entity.trim(), n,
                 GodClamps.spawnOffset(dx, max), GodClamps.spawnOffset(dy, max), GodClamps.spawnOffset(dz, max), grief);
         } catch (WorldRefusal r) {
-            return r.getMessage();
+            return WorldOutcome.refused(r.getMessage());
         }
         gesture(player, "summon");
-        return "God a fait apparaître " + spawned + " " + entity + (spawned > 1 ? "s" : "")
-            + " près du joueur" + (grief ? "" : " (griefing désactivé)") + ".";
+        return WorldOutcome.done("God a fait apparaître " + spawned + " " + entity + (spawned > 1 ? "s" : "")
+            + " près du joueur" + (grief ? "" : " (griefing désactivé)") + ".");
     }
 
     /**
      * Manifest the shared body in front of the player. Only the session owner may: a bodiless prayer must not
      * teleport the shared body, flip its invulnerability, or touch the owner's watchdog.
      */
-    public String appear(UUID player, Double distance, Double height, Boolean lookAtPlayer) {
+    public WorldOutcome appear(UUID player, Double distance, Double height, Boolean lookAtPlayer) {
         if (!GodSessionManager.isOwner(player)) {
-            return "Le corps de Dieu est occupé avec un autre fidèle — cette rencontre reste sans forme.";
+            return WorldOutcome.refused("Le corps de Dieu est occupé avec un autre fidèle — cette rencontre reste sans forme.");
         }
         double d = clamp(distance == null ? 3.0 : distance, cfg.appearMinDistance, cfg.appearMaxDistance);
         double h = clamp(height == null ? 0.0 : height, cfg.appearMinHeight, cfg.appearMaxHeight);
@@ -157,27 +158,27 @@ public final class GodService {
         try {
             world.appear(player, d, h, face);
         } catch (WorldRefusal r) {
-            return r.getMessage();
+            return WorldOutcome.refused(r.getMessage());
         }
         GodSessionManager.markManifested();
         GodSessionManager.resetIdleTimer(player);
-        return "God a pris forme physique devant le joueur.";
+        return WorldOutcome.done("God a pris forme physique devant le joueur.");
     }
 
     /** Send the body away; the session continues (a later {@link #appear} brings it back). Owner only. */
-    public String vanish(UUID player) {
+    public WorldOutcome vanish(UUID player) {
         if (!GodSessionManager.isOwner(player)) {
-            return "Tu ne tiens pas le corps de Dieu — rien à faire disparaître.";
+            return WorldOutcome.refused("Tu ne tiens pas le corps de Dieu — rien à faire disparaître.");
         }
         try {
             world.vanish(player);
         } catch (WorldRefusal r) {
-            return r.getMessage();
+            return WorldOutcome.refused(r.getMessage());
         }
         // The body is gone but the session continues — stop routing speech
         // and gestures through the parked bot until the next Appear.
         GodSessionManager.clearManifested();
-        return "God a disparu.";
+        return WorldOutcome.done("God a disparu.");
     }
 
     /**
@@ -212,32 +213,32 @@ public final class GodService {
      * owns the session and the body is manifested. Blank lines are refused; long ones are cut at
      * {@link #MAX_SAY_CHARS}.
      */
-    public String say(UUID player, String message) {
-        if (message == null || message.isBlank()) return "Message vide : rien à dire.";
+    public WorldOutcome say(UUID player, String message) {
+        if (message == null || message.isBlank()) return WorldOutcome.refused("Message vide : rien à dire.");
         String line = message.strip();
         if (line.length() > MAX_SAY_CHARS) line = line.substring(0, MAX_SAY_CHARS);
         try {
             world.tell(player, "Dieu : " + line);
         } catch (WorldRefusal r) {
-            return r.getMessage();
+            return WorldOutcome.refused(r.getMessage());
         }
         if (GodSessionManager.isOwner(player) && GodSessionManager.hasManifested()) world.speak(line);
-        return "Message transmis au joueur.";
+        return WorldOutcome.done("Message transmis au joueur.");
     }
 
-    public String playerContext(UUID player) {
+    public WorldOutcome playerContext(UUID player) {
         try {
-            return world.playerContext(player);
+            return WorldOutcome.done(world.playerContext(player));
         } catch (WorldRefusal r) {
-            return r.getMessage();
+            return WorldOutcome.refused(r.getMessage());
         }
     }
 
-    public String queryTerrain(UUID player, Integer centerX, Integer centerZ, Integer radius) {
+    public WorldOutcome queryTerrain(UUID player, Integer centerX, Integer centerZ, Integer radius) {
         try {
-            return world.queryTerrain(player, centerX, centerZ, radius);
+            return WorldOutcome.done(world.queryTerrain(player, centerX, centerZ, radius));
         } catch (WorldRefusal r) {
-            return r.getMessage();
+            return WorldOutcome.refused(r.getMessage());
         }
     }
 

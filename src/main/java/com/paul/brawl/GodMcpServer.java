@@ -7,6 +7,7 @@ import static com.paul.brawl.McpTools.optBool;
 import static com.paul.brawl.McpTools.optInt;
 import static com.paul.brawl.McpTools.optNumber;
 import static com.paul.brawl.McpTools.optStr;
+import static com.paul.brawl.McpTools.result;
 import static com.paul.brawl.McpTools.str;
 import static com.paul.brawl.McpTools.tool;
 
@@ -74,20 +75,20 @@ public final class GodMcpServer {
                     + "C'est ta seule façon de lui répondre.",
                 ticketOnly().str("message", "Ce que Dieu dit, en français (au plus " + GodService.MAX_SAY_CHARS + " caractères).", true),
                 session((p, a) -> {
-                    String out = god.say(p, str(a, "message"));
-                    tickets.markSaid(optStr(a, "ticket"));
-                    return ok(out);
+                    WorldOutcome out = god.say(p, str(a, "message"));
+                    if (out.ok()) tickets.markSaid(optStr(a, "ticket")); // a refused line was not heard
+                    return result(out);
                 })),
             tool("get_player_context",
                 "Le joueur qui prie (position, vie, inventaire, effets… en JSON) et l'historique récent du chat et des commandes.",
                 ticketOnly(),
-                session((p, a) -> ok(god.playerContext(p)))),
+                session((p, a) -> result(god.playerContext(p)))),
             tool("reward",
                 "Donne un objet au joueur. Syntaxe /give, composants permis (ex. minecraft:diamond, "
                     + "minecraft:enchanted_book[minecraft:enchantments={levels:{\"minecraft:sharpness\":5}}]). Quantité plafonnée côté serveur.",
                 ticketOnly().str("item", "Identifiant de l'objet, avec composants éventuels.", true)
                     .integer("amount", "Nombre d'objets (au moins 1).", true),
-                session((p, a) -> ok(god.reward(p, str(a, "item"), integer(a, "amount"))))),
+                session((p, a) -> result(god.reward(p, str(a, "item"), integer(a, "amount"))))),
             tool("offer_trade",
                 "Propose un échange : Dieu donne give_amount give_item contre take_amount take_item. Le joueur l'accepte avec /accept "
                     + "dans les 5 minutes. Quantités de 1 à " + TradeOffers.MAX_TRADE_AMOUNT + ".",
@@ -95,17 +96,17 @@ public final class GodMcpServer {
                     .integer("give_amount", "Quantité donnée.", true)
                     .str("take_item", "Objet pris au joueur.", true)
                     .integer("take_amount", "Quantité prise.", true),
-                session((p, a) -> ok(god.offerTrade(p, str(a, "give_item"), integer(a, "give_amount"),
+                session((p, a) -> result(god.offerTrade(p, str(a, "give_item"), integer(a, "give_amount"),
                     str(a, "take_item"), integer(a, "take_amount"))))),
             tool("punish",
                 "Frappe le joueur de la foudre. Nombre d'éclairs plafonné côté serveur.",
                 ticketOnly().integer("strikes", "Nombre d'éclairs.", true),
-                session((p, a) -> ok(god.punish(p, integer(a, "strikes"))))),
+                session((p, a) -> result(god.punish(p, integer(a, "strikes"))))),
             tool("change_weather",
                 "Change la météo du monde.",
                 ticketOnly().strEnum("weather", "Type de météo.", List.copyOf(new java.util.TreeSet<>(GodService.WEATHER_TYPES)), true)
                     .integer("duration_seconds", "Durée en secondes (0 = durée par défaut).", true),
-                session((p, a) -> ok(god.changeWeather(p, str(a, "weather"), integer(a, "duration_seconds"))))),
+                session((p, a) -> result(god.changeWeather(p, str(a, "weather"), integer(a, "duration_seconds"))))),
             tool("spawn_creature",
                 "Fait surgir des créatures près du joueur, à un décalage en blocs. Nombre et décalages plafonnés côté serveur. À utiliser rarement.",
                 ticketOnly().str("entity", "Identifiant d'entité, ex. minecraft:zombie, minecraft:wolf.", true)
@@ -113,18 +114,18 @@ public final class GodMcpServer {
                     .integer("dx", "Décalage X (est+).", true)
                     .integer("dy", "Décalage Y (haut+).", true)
                     .integer("dz", "Décalage Z (sud+).", true),
-                session((p, a) -> ok(god.spawnCreature(p, str(a, "entity"), integer(a, "count"),
+                session((p, a) -> result(god.spawnCreature(p, str(a, "entity"), integer(a, "count"),
                     integer(a, "dx"), integer(a, "dy"), integer(a, "dz"))))),
             tool("appear",
                 "Manifeste ton corps devant le joueur (par défaut 3 blocs devant, au sol, face à lui). Dramatique : sois parcimonieux.",
                 ticketOnly().number("distance", "Blocs devant le joueur (plafonné, typiquement 1..6).", false)
                     .number("height", "Hauteur au-dessus de ses pieds (plafonnée, typiquement 0..4).", false)
                     .bool("look_at_player", "Se tourner vers le joueur (défaut vrai).", false),
-                body((p, a) -> ok(god.appear(p, optNumber(a, "distance"), optNumber(a, "height"), optBool(a, "look_at_player"))))),
+                body((p, a) -> result(god.appear(p, optNumber(a, "distance"), optNumber(a, "height"), optBool(a, "look_at_player"))))),
             tool("vanish",
                 "Renvoie ton corps. La séance continue ; elle se ferme quand tu as fini (ou avec end_session).",
                 ticketOnly(),
-                body((p, a) -> ok(god.vanish(p)))),
+                body((p, a) -> result(god.vanish(p)))),
             tool("wait",
                 "Laisse passer des secondes avant de continuer (pour faire durer la tension). Plafonné côté serveur, typiquement 1..30.",
                 ticketOnly().integer("seconds", "Secondes à attendre.", true),
@@ -143,7 +144,7 @@ public final class GodMcpServer {
                 ticketOnly().integer("center_x", "X absolu du centre (défaut : le joueur).", false)
                     .integer("center_z", "Z absolu du centre (défaut : le joueur).", false)
                     .integer("radius", "Demi-largeur en blocs, 8..64 (défaut 32).", false),
-                session((p, a) -> ok(god.queryTerrain(p, optInt(a, "center_x"), optInt(a, "center_z"), optInt(a, "radius"))))),
+                session((p, a) -> result(god.queryTerrain(p, optInt(a, "center_x"), optInt(a, "center_z"), optInt(a, "radius"))))),
             tool("body_tools",
                 "Liste les outils du corps (Mineflayer : se déplacer, regarder, combattre…) utilisables avec body_call, avec leurs paramètres.",
                 ticketOnly(),

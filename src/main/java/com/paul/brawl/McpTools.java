@@ -102,6 +102,11 @@ final class McpTools {
         return McpSchema.CallToolResult.builder().addTextContent(text == null ? "" : text).isError(false).build();
     }
 
+    /** A world-layer outcome: {@code isError} exactly when it was refused. */
+    static McpSchema.CallToolResult result(WorldOutcome o) {
+        return o.refused() ? error(o.text()) : ok(o.text());
+    }
+
     static McpSchema.CallToolResult error(String text) {
         return McpSchema.CallToolResult.builder().addTextContent(text).isError(true).build();
     }
