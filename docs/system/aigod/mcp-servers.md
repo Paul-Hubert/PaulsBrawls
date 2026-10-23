@@ -97,8 +97,10 @@ A cancelled queue (`/godbody off`, server stop) reads "Placement annulé".
 
 **Leases** (`SubBuilds`): a lease belongs to the player of the ticket that opened it, so another build's ticket
 cannot use it. It is dropped and its slot released when:
-- it sees no call for `subBuildIdleSeconds` (default 120), so a dead agent cannot hold the slots. The sweep is lazy:
-  it runs on the next builder call, and `AgentTurns` also closes a build's leases when its turn ends;
+- it sees no call for `subBuildIdleSeconds` (default 120), so a dead agent cannot hold the slots. Every builder
+  call sweeps, and a periodic sweeper (`SubBuilds.startSweeper`, a daemon thread started by `ExternalAgent.start`
+  and closed on server stop) sweeps every `clamp(subBuildIdleSeconds / 4, 1 s, 30 s)`, so a dead lease gives its
+  slot back with no later call. `AgentTurns` also closes a build's leases when its turn ends;
 - `BuildGuard.cancelAll()` ran after it opened (`/godbody off`, server stop), so a cancelled build stays cancelled;
 - `end_sub_build` closes it.
 

@@ -17,6 +17,7 @@ public final class ExternalAgent {
 
     static final AgentTickets TICKETS = new AgentTickets();
     private static volatile SubBuilds subBuilds;
+    private static volatile AutoCloseable sweeper;
     private static volatile AgentMcpServers servers;
     private static volatile AgentTurns turns;
     private static boolean listening;
@@ -33,7 +34,9 @@ public final class ExternalAgent {
         LOGGER.info("{}", cfg.describe());
         if (!cfg.external() || servers != null) return;
         cfg.ensureToken();
-        subBuilds = new SubBuilds(System::currentTimeMillis, cfg.subBuildIdleSeconds * 1000L);
+        long idle = cfg.subBuildIdleSeconds * 1000L;
+        subBuilds = new SubBuilds(System::currentTimeMillis, idle);
+        sweeper = subBuilds.startSweeper(SubBuilds.sweepPeriodMillis(idle));
         try {
             servers = AgentMcpServers.start(cfg.mcpPort, cfg::effectiveToken, GodService.live(), new GatewayBodyTools(),
                 () -> BridgeConfig.INSTANCE.enabled, BuildService.live(), TICKETS, subBuilds);
@@ -58,6 +61,14 @@ public final class ExternalAgent {
         if (servers != null) {
             servers.close();
             servers = null;
+        }
+        if (sweeper != null) {
+            try {
+                sweeper.close();
+            } catch (Exception ignored) {
+                // a daemon thread; shutdownNow does not throw
+            }
+            sweeper = null;
         }
         if (subBuilds != null) subBuilds.endAll(null);
         TICKETS.revoke(null, AgentTickets.Kind.GOD);

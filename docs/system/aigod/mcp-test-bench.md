@@ -15,6 +15,7 @@ sources:
   - src/test/java/com/paul/brawl/McpLiveProbeTest.java
   - src/test/java/com/paul/brawl/McpTcpNoDelayTest.java
   - src/test/java/com/paul/brawl/McpLatencyMain.java
+  - src/test/java/com/paul/brawl/SubBuildsSweeperTest.java
   - src/test/java/com/paul/brawl/AgentTurnsTest.java
   - src/test/java/com/paul/brawl/RecordingGodWorld.java
   - src/test/java/com/paul/brawl/RecordingBuildWorld.java
@@ -66,7 +67,7 @@ One `McpBench` = the real `AgentMcpServers` on port 0 with:
 | `RecordingGodWorld` | Minecraft for God: records `give …`, `strike xN`, `appear d h face`, `tell …`; online set, known items/entities |
 | `RecordingBuildWorld` | Minecraft for building: records every placed block (absolute `x,y,z block`) and every batch size |
 | `RecordingBodyTools` | The Node Mineflayer tools: one tool (`move-to-position`), calls recorded |
-| `clock` (an `AtomicLong`) | Time for tickets and sub-build leases: `advance` instead of sleeping |
+| `clock` (an `AtomicLong`) | Time for tickets and sub-build leases: `advance` instead of sleeping. The real periodic sub-build sweeper runs every 10 ms of real time and measures idleness on this clock. |
 | `bridge` (an `AtomicBoolean`) | `/godbody on|off` |
 
 The real `GodService`, `BuildService`, `AgentTickets`, `SubBuilds`, `GodSessionManager` and `BuildGuard` sit in
@@ -121,7 +122,8 @@ scenario, so a typo cannot pass silently. `${name}` substitutes a variable, and 
 | `{"watchdog": true}` | The idle watchdog, `/pray stop` (`forceEndSession`) |
 | `{"godbody": "off"\|"on"}` | `/godbody`: off also ends the session and cancels every sub-build |
 | `{"revoke": "${t}"}` | The turn ended (the mod revokes its ticket) |
-| `{"state": {...}}` | Assert `busy`, `owner`, `manifested`, `slots`, `leases` (held, swept lazily), `liveTickets` |
+| `{"state": {...}}` | Assert `busy`, `owner`, `manifested`, `slots`, `leases` (held), `liveTickets` |
+| `{"await": {...}}` | The same keys as `state`, polled for up to 2 s: a state reached with no call (the periodic sub-build sweeper) |
 | `{"repeat": n, "steps": [...]}` | Loop, with `${i}` = 0..n-1 |
 | `{"comment": "..."}` | Nothing |
 
@@ -141,7 +143,7 @@ The `expect` keys are:
 | `02-rival-player` | bob cannot pray while alice holds the avatar; a ticket minted for him anyway opens nothing; alice continues |
 | `03-watchdog-and-new-prayer` | A watchdog end kills the ticket, even after alice prays again and gets a new session |
 | `04-build-lifecycle` | Pivot, anchor and offsets give exact absolute positions; an unknown block; a closed sub-build refuses |
-| `05-sub-build-slots` | 4 slots; a fifth is refused; ending one frees one; idle leases are swept on the next builder call (lazily); anchors beyond ±256 |
+| `05-sub-build-slots` | 4 slots; a fifth is refused; ending one frees one; idle leases give their slots back with no builder call (the periodic sweeper); anchors beyond ±256 |
 | `06-godbody-off` | `/godbody off` ends the prayer and cancels the build; the body is refused but the voice works without a body; `/godbody on` brings the body back |
 | `07-clamps` | Every God clamp, with the exact effect that reached the world |
 | `08-offline-and-expiry` | An offline player cannot be acted on, then can when back; a missing pivot; expired tickets |
@@ -179,7 +181,7 @@ dev server (`godAgent=external`) gave `ALL PASS (36 checks)`.
 | `AgentTickets.mint` was revoke-then-put, so concurrent mints for one player could leave several live tickets | `mint` and `revoke(player, kind)` are synchronized; exactly one stays live |
 | `AgentTurns.build` minted the new ticket **before** checking for a running build. Minting revokes the player's earlier ticket, so a second `/build` while one was running was refused **and killed the running build** (every later tool call of that build was refused). Simultaneous prayers of one player had the same race. | `AgentTurns` reserves the player's turn slot first, then claims and mints (`ae14a12`, `AgentTurnsTest`) |
 | Each MCP request pays ~40 ms of Nagle/delayed-ACK stall on the JDK `HttpServer`: a build of 500 `place_*` calls spends ~20 s waiting on TCP | `JdkHttpServers.tcpNoDelay()` runs first in `ServerEntryPoint` and before every `HttpServer.create`. The JDK reads the property once per JVM, so `McpTcpNoDelayTest` measures in a fresh JVM: ~3 ms per request vs ~44 ms with Nagle. The `:8767` listener gets the same bytes without the stall. |
-| Idle sub-build leases are swept **lazily**, on the next builder call, so until then their slots stay taken for the builtin `BuildSubAgent` too | Not changed. `AgentTurns` closes a build's leases when its turn ends, so a stale lease lives at most one build turn. Pinned by `05-sub-build-slots`. |
+| Idle sub-build leases were swept **lazily**, on the next builder call, so until then their slots stayed taken for the builtin `BuildSubAgent` too | `SubBuilds.startSweeper`: external mode sweeps every `clamp(subBuildIdleSeconds/4, 1 s, 30 s)` until server stop. The bench runs the same sweeper (every 10 ms, idleness on the bench clock); `05-sub-build-slots` now awaits the release with no call, and `SubBuildsSweeperTest` covers start and stop. |
 | `god` refusals that come from `GodService` (an unknown item, "Trade cancelled…", reward amount 0) come back with `isError: false`, unlike the builder, which flags every non-placement | Not changed: it is how the builtin ChatBot always saw them (see [mcp-servers.md](mcp-servers.md#results-and-errors)). The scenarios pin the texts. |
 
 ## Related

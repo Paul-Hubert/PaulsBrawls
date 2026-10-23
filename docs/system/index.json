@@ -603,7 +603,7 @@
         "Tests",
         "Related"
       ],
-      "bytes": 12706
+      "bytes": 12920
     },
     {
       "id": "aigod.mcp-test-bench",
@@ -635,6 +635,7 @@
         "src/test/java/com/paul/brawl/McpLiveProbeTest.java",
         "src/test/java/com/paul/brawl/McpTcpNoDelayTest.java",
         "src/test/java/com/paul/brawl/McpLatencyMain.java",
+        "src/test/java/com/paul/brawl/SubBuildsSweeperTest.java",
         "src/test/java/com/paul/brawl/AgentTurnsTest.java",
         "src/test/java/com/paul/brawl/RecordingGodWorld.java",
         "src/test/java/com/paul/brawl/RecordingBuildWorld.java",
@@ -658,7 +659,7 @@
         "What the bench found",
         "Related"
       ],
-      "bytes": 16370
+      "bytes": 16828
     },
     {
       "id": "aigod.overview",
@@ -2136,7 +2137,7 @@
         "Login names (must be pairwise distinct)",
         "Related"
       ],
-      "bytes": 13779
+      "bytes": 13846
     }
   ]
 }

@@ -5,14 +5,21 @@ import java.util.Base64;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
+
+import org.slf4j.LoggerFactory;
 
 /**
  * Sub-build leases for the {@code builder} MCP server (docs/27 §4): the server-side form of BuildGuard's
  * "at most 4 parallel sub-builds". An agent's sub-agent opens a lease with {@code begin_sub_build}, places relative
  * to its anchor, and closes it with {@code end_sub_build}. A lease idle for {@code idleMillis}, or opened before a
  * {@link BuildGuard#cancelAll()} ({@code /godbody off}, server stop), is dropped and its slot released — so an agent
- * that dies cannot hold the slots, and cancelled builds stay cancelled. Minecraft-free (SubBuildsTest).
+ * that dies cannot hold the slots, and cancelled builds stay cancelled. Every call sweeps, and
+ * {@link #startSweeper} sweeps on a timer too, so a dead lease does not keep its BuildGuard slot (shared with the
+ * builtin {@code BuildSubAgent}) until some later builder call. Minecraft-free (SubBuildsSweeperTest, the bench).
  */
 public final class SubBuilds {
 
@@ -112,6 +119,32 @@ public final class SubBuilds {
 
     public int live() {
         return leases.size();
+    }
+
+    /**
+     * Sweep every {@code periodMillis} on a daemon thread until the returned handle is closed (external mode starts
+     * it with the MCP servers and closes it on server stop). Idleness is still measured with the injected clock,
+     * so a test advances that clock and the sweeper does the rest.
+     */
+    public AutoCloseable startSweeper(long periodMillis) {
+        ScheduledExecutorService ex = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "sub-build-sweeper");
+            t.setDaemon(true);
+            return t;
+        });
+        ex.scheduleWithFixedDelay(() -> {
+            try {
+                sweep();
+            } catch (RuntimeException e) {
+                LoggerFactory.getLogger("SubBuilds").warn("Sub-build sweep failed: {}", e.toString());
+            }
+        }, periodMillis, periodMillis, TimeUnit.MILLISECONDS);
+        return ex::shutdownNow;
+    }
+
+    /** The sweep period for an idle limit: a quarter of it, between 1 s and 30 s. */
+    public static long sweepPeriodMillis(long idleMillis) {
+        return Math.max(1_000, Math.min(30_000, idleMillis / 4));
     }
 
     /** Drop idle and cancelled leases, releasing their slots. */

@@ -122,6 +122,19 @@ class McpScenarioTest {
         } else if (s.has("state")) {
             keys(s, where, Set.of("state", "comment"));
             state(b, s.path("state"), where);
+        } else if (s.has("await")) {
+            // A state reached WITHOUT any call (the periodic sub-build sweeper): poll it for up to 2 s.
+            keys(s, where, Set.of("await", "comment"));
+            long deadline = System.currentTimeMillis() + 2_000;
+            while (true) {
+                try {
+                    state(b, s.path("await"), where);
+                    break;
+                } catch (AssertionError e) {
+                    if (System.currentTimeMillis() > deadline) throw e;
+                    Thread.sleep(10);
+                }
+            }
         } else if (s.has("repeat")) {
             keys(s, where, Set.of("repeat", "steps", "comment"));
             for (int k = 0; k < s.path("repeat").asInt(); k++) {
@@ -178,7 +191,7 @@ class McpScenarioTest {
         if (st.has("owner")) assertEquals(b.player(st.path("owner").asText()), GodSessionManager.currentOwner(), "avatar owner");
         if (st.has("manifested")) assertEquals(st.path("manifested").asBoolean(), GodSessionManager.hasManifested(), "manifested");
         if (st.has("slots")) assertEquals(st.path("slots").asInt(), BuildGuard.active(), "BuildGuard slots in use");
-        if (st.has("leases")) assertEquals(st.path("leases").asInt(), b.subBuilds.live(), "sub-build leases held (swept lazily)");
+        if (st.has("leases")) assertEquals(st.path("leases").asInt(), b.subBuilds.live(), "sub-build leases held");
         if (st.has("liveTickets")) assertEquals(st.path("liveTickets").asInt(), b.tickets.size(), "minted, unrevoked tickets");
     }
 

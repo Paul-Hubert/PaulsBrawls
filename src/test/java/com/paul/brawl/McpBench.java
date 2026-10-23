@@ -56,6 +56,8 @@ final class McpBench implements AutoCloseable {
     final AgentTickets tickets = new AgentTickets(clock::get);
     final SubBuilds subBuilds = new SubBuilds(clock::get, 120_000);
     final AgentMcpServers servers;
+    /** The real periodic sweeper, every 10 ms of real time; idleness follows {@link #clock}. */
+    private final AutoCloseable sweeper;
     private final Map<String, UUID> players = new LinkedHashMap<>();
     private final List<McpSyncClient> clients = new ArrayList<>();
     private final AtomicInteger rpcIds = new AtomicInteger(1000);
@@ -66,6 +68,7 @@ final class McpBench implements AutoCloseable {
         BuildGuard.resetForTests();
         servers = AgentMcpServers.start(0, () -> TOKEN, new GodService(godWorld, BridgeConfig.INSTANCE), body, bridge::get,
             new BuildService(buildWorld), tickets, subBuilds);
+        sweeper = subBuilds.startSweeper(10);
     }
 
     int port() {
@@ -352,6 +355,11 @@ final class McpBench implements AutoCloseable {
                     // closing a client of a stopped server
                 }
             }
+        }
+        try {
+            sweeper.close();
+        } catch (Exception ignored) {
+            // shutdownNow
         }
         servers.close();
         GodSessionManager.forceEndSession();
