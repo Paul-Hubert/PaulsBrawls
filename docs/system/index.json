@@ -336,7 +336,7 @@
         "src/test/java/com/paul/brawl/AgentTurnsTest.java",
         "docs/27-god-builder-mcp-design.md"
       ],
-      "verified_at": "9406df0",
+      "verified_at": "a84125f",
       "path": "docs/system/aigod/external-agent.md",
       "headings": [
         "Components",
@@ -607,7 +607,7 @@
         "src/test/java/com/paul/brawl/AgentTicketsTest.java",
         "docs/system/aigod/mcp-test-bench.md"
       ],
-      "verified_at": "718214e",
+      "verified_at": "a84125f",
       "path": "docs/system/aigod/mcp-servers.md",
       "headings": [
         "Process and transport",
@@ -664,7 +664,7 @@
         "src/main/java/com/paul/brawl/AgentTickets.java",
         "src/main/java/com/paul/brawl/AgentTurns.java"
       ],
-      "verified_at": "ae14a12",
+      "verified_at": "a84125f",
       "path": "docs/system/aigod/mcp-test-bench.md",
       "headings": [
         "Running it",
@@ -676,7 +676,7 @@
         "What the bench found",
         "Related"
       ],
-      "bytes": 18873
+      "bytes": 19254
     },
     {
       "id": "aigod.overview",
@@ -1992,7 +1992,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 25198
+      "bytes": 26353
     },
     {
       "id": "platform.entrypoints-and-wiring",

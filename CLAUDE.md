@@ -52,7 +52,7 @@ They copy the remapped jar into the paths set by `mods_folder` / `client_mods_fo
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
-The Java side has twenty-five JUnit 5 classes (933 test cases) under `src/test/java/com/paul/brawl/`, each covering a
+The Java side has thirty JUnit 5 classes (971 test cases) under `src/test/java/com/paul/brawl/`, each covering a
 Minecraft-free helper: `TradeMath`, `ImageMime`, `BuildGuard`, `GodToolGate`, `GodClamps`, `ItemIds`, `FlagGlow`,
 `GibberMath`, `BlockInfoJson`, `EdenRetry`, `GodActionQueue`, `AgentTickets`, plus `GodService` and `BuildService` (the
 world layer's rules, run against the `RecordingGodWorld` / `RecordingBuildWorld` test helpers) and the MCP contract

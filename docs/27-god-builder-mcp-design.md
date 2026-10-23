@@ -53,6 +53,14 @@ opencode is a **coding** agent: it has bash, edit, write and webfetch tools. Its
 safety. Even with every built-in tool enabled, the agent could only reach the world through the two MCP servers,
 which apply every rule below.
 
+**Added later (2026-10-23): Claude Code as a second backend** (`agentKind = claude-code`). Claude Code 2.1.309 in
+headless mode covers the same needs without a long-running server: one `claude -p` process per turn,
+`--session-id` / `--resume` for one conversation per player, agents in `.claude/agents/` (`--agent` picks the main
+one, `tools:` restricts each, and the `Agent` tool runs sub-agents), remote HTTP MCP servers with
+`${ENV}` headers, and image blocks on stdin in stream-json mode. Both backends sit behind `AgentBackend`, so the
+rest of this design is unchanged; opencode stays the default. As built:
+[docs/system/aigod/external-agent.md](system/aigod/external-agent.md).
+
 ## 2. MCP server inside the mod
 
 - **Library:** `io.modelcontextprotocol.sdk:mcp-core` + `mcp-json-jackson2` **2.0.1** (Maven Central, 2026-08),

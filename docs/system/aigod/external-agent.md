@@ -32,7 +32,7 @@ sources:
   - src/test/java/com/paul/brawl/AgentClientTest.java
   - src/test/java/com/paul/brawl/AgentTurnsTest.java
   - docs/27-god-builder-mcp-design.md
-verified_at: 9406df0
+verified_at: a84125f
 ---
 
 # AI God — the external agent

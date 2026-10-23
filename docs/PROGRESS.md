@@ -3,6 +3,75 @@
 One dated section per session: what was done, decisions taken, what's next,
 surprises. Newest first.
 
+## 2026-10-23 — god/builder MCP: open findings fixed, Claude Code as client and as agent (Java mod, not Eden)
+- Scope: the Java AI God's MCP servers and external agent only. Nothing under `eden/`, `docs/system/eden/` or
+  `minecraft-mcp-server/` was touched. The builtin ChatBot loop and the `godAgent` switch stay.
+- Commits on `rework`:
+  - `b38ca1b` fix: TCP_NODELAY for the JDK `HttpServer` in production (`JdkHttpServers.tcpNoDelay()`, first thing in
+    `ServerEntryPoint`; the JDK reads the property once, at the JVM's first `HttpServer`, checked with `javap`).
+    `McpTcpNoDelayTest` measures in a fresh JVM: 2.8 ms per request vs 44 ms with Nagle forced on (and 44 ms with
+    the call removed). `build.gradle` no longer sets the property.
+  - `d18ab38` chore: untrack a `logs/` directory committed by mistake in `b38ca1b`; `/logs/` is now ignored.
+  - `b12b8b2` fix: idle sub-build leases are swept periodically (`SubBuilds.startSweeper`, every
+    `clamp(subBuildIdleSeconds/4, 1 s, 30 s)` while external mode runs, closed on server stop). Scenario `05` now
+    awaits the release with no builder call (new `await` step; it fails without the sweeper).
+  - `c68c083` fix: every god/builder refusal is `isError: true`. `GodService`/`BuildService` return a typed
+    `WorldOutcome(text, refused)`; the builtin ChatBot reads the same texts; the builder's `endsWith("placé(s).")`
+    sniffing is gone. A refused `say` no longer counts as having spoken.
+  - `ee47cd0` fix: during an external prayer turn the avatar's idle limit is `agentIdleTimeoutSeconds` (new key,
+    default 180 s), so a thinking model is not cut off at 90 s; the watchdog stays the backstop. "Known limits"
+    in external-agent.md: the say fallback (left: any filter would be a text heuristic) and the refused bodiless
+    prayer (by design).
+  - `4997f1c` test: `McpClaudeCodeInteropTest`, the request shapes Claude Code 2.1.309 sends (recorded against the
+    servers), replayed; with `CLAUDE_BIN`, the real `claude mcp add` + `claude mcp list`. Nothing in the server
+    needed a fix: the `server/discover` probe of the 2026-07-28 draft gets `-32601` and Claude Code falls back to
+    `initialize` 2025-11-25; `MCP-Protocol-Version` is deliberately not validated.
+  - `da60352` feat: tool titles and annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+    `openWorldHint: false`) on every tool; `outputSchema` + `structuredContent` on `get_build_origin` and
+    `begin_sub_build` (text kept). `gradle mcpProbe` now runs 42 checks.
+  - `7106da5` feat: Claude Code as the external agent (`agentKind = claude-code`; `claudeBin`, `claudeDir`,
+    `claudeModel`). `AgentBackend` interface for `AgentClient` (opencode) and the new `ClaudeCodeClient` (one
+    `claude -p` per turn, stream-json on stdin with the image, `--session-id`/`--resume`, process-tree kill on
+    abort/timeout). `god-agent/claude-code/`: `.mcp.json`, `settings.json`, agents whose bodies are exactly
+    `god-agent/prompts/*.md`. `ClaudeCodeE2ETest` (13) with `ScriptedAnthropic`.
+  - `a84125f` fix: `ClaudeCodeClient` adds loopback to `NO_PROXY` (found on the live run below).
+- Java tests: 933 → **971** (25 → 30 classes). With `OPENCODE_BIN` and `CLAUDE_BIN` set: 971 run, 0 skipped, all
+  green. Without either: 949 run, 22 skipped. `gradle build` and `gradle test` were green on every commit.
+- Claude Code findings (2.1.309, each handled and documented in external-agent.md / CLAUDE.md):
+  - `allow` rules in a project `.claude/settings.json` are ignored until the workspace is trusted interactively,
+    so the permissions go in `settings.json` passed with `--settings`; a run without the allow list gets every MCP
+    call denied, which shows the file is read.
+  - `--setting-sources ""` also drops the project agents; `project` keeps them and keeps out the user's settings,
+    hooks and `CLAUDE.md`.
+  - Sub-agents run in the background: the builder answers when it launches them and again when woken by their
+    completion. The LAST `result` is the answer.
+  - A 401 from the API is retried ten times with backoff (`api_retry` events); the client stops at the first
+    401/403 (`ERROR`).
+  - A tool's `structuredContent` reaches the model instead of its text content.
+  - argv follows the server's locale, so the prayer goes on stdin as UTF-8.
+  - With `HTTPS_PROXY` set, the loopback MCP calls were sent to the proxy (`god` failed): `NO_PROXY` fix.
+- Verified live (this container):
+  - A real dev server (`gradle runServer`, `run/`, `godAgent=external`, `agentKind=claude-code`) logged
+    `MCP servers on http://127.0.0.1:8771 (/mcp/god, /mcp/builder)` next to the `:8767` settlement listener, which
+    still answered (`400 {"ok":false,"error":"nothing to trade"}` for an empty trade). MCP `ping` over keep-alive:
+    1.17 ms median.
+  - `gradle mcpProbe -PmcpToken=…`: `ALL PASS (42 checks)`.
+  - Claude Code 2.1.309, `claude mcp add --transport http … --header "Authorization: Bearer …"` for both, then
+    `claude mcp list`: `god: http://127.0.0.1:8771/mcp/god (HTTP) - ✔ Connected` and
+    `builder: http://127.0.0.1:8771/mcp/builder (HTTP) - ✔ Connected`.
+  - A real headless turn with the real model (the `haiku` alias, the container's API access through its proxy)
+    through `ClaudeCodeClient` and the repo's `god-agent/claude-code/` against that server: the god agent called
+    `get_player_context` with a forged ticket and quoted the refusal (5.5 s). This run found the `NO_PROXY` bug.
+  - A real-model prayer through the real `AgentTurns` + `ClaudeCodeClient` + MCP servers, with recording world
+    ports (no player could be online): `appear`, two `say` lines in French in God's voice (a quest: five iron
+    blocks on the altar, proven by an image), `vanish`; avatar released, no ticket left (12.4 s).
+  - The dev server was stopped with SIGTERM, so a clean `SERVER_STOPPING` was not observed live. `run/` was
+    restored to its tracked state.
+- Still NOT RUN: the in-game checklist of docs/26 §6 (no Minecraft client and no second player here). The builtin
+  ChatBot loop stays.
+- Next: run the docs/26 §6 checklist with each backend (`agentKind=opencode`, then `claude-code`) on the dev
+  server with two players; only then consider removing the builtin loop (docs/27 §7).
+
 ## 2026-10-06 — MCP test bench for the god/builder servers (Java mod, not Eden)
 - What: an extensive test bench for the `god`/`builder` MCP servers ([docs/system/aigod/mcp-test-bench.md](system/aigod/mcp-test-bench.md)).
   It has a shared fixture (`McpBench`) and six suites:

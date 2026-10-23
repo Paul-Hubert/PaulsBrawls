@@ -25,7 +25,7 @@ sources:
   - src/test/java/com/paul/brawl/GodMcpServerTest.java
   - src/test/java/com/paul/brawl/AgentTicketsTest.java
   - docs/system/aigod/mcp-test-bench.md
-verified_at: 718214e
+verified_at: a84125f
 ---
 
 # AI God — the god and builder MCP servers
