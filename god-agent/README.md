@@ -104,6 +104,9 @@ trusted by the mod: tickets, clamps and caps are enforced server-side.
       mcp__builder__* : get_build_origin, puis begin_sub_build / place_* / end_sub_build pour construire une tour".
       A useful allowlist is `"permissions": {"allow": ["mcp__builder__*"]}` in your project's `.claude/settings.json`.
    3. `/construction ticket revoke` when done (or let it expire). A `/build` of yours replaces it.
+   4. To build **by writing code** (domes, spirals, curves…), paste [code-builder/PROMPT.md](code-builder/PROMPT.md)
+      into a session started in `god-agent/code-builder/`; its scripts use `mcp-build.mjs` (128 blocks a call).
+      Only in your own session: never give Bash to the `/build` agent, since any player can type `/build`.
 
    The servers listen on 127.0.0.1 only. From another machine use `ssh -L 8771:127.0.0.1:8771 <server>`; never widen
    the bind. In PowerShell, put the token in the header as `"Authorization: Bearer $env:PAULSBRAWLS_MCP_TOKEN"`.
