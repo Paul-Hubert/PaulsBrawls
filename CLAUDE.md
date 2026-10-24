@@ -52,7 +52,7 @@ They copy the remapped jar into the paths set by `mods_folder` / `client_mods_fo
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
-The Java side has thirty JUnit 5 classes (971 test cases) under `src/test/java/com/paul/brawl/`, each covering a
+The Java side has thirty JUnit 5 classes (974 test cases) under `src/test/java/com/paul/brawl/`, each covering a
 Minecraft-free helper: `TradeMath`, `ImageMime`, `BuildGuard`, `GodToolGate`, `GodClamps`, `ItemIds`, `FlagGlow`,
 `GibberMath`, `BlockInfoJson`, `EdenRetry`, `GodActionQueue`, `AgentTickets`, plus `GodService` and `BuildService` (the
 world layer's rules, run against the `RecordingGodWorld` / `RecordingBuildWorld` test helpers) and the MCP contract
@@ -266,7 +266,7 @@ Server (permission level 2 unless noted):
 
 - `/gib <amount>` — bump global revenue, pay all online players. `/gib_salary <amount>`, `/gib_salary_period <seconds>` configure the scheduler.
 - `/pray <text>` (perm 0) — message God; claims the avatar via `GodSessionManager.claim` (bodiless if the body is owned elsewhere). `/pray stop` (perm 0) ends your session. `/pray reset` (perm 0) forgets your conversation (external: the opencode session; builtin: `godBot` memory). `/accept` (perm 0) accepts a pending trade. With `godAgent = external`, `/pray`/`/prove`/`/build` go to opencode instead (see above).
-- `/prompt [text]`, `/block <x> <y> <z>`, `/construction` — prompt overlay, debug placement (pivot-relative), set build origin. `/block` and `/construction` are registered in `ChatBotActions`, not `ChatCommand`.
+- `/prompt [text]`, `/block <x> <y> <z>`, `/construction` — prompt overlay, debug placement (pivot-relative), set build origin. `/construction ticket [minutes]` / `ticket revoke` (external mode) — a builder ticket for the admin's own MCP client (interactive Claude Code), shown only to them. `/block` and `/construction` are registered in `ChatBotActions`, not `ChatCommand`.
 - `/llm …` — provider/model/host/port/apikey/timeout/reload + `/llm bridge …`. `timeout` (5–1800 s, default 180) gates every LLM HTTP call (reasoning models exceed langchain4j's 60 s default). `/llm model` is saved but only applied after `/llm reload`.
 - `/godbody on|off` — admin kill-switch. `/mcp reload` — refresh the MCP tool catalogue (`/mcp` and `/mcp status` are perm 0).
 - `/villagers start <name>` | `stop` | `restart <name>` — drives **Eden** via its admin API (`POST /scenario/<action>` on `:8770`). `start`/`restart` must be run by a player, because bots scatter around them. `<name>` must equal the scenario Eden booted with (Eden loads nothing on this call; anything else gets a 404).

@@ -186,6 +186,55 @@ public final class AgentTurns {
         }
     }
 
+    // -- manual builder tickets (an admin driving the builder server from their own MCP client) ------------------
+
+    /** Default and maximum lifetime of a ticket from {@code /construction ticket}. */
+    public static final int MANUAL_TICKET_DEFAULT_MINUTES = 60;
+    public static final int MANUAL_TICKET_MAX_MINUTES = 480;
+
+    /** A manual builder ticket, or the French refusal. */
+    public record ManualTicket(AgentTickets.Ticket ticket, int minutes, int[] pivot, String refusal) {}
+
+    static final String MANUAL_NO_PIVOT = "Aucun point de référence : lance d'abord /construction en visant un bloc.";
+    static final String MANUAL_BUILD_RUNNING = "Une construction /build est en cours pour toi : attends sa fin "
+        + "(ou /godbody off) avant de prendre un ticket.";
+
+    /**
+     * {@code /construction ticket [minutes]}: a builder ticket for the admin's OWN MCP client (an interactive Claude
+     * Code session, say), bound to this admin and their pivot like a {@code /build} ticket. It is refused while a
+     * {@code /build} turn of theirs runs: minting revokes the player's earlier builder ticket, which would kill that
+     * build. A later {@code /build} replaces it the same way. Lifetime clamped to 1..{@value #MANUAL_TICKET_MAX_MINUTES}.
+     */
+    public ManualTicket mintManualBuilderTicket(UUID player, Integer minutes) {
+        int m = minutes == null ? MANUAL_TICKET_DEFAULT_MINUTES : Math.max(1, Math.min(MANUAL_TICKET_MAX_MINUTES, minutes));
+        int[] origin = build.origin(player);
+        if (origin == null) return new ManualTicket(null, m, null, MANUAL_NO_PIVOT);
+        if (buildTurns.putIfAbsent(player, RESERVED) != null) return new ManualTicket(null, m, origin, MANUAL_BUILD_RUNNING);
+        try {
+            subBuilds.endAll(player); // leases of the replaced ticket
+            AgentTickets.Ticket t = tickets.mint(AgentTickets.Kind.BUILDER, player, 0, m * 60_000L);
+            return new ManualTicket(t, m, origin, null);
+        } finally {
+            buildTurns.remove(player, RESERVED);
+        }
+    }
+
+    /**
+     * {@code /construction ticket revoke}: every builder ticket of the player dies and their sub-builds close.
+     * Returns how many tickets were live. A running {@code /build} of theirs is aborted too (its ticket is gone).
+     */
+    public int revokeBuilderTickets(UUID player) {
+        int n = tickets.revoke(player, AgentTickets.Kind.BUILDER);
+        subBuilds.endAll(player);
+        Turn turn = buildTurns.get(player);
+        if (turn != null && turn.sessionId() != null) Thread.ofVirtual().start(() -> client.abort(turn.sessionId()));
+        return n;
+    }
+
+    public boolean building(UUID player) {
+        return buildTurns.containsKey(player);
+    }
+
     // -- ends from the mod side ----------------------------------------------------------------------------------
 
     /**
@@ -202,13 +251,17 @@ public final class AgentTurns {
         if (sid != null) Thread.ofVirtual().start(() -> client.abort(sid));
     }
 
-    /** {@code /godbody off}: stop every build turn (sub-build leases die through BuildGuard's epoch). */
+    /**
+     * {@code /godbody off}: stop every build turn and kill every builder ticket, the manual ones from
+     * {@code /construction ticket} included (sub-build leases die through BuildGuard's epoch).
+     */
     public void abortBuilds() {
         for (Map.Entry<UUID, Turn> e : buildTurns.entrySet()) {
             tickets.revoke(e.getValue().ticketId());
             String sid = e.getValue().sessionId();
             if (sid != null) Thread.ofVirtual().start(() -> client.abort(sid));
         }
+        tickets.revoke(null, AgentTickets.Kind.BUILDER);
     }
 
     /** Forget the player's agent conversation (its next prayer starts a fresh session). */

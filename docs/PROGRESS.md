@@ -3,6 +3,16 @@
 One dated section per session: what was done, decisions taken, what's next,
 surprises. Newest first.
 
+## 2026-10-24 — `/construction ticket`: build from your own Claude Code session (Java mod, not Eden)
+- An op-only `/construction ticket [minutes]` mints a builder ticket bound to the admin and their pivot, shown only
+  to them (click to copy), for an interactive MCP client such as Claude Code; `/construction ticket revoke` kills it
+  and closes their sub-builds; `/godbody off` kills every builder ticket. It is refused while a `/build` turn of
+  theirs runs (minting would revoke that turn's ticket).
+- `AgentTurnsTest` +3: the ticket opens the real builder server and places a block until revoked; clamping and the
+  pivot refusal; it never kills a running `/build`.
+- Not verified live: the command tree and the chat click need a real client. A real-world build through MCP
+  (blocks read back from a live world) is still to do.
+
 ## 2026-10-23 — god/builder MCP: open findings fixed, Claude Code as client and as agent (Java mod, not Eden)
 - Scope: the Java AI God's MCP servers and external agent only. Nothing under `eden/`, `docs/system/eden/` or
   `minecraft-mcp-server/` was touched. The builtin ChatBot loop and the `godAgent` switch stay.

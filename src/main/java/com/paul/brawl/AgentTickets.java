@@ -73,10 +73,12 @@ public final class AgentTickets {
         return id != null && said.remove(id);
     }
 
-    /** Revoke every ticket of {@code player} (null = every player) of {@code kind}. */
-    public synchronized void revoke(UUID player, Kind kind) {
+    /** Revoke every ticket of {@code player} (null = every player) of {@code kind}; returns how many were live. */
+    public synchronized int revoke(UUID player, Kind kind) {
+        int before = tickets.size();
         tickets.values().removeIf(t -> t.kind() == kind && (player == null || t.player().equals(player)));
         said.retainAll(tickets.keySet());
+        return before - tickets.size();
     }
 
     public int size() {

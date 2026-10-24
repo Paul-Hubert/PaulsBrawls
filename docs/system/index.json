@@ -619,7 +619,7 @@
         "Tests",
         "Related"
       ],
-      "bytes": 16561
+      "bytes": 16859
     },
     {
       "id": "aigod.mcp-test-bench",
@@ -2106,7 +2106,7 @@
         "Eden — admin HTTP verbs (`127.0.0.1:8770`, no auth)",
         "Related"
       ],
-      "bytes": 10499
+      "bytes": 11016
     },
     {
       "id": "reference.ports-files-config",

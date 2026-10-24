@@ -194,7 +194,7 @@ from the repo.
 
 ## Java unit tests (`src/test/java/com/paul/brawl/`)
 
-Thirty JUnit 5 classes (971 test cases, counting parameterized and dynamic ones), run with `./gradlew test`;
+Thirty JUnit 5 classes (974 test cases, counting parameterized and dynamic ones), run with `./gradlew test`;
 the 8 of `AgentE2ETest` are skipped unless `OPENCODE_BIN` points at an opencode binary, and the 13 of
 `ClaudeCodeE2ETest` plus one `McpClaudeCodeInteropTest` case unless `CLAUDE_BIN` points at `claude` (use `--rerun`
 after changing either variable). None boots Minecraft, so command trees, packets and
@@ -222,7 +222,7 @@ loopback port against the official MCP Java SDK client ([aigod/mcp-servers.md](.
 | `BuilderMcpServerTest` | 11 | `BuilderMcpServer`, `SubBuilds`, `McpHttpEndpoint` | Real MCP client: tool schemas, every refusal, the 4-sub-build and 128-block caps, HTTP 401/403/405/400 |
 | `GodMcpServerTest` | 10 | `GodMcpServer` | Real MCP client: tool list, ownership and stale-session refusals, clamps, bridge gate, `wait` bound |
 | `AgentClientTest` | 3 | `AgentClient` | opencode reply parsing (final text, `info.error`), the agent-down path |
-| `AgentTurnsTest` | 4 | `AgentTurns` | A second `/build` or prayer never kills the running turn's ticket; simultaneous prayers start one turn; a prayer turn gets `agentIdleTimeoutSeconds` |
+| `AgentTurnsTest` | 7 | `AgentTurns` | A second `/build` or prayer never kills the running turn's ticket; simultaneous prayers start one turn; a prayer turn gets `agentIdleTimeoutSeconds` |
 | `SubBuildsSweeperTest` | 3 | `SubBuilds` | The periodic sweep releases idle leases with no call, stops when closed |
 | `ClaudeCodeClientTest` | 9 | `ClaudeCodeClient`, `GodAgentConfig`, `god-agent/claude-code/` | Command line, stdin message, result/stream parsing, `NO_PROXY`, the `agentKind` switch, agent bodies equal `god-agent/prompts/*.md` |
 | `McpProtocolConformanceTest` | 78 | `McpHttpEndpoint`, both servers | MCP test bench: raw JSON-RPC/HTTP conformance, auth, Origin, body cap, garbage |

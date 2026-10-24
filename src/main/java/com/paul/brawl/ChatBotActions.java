@@ -201,9 +201,50 @@ public class ChatBotActions {
                         ExternalAgent.resetBuild(player.getUuid()); // docs/27: a new site, a new builder conversation
                         return Command.SINGLE_SUCCESS;
                     })
+                    // A builder ticket for the admin's own MCP client (e.g. an interactive Claude Code session).
+                    .then(CommandManager.literal("ticket")
+                        .executes(context -> manualTicket(context.getSource().getPlayerOrThrow(), null))
+                        .then(CommandManager.literal("revoke")
+                            .executes(context -> revokeTickets(context.getSource().getPlayerOrThrow())))
+                        .then(CommandManager.argument("minutes", IntegerArgumentType.integer(1, AgentTurns.MANUAL_TICKET_MAX_MINUTES))
+                            .executes(context -> manualTicket(context.getSource().getPlayerOrThrow(),
+                                IntegerArgumentType.getInteger(context, "minutes")))))
             );
         });
 
+    }
+
+    /**
+     * {@code /construction ticket [minutes]}: shown to this admin only (never logged, never broadcast), with a click
+     * that copies the ticket. The ticket is the same kind {@code /build} mints: bound to this admin and their pivot.
+     */
+    private static int manualTicket(ServerPlayerEntity player, Integer minutes) {
+        AgentTurns.ManualTicket m = ExternalAgent.mintManualBuilderTicket(player.getUuid(), minutes);
+        if (m.ticket() == null) {
+            player.sendMessage(net.minecraft.text.Text.literal("Dieu : (" + m.refusal() + ")"), false);
+            return 0;
+        }
+        String id = m.ticket().id();
+        net.minecraft.text.Text ticket = net.minecraft.text.Text.literal(id).styled(s -> s
+            .withColor(net.minecraft.util.Formatting.GOLD)
+            .withUnderline(true)
+            .withClickEvent(new net.minecraft.text.ClickEvent(net.minecraft.text.ClickEvent.Action.COPY_TO_CLIPBOARD, id))
+            .withHoverEvent(new net.minecraft.text.HoverEvent(net.minecraft.text.HoverEvent.Action.SHOW_TEXT,
+                net.minecraft.text.Text.literal("Clique pour copier le ticket"))));
+        int[] p = m.pivot();
+        player.sendMessage(net.minecraft.text.Text.literal("Ticket de construction (" + m.minutes() + " min, pivot "
+            + p[0] + " " + p[1] + " " + p[2] + ") : ").append(ticket), false);
+        player.sendMessage(net.minecraft.text.Text.literal("Serveur MCP : " + ExternalAgent.builderUrl()
+            + " — donne ce ticket à ton agent ; /construction ticket revoke l'annule."), false);
+        LOGGER.info("Manual builder ticket minted for {} ({} min).", player.getName().getString(), m.minutes());
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int revokeTickets(ServerPlayerEntity player) {
+        int n = ExternalAgent.revokeBuilderTickets(player.getUuid());
+        player.sendMessage(net.minecraft.text.Text.literal(n < 0 ? "Dieu : (" + ExternalAgent.NOT_RUNNING + ")"
+            : n == 0 ? "Aucun ticket de construction actif." : "Ticket de construction annulé ; tes sous-constructions sont fermées."), false);
+        return n < 0 ? 0 : Command.SINGLE_SUCCESS;
     }
 
     /** {@code /block}: one block at an offset from the admin's {@code /construction} pivot (no pivot → nothing). */

@@ -87,6 +87,9 @@ or else from `mcpToken` in `god_agent.properties`. When both are blank, `ensureT
   exactly one live).
 - The agent never names a player. Every tool takes `ticket` (required) and acts on the ticket's player only.
 - A god ticket is refused by the builder, and a builder ticket by god.
+- Besides `/pray` and `/build`, an op can mint a builder ticket for their own MCP client with
+  `/construction ticket [minutes]` (1..480 min, default 60; refused while a `/build` turn of theirs runs, so it never
+  revokes a running build). `/construction ticket revoke` and `/godbody off` kill it.
 
 ## Tool metadata (for an LLM client)
 

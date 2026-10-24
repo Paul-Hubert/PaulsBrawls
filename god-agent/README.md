@@ -97,6 +97,17 @@ trusted by the mod: tickets, clamps and caps are enforced server-side.
    claude mcp list   # god … ✔ Connected, builder … ✔ Connected
    ```
 
+   To **build from your own interactive Claude Code session** (you are the builder, no `/build` turn):
+   1. In game, as an op: `/construction` while looking at the site's pivot block, then `/construction ticket 60`.
+      Click the gold ticket (`bld-…`) to copy it. It is bound to you and your pivot.
+   2. In your session, give it the ticket, for example: "Ticket de construction : bld-… . Utilise les outils
+      mcp__builder__* : get_build_origin, puis begin_sub_build / place_* / end_sub_build pour construire une tour".
+      A useful allowlist is `"permissions": {"allow": ["mcp__builder__*"]}` in your project's `.claude/settings.json`.
+   3. `/construction ticket revoke` when done (or let it expire). A `/build` of yours replaces it.
+
+   The servers listen on 127.0.0.1 only. From another machine use `ssh -L 8771:127.0.0.1:8771 <server>`; never widen
+   the bind. In PowerShell, put the token in the header as `"Authorization: Bearer $env:PAULSBRAWLS_MCP_TOKEN"`.
+
    "Dynamic Client Registration rejected (HTTP 404)" means the `Authorization` header is missing (Claude Code then
    tries OAuth, which these servers do not offer); "HTTP 401" means the token is wrong.
 

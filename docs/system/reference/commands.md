@@ -59,6 +59,7 @@ Details: [aigod/configuration-and-commands.md](../aigod/configuration-and-comman
 
 | Syntax | Perm | Source | Behaviour |
 |---|---|---|---|
+| `/construction ticket [minutes]` | 2 | `ChatBotActions.manualTicket` → `AgentTurns.mintManualBuilderTicket` | External mode only. Mints a builder ticket bound to this admin and their pivot, for the admin's **own** MCP client (e.g. an interactive Claude Code session). Shown to that admin only, click to copy; 1..480 min (default 60). Refused without a pivot, or while a `/build` turn of theirs runs. `/construction ticket revoke` kills it and closes their sub-builds; `/godbody off` kills every builder ticket. |
 | `/construction` | 2 | `ChatBotActions.java:192-196` | Raycasts (100 blocks) from the player's eyes and stores the hit as the build **pivot**; wipes the build sub-agent's memory. No feedback on a miss. Player-only (`getPlayerOrThrow`, bug #18). |
 | `/block <x> <y> <z>` | 2 | `ChatBotActions.java:174-184` | Debug: places stone at **pivot + (x,y,z)** (relative, not absolute). Player-only (bug #18). |
 

@@ -102,6 +102,7 @@ class AgentTurnsTest {
     private RecordingBuildWorld buildWorld;
     private AgentTickets tickets;
     private AgentTurns turns;
+    private final SubBuilds subBuilds = new SubBuilds(System::currentTimeMillis, 120_000);
 
     @BeforeEach
     void setUp() throws Exception {
@@ -118,7 +119,7 @@ class AgentTurnsTest {
         Files.writeString(cfgFile, "godAgent=external\n");
         GodAgentConfig cfg = new GodAgentConfig(cfgFile);
         turns = new AgentTurns(new AgentClient(agent.url(), "opencode", ""), new GodService(world, BridgeConfig.INSTANCE),
-            new BuildService(buildWorld), tickets, new SubBuilds(System::currentTimeMillis, 120_000), cfg);
+            new BuildService(buildWorld), tickets, subBuilds, cfg);
     }
 
     @AfterEach
@@ -212,5 +213,55 @@ class AgentTurnsTest {
         assertEquals(1, tickets.size());
         agent.release.countDown();
         started.get(0).join(10_000);
+    }
+
+    // -- /construction ticket: a builder ticket for the admin's own MCP client --------------------------------------
+
+    @Test
+    void aManualTicketOpensTheRealBuilderServerUntilRevoked() throws Exception {
+        AgentTurns.ManualTicket m = turns.mintManualBuilderTicket(alice, 5);
+        assertNull(m.refusal());
+        assertEquals(5, m.minutes());
+        assertNotNull(tickets.resolve(m.ticket().id(), AgentTickets.Kind.BUILDER));
+        try (AgentMcpServers servers = AgentMcpServers.start(0, () -> "t", new GodService(world, BridgeConfig.INSTANCE),
+                new RecordingBodyTools(), () -> true, new BuildService(buildWorld), tickets, subBuilds);
+             var client = McpTestClients.connect(servers.port(), AgentMcpServers.BUILDER_PATH, "t")) {
+            String id = m.ticket().id();
+            String begun = McpTestClients.text(McpTestClients.call(client, "begin_sub_build",
+                java.util.Map.of("ticket", id, "anchor_x", 0, "anchor_y", 1, "anchor_z", 0)));
+            Matcher sb = Pattern.compile("sub_build=(\\S+)").matcher(begun);
+            assertTrue(sb.find(), begun);
+            var placed = McpTestClients.call(client, "place_block", java.util.Map.of("ticket", id, "sub_build", sb.group(1),
+                "x", 0, "y", 0, "z", 0, "block", "minecraft:stone"));
+            assertTrue(!placed.isError(), McpTestClients.text(placed));
+            assertEquals(List.of("0,65,0 minecraft:stone"), buildWorld.placed);
+
+            assertEquals(1, turns.revokeBuilderTickets(alice));
+            assertEquals(0, subBuilds.live(), "revoking closes the admin's sub-builds");
+            assertTrue(McpTestClients.call(client, "get_build_origin", java.util.Map.of("ticket", id)).isError(),
+                "a revoked ticket opens nothing");
+        }
+    }
+
+    @Test
+    void aManualTicketIsClampedAndNeedsAPivot() {
+        assertEquals(AgentTurns.MANUAL_TICKET_MAX_MINUTES, turns.mintManualBuilderTicket(alice, 100_000).minutes());
+        assertEquals(AgentTurns.MANUAL_TICKET_DEFAULT_MINUTES, turns.mintManualBuilderTicket(alice, null).minutes());
+        buildWorld.origins.remove(alice);
+        AgentTurns.ManualTicket m = turns.mintManualBuilderTicket(alice, 10);
+        assertNull(m.ticket());
+        assertEquals(AgentTurns.MANUAL_NO_PIVOT, m.refusal());
+    }
+
+    @Test
+    void aManualTicketNeverKillsARunningBuild() throws Exception {
+        Thread first = turns.build(alice, "Alice", "une tour", null);
+        String running = ticketOfTurn(1);
+        AgentTurns.ManualTicket m = turns.mintManualBuilderTicket(alice, 10);
+        assertNull(m.ticket());
+        assertEquals(AgentTurns.MANUAL_BUILD_RUNNING, m.refusal());
+        assertNotNull(tickets.resolve(running, AgentTickets.Kind.BUILDER), "the /build turn keeps its ticket");
+        agent.release.countDown();
+        first.join(10_000);
     }
 }

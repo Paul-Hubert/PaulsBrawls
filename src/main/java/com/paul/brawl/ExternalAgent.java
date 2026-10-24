@@ -121,9 +121,30 @@ public final class ExternalAgent {
         if (t != null) t.resetBuild(player);
     }
 
-    /** {@code /godbody off}: stop every running build turn. */
+    /** {@code /godbody off}: stop every running build turn and kill every builder ticket. */
     public static void abortBuilds() {
         AgentTurns t = turns;
         if (t != null) t.abortBuilds();
+    }
+
+    static final String NOT_RUNNING = "Les serveurs MCP ne tournent pas : mets godAgent=external dans "
+        + "god_agent.properties et redémarre le serveur.";
+
+    /** {@code /construction ticket [minutes]}; null turns = external mode off or the servers failed to bind. */
+    public static AgentTurns.ManualTicket mintManualBuilderTicket(UUID player, Integer minutes) {
+        AgentTurns t = turns;
+        if (t == null || servers == null) return new AgentTurns.ManualTicket(null, 0, null, NOT_RUNNING);
+        return t.mintManualBuilderTicket(player, minutes);
+    }
+
+    /** {@code /construction ticket revoke}; -1 when external mode is off. */
+    public static int revokeBuilderTickets(UUID player) {
+        AgentTurns t = turns;
+        return t == null ? -1 : t.revokeBuilderTickets(player);
+    }
+
+    /** The builder endpoint as an MCP client on this machine reaches it. */
+    public static String builderUrl() {
+        return "http://127.0.0.1:" + GodAgentConfig.INSTANCE.mcpPort + AgentMcpServers.BUILDER_PATH;
     }
 }
