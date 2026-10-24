@@ -7,12 +7,15 @@ import { mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
+import Database from 'better-sqlite3';
+
 import { loadConfig, assertIdentity, type EdenConfig } from './config';
 import { loadEnvFile, loadProviders, resolveProvider } from './providers';
 import { loadScenario, applyScenario } from './scenario-loader';
 import { logger } from './logger';
 import { Journal, type JournalAppender } from './journal/journal';
 import { createLagMonitor, type LagMonitor } from './journal/lag-monitor';
+import { SqliteVecStore, type IVectorStore } from './vectors/store';
 import { BotPool } from './bots/pool';
 import { AdminServer } from './admin/server';
 import { VillageLauncher } from './village-launch';
@@ -20,6 +23,7 @@ import { SkillLibrary, AllGranted, renderSignature } from './skills/library';
 import { SkillEngine } from './skills/engine';
 import { SkillRetriever } from './skills/retrieve';
 import { STOCK_SKILLS, seedStockSkills } from './skills/exemplars/index';
+import { DENIED_PROCESS_METHODS, SkillForbiddenError } from './skills/instrument';
 import { LlmClient, ProviderRegistry } from './llm/client';
 import { LlmScheduler, BudgetTracker } from './llm/scheduler';
 import { EmbeddingsService, localBackend } from './llm/embeddings';
@@ -38,7 +42,7 @@ import { CriticDesk, loadCriticPrompt } from './god/critic';
 import { GodBody } from './god/body';
 import { VillagerMemory } from './villagers/memory';
 import { MemorySummarizer } from './villagers/memory-summarizer';
-import { SettlementClient } from './social/trade';
+import { SettlementClient, TradeService, type ReachStrategy } from './social/trade';
 import {
   SkillStatsView,
   CompetenceView,
@@ -46,7 +50,7 @@ import {
   TradeLedgerView,
   RolloutsView,
 } from './views/index';
-import type { Bot, Inbox, InboxMessage, RunReport, Snapshot, SkillStats, Task, TaskLedger } from './types/index';
+import type { Bot, Inbox, InboxMessage, RunnerRef, RunReport, Snapshot, SkillStats, Task, TaskLedger, VillagerSocial } from './types/index';
 
 /** Options for {@link start}. */
 export interface EdenHostOptions {
@@ -139,24 +143,56 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
     assertIdentity(config.villagers, config.god.name);
   }
 
-  // 2. Open the journal (sole writer). Replay nothing — current state lives in its tables.
+  // 2. Open the journal (sole writer). Replay nothing — current state lives in its tables. One shared
+  //    better-sqlite3 connection is the spine (D-03): the journal writes the `journal` table, the vector
+  //    store (below) writes its `vec0` table — distinct tables, one connection (S2 honored).
   mkdirSync(dataDir, { recursive: true });
-  const journal = new Journal(join(dataDir, 'eden.db'));
+  const db = new Database(join(dataDir, 'eden.db'));
+  const journal = new Journal(db);
   for (const w of warnings) {
     logger.warn('config', w);
     journal.append('engine', 'system.config-warning', { message: w });
+  }
+
+  // The persisted embedding store (D-record: embed-at-write via sqlite-vec). Constructed ONLY on a real
+  // boot (spawnBots) so CI — which calls start() with bots off — never loads the native extension; and
+  // never when journal.vectorStore === 'off'. A missing/failed store is omitted (undefined) and every
+  // retrieval falls to the keyword floor (R38). The store self-degrades too (enabled() === false) if the
+  // pre-1.0 prebuilt fails to load on this platform (R74) — either way the host never crashes.
+  const vectors: IVectorStore | undefined =
+    opts.spawnBots && config.journal.vectorStore !== 'off'
+      ? new SqliteVecStore({ db, onWarn: (m) => logger.warn('vectors', m) })
+      : undefined;
+  if (vectors && !vectors.enabled()) {
+    journal.append('engine', 'system.config-warning', {
+      message: 'vectors: sqlite-vec failed to load — memory/skill retrieval runs on the keyword floor (R38/R74)',
+    });
   }
 
   // The event-loop lag monitor is the backpressure canary (D-07).
   const lag: LagMonitor = createLagMonitor(journal);
   lag.start();
 
+  // Retention (config journal.retentionDays): bound the otherwise-unbounded journal by pruning the
+  // high-volume OBSERVABILITY kinds past the horizon (vitals + system.loop-lag — verified unconsumed by
+  // any view fold, so the rebuild==live invariant holds). Prune once at boot, then daily on a real boot.
+  // The interval is unref'd so it never holds the loop open, and cleared on shutdown.
+  journal.prune(config.journal.retentionDays);
+  const pruneTimer = opts.spawnBots
+    ? setInterval(() => journal.prune(config.journal.retentionDays), 24 * 60 * 60 * 1000)
+    : undefined;
+  pruneTimer?.unref();
+
   // Blocker Z: a rogue skill can throw ASYNCHRONOUSLY from mineflayer's physics timer (e.g. a bad
   // pathfinder goal → `stateGoal.isValid is not a function`), which escapes the per-run try/catch and
   // would otherwise crash the whole host. Install last-resort process guards that journal + survive.
   // Opt-in (a real boot sets it) so CI/tests — which call start() — never install a global handler.
   let removeProcessGuards: (() => void) | undefined;
-  if (opts.installProcessGuards) removeProcessGuards = installProcessGuards(journal);
+  let removeHostKillerGuards: (() => void) | undefined;
+  if (opts.installProcessGuards) {
+    removeProcessGuards = installProcessGuards(journal);
+    removeHostKillerGuards = guardHostKillers(journal); // CRIT-2/R77 — neutralize process host-killers
+  }
 
   // Derived views (views/, LAYER 1) — fold the journal LIVE off its subscribe stream (P4/S2: derived
   // state, never primary). The admin + website read these; `eden rebuild-stats` rebuilds them by replay
@@ -211,9 +247,21 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
 
   // God's desks + the refinement loop (M4-3). Wired only for a real run (needs a live world + provider).
   const enableGod = opts.enableGod ?? opts.spawnBots ?? false;
-  const wiring = enableGod ? wireGod({ config, journal, dataDir, pool }) : undefined;
+  const wiring = enableGod ? wireGod({ config, journal, dataDir, pool, vectors }) : undefined;
   const reactivity = wiring?.reactivity;
   reactivityRef.current = reactivity; // hand the live reactivity to the (already-built) pool spawn hook
+
+  // CRIT-3: scrub the API key from process.env NOW that the LLM client(s) have captured it into their own
+  // private fields (llm/client.ts constructor). A skill body is validated by a syntax parse only and runs
+  // with the full mineflayer power, so it can read `globalThis.process.env.OPENAI_API_KEY` and exfiltrate
+  // the paid key. Deleting only the specific key var(s) after capture closes that exfil path while the
+  // client keeps working from its captured copy. Gated on `installProcessGuards` — the unambiguous
+  // real-boot marker (the direct-run entrypoint sets it; test-invoked start() leaves it false, so tests
+  // that set OPENAI_API_KEY keep working and a future wireGod can still read the env on a test boot).
+  if (opts.installProcessGuards && wiring) {
+    if (config.apiKeyEnv) delete process.env[config.apiKeyEnv];
+    delete process.env['OPENAI_API_KEY']; // the client's documented fallback default — scrub it too
+  }
 
   // M5: pump the coarse 30 s clock (tick-30s) across every attached router. Unref'd so it never holds the
   // loop open; a no-op when reactivity is unwired (CI / no live bots). The emitter-side hysteresis clocks
@@ -430,7 +478,12 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
   // into a boot-time staggered login (R13/I1) for programmatic drivers (the live-test harness) that boot
   // then act without an admin POST. It starts the pool BARE (the launcher stays unarmed → onSpawn no-ops),
   // so the driver owns all positioning/loadout via its own RCON arena — no stray /spreadplayers + /give.
-  if (pool && opts.autoSpawn) void pool.start();
+  // LOW-7: attach a .catch so a reject from pool.start() (e.g. a sync FS throw in stampWorldId) is always
+  // logged + attributed, never an unhandled rejection when installProcessGuards is off (e.g. the live-test
+  // harness, which sets autoSpawn but not the global guards).
+  if (pool && opts.autoSpawn) {
+    pool.start().catch((e: unknown) => logger.error('engine', `pool.start (autoSpawn) failed: ${e instanceof Error ? e.message : String(e)}`));
+  }
 
   return {
     adminPort: port,
@@ -440,13 +493,24 @@ export async function start(configPath: string, opts: EdenHostOptions = {}): Pro
     god: wiring?.god,
     async stop() {
       removeProcessGuards?.();
+      removeHostKillerGuards?.();
       villageLoop?.stop();
       if (reactivityTick) clearInterval(reactivityTick);
+      if (pruneTimer) clearInterval(pruneTimer);
       reactivity?.detach();
       await launcher.stop();
       pool?.stop();
       lag.stop();
       await admin.stop();
+      // Drain every villager's off-the-hot-path embed/summarize work BEFORE closing the shared
+      // better-sqlite3 handle — `journal.close()` closes the one connection both the Journal and the
+      // SqliteVecStore use, so a still-running fire-and-forget vector/summary chain would otherwise hit a
+      // closed db (benign — wrapped in try/catch — but a dropped write). flush* never reject (R38).
+      if (wiring) {
+        await Promise.all(
+          [...wiring.memories.values()].flatMap((m) => [m.flushVectors(), m.flushSummary()]),
+        );
+      }
       journal.close();
     },
   };
@@ -483,8 +547,8 @@ interface GodWiring {
  * The strong/fast tier split (D-13): curriculum proposal + critic run STRONG (novelty); orchestrator
  * dispatch + QA-cache run FAST. Per-desk budget caps default null (R49 — throughput is the limiter).
  */
-function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; pool: BotPool | undefined }): GodWiring {
-  const { config, journal, dataDir } = args;
+function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; pool: BotPool | undefined; vectors: IVectorStore | undefined }): GodWiring {
+  const { config, journal, dataDir, vectors } = args;
   const providers = new ProviderRegistry({
     strong: { baseUrl: config.llm.providers.strong.baseUrl, model: config.llm.providers.strong.model, inputTokenBudget: config.llm.providers.strong.inputTokenBudget },
     fast: { baseUrl: config.llm.providers.fast.baseUrl, model: config.llm.providers.fast.model, inputTokenBudget: config.llm.providers.fast.inputTokenBudget },
@@ -522,6 +586,11 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   // search_skills returns nothing and a villager has nothing to compose. seedStock appends a version, so
   // a re-seed on a populated library is harmless (the active version is just re-asserted).
   seedStockSkills(library);
+  // MED-4: tamper/corruption tripwire (D-12). Re-hash every non-archived skill's on-disk code against its
+  // recorded codeHash; a mismatch (a hand-edited or corrupted .js in .eden-data/library) QUARANTINES that
+  // version so a drifted body never runs unguarded. verifyHashes() handles the drift itself (quarantine,
+  // its job) and never throws — boot is never crashed by a corrupt skill file.
+  library.verifyHashes();
   const grants = new AllGranted();
   const engine = new SkillEngine({
     library, journal, grants,
@@ -542,12 +611,108 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   const memories = new Map<string, VillagerMemory>(
     config.villagers.map((v) => [
       v.name,
-      new VillagerMemory({ villager: v.name, dataDir, journal, worldId, embeddings, summarizer }),
+      new VillagerMemory({ villager: v.name, dataDir, journal, worldId, embeddings, vectors, summarizer }),
     ]),
   );
   const memoryFor = (name: string): VillagerMemory | undefined => memories.get(name);
 
-  const tools = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: config.skills.maxSkillLines, memoryFor });
+  const roster = new Map<string, RosterEntry>(config.villagers.map((v) => [v.name, { name: v.name, role: v.role, persona: `Tu es ${v.name}, ${v.role} du village. Tu parles français.` }]));
+
+  // ── Society (M6, HIGH-4): wire the trade + conversation subsystem LIVE (it was fully built + CI-tested
+  //    but NEVER instantiated). The SettlementClient POSTs typed offers to the mod's atomic :8767 listener
+  //    (coin→paulsbrawls:coin). FAIL-FAST: validate the url at construction (a malformed settlement.url is a
+  //    boot error, not a silent run-time 0-trade village). R29: needs :8767 free of the dev server. ──
+  let settlementUrl: URL;
+  try {
+    settlementUrl = new URL(config.settlement.url);
+  } catch {
+    throw new Error(`config.settlement.url is not a valid URL: ${JSON.stringify(config.settlement.url)} (fix eden.json — trade settlement POSTs here, R29 :8767)`);
+  }
+  const settlement = new SettlementClient({ url: settlementUrl.toString(), journal });
+
+  // The bots' usernames — a `say(to:…)` addressee MUST be a villager (never a raw command target / a player).
+  const villagerNames = new Set<string>(config.villagers.map((v) => v.name));
+  const TRADE_RANGE = 6; // blocks — R33: walk to a partner farther than this before settling.
+  const HEARD_IMPORTANCE = 3; // an addressed line the hearer remembers (matches Conversation's OVERHEARD).
+  const HEADLINE_IMPORTANCE = 8; // the relationship-defining beat (matches Conversation's HEADLINE).
+
+  // socialFor(villager): the villager-facing SOCIAL/ECONOMIC port the ToolRegistry drives (say + propose_trade).
+  // Built per villager so the speaker `from` is FIXED here (never a tool arg) — tool input can't inject a raw
+  // settlement `from`/`to`/amount outside a negotiated typed offer (the CRIT-4-adjacent guard). The `say` path
+  // performs the SAME writes social/Conversation does, through the SAME types/ {@link Conversant}/
+  // {@link MemoryWriter} seam (chat.said/heard + a hearer memory + the speaker's relationship beat →
+  // moveRelation), so a one-shot tool-driven `say` closes the conversation→memory/relations loop (R69). The
+  // full multi-turn social/Conversation engine stays available for a future `start_conversation` flow (it
+  // needs two live brains — out of scope for one tool call). Returns undefined for an actor with no body.
+  const socialFor = (from: string): VillagerSocial | undefined => {
+    const pool = args.pool;
+    if (!pool || !villagerNames.has(from)) return undefined;
+    // Per-villager TradeService over the shared SettlementClient. R33 reach: walk to an out-of-range partner
+    // (compose the go-to skill) before settling — only when BOTH bodies are connected so positions are real.
+    return {
+      say: async ({ to, text, beat }): Promise<{ ok: boolean; reason?: string }> => {
+        const bot = pool.bot(from);
+        if (!bot) return { ok: false, reason: `corps de "${from}" non connecté` };
+        // SECURITY: never let "speech" be a `/`-command (the bot chat interceptor also strips it on op'd
+        // runs; villagers are mortal/never op'd — this is defense in depth, mirroring R25).
+        const line = /^\s*\//.test(text) ? '' : text;
+        if (!line) return { ok: false, reason: 'message refusé (commande "/" interdite)' };
+        if (to === undefined) {
+          // Public chat — speak to the game. (chat.said with a "(village)" addressee for the journal.)
+          bot.chat(line);
+          journal.append(`villager:${from}`, 'chat.said', { from, to: '(village)', text: line }, {});
+          return { ok: true };
+        }
+        if (!villagerNames.has(to)) return { ok: false, reason: `destinataire inconnu "${to}" (pas un villageois)` };
+        const hearerMem = memoryFor(to);
+        if (!hearerMem) return { ok: false, reason: `mémoire de "${to}" non câblée` };
+        // The addressee hears the line (journal + a social memory) — the Conversation `hear` write, reused.
+        journal.append(`villager:${from}`, 'chat.said', { from, to, text: line }, {});
+        journal.append(`villager:${to}`, 'chat.heard', { hearer: to, from, text: line, eavesdrop: false }, {});
+        hearerMem.remember({ kind: 'social', text: `${from} m'a dit: « ${line} »`, importance: HEARD_IMPORTANCE });
+        // Mirror to game chat too so a nearby player overhears the directed line.
+        bot.chat(line);
+        // The relationship beat (leave_conversation) — move the SPEAKER's relation + seed the headline for
+        // BOTH (the applyLeave write, reused) — closes R69 (relations move from a tool-driven say).
+        if (beat) {
+          memoryFor(from)?.moveRelation(to, beat.opinion, beat.note);
+          memoryFor(from)?.remember({ kind: 'social', text: beat.headline, importance: HEADLINE_IMPORTANCE });
+          hearerMem.remember({ kind: 'social', text: beat.headline, importance: HEADLINE_IMPORTANCE });
+        }
+        return { ok: true };
+      },
+      proposeTrade: async ({ to, give, want }): Promise<{ ok: boolean; reason?: string }> => {
+        if (!villagerNames.has(to)) return { ok: false, reason: `partenaire inconnu "${to}" (pas un villageois)` };
+        // R33 reach: only when both bodies are connected (else the brain is assumed adjacent — no walk).
+        const self = pool.bot(from);
+        const partner = pool.bot(to);
+        let reach: ReachStrategy | undefined;
+        if (self && partner) {
+          const runner: RunnerRef = { name: from, role: roster.get(from)?.role ?? 'villager', tier: 'mortal' };
+          const dist = (): number => {
+            const a = self.entity?.position;
+            const b = partner.entity?.position;
+            if (!a || !b) return Infinity;
+            return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+          };
+          reach = {
+            inRange: () => dist() <= TRADE_RANGE,
+            walkTo: async () => {
+              const b = partner.entity?.position;
+              if (!b) return;
+              await engine.run('go-to', { x: Math.round(b.x), y: Math.round(b.y), z: Math.round(b.z), range: TRADE_RANGE - 1 }, runner);
+            },
+          };
+        }
+        // TradeService → SettlementClient → :8767 is the ONLY trade path. A failed/timed-out/non-2xx
+        // settlement returns ok:false with the named reason (inventories UNTOUCHED) — the tool surfaces it.
+        const trade = new TradeService({ journal, settlement, ...(reach ? { reach } : {}) });
+        return trade.propose({ from, to, give, want });
+      },
+    };
+  };
+
+  const tools = new ToolRegistry({ library, engine, retriever, journal, maxSkillLines: config.skills.maxSkillLines, memoryFor, socialFor });
   const builder = new ContextPackBuilder({ journal });
   const brain = new Brain({ builder, tools, scheduler, client, journal });
 
@@ -569,14 +734,10 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
   // The body (theatrics, never a dependency) — built so divine stage-setting has a runner (M3-5).
   void new GodBody({ engine, journal, avatarName: config.god.name, embodiedVerdicts: config.god.embodiedVerdicts });
 
-  // The SettlementClient for trade (POSTs typed offers to settlement.url; coin→paulsbrawls:coin). Conversation/
-  //    trade SERVICES are constructed per-interaction with bot-backed sinks (Conversant/ReachStrategy) at run
-  //    time — those need a live bot, so they're created lazily in the (real-boot) flow, not here. Wired from
-  //    config (R29: needs :8767, free of the dev server); constructed here so a boot fails fast if the url is
-  //    malformed. The per-villager memories above are stable singletons the admin + the refinement loop read.
-  void new SettlementClient({ url: config.settlement.url, journal });
+  // (HIGH-4) The SettlementClient + per-villager social/trade wiring now live above (next to memoryFor), so
+  // the `socialFor` port the ToolRegistry's say/propose_trade tools drive is constructed once at boot — the
+  // dead `void new SettlementClient(...)` placeholder (never validated, never used) is gone.
 
-  const roster = new Map<string, RosterEntry>(config.villagers.map((v) => [v.name, { name: v.name, role: v.role, persona: `Tu es ${v.name}, ${v.role} du village. Tu parles français.` }]));
   // P2b: the always-in-prompt teaching set — the exemplar mortal stock skills' working NAMED-function
   // code, so the model sees the dialect every authoring turn. Villagers are mortal: NEVER leak divine
   // skill code (tier-filtered out of every villager prompt, 02 §Tiers).
@@ -683,6 +844,11 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
       };
     };
 
+    // Our bots' usernames (every villager + the avatar) — the signal adapter tags chat from one of these
+    // as `villager-chat`, never `player-chat`, so a villager can't react to its own (or a peer's) speech
+    // as a player tell (would loop). The avatar is included: when Dieu speaks in chat it is bot speech too.
+    const botNames = new Set<string>([...config.villagers.map((v) => v.name), config.god.name]);
+
     reactivity = new VillagerReactivity({
       villagers: config.villagers.map((v) => ({ name: v.name, role: v.role })),
       store,
@@ -690,7 +856,22 @@ function wireGod(args: { config: EdenConfig; journal: Journal; dataDir: string; 
       journal,
       wakeup,
       vitalsFor,
+      botNames,
     });
+
+    // HIGH-3 inbox reflex — pulse an `inbox` event onto the villager's bus when a message lands, so a
+    // seeded `inbox → deliberate` reflex wakes it. CRIT-4: DON'T fire on directives — the rollout
+    // coordinator already drains + handles those (firing here would double-handle + race it). The reflex
+    // is for non-directive tells/critiques (the admin /prompt tell, a peer/God aside). The reactivity layer
+    // ignores the pulse if the villager isn't attached (disconnected) — the message stays queued for drain.
+    for (const inbox of inboxes.values()) {
+      if (inbox instanceof VillagerInbox) {
+        inbox.setDeliveryHook((villager, m) => {
+          if (m.kind === 'directive') return;
+          reactivity?.signalInbox(villager);
+        });
+      }
+    }
   }
 
   return { god, curriculum, orchestrator, coordinator, library, scheduler, inboxes, memories, store, ...(reactivity ? { reactivity } : {}) };
@@ -959,8 +1140,22 @@ export class RolloutCoordinator {
       };
 
       const delib = await this.o.brain.deliberate(input, { rolloutId: rollout.id });
-      if (!delib.draft || !delib.lastRunReport) {
-        // The villager produced no trial this turn — keep the rollout open for another revision.
+
+      if (!delib.draft) {
+        // The villager produced no draft this turn — keep the rollout open for another revision.
+        continue;
+      }
+
+      // A draft exists this turn — capture its pointer NOW so the density payload carries it into the next
+      // revision even if this turn authored-but-didn't-trial it (otherwise the draft is lost and the next
+      // turn re-authors from scratch). lastRunReport / lastCritique are still set post-verdict below.
+      draftName = delib.draft.name;
+      draftVersion = delib.draft.version;
+      draftCode = this.o.library.read(delib.draft.name, delib.draft.version)?.code;
+
+      if (!delib.lastRunReport) {
+        // Authored a draft but did not trial it — keep the draft (carried via density above) and let the
+        // loop prompt a run_skill next revision. No ticket without a RunReport (nothing to judge yet).
         continue;
       }
 
@@ -997,9 +1192,7 @@ export class RolloutCoordinator {
 
       lastCritique = verdict.critique;
       lastRunReport = delib.lastRunReport;
-      draftName = delib.draft.name;
-      draftVersion = delib.draft.version;
-      draftCode = this.o.library.read(delib.draft.name, delib.draft.version)?.code;
+      // (draftName/draftVersion/draftCode were captured above, right after delib.draft was confirmed.)
     }
     // R65 convergence breaker: this rollout exhausted its maxRetries without converging. Tell the
     // curriculum (the sole ledger writer — S2): it counts exhausted rollouts and, after K of them, closes
@@ -1182,6 +1375,46 @@ export function installProcessGuards(journal: JournalAppender): () => void {
   return (): void => {
     process.removeListener('uncaughtException', onUncaught);
     process.removeListener('unhandledRejection', onRejection);
+  };
+}
+
+/**
+ * CRIT-2 (R77): neutralize the four host-killer `process` methods on the REAL process object. The D-08
+ * shim (instrument.ts) only shadows the LOCAL `process` binding inside a skill's scope, so a skill could
+ * still kill the host via `globalThis.process.exit()`, `require('process').abort()`, or
+ * `new Function('return process')().kill(process.pid)` — all the SAME global object the shim never touched
+ * (the escape R45 left "reachable by design"). The host itself never calls these (crash-only / pm2 — the
+ * direct-run entrypoint sets `process.exitCode`, never `exit()`), so replacing them outright is free. A
+ * blocked call journals a `system.error` and throws SkillForbiddenError: inside a skill run the engine
+ * catches it (the run fails cleanly); from a skill's DEFERRED callback the throw lands on
+ * installProcessGuards' uncaughtException handler — either way the host survives.
+ *
+ * Scope: this closes the `process.*` host-kill vector ONLY. It does NOT sandbox skills — an OS-level kill
+ * via `import('node:child_process')` or arbitrary fs writes stay reachable (the full-Node-capability
+ * surface, owner #11); closing those needs worker/VM isolation (tracked with CRIT-1). Install ONLY on a
+ * real boot (gated with installProcessGuards). `target` is injectable so a real-process mutation never
+ * leaks into the test runner. Returns a detacher that restores the originals.
+ */
+export function guardHostKillers(
+  journal: JournalAppender,
+  target: Record<string, unknown> = process as unknown as Record<string, unknown>,
+): () => void {
+  const originals = new Map<string, unknown>();
+  for (const m of DENIED_PROCESS_METHODS) {
+    originals.set(m, target[m]);
+    target[m] = (...args: unknown[]): never => {
+      const call = `process.${m}(${args.map((a) => String(a)).join(', ')})`;
+      logger.error('engine', `blocked host-killer ${call} from skill code (CRIT-2)`);
+      journal.append('engine', 'system.error', {
+        message: `blocked host-killer ${call} — the host cannot be terminated via process.${m} from skill code (CRIT-2/R77)`,
+      });
+      throw new SkillForbiddenError(
+        `process.${m}() is forbidden — the host cannot be killed from skill code (CRIT-2)`,
+      );
+    };
+  }
+  return (): void => {
+    for (const [m, fn] of originals) target[m] = fn;
   };
 }
 

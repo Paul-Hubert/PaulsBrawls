@@ -81,6 +81,7 @@ const GO_TO: StockSkill = {
   tags: ['movement'],
   // R7: walk far/unloaded goals in ≤40-block legs; recompute from the live position each hop.
   code: `async function goTo(bot, { x, y, z, range = 1 }, ctx) {
+  ctx.log("info", "going to " + x + "," + y + "," + z + " (range=" + range + ")");
   const MAX_HOP = 40;
   for (let guard = 0; guard < 1024; guard++) {
     const p = bot.entity.position;
@@ -88,50 +89,69 @@ const GO_TO: StockSkill = {
     const remaining = Math.hypot(dx, dy, dz);
     if (remaining <= MAX_HOP) break;
     const t = MAX_HOP / remaining;
+    ctx.log("info", "hop toward " + x + "," + y + "," + z + " (remaining=" + remaining + "m)");
     await bot.pathfinder.goto(new ctx.goals.GoalNear(p.x + dx * t, p.y + dy * t, p.z + dz * t, 2));
-    ctx.log('hop toward ' + x + ',' + y + ',' + z);
   }
+  ctx.log("info", "final approach to " + x + "," + y + "," + z);
   await bot.pathfinder.goto(new ctx.goals.GoalNear(x, y, z, range));
+  ctx.log("info", "arrived at " + x + "," + y + "," + z);
   return { arrived: true };
 }`,
 };
 
 const MINE_BLOCK: StockSkill = {
   name: 'mine-block',
-  summary: 'casser un bloc à une position',
+  summary: 'casser un bloc a une position',
   params: obj({ x: N, y: N, z: N }, ['x', 'y', 'z']),
   returns: obj({ mined: S }),
   tier: 'mortal',
   exemplar: true,
   tags: ['mining'],
   code: `async function mineBlock(bot, { x, y, z }, ctx) {
+  ctx.log("info", "mining block at " + x + "," + y + "," + z);
   const block = bot.blockAt(new ctx.Vec3(x, y, z));
-  if (!block) throw new Error('no block at ' + x + ',' + y + ',' + z + ' (absent or chunk unloaded)');
+  if (!block) {
+    ctx.log("warn", "no block at " + x + "," + y + "," + z + " (absent or chunk unloaded)");
+    throw new Error("no block at " + x + "," + y + "," + z + " (absent or chunk unloaded)");
+  }
+  ctx.log("info", "digging " + block.name);
   await bot.dig(block);
+  ctx.log("info", "finished mining " + block.name);
   return { mined: block.name };
 }`,
 };
 
 const FIND_BLOCK: StockSkill = {
   name: 'find-block',
-  summary: 'trouver le bloc le plus proche par nom et renvoyer sa position (utilise bot.findBlock — PAS un scan manuel)',
+  summary: 'trouver le bloc le plus proche par nom et renvoyer sa position (utilise bot.findBlock - PAS un scan manuel)',
   params: obj({ name: S, maxDistance: N }, ['name']),
   returns: obj({ x: N, y: N, z: N, name: S }),
   tier: 'mortal',
   exemplar: true,
   tags: ['search', 'collection'],
-  // The reliable locate primitive: bot.findBlock scans the loaded world FOR you — by numeric id when the
+  // The reliable locate primitive: bot.findBlock scans the loaded world FOR you - by numeric id when the
   // registry knows it (far faster than a function matcher, the same path craft-item uses for the table),
-  // else by name predicate. Compose it (find-block → collect-blocks / mine-block) INSTEAD of hand-rolling a
+  // else by name predicate. Compose it (find-block -> collect-blocks / mine-block) INSTEAD of hand-rolling a
   // bot.blockAt(new Vec3(x+dx,y,z+dz)) grid scan: those step past columns, search one y-plane, depend on the
   // right origin, and flood the log on a miss (seen live: craft-wooden-tools scanned 28 k air blocks).
+  // R76 — a `matching` FUNCTION must test ONLY block.name/type. mineflayer runs your matcher against
+  // synthetic palette blocks (Block.fromStateId — name set, position:null, NO neighbours) to decide which
+  // chunk sections to scan; a matcher that reads `b.position` or calls `bot.blockAt` (e.g. an "air above"
+  // check) returns false for every palette entry, so EVERY section is skipped and findBlock returns null
+  // though matching blocks are everywhere. Do air-above / position-dedup / neighbour tests AFTER, on the
+  // returned block (see find-tillable). This is the bug that killed 22 `till-and-sow` versions.
   code: `async function findBlock(bot, { name, maxDistance = 48 }, ctx) {
+  ctx.log("info", "searching for " + JSON.stringify(name) + " within " + maxDistance + "m");
   const want = name.indexOf(':') >= 0 ? name.slice(name.indexOf(':') + 1) : name;
   const entry = bot.registry && bot.registry.blocksByName ? bot.registry.blocksByName[want] : null;
   const matching = entry && entry.id != null ? entry.id : (b) => b && b.name === want;
   const block = bot.findBlock({ matching, maxDistance });
-  if (!block) throw new Error('aucun bloc "' + want + '" trouvé dans un rayon de ' + maxDistance + ' blocs');
+  if (!block) {
+    ctx.log("warn", "no block " + JSON.stringify(want) + " found within " + maxDistance + "m (task impossible right now)");
+    throw new Error("aucun bloc " + JSON.stringify(want) + " trouve dans un rayon de " + maxDistance + " blocs");
+  }
   const p = block.position;
+  ctx.log("info", "found " + block.name + " at " + p.x + "," + p.y + "," + p.z);
   return { x: p.x, y: p.y, z: p.z, name: block.name };
 }`,
 };
@@ -147,19 +167,25 @@ const COLLECT_BLOCKS: StockSkill = {
   // R10: trunk logs only (column connected to ground), one dig per call, skip-on-failure — never
   // chase floating leaf-logs (bulk collect dies mid-list on them).
   code: `async function collectBlocks(bot, { x, y, z, maxHeight = 32 }, ctx) {
+  ctx.log("info", "collecting logs at " + x + "," + y + "," + z + " (maxHeight=" + maxHeight + ")");
   const isLog = (n) => /(_log|_wood|_stem|_hyphae)$/.test(n);
   let collected = 0;
   for (let dy = 0; dy < maxHeight; dy++) {
     const block = bot.blockAt(new ctx.Vec3(x, y + dy, z));
     if (!block || !isLog(block.name)) break;
-    try { await bot.dig(block); collected++; }
-    catch (e) { ctx.log('skip undiggable log: ' + e.message); }
+    try { ctx.log("info", "digging " + block.name); await bot.dig(block); collected++; }
+    catch (e) { ctx.log("warn", "failed to dig: " + e.message); }
   }
+  if (collected === 0) {
+    ctx.log("warn", "no logs found (task impossible right now)");
+    return { collected };
+  }
+  ctx.log("info", "collected " + collected + " logs, walking to pickup");
   // Gap E: bot.dig leaves the drops on the ground and mineflayer auto-collects only within ~1 block, but
-  // the bot digs from up to its reach — so the logs land out of pickup range. Walk onto the trunk base
+  // the bot digs from up to its reach - so the logs land out of pickup range. Walk onto the trunk base
   // (the drops fall there) to gather them; best-effort so a NoPath never fails the harvest.
-  if (collected > 0 && bot.pathfinder && bot.pathfinder.goto && ctx.goals) {
-    await bot.pathfinder.goto(new ctx.goals.GoalNear(x, y, z, 1)).catch((e) => ctx.log('pickup walk skipped: ' + e.message));
+  if (bot.pathfinder && bot.pathfinder.goto && ctx.goals) {
+    await bot.pathfinder.goto(new ctx.goals.GoalNear(x, y, z, 1)).catch((e) => ctx.log("warn", "pickup walk failed: " + e.message));
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
   return { collected };
@@ -294,7 +320,7 @@ const SMELT_ITEM: StockSkill = {
     await furnace.putFuel(itemId(bot, fuel), null, 1);
     await furnace.putInput(itemId(bot, input), null, count);
     let smelted = 0;
-    while (smelted < count) { await new Promise((r) => setTimeout(r, 1000)); ctx.log('smelting...'); smelted = furnace.outputItem() ? furnace.outputItem().count : smelted; }
+    while (smelted < count) { await new Promise((r) => setTimeout(r, 1000)); ctx.log("info", "smelting..."); smelted = furnace.outputItem() ? furnace.outputItem().count : smelted; }
     await furnace.takeOutput();
     return { smelted: count };
   } finally { furnace.close(); resumeMutators(bot); }
@@ -327,12 +353,86 @@ const KILL_MOB: StockSkill = {
   tier: 'mortal',
   exemplar: false,
   tags: ['combat'],
+  // Distance is Math.hypot over .x/.y/.z, NOT a Vec3 .distanceTo — a real mineflayer entity.position is a
+  // Vec3, but FakeBot models it as a plain {x,y,z}, so a .distanceTo here threw against the fake and the
+  // whole combat path was unproven in CI (project convention: skills compute distance with Math.hypot).
   code: `async function killMob(bot, { entityName, maxDistance = 16 }, ctx) {
-  const target = Object.values(bot.entities).find((e) => e && e.name === entityName && bot.entity.position.distanceTo(e.position) <= maxDistance);
+  const me = bot.entity.position;
+  const target = Object.values(bot.entities).find((e) => e && e.name === entityName && e.position && Math.hypot(e.position.x - me.x, e.position.y - me.y, e.position.z - me.z) <= maxDistance);
   if (!target) throw new Error('no ' + entityName + ' within ' + maxDistance);
   await bot.pvp.attack(target);
   while (target.isValid) { await new Promise((r) => setTimeout(r, 250)); }
   return { killed: true };
+}`,
+};
+
+// The RANGED counterpart to kill-mob — the primitive a tower archer composes to kill WITHOUT closing to
+// melee (the "no damage" path). Equip the bow, aim at the target's upper body, draw to full power
+// (activateItem → ~1.2 s → deactivateItem), repeat until it dies or the shot budget runs out. Needs a bow
+// + arrows; a clear error NAMES the missing one (S10) so write_skill knows to acquire it before retrying.
+const SHOOT_MOB: StockSkill = {
+  name: 'shoot-mob',
+  summary: 'tirer à l’arc sur une entité jusqu’à sa mort (charge complète, visée tête) — sans corps-à-corps',
+  params: obj({ entityName: S, maxDistance: N, maxShots: N }, ['entityName']),
+  returns: obj({ killed: { type: 'boolean' }, shots: N }),
+  tier: 'mortal',
+  exemplar: false,
+  tags: ['combat', 'ranged'],
+  code: `async function shootMob(bot, { entityName, maxDistance = 32, maxShots = 12 }, ctx) {
+  const bow = bot.inventory.items().find((i) => i.name === 'bow');
+  if (!bow) throw new Error('pas d’arc (bow) dans l’inventaire — impossible de tirer');
+  if (!bot.inventory.items().some((i) => i.name === 'arrow')) throw new Error('pas de flèches (arrow) dans l’inventaire');
+  await bot.equip(bow, 'hand');
+  // Math.hypot over .x/.y/.z, NOT Vec3 .distanceTo — FakeBot's entity.position is a plain {x,y,z} (see kill-mob).
+  const acquire = () => { const me = bot.entity.position; return Object.values(bot.entities).find((e) =>
+    e && e.name === entityName && e.position && Math.hypot(e.position.x - me.x, e.position.y - me.y, e.position.z - me.z) <= maxDistance); };
+  let shots = 0;
+  for (let i = 0; i < maxShots; i++) {
+    const target = acquire();
+    if (!target) break;                                   // dead or fled — stop firing
+    const headY = (typeof target.height === 'number' ? target.height : 1.8) * 0.85;
+    await bot.lookAt(target.position.offset(0, headY, 0), true);
+    bot.activateItem();                                   // draw the bow
+    await new Promise((r) => setTimeout(r, 1200));        // hold to full charge
+    bot.deactivateItem();                                 // release the arrow
+    shots++;
+    ctx.log("info", "shoot-mob: tir #" + shots + " sur " + entityName);
+    await new Promise((r) => setTimeout(r, 700));         // settle: arrow flight + re-acquire
+  }
+  return { killed: !acquire(), shots };
+}`,
+};
+
+// Positioning primitive for an archer: find the highest STANDABLE block nearby (a solid top with air to
+// stand in + headroom) strictly above the bot — the top of the tower/hill it should perch on to shoot down
+// without being reached. NAME-ONLY findBlocks matcher (R76: never read b.position inside a matcher — the
+// synthetic palette block has position:null, which silently skips the whole scan). Returns the cell ABOVE
+// the top block (where the body stands). Degrades to {found:false} cleanly when nothing rises near (S10).
+const FIND_HIGH_SPOT: StockSkill = {
+  name: 'find-high-spot',
+  summary: 'trouver le point praticable le plus HAUT à proximité (sommet de tour/colline) où se poster',
+  params: obj({ radius: N, minRise: N }),
+  returns: obj({ found: { type: 'boolean' }, x: N, y: N, z: N }),
+  tier: 'mortal',
+  exemplar: false,
+  tags: ['movement', 'positioning'],
+  code: `async function findHighSpot(bot, { radius = 16, minRise = 2 }, ctx) {
+  const SKIP = new Set(['air','cave_air','void_air','water','lava','short_grass','tall_grass','fire','snow']);
+  const me = bot.entity.position;
+  const tops = bot.findBlocks
+    ? bot.findBlocks({ matching: (b) => !!b && !SKIP.has(b.name), maxDistance: radius, count: 4096 })
+    : [];
+  let best = null, bestY = Math.floor(me.y) + minRise - 1;
+  for (const p of tops) {
+    if (p.y <= bestY) continue;                                  // not higher than the best so far
+    const above = bot.blockAt(new ctx.Vec3(p.x, p.y + 1, p.z));  // air to stand in
+    if (above && !SKIP.has(above.name)) continue;
+    const head = bot.blockAt(new ctx.Vec3(p.x, p.y + 2, p.z));   // headroom
+    if (head && !SKIP.has(head.name)) continue;
+    bestY = p.y; best = p;
+  }
+  if (!best) { ctx.log("info", "find-high-spot: aucun point plus haut a " + radius + " blocs"); return { found: false, x: 0, y: 0, z: 0 }; }
+  return { found: true, x: best.x, y: best.y + 1, z: best.z };   // stand ON TOP of the block
 }`,
 };
 
@@ -350,7 +450,7 @@ const EXPLORE_UNTIL: StockSkill = {
     if (found) return { found: true, x: found.position.x, y: found.position.y, z: found.position.z };
     const p = bot.entity.position;
     await ctx.skills.run('go-to', { x: p.x + 32, y: p.y, z: p.z, range: 3 });
-    ctx.log('explored hop ' + hop);
+    ctx.log("info", "explored hop " + hop);
   }
   return { found: false, x: 0, y: 0, z: 0 };
 }`,
@@ -446,6 +546,62 @@ const SOW_SEED: StockSkill = {
 //    caller branches), an action-skill does ONE world effect, a pair composes find→act, and `tend-bread-farm`
 //    sequences every pair in a loop. The atomic till/sow already exist as till-block/sow-seed (R55), so we
 //    reuse them rather than mint near-duplicates — that is the whole point.
+
+const FIND_TILLABLE: StockSkill = {
+  name: 'find-tillable',
+  summary:
+    'trouver la terre/herbe labourable (dirt/grass_block/dirt_path, AIR au-dessus) la plus proche — SANS exiger d’eau; renvoie une liste de spots triés du plus proche au plus loin (l’eau proche est juste préférée pour le rendement)',
+  params: obj({
+    maxDistance: N,
+    count: N,
+    exclude: { type: 'array' },
+    preferWater: { type: 'boolean' },
+  }),
+  returns: obj({ found: { type: 'boolean' }, count: N, spots: { type: 'array' }, x: N, y: N, z: N }),
+  tier: 'mortal',
+  exemplar: false,
+  tags: ['farming', 'search', 'till'],
+  // The general "find ground to till" primitive — the gap that made villagers churn (find-till-spot only
+  // works NEXT TO water, and on most maps water is out of range, so it returned nothing and tilling never
+  // started). R76: the bot.findBlocks matcher is NAME-ONLY (dirt/grass/dirt_path) so it survives mineflayer's
+  // synthetic-palette pre-check; the "air directly above", exclude-set, and water-preference are POST-filters
+  // on the returned positions, NEVER inside the matcher. Returns a nearest-first LIST so the caller tills each
+  // spot without re-searching (and without a position-keyed skip-set inside a matcher — the R76 trap again).
+  // {found:false} when there is no open dirt/grass — never throws, so the composer degrades gracefully.
+  code: `async function findTillable(bot, { maxDistance = 48, count = 16, exclude = [], preferWater = true }, ctx) {
+  const TILLABLE = new Set(['dirt', 'grass_block', 'dirt_path']);
+  const isOpen = (b) => !b || b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air';
+  const skip = new Set((exclude || []).map((p) => p.x + ',' + p.y + ',' + p.z));
+  // NAME-ONLY matcher (palette-safe, R76). Over-fetch so the air-above filter still yields ~count spots.
+  const positions = bot.findBlocks
+    ? bot.findBlocks({ matching: (b) => !!b && TILLABLE.has(b.name), maxDistance, count: Math.max(count * 4, 32) })
+    : [];
+  const open = [];
+  for (const p of positions) {
+    if (skip.has(p.x + ',' + p.y + ',' + p.z)) continue;
+    const above = bot.blockAt(new ctx.Vec3(p.x, p.y + 1, p.z)); // neighbour check AFTER findBlocks, not inside it
+    if (isOpen(above)) open.push({ x: p.x, y: p.y, z: p.z });
+  }
+  if (open.length === 0) {
+    ctx.log("info", "find-tillable: aucune terre/herbe labourable (air au-dessus) dans " + maxDistance + "m");
+    return { found: false, count: 0, spots: [], x: 0, y: 0, z: 0 };
+  }
+  // Optional yield preference: water within a 4-block box hydrates farmland — float those spots first
+  // (stable sort keeps nearest-first within each group). NEVER gates tilling: no water ⇒ just nearest-first.
+  if (preferWater) {
+    const water = bot.findBlock ? bot.findBlock({ matching: (b) => !!b && b.name === 'water', maxDistance }) : null;
+    if (water && water.position) {
+      const w = water.position;
+      const near = (s) => Math.abs(s.x - w.x) <= 4 && Math.abs(s.z - w.z) <= 4 && Math.abs(s.y - w.y) <= 1;
+      open.sort((a, b) => (near(b) ? 1 : 0) - (near(a) ? 1 : 0));
+    }
+  }
+  const spots = open.slice(0, count);
+  const first = spots[0];
+  ctx.log("info", "find-tillable: " + spots.length + " spot(s), plus proche " + first.x + "," + first.y + "," + first.z);
+  return { found: true, count: spots.length, spots, x: first.x, y: first.y, z: first.z };
+}`,
+};
 
 const FIND_TILL_SPOT: StockSkill = {
   name: 'find-till-spot',
@@ -578,7 +734,7 @@ const PICKUP_DROPS: StockSkill = {
       await ctx.skills.run('go-to', { x: pos.x, y: pos.y, z: pos.z, range: 1 });
       await sleep(200);
       picked++;
-    } catch (e) { ctx.log('drop ignoré: ' + e.message); }
+    } catch (e) { ctx.log("warn", "drop ignoré: " + e.message); }
   }
   return { picked };
 }`,
@@ -688,13 +844,13 @@ const TEND_BREAD_FARM: StockSkill = {
       if (haveSeed()) {
         // The crop sat on farmland one block below it — replant there.
         try { await ctx.skills.run('sow-seed', { x: reap.x, y: reap.y - 1, z: reap.z, seed }); planted++; }
-        catch (e) { ctx.log('replant ignoré: ' + e.message); }
+        catch (e) { ctx.log("warn", "replant ignoré: " + e.message); }
       }
     } else {
       const tilled = await ctx.skills.run('till-spot-near-water', { maxDistance: 32 });
       if (tilled.tilled && haveSeed()) {
         try { await ctx.skills.run('sow-seed', { x: tilled.x, y: tilled.y, z: tilled.z, seed }); planted++; }
-        catch (e) { ctx.log('semis ignoré: ' + e.message); }
+        catch (e) { ctx.log("warn", "semis ignoré: " + e.message); }
       }
     }
     if (wheat() >= breadThreshold) {
@@ -702,7 +858,7 @@ const TEND_BREAD_FARM: StockSkill = {
         const made = await ctx.skills.run('make-bread', { count: Math.floor(wheat() / breadThreshold) });
         baked += made.crafted || 0;
         if (made.crafted > 0) await ctx.skills.run('store-in-chest', { items: [{ name: 'bread', count: made.crafted }], ...(chest || {}) });
-      } catch (e) { ctx.log('cuisson/rangement ignoré: ' + e.message); }
+      } catch (e) { ctx.log("warn", "cuisson/rangement ignoré: " + e.message); }
     }
     await sleep(500);
   }
@@ -757,7 +913,7 @@ const DEFEND_SELF: StockSkill = {
     const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (d <= best) { best = d; target = e; }
   }
-  if (!target) { ctx.log('defend-self: aucun ennemi à portée'); return { defended: false }; }
+  if (!target) { ctx.log("warn", "defend-self: aucun ennemi a portee"); return { defended: false }; }
   await ctx.skills.run('kill-mob', { entityName: target.name, maxDistance });
   return { defended: true };
 }`,
@@ -778,7 +934,7 @@ const GO_HOME: StockSkill = {
   // args when the time emitter lands.
   code: `async function goHome(bot, { x, y, z, range = 2 }, ctx) {
   if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') {
-    ctx.log('go-home: pas d’ancre maison fournie — rien à faire');
+    ctx.log("warn", "go-home: pas d’ancre maison fournie - rien a faire");
     return { home: false };
   }
   await ctx.skills.run('go-to', { x, y, z, range });
@@ -802,7 +958,7 @@ const HARVEST_FIELD: StockSkill = {
     const wheat = bot.findBlock ? bot.findBlock({ matching: (b) => b && b.name === 'wheat', maxDistance: 16 }) : null;
     if (!wheat) break;
     try { await bot.dig(wheat); harvested++; }
-    catch (e) { ctx.log('harvest-field: bloc non récoltable: ' + e.message); break; }
+    catch (e) { ctx.log("warn", "harvest-field: bloc non recolatable: " + e.message); break; }
   }
   return { harvested };
 }`,
@@ -852,11 +1008,14 @@ export const STOCK_SKILLS: StockSkill[] = [
   SMELT_ITEM,
   PLACE_ITEM,
   KILL_MOB,
+  SHOOT_MOB,
+  FIND_HIGH_SPOT,
   EXPLORE_UNTIL,
   // Farming primitives — confirmed till/sow (R55: wait for the server block-update, never read sync).
   TILL_BLOCK,
   SOW_SEED,
   // The bread economy — one canonical skill per action, composed into find→act pairs, then one loop.
+  FIND_TILLABLE,
   FIND_TILL_SPOT,
   TILL_SPOT_NEAR_WATER,
   FIND_HARVESTABLE_PLANT,

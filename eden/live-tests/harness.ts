@@ -44,6 +44,22 @@ export interface Scenario {
   assert: (ctx: AssertContext) => Promise<AssertResult>;
   /** wall-clock ceiling for the whole run (the deadline each task races against). */
   timeoutMs: number;
+  /**
+   * Optional MANUAL-SETUP pause (ms) AFTER the bots connect + prepare (gear) runs, BEFORE the tasks inject.
+   * For scenarios where the operator hand-builds part of the world (e.g. an archer's tower + a mob spawner)
+   * while the bots wait, already equipped. Overridable at run time with EDEN_LIVE_SETUP_PAUSE_MS. The parent
+   * supervisor (run.ts) adds this to its hard-kill grace so a long pause never reads as a wedge. 0/undefined
+   * = no pause (the default — every existing scenario is unaffected).
+   */
+  setupPauseMs?: number;
+}
+
+/** Resolve a scenario's manual-setup pause (ms): the env override wins over the scenario default. Shared by
+ *  the runner (which sleeps it) and the supervisor (which folds it into the hard-kill grace). */
+export function setupPauseMsOf(scenario: Scenario): number {
+  const env = process.env['EDEN_LIVE_SETUP_PAUSE_MS'];
+  const ms = env !== undefined && env !== '' ? Number(env) : (scenario.setupPauseMs ?? 0);
+  return Number.isFinite(ms) && ms > 0 ? ms : 0;
 }
 
 /** The outcome of one injected task (the coordinator result, a timeout, or an error). */
@@ -250,6 +266,16 @@ export async function runScenario(scenario: Scenario, opts: { runDir?: string; p
     }
     log('settling 3s for chunk load + inventory sync …');
     await sleep(3000);
+
+    // Manual-setup pause: bots are connected + equipped but have NO task yet. Use this window to hand-build
+    // the part of the world the scenario leaves to the operator (an archer's tower, a mob spawner). Tasks
+    // inject the instant it ends. The parent supervisor folds this into its hard-kill grace (run.ts).
+    const pauseMs = setupPauseMsOf(scenario);
+    if (pauseMs > 0) {
+      log(`MANUAL SETUP PAUSE: ${(pauseMs / 1000).toFixed(0)}s — build your tower + place the spawner now (bots are connected + equipped); tasks inject when it ends.`);
+      await sleep(pauseMs);
+      log('manual-setup pause over — injecting tasks.');
+    }
 
     progress = setInterval(() => log(`journal: ${JSON.stringify(kindHistogram(host!))}`), 20_000);
 

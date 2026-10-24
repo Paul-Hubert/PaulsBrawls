@@ -1,0 +1,51 @@
+{
+  // Defense-outpost scenario — an ARCHER on a high spot + a SWORDSMAN on the ground learn to DETECT
+  // hostile mobs and kill them WITHOUT taking damage. Run it interactively on the real server:
+  //   1. set  "scenario": "detect-and-defend"  in eden.json, then boot the host (tsx src/main.ts eden.json)
+  //   2. in-game: /villagers start   (connects + equips Aldric & Bertrand at the world spawn)
+  //   3. build a small tower next to Aldric (with stairs/ladder so it can climb) — it will find-high-spot,
+  //   4. place a zombie spawner within aggro range; ensure difficulty >= easy and the spawner area is dark.
+  // The villagers carry full iron armor + iron sword + bow + arrows (given on connect; armor-manager
+  // auto-equips). Detection is the real M5 seam: the entity-spotted poll + the archer/swordsman role
+  // reflexes (roles.json) make a villager engage the instant a hostile enters perception. God (godPrompt
+  // below) teaches each one to author a detect-and-engage skill composing the stock primitives.
+
+  "name": "detect-and-defend",
+  "description": "Avant-poste de défense: un archer en hauteur et un épéiste détectent et abattent les hostiles sans subir de dégâts.",
+
+  "god": {
+    "combineDesks": false,
+    "embodiedVerdicts": true,
+    "authoring": "villager",
+    "godPrompt": "Defense outpost. An ARCHER (Aldric) and a SWORDSMAN (Bertrand) must learn to DETECT hostile mobs and KILL them WITHOUT taking a single point of damage. Teach skills ONE AT A TIME, in the order below; propose ONLY the current skill's task and do NOT propose the next until the current one is admitted to the library as `active` AND confirmed by a successful verdict.\n\nThe villagers ALREADY carry full iron armor, an iron sword, a bow and arrows — do NOT propose acquiring gear. Every skill must COMPOSE the existing primitive skills (find-high-spot, go-to, shoot-mob, kill-mob, defend-self, pickup-drops) via ctx.skills.run — never re-implement a primitive. The OPERATOR builds a small tower next to the archer and places a zombie spawner within aggro range; do NOT summon mobs yourself — the spawner provides them.\n\nThe SUCCESS BAR for every combat skill is strict: the targeted mobs die AND the villager takes ZERO damage (its health never drops). A villager that gets hit has NOT succeeded — your critique must push it to engage SOONER, from FARTHER, or from HIGHER ground (and the archer must never leave its perch).\n\nThe skills to teach, in this order:\n1. perch-high (Aldric) — find the highest standable spot nearby by composing 'find-high-spot', then climb onto it with 'go-to'. The archer fights from up here so melee mobs can never reach it. GRACEFUL: if no higher spot exists, stay put and return success.\n2. snipe-hostiles (Aldric) — from the perch, LOOP: find the nearest hostile mob (e.g. a zombie) and shoot it dead with the bow by composing 'shoot-mob', repeating until none remain in range. NEVER descend the tower; take zero damage. GRACEFUL: if no hostile is in range, return success (nothing to shoot).\n3. intercept-hostiles (Bertrand) — LOOP: find the nearest hostile mob and kill it by composing 'kill-mob' (or soften it first with 'shoot-mob' while it is still far), engaging at the EDGE of detection so it dies BEFORE it can land a hit, repeating until none remain. Take zero damage. GRACEFUL: if no hostile is in range, return success.\n\nGraceful degradation (nothing to do = return success) is a SUCCESS, not a failure. Each skill is its own standalone library skill — do NOT bundle them into one big loop. After these three are active and confirmed, the mission is COMPLETE — stop proposing new skills."
+  },
+
+  "villagers": {
+    "Aldric": {
+      "role": "archer",
+      "persona": "Tu es Aldric, un archer vigilant et patient. Tu défends depuis les hauteurs et tu abats l'ennemi à l'arc bien avant qu'il n'approche — jamais tu ne te laisses toucher.",
+      "items": [
+        { "id": "minecraft:iron_helmet",     "count": 1 },
+        { "id": "minecraft:iron_chestplate", "count": 1 },
+        { "id": "minecraft:iron_leggings",   "count": 1 },
+        { "id": "minecraft:iron_boots",      "count": 1 },
+        { "id": "minecraft:iron_sword",      "count": 1 },
+        { "id": "minecraft:bow",             "count": 1 },
+        { "id": "minecraft:arrow",           "count": 128 }
+      ]
+    },
+    "Bertrand": {
+      "role": "swordsman",
+      "persona": "Tu es Bertrand, un épéiste discipliné. Tu interceptes les monstres tôt et tu les abats net, sans jamais encaisser un coup.",
+      "items": [
+        { "id": "minecraft:iron_helmet",     "count": 1 },
+        { "id": "minecraft:iron_chestplate", "count": 1 },
+        { "id": "minecraft:iron_leggings",   "count": 1 },
+        { "id": "minecraft:iron_boots",      "count": 1 },
+        { "id": "minecraft:iron_sword",      "count": 1 },
+        { "id": "minecraft:bow",             "count": 1 },
+        { "id": "minecraft:arrow",           "count": 128 }
+      ]
+    }
+  }
+}

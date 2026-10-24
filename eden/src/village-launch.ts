@@ -78,7 +78,7 @@ export class VillageLauncher {
     if (this.running) return { ok: true, message: 'village already running', botNames: this.botNames() };
     this.arm(cx, cz, false);
     this.running = true;
-    void this.deps.pool!.start();
+    this.kickPool();
     return { ok: true, message: `village started (${this.deps.villagers.length} villager(s))`, botNames: this.botNames() };
   }
 
@@ -102,7 +102,7 @@ export class VillageLauncher {
     }
     this.arm(cx, cz, true);
     this.running = true;
-    void this.deps.pool!.start();
+    this.kickPool();
     return { ok: true, message: `village restarted (${this.deps.villagers.length} villager(s))`, botNames: this.botNames() };
   }
 
@@ -156,6 +156,15 @@ export class VillageLauncher {
   private arm(cx: number, cz: number, clear: boolean): void {
     this.setup = { cx, cz, clear };
     this.didSetup.clear();
+  }
+
+  /** Fire the (deferred) pool connect. LOW-7: attach a .catch so a reject from pool.start() (e.g. a sync FS
+   *  throw in stampWorldId) is always logged + attributed, never an unhandled rejection — the admin route's
+   *  response has already returned by the time the staggered login resolves/rejects. */
+  private kickPool(): void {
+    this.deps.pool!.start().catch((e: unknown) =>
+      logger.error('village', `pool.start failed: ${e instanceof Error ? e.message : String(e)}`),
+    );
   }
 
   private botNames(): string[] {

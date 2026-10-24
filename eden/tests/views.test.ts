@@ -29,6 +29,7 @@ function runReport(over: Partial<RunReport>): RunReport {
     pulses: 3,
     deepestDepth: 0,
     callTree: [],
+    logs: [],
     worldBefore: null,
     worldAfter: null,
     ...over,
@@ -176,3 +177,4 @@ let seq = 0;
 function ev(kind: string, payload: object, refs: Record<string, unknown> = {}): import('../src/types/index').JournalEvent {
   return { id: `e${seq++}`, at: 1000 + seq, actor: 'engine', kind, payload, refs };
 }
+

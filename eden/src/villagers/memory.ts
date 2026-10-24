@@ -22,9 +22,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { ulid } from 'ulid';
+
 import type { MemoryEntry, MemorySeed, MemoryWriter, Relation } from '../types/index';
 import type { IJournal, JournalAppender } from '../journal/journal';
-import { cosine, keywordScore, type EmbeddingsService } from '../llm/embeddings';
+import { keywordScore, type EmbeddingsService } from '../llm/embeddings';
+import type { IVectorStore } from '../vectors/store';
 import type { MemorySummarizer } from './memory-summarizer';
 
 export { MemorySummarizer } from './memory-summarizer';
@@ -76,6 +79,12 @@ export interface VillagerMemoryOptions {
   worldId: string;
   /** Semantic backend for the relevance half of max(cosine, keyword). Omit → keyword floor (R38). */
   embeddings?: EmbeddingsService;
+  /**
+   * Persisted vector store (sqlite-vec on eden.db). Each entry's embedding is computed ONCE at write
+   * and stored under the villager namespace; recall embeds only the query then KNNs the stored vectors.
+   * Omit (or a store whose extension failed to load) → keyword floor (R38, extended to the store).
+   */
+  vectors?: IVectorStore;
   /** The fast-LLM summarizer run on eviction. Omit → eviction still archives, just no rolling summary. */
   summarizer?: MemorySummarizer;
   windowMax?: number;
@@ -94,6 +103,7 @@ export class VillagerMemory implements MemoryWriter {
   private readonly journal: JournalAppender;
   private readonly worldId: string;
   private readonly embeddings?: EmbeddingsService;
+  private readonly vectors?: IVectorStore;
   private readonly summarizer?: MemorySummarizer;
   private readonly windowMax: number;
   private readonly evictBatch: number;
@@ -109,6 +119,8 @@ export class VillagerMemory implements MemoryWriter {
   private quarantine: PersistedMemory | null = null;
   // Pending summarization work — flushSummary() awaits it (off the hot path).
   private pendingSummary: Promise<void> = Promise.resolve();
+  // Pending embed+upsert work (embed-at-write, off the hot path) — flushVectors() awaits it.
+  private pendingVectors: Promise<void> = Promise.resolve();
 
   constructor(opts: VillagerMemoryOptions) {
     this.villager = opts.villager;
@@ -116,18 +128,25 @@ export class VillagerMemory implements MemoryWriter {
     this.journal = opts.journal;
     this.worldId = opts.worldId;
     if (opts.embeddings) this.embeddings = opts.embeddings;
+    if (opts.vectors) this.vectors = opts.vectors;
     if (opts.summarizer) this.summarizer = opts.summarizer;
     this.windowMax = opts.windowMax ?? DEFAULT_WINDOW_MAX;
     this.evictBatch = opts.evictBatch ?? DEFAULT_EVICT_BATCH;
     this.archiveMax = opts.archiveMax ?? DEFAULT_ARCHIVE_MAX;
     this.now = opts.now ?? Date.now;
     this.load();
+    // Back-compat: entries persisted before MemoryEntry.id existed get one assigned (the vec0 key).
+    this.assignMissingIds();
+    // One-time, off-the-hot-path backfill: embed any live entry that has no stored vector yet (cold start
+    // or migrating an existing store). Idempotent + crash-resumable — the ONLY bulk re-embed (5d).
+    this.scheduleBackfill();
   }
 
   // ── writes (MemoryWriter) ─────────────────────────────────────────────────────────────────────
   /** Seed an episodic entry into the window (heuristic importance + tags if omitted). May evict. */
   remember(seed: MemorySeed): MemoryEntry {
     const entry: MemoryEntry = {
+      id: ulid(),
       kind: seed.kind,
       text: seed.text,
       tags: seed.tags && seed.tags.length > 0 ? seed.tags : deriveTags(seed.text),
@@ -135,6 +154,9 @@ export class VillagerMemory implements MemoryWriter {
       at: this.now(),
     };
     this.window.push(entry);
+    // Embed-at-write, off the hot path (best-effort, like the summarizer): remember() stays synchronous.
+    // Until the vector lands (one macrotask) the entry simply scores on the keyword floor — acceptable.
+    this.scheduleVector(entry);
     this.maybeEvict();
     this.persist();
     return entry;
@@ -186,23 +208,30 @@ export class VillagerMemory implements MemoryWriter {
   /**
    * Ranked retrieval over the live window (and archive) for a query (context-pack §6). The blend is
    * 0.5·relevance + 0.25·recency(2 h half-life) + 0.25·importance, relevance = max(cosine, keyword).
-   * Embeddings are computed lazily here and degrade to the keyword floor (R38: embed → null).
+   *
+   * Embed-at-write means recall embeds ONLY the query (1 inference, was O(pool)) and reads cosine from
+   * the vector store for the EXACT in-RAM pool — `scoreFor` brute-forces the partition in C so no entry
+   * is dropped before the recency/importance blend (docs/21 §6). With embeddings OR the store
+   * off/degraded, every entry scores on the keyword floor and the ranking is unchanged (R38).
    */
   async retrieve(query: string, k: number): Promise<RankedMemory[]> {
     const pool = [...this.window, ...this.archiveStore];
     if (pool.length === 0) return [];
 
-    // Lazy, batched embeddings off the hot path; null (off/degraded) → keyword floor everywhere (R38).
-    let vectors: number[][] | null = null;
-    if (this.embeddings?.enabled()) {
-      vectors = await this.embeddings.embed([query, ...pool.map((e) => e.text)]);
+    // ONE inference: the query only. Skipped entirely (→ keyword floor) when either backend is unavailable.
+    let queryVec: number[] | undefined;
+    if (this.embeddings?.enabled() && this.vectors?.enabled()) {
+      const v = await this.embeddings.embed([query]);
+      queryVec = v?.[0];
     }
-    const queryVec = vectors?.[0];
+    const cosById = queryVec
+      ? this.vectors!.scoreFor(this.villager, queryVec, pool.map((e) => e.id))
+      : undefined;
 
     const tNow = this.now();
-    const ranked: RankedMemory[] = pool.map((entry, i) => {
+    const ranked: RankedMemory[] = pool.map((entry) => {
       const kw = keywordScore(query, entry.text);
-      const cos = queryVec && vectors ? Math.max(0, cosine(queryVec, vectors[i + 1] ?? [])) : 0;
+      const cos = cosById ? Math.max(0, cosById.get(entry.id) ?? 0) : 0; // 0 = no vector yet → keyword floor
       const relevance = Math.max(cos, kw); // relevance = max(embedding cosine, keyword overlap) (04)
       const recency = Math.pow(0.5, (tNow - entry.at) / RECENCY_HALF_LIFE_MS);
       const importance = clamp(entry.importance, 0, 10) / 10;
@@ -236,17 +265,28 @@ export class VillagerMemory implements MemoryWriter {
       this.archiveStore = this.quarantine.archive;
       this.relationMap = new Map(this.quarantine.relations.map((r) => [r.other, r]));
       this.summary = this.quarantine.lifeSummary;
+      this.quarantine = null;
+      this.assignMissingIds(); // pre-id entries adopted from the old world get a stable vec0 key
       this.trimArchive();
+      this.persist(); // re-stamp with the current world id + the adopted state
+      this.scheduleBackfill(); // re-embed any adopted entry whose vector is absent (text unchanged)
+      return;
     }
-    // 'wipe' keeps the already-empty live state.
+    // 'wipe' keeps the already-empty live state; drop the dead-world vectors too (R32).
+    this.vectors?.clear(this.villager);
     this.quarantine = null;
-    this.persist(); // re-stamp with the current world id + the resolved state
+    this.persist(); // re-stamp with the current world id + the empty state
   }
 
   // ── summarization (off the hot path; flushSummary awaits the pending work) ───────────────────────
   /** Await any in-flight eviction summarization (tests + graceful shutdown). */
   async flushSummary(): Promise<void> {
     await this.pendingSummary;
+  }
+
+  /** Await any in-flight embed+upsert work — the embed-at-write + backfill chain (tests + shutdown). */
+  async flushVectors(): Promise<void> {
+    await this.pendingVectors;
   }
 
   private maybeEvict(): void {
@@ -262,7 +302,22 @@ export class VillagerMemory implements MemoryWriter {
 
   private trimArchive(): void {
     if (this.archiveStore.length > this.archiveMax) {
-      this.archiveStore.splice(0, this.archiveStore.length - this.archiveMax);
+      const dropped = this.archiveStore.splice(0, this.archiveStore.length - this.archiveMax);
+      // The only place a vector is deleted: an entry FIFO-dropped past archiveMax is gone for good.
+      // (Eviction window→archive keeps the text — and therefore the vector — valid, so it does nothing.)
+      // Route the delete through the SAME pendingVectors chain as the per-write upsert so it is ordered
+      // AFTER that entry's (deferred) upsert — otherwise the async upsert lands after a sync delete and
+      // orphans the vector.
+      if (this.vectors?.enabled() && dropped.length > 0) {
+        const ids = dropped.map((e) => e.id);
+        this.pendingVectors = this.pendingVectors
+          .then(() => {
+            for (const id of ids) this.vectors!.delete(this.villager, id);
+          })
+          .catch(() => {
+            // Best-effort: a failed delete leaves a stale vector (harmless — its entry is gone), never throws.
+          });
+      }
     }
   }
 
@@ -287,19 +342,83 @@ export class VillagerMemory implements MemoryWriter {
         }
         // Seed up to two LESSON memories into the live window (insights survive eviction — 04).
         for (const lesson of (result.lessons ?? []).slice(0, 2)) {
-          this.window.push({
+          const entry: MemoryEntry = {
+            id: ulid(),
             kind: 'lesson',
             text: lesson,
             tags: deriveTags(lesson),
             importance: IMPORTANCE_BY_KIND.lesson,
             at: this.now(),
-          });
+          };
+          this.window.push(entry);
+          this.scheduleVector(entry); // embed-at-write for the distilled insight too
         }
         this.persist();
       })
       .catch(() => {
         // Summarization is best-effort: a model/network error never breaks the memory flow (R39 spirit).
       });
+  }
+
+  // ── embed-at-write (off the hot path; flushVectors awaits the chain) ─────────────────────────────
+  /**
+   * Schedule a single entry's embed+upsert on the pendingVectors chain (fire-and-forget, best-effort —
+   * exactly the summarizer pattern). A no-op when either backend is unavailable; until the vector lands
+   * the entry scores on the keyword floor (acceptable). Errors are swallowed (the store also degrades).
+   */
+  private scheduleVector(entry: MemoryEntry): void {
+    if (!this.embeddings?.enabled() || !this.vectors?.enabled()) return;
+    const { id, text } = entry;
+    this.pendingVectors = this.pendingVectors
+      .then(async () => {
+        const v = await this.embeddings!.embed([text]);
+        const vec = v?.[0];
+        if (vec) this.vectors!.upsert(this.villager, id, vec);
+      })
+      .catch(() => {
+        // Best-effort: an embed/store error never breaks the memory flow (R38/R39 spirit).
+      });
+  }
+
+  /**
+   * One-time bulk backfill: embed every live entry that has no stored vector yet, in batches, off the
+   * hot path. Idempotent (already-stored ids are skipped) and crash-resumable (vectors persist as
+   * computed). This is the ONLY place memory re-embeds in bulk — once per process per missing set, never
+   * per recall (the whole point of the migration).
+   */
+  private scheduleBackfill(): void {
+    if (!this.embeddings?.enabled() || !this.vectors?.enabled()) return;
+    const have = this.vectors.keys(this.villager);
+    const missing = [...this.window, ...this.archiveStore].filter((e) => !have.has(e.id));
+    if (missing.length === 0) return;
+    this.pendingVectors = this.pendingVectors
+      .then(async () => {
+        const BATCH = 32;
+        for (let i = 0; i < missing.length; i += BATCH) {
+          const batch = missing.slice(i, i + BATCH);
+          const vecs = await this.embeddings!.embed(batch.map((e) => e.text));
+          if (!vecs) return; // off/degraded mid-backfill → stop (keyword floor; a later boot resumes)
+          for (let j = 0; j < batch.length; j++) {
+            const vec = vecs[j];
+            if (vec) this.vectors!.upsert(this.villager, batch[j]!.id, vec);
+          }
+        }
+      })
+      .catch(() => {
+        // Best-effort: a backfill failure leaves those entries on the keyword floor, never crashes boot.
+      });
+  }
+
+  /** Assign a stable id to any entry persisted before MemoryEntry.id existed; re-persist if any changed. */
+  private assignMissingIds(): void {
+    let changed = false;
+    for (const e of [...this.window, ...this.archiveStore]) {
+      if (!e.id) {
+        e.id = ulid();
+        changed = true;
+      }
+    }
+    if (changed) this.persist();
   }
 
   // ── persistence (.eden-data/bots/<name>.json under the `memory` key) ─────────────────────────────

@@ -133,6 +133,14 @@ export class Orchestrator {
    */
   async dispatch(opts: { task?: Task; event?: string; trigger: DispatchTrigger }): Promise<Directive[]> {
     const user = this.renderDispatchContext(opts);
+    // MED-14 / R68: a task-driven dispatch (a task is on the table) MUST emit a real `directive` tool
+    // call — with `tool_choice:'auto'` gpt-4o intermittently narrates the directive JSON as text
+    // (finish_reason='stop', toolCalls empty), silently dropping the directive's reason/priority (the
+    // same narration-as-text failure the curriculum and critic were forced off of). When a task is
+    // present, force the single tool exactly as those desks do. A survey trigger (idle-sweep / routed
+    // event / admin) with NO task may legitimately produce ZERO directives (everyone is busy, nothing
+    // to escalate), so it stays on `auto` — forcing a tool there would mint a spurious order.
+    const forceTool = opts.task !== undefined;
     const result = await this.scheduler.enqueue({
       villager: 'god:orchestrator',
       lane: 'god',
@@ -144,6 +152,7 @@ export class Orchestrator {
             { role: 'user', content: user },
           ],
           tools: [DIRECTIVE_TOOL],
+          ...(forceTool ? { toolChoice: { type: 'function' as const, function: { name: 'directive' } } } : {}),
           tier: this.tier,
           caller: 'god:orchestrator',
         }),

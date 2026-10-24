@@ -8,12 +8,14 @@ import type { Scenario } from './harness';
 import { farmWheat } from './scenarios/farm-wheat';
 import { craftWoodenTools } from './scenarios/craft-wooden-tools';
 import { cooperativeMobDefense } from './scenarios/cooperative-mob-defense';
+import { detectAndDefend } from './scenarios/detect-and-defend';
 
 /**
  * The catalogue, in the SUGGESTED run order: lowest real-mineflayer risk first (farm-wheat proves the
- * harness end-to-end), the crafting-window risk next, the pvp + multi-villager risk last.
+ * harness end-to-end), the crafting-window risk next, the pvp + multi-villager risk last. detect-and-defend
+ * is operator-driven (a manual-setup pause for the tower + spawner) so it sits last, after the automated set.
  */
-export const SCENARIOS: Scenario[] = [farmWheat, craftWoodenTools, cooperativeMobDefense];
+export const SCENARIOS: Scenario[] = [farmWheat, craftWoodenTools, cooperativeMobDefense, detectAndDefend];
 
 /** Distinct assignee names referenced by a scenario's tasks (used by the runner + the catalogue test). */
 export function scenarioAssignees(scenario: Scenario): string[] {

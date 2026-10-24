@@ -13,7 +13,7 @@ import type { Inbox, RunReport, Snapshot, Task, Verdict } from '../src/types/ind
 const SNAP: Snapshot = { biome: 'plains', time: 0, position: [0, 64, 0], health: 20, hunger: 20, equipment: [], inventory: [], nearbyEntities: [], nearbyBlocks: [], knownChests: [] };
 
 function report(over: Partial<RunReport> = {}): RunReport {
-  return { runId: 'run-1', rolloutId: 'roll-x', skill: 'collect-oak-logs', version: 1, villager: 'Firmin', args: {}, outcome: { ok: true }, startedAt: 0, durationMs: 50, pulses: 1, deepestDepth: 0, callTree: [], worldBefore: SNAP, worldAfter: SNAP, ...over };
+  return { runId: 'run-1', rolloutId: 'roll-x', skill: 'collect-oak-logs', version: 1, villager: 'Firmin', args: {}, outcome: { ok: true }, startedAt: 0, durationMs: 50, pulses: 1, deepestDepth: 0, callTree: [], logs: [], worldBefore: SNAP, worldAfter: SNAP, ...over };
 }
 
 function task(over: Partial<Task> = {}): Task {
@@ -121,3 +121,4 @@ test('M3-4 (D-12(ii)/R37): a wrongly-quarantined skill that succeeds re-enters a
   assert.equal(out.admitted, true);
   assert.equal(library.getVersion('collect-oak-logs', 1)?.status, 'active-probation', 'self-healing un-quarantine lands in active-probation (R37/R48), never straight to active');
 });
+

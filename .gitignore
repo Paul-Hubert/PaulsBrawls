@@ -100,6 +100,7 @@ nb-configuration.xml
 
 
 run/world/
+run/super-flat-builds/
 run/logs/
 run/usercache.json
 run/ops.json

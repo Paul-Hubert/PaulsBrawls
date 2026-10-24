@@ -71,11 +71,16 @@ export class SettlementClient {
    * otherwise. NEVER throws into the flow — a network/HTTP error is a SettlementResult{ok:false}.
    */
   async settle(tradeId: string, offer: TradeOffer): Promise<SettlementResult> {
+    // The mod's VillageHttpListener.TradeRequest deserializes (Gson) EXACTLY {botA,botB,aGives,bGives}
+    // — any other key names leave those fields null and `validateShape` 400s with "missing botA". So the
+    // wire body MUST use the mod's names: from→botA, to→botB, give→aGives, and want (what `to`/botB gives
+    // back) → bGives. The item line shape {item,count} already matches the mod's ItemSpec. (Eden's own
+    // journal events keep the from/to/give/want vocabulary; only this POST speaks the mod's contract.)
     const body = {
-      from: offer.from,
-      to: offer.to,
-      give: offer.give.map(resolveItem),
-      want: offer.want.map(resolveItem),
+      botA: offer.from,
+      botB: offer.to,
+      aGives: offer.give.map(resolveItem),
+      bGives: offer.want.map(resolveItem),
     };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);

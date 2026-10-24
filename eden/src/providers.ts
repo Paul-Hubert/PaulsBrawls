@@ -38,7 +38,13 @@ function parseProviderConfig(raw: Raw, tier: 'strong' | 'fast'): ProviderConfig 
  */
 export function loadProviders(path: string): Record<string, ProviderPreset> {
   const text = readFileSync(path, 'utf8');
-  const raw: unknown = JSON.parse(stripJsonComments(text, { trailingCommas: true }));
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stripJsonComments(text, { trailingCommas: true }));
+  } catch (e) {
+    // LOW-5: name the offending file (S10) instead of a bare SyntaxError.
+    throw new Error(`config: ${path} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+  }
   if (!isObj(raw)) throw new Error(`providers: ${path} must be a JSON object`);
   const result: Record<string, ProviderPreset> = {};
   for (const [name, entry] of Object.entries(raw)) {

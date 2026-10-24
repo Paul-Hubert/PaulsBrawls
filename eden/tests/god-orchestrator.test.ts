@@ -81,6 +81,35 @@ test('M4-2 (dispatch routing): a directive call opens directivesOpen + delivers 
   }
 });
 
+test('MED-14 / R68 (task-driven dispatch forces the directive tool — never "auto")', async () => {
+  // A dispatch with a task on the table MUST emit a real directive tool call; with tool_choice:'auto'
+  // gpt-4o narrates the directive JSON as text and silently drops it (the R68 failure the curriculum +
+  // critic were forced off of). The wire body must carry the forced tool.
+  const h = await harness([directiveTurn({ to: 'Firmin', goal: 'Collect 3 oak logs', reason: 'r', priority: 'normal' })]);
+  try {
+    await h.orch.dispatch({ task: task(), trigger: 'new-task' });
+    const wired = h.llm.requests[0]?.body as Record<string, unknown>;
+    assert.deepEqual(wired['tool_choice'], { type: 'function', function: { name: 'directive' } },
+      'a task-driven dispatch forces the directive tool (R68)');
+  } finally {
+    await h.close();
+  }
+});
+
+test('MED-14 (a survey trigger with no task stays on "auto" — zero directives is legitimate)', async () => {
+  // An idle-sweep / routed event with no task may legitimately produce NO directive (everyone is busy,
+  // nothing to escalate). Forcing the tool there would mint a spurious order, so it stays on 'auto'.
+  const h = await harness([{ content: 'rien à faire', finishReason: 'stop' }]);
+  try {
+    const dirs = await h.orch.dispatch({ trigger: 'idle-sweep' });
+    assert.equal(dirs.length, 0, 'a survey trigger can produce zero directives');
+    const wired = h.llm.requests[0]?.body as Record<string, unknown>;
+    assert.equal(wired['tool_choice'], 'auto', 'a no-task survey dispatch is not forced (zero directives is valid)');
+  } finally {
+    await h.close();
+  }
+});
+
 test('M4-2 (anti-thrash: max 1 open non-standing/villager): a second directive supersedes the oldest (journaled)', async () => {
   const h = await harness([
     directiveTurn({ to: 'Firmin', goal: 'first job', reason: 'r1', priority: 'normal' }),

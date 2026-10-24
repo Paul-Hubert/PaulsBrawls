@@ -15,7 +15,7 @@
 
 import type { IJournal } from '../journal/journal';
 import type { LlmToolCall, LlmToolDef } from '../llm/client';
-import type { EventType, Filter, JsonSchema, RunnerRef, RunReport, SubscriptionHandler } from '../types/index';
+import type { EventType, Filter, JsonSchema, RunnerRef, RunReport, SayBeat, SubscriptionHandler, TradeItem, VillagerSocial } from '../types/index';
 import { SkillLibrary } from '../skills/library';
 import { SkillEngine } from '../skills/engine';
 import { SkillRetriever } from '../skills/retrieve';
@@ -68,6 +68,11 @@ export interface ToolRegistryOptions {
    *  injects into social/ via the MemoryWriter seam, so a conversation's leave-headline and a `remember`
    *  tool call land in one store (one writer, S2). */
   memoryFor?: (villager: string) => VillagerMemory | undefined;
+  /** M6 society: resolve the ACTING villager's social/economic port (say + propose_trade) — the seam main.ts
+   *  binds per villager to social/{Conversation,TradeService} (the speaker `from` is fixed there, never a
+   *  tool arg). Optional so M3/M4 tests keep honest "(société non câblée)" stubs. Returns undefined for an
+   *  actor with no body wired (e.g. a no-bots CI boot). */
+  socialFor?: (villager: string) => VillagerSocial | undefined;
 }
 
 const SCHEMA_OBJECT = { type: 'object' } as const;
@@ -152,6 +157,41 @@ export class ToolRegistry {
         required: ['id'],
       }),
       def('list_subscriptions', 'Liste tes abonnements (id, évènement, action, filtre).', { type: 'object', properties: {} }),
+      def('say', 'Parle en français. Sans "to": parle au chat du jeu (un "/" en tête est refusé — pas de commande). Avec "to": adresse un villageois proche (il l’entend et s’en souvient); ajoute "beat" {opinion,note,headline} pour faire évoluer ta relation avec lui.', {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'la phrase à dire (français)' },
+          to: { type: 'string', description: 'optionnel; le nom du villageois auquel tu t’adresses (sinon, chat public)' },
+          beat: {
+            type: 'object',
+            description: 'optionnel; le « beat » relationnel: { opinion: nombre signé, note: string, headline: string } — fait bouger ta relation et marque un souvenir fort pour vous deux',
+            properties: {
+              opinion: { type: 'number' },
+              note: { type: 'string' },
+              headline: { type: 'string' },
+            },
+            required: ['opinion', 'note', 'headline'],
+          },
+        },
+        required: ['text'],
+      }),
+      def('propose_trade', 'Propose un échange typé à un villageois et le règle via le mod (atomique). coin↔paulsbrawls:coin. Donne "give" pour recevoir "want"; échec nommé si le règlement échoue (rien n’est échangé).', {
+        type: 'object',
+        properties: {
+          to: { type: 'string', description: 'le partenaire de l’échange' },
+          give: {
+            type: 'array',
+            description: 'ce que TU donnes',
+            items: { type: 'object', properties: { item: { type: 'string' }, count: { type: 'number' } }, required: ['item', 'count'] },
+          },
+          want: {
+            type: 'array',
+            description: 'ce que tu veux en retour',
+            items: { type: 'object', properties: { item: { type: 'string' }, count: { type: 'number' } }, required: ['item', 'count'] },
+          },
+        },
+        required: ['to', 'give', 'want'],
+      }),
     ];
   }
 
@@ -182,6 +222,10 @@ export class ToolRegistry {
           return this.unsubscribe(a, ctx);
         case 'list_subscriptions':
           return this.listSubscriptions(ctx);
+        case 'say':
+          return await this.say(a, ctx);
+        case 'propose_trade':
+          return await this.proposeTrade(a, ctx);
         default:
           return { content: `Erreur: outil inconnu "${callMsg.name}" (unknown tool).`, ok: false };
       }
@@ -232,6 +276,26 @@ export class ToolRegistry {
     // Parse + instrument up front so syntax/instrumentation errors come back inline for immediate retry.
     const compiled = compile(code);
     if (!compiled.ok) return { content: `Erreur de compilation du skill "${name}": ${compiled.error}`, ok: false };
+    // R73: validate the SHAPE of any provided params/returns schema before it can enter the library. A
+    // typeless properties-map like `{ maxBlocks: 'number' }` (no `{ type:'object', properties }` wrapper)
+    // defeats run-boundary arg validation AND makes the rendered signature lie — reject it inline (like a
+    // parse error) so the villager re-authors a proper manifest. A provided `properties` must itself be an
+    // object. An absent field falls through to the `?? { type:'object', properties:{} }` default below.
+    const isObjectSchema = (s: unknown): boolean => {
+      if (typeof s !== 'object' || s === null || Array.isArray(s)) return false;
+      const o = s as Record<string, unknown>;
+      if (o['type'] !== 'object') return false;
+      if ('properties' in o && (typeof o['properties'] !== 'object' || o['properties'] === null || Array.isArray(o['properties']))) return false;
+      return true;
+    };
+    for (const field of ['params', 'returns'] as const) {
+      if (a[field] !== undefined && !isObjectSchema(a[field])) {
+        return {
+          content: `Erreur: le schéma "${field}" doit être un JSON Schema d'objet de forme { type:'object', properties:{…}, required:[…] } — reçu un objet sans "type":"object". Réécris le manifeste.`,
+          ok: false,
+        };
+      }
+    }
     const sv = this.opts.library.upsertDraft({
       name,
       summary: String(a['summary'] ?? name),
@@ -335,6 +399,64 @@ export class ToolRegistry {
     return { content: lines.join('\n') };
   }
 
+  // ── M6 society: say / propose_trade (04 §Social) ──────────────────────────────────────────────────
+  /**
+   * Speak one line. SECURITY: a leading `/` is a command — REJECT it inline (defense in depth; villagers
+   * are mortal/never op'd, but mirror the God-body chat interceptor so chat tool input can never emit a
+   * server command). The social port performs the actual writes (game-chat sink / addressee hear + memory /
+   * the relationship beat → moveRelation), so a one-shot `say` still closes R69.
+   */
+  private async say(a: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome> {
+    const social = this.opts.socialFor?.(ctx.villager);
+    if (!social) return { content: '(société non câblée — parole ignorée)', ok: false };
+    const text = String(a['text'] ?? '').trim();
+    if (!text) return { content: 'Erreur: say requiert un "text".', ok: false };
+    if (/^\s*\//.test(text)) {
+      // R25-style guard: never let "speech" be a `/`-command (no command emission from chat input).
+      return { content: 'Erreur: say refuse un message commençant par "/" (pas de commande). Parle normalement.', ok: false };
+    }
+    const to = typeof a['to'] === 'string' && a['to'].trim() ? a['to'].trim() : undefined;
+    const beat = this.parseBeat(a['beat']);
+    if (a['beat'] !== undefined && !beat) {
+      return { content: 'Erreur: "beat" doit être { opinion: nombre, note: string, headline: string }.', ok: false };
+    }
+    const res = await social.say({ text, ...(to ? { to } : {}), ...(beat ? { beat } : {}) });
+    if (!res.ok) return { content: `Erreur say (to=${to ?? '∅'}): ${res.reason ?? 'échec'}`, ok: false };
+    return { content: to ? `Dit à ${to}: « ${text} »` : `Dit au village: « ${text} »` };
+  }
+
+  /**
+   * Propose + settle a typed offer via the social port (TradeService → SettlementClient → :8767). The
+   * settlement is the ONLY trade path: tool args carry only the partner + typed items — the speaker (`from`)
+   * is bound in main.ts, never an arg, so input cannot inject a raw settlement. A failed/timed-out/non-2xx
+   * settlement is SURFACED here (ok:false + the named reason) so the villager's inventory belief can't
+   * silently diverge from server truth.
+   */
+  private async proposeTrade(a: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome> {
+    const social = this.opts.socialFor?.(ctx.villager);
+    if (!social) return { content: '(société non câblée — échange ignoré)', ok: false };
+    const to = String(a['to'] ?? '').trim();
+    if (!to) return { content: 'Erreur: propose_trade requiert un "to" (le partenaire).', ok: false };
+    const give = parseItems(a['give']);
+    const want = parseItems(a['want']);
+    if (!give || give.length === 0) return { content: 'Erreur: propose_trade requiert "give": [{ item, count }, …] non vide.', ok: false };
+    if (!want || want.length === 0) return { content: 'Erreur: propose_trade requiert "want": [{ item, count }, …] non vide.', ok: false };
+    const res = await social.proposeTrade({ to, give, want });
+    if (!res.ok) {
+      // Surface the settlement failure to the brain — DO NOT pretend success (inventories are untouched).
+      return { content: `Échange ÉCHOUÉ avec ${to} (rien n’a été échangé): ${res.reason ?? 'cause inconnue'}`, ok: false };
+    }
+    return { content: `Échange réglé avec ${to}: tu donnes ${renderItems(give)}, tu reçois ${renderItems(want)}.` };
+  }
+
+  /** Parse + validate a {@link SayBeat} from raw tool args (undefined when absent OR malformed). */
+  private parseBeat(raw: unknown): SayBeat | undefined {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+    const o = raw as Record<string, unknown>;
+    if (typeof o['opinion'] !== 'number' || typeof o['note'] !== 'string' || typeof o['headline'] !== 'string') return undefined;
+    return { opinion: o['opinion'], note: o['note'], headline: o['headline'] };
+  }
+
   /** Minimal stats fold from skill.run events (the views/ module formalizes this in M7). */
   private foldStats(name: string): { runs: number; successes: number; failures: number; lastOutcomes: string[] } {
     const events = this.opts.journal.query({ kinds: ['skill.run'], ref: name }).filter((e) => e.refs.skill === name);
@@ -354,6 +476,25 @@ export class ToolRegistry {
 
 function def(name: string, description: string, parameters: object): LlmToolDef {
   return { type: 'function', function: { name, description, parameters } };
+}
+
+/** Parse a raw trade-item array into typed {@link TradeItem}s (undefined when not an array; bad rows dropped). */
+function parseItems(raw: unknown): TradeItem[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: TradeItem[] = [];
+  for (const r of raw) {
+    if (typeof r !== 'object' || r === null) continue;
+    const o = r as Record<string, unknown>;
+    const item = typeof o['item'] === 'string' ? o['item'].trim() : '';
+    const count = typeof o['count'] === 'number' ? o['count'] : NaN;
+    if (item && Number.isFinite(count) && count > 0) out.push({ item, count: Math.floor(count) });
+  }
+  return out;
+}
+
+/** Render a typed offer side as a short human string ("8×oak_log, 2×coin") for the tool result. */
+function renderItems(items: TradeItem[]): string {
+  return items.map((i) => `${i.count}×${i.item}`).join(', ');
 }
 
 /** A one-line human description of a subscription handler (for tool results — legible reflexes, P5). */

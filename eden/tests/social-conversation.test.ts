@@ -9,9 +9,13 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { MemoryJournal } from './fakes/memory-journal';
 import { Conversation } from '../src/social/conversation';
+import { VillagerMemory } from '../src/villagers/memory';
 import type { Conversant, MemorySeed, MemoryWriter, Relation } from '../src/types/index';
 import type { ConversationParticipant, SpeakResult } from '../src/social/conversation';
 
@@ -174,6 +178,46 @@ test('M6-2 (eavesdroppers): villagers in earshot but not party to the conversati
   // each overheard line journals chat.heard with eavesdrop:true
   const heard = journal.query({ kinds: ['chat.heard'] }).filter((e) => (e.payload as { eavesdrop: boolean }).eavesdrop);
   assert.ok(heard.length >= 2);
+});
+
+test('HIGH-4 (R69 closed): a conversation writes a SOCIAL memory + moves a RELATION in the REAL VillagerMemory', async () => {
+  // R69 was "conversation→memory unwired": the social subsystem was built but never reached a real
+  // VillagerMemory, so relations() was always empty. This proves the loop is closed end-to-end against the
+  // REAL store (not the RecordingMemory fake) — exactly the memoryFor/memories resolver main.ts injects as
+  // the MemoryWriter seam: a leave_conversation seeds a `social` memory for BOTH parties + moves the leaver's
+  // relation toward the partner.
+  const dir = mkdtempSync(join(tmpdir(), 'eden-r69-'));
+  const journal = new MemoryJournal();
+  const firminMem = new VillagerMemory({ villager: 'Firmin', dataDir: dir, journal, worldId: 'w1' });
+  const pilouMem = new VillagerMemory({ villager: 'Pilou', dataDir: dir, journal, worldId: 'w1' });
+
+  // Two Conversants backed by the real memory (the seam main.ts binds); chat sink + earshot are inert here.
+  const conversant = (name: string, mem: VillagerMemory): Conversant => ({
+    name, memory: mem, sayInGame: () => {}, playerInEarshot: () => false,
+  });
+  const convo = new Conversation({
+    journal,
+    initiator: {
+      conversant: conversant('Firmin', firminMem),
+      speak: (() => { const q: SpeakResult[] = [{ say: 'merci pour le blé' }, { leave: { opinion: 4, note: 'généreux', headline: 'Pilou m’a donné du blé' } }]; return () => Promise.resolve(q.shift()!); })(),
+    },
+    partner: {
+      conversant: conversant('Pilou', pilouMem),
+      speak: () => Promise.resolve({ say: 'de rien, voisin' }),
+    },
+  });
+  await convo.run();
+
+  // The relation MOVED in the real store (the pre-R69 symptom was relations() always empty).
+  const rel = firminMem.relations().find((r) => r.other === 'Pilou');
+  assert.ok(rel, 'Firmin now holds a relation toward Pilou (R69: relations() is no longer always empty)');
+  assert.equal(rel!.score, 4, 'the leave opinion moved the relation');
+  assert.equal(rel!.note, 'généreux');
+
+  // BOTH parties got the headline as a HIGH-importance social memory; Pilou also remembered the heard line.
+  assert.ok(firminMem.all().some((e) => e.kind === 'social' && /blé/.test(e.text) && e.importance >= 7), 'Firmin keeps the headline as a social memory');
+  assert.ok(pilouMem.all().some((e) => e.kind === 'social' && /blé/.test(e.text) && e.importance >= 7), 'Pilou keeps the same headline');
+  assert.ok(pilouMem.all().some((e) => e.kind === 'social' && /merci/.test(e.text)), 'Pilou remembered the line Firmin addressed to him');
 });
 
 test('M6-2 (addressee hears): the conversation partner journals chat.heard (eavesdrop:false) and remembers it', async () => {

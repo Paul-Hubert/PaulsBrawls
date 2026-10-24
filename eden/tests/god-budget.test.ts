@@ -24,7 +24,7 @@ const SNAP = (inv: Array<{ name: string; count: number }> = []): Snapshot => ({
   equipment: [], inventory: inv, nearbyEntities: [], nearbyBlocks: [], knownChests: [],
 });
 function report(over: Partial<RunReport> = {}): RunReport {
-  return { runId: 'run-1', rolloutId: 'roll-1', skill: 'collect-oak-logs', version: 1, villager: 'Firmin', args: {}, outcome: { ok: true }, startedAt: 0, durationMs: 100, pulses: 3, deepestDepth: 0, callTree: [], worldBefore: SNAP(), worldAfter: SNAP([{ name: 'oak_log', count: 3 }]), ...over };
+  return { runId: 'run-1', rolloutId: 'roll-1', skill: 'collect-oak-logs', version: 1, villager: 'Firmin', args: {}, outcome: { ok: true }, startedAt: 0, durationMs: 100, pulses: 3, deepestDepth: 0, callTree: [], logs: [], worldBefore: SNAP(), worldAfter: SNAP([{ name: 'oak_log', count: 3 }]), ...over };
 }
 const task = (over: Partial<Task> = {}): Task => ({ id: 'task-1', goal: 'collect 3 oak logs', assignee: 'Firmin', successCriteria: 's', context: '', maxRetries: 4, check: { item: 'oak_log', count: 3 }, ...over });
 const ticket = (id = 'ticket-1'): CriticTicket => ({ id, source: 'rollout', runReportRef: 'run-1', taskRef: 'task-1', filedAt: 0 });
@@ -226,3 +226,4 @@ test('M4-4 (verdict batching): judgeBatch fans up to 3 tickets into ONE critic c
     await w.llm.close();
   }
 });
+

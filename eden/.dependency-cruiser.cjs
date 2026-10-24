@@ -54,6 +54,16 @@ module.exports = {
       to: { path: '^src/', pathNot: '^src/(views/|journal/|types/)' },
     },
     {
+      name: 'vectors-only-types',
+      severity: 'error',
+      comment:
+        'vectors/ is LAYER 1 storage (sqlite-vec on the eden.db spine, D-03). It imports better-sqlite3 + ' +
+        'sqlite-vec + types only — NOT logger/ (it reports failures through an injected onWarn callback). ' +
+        'Its consumers (villagers/, skills/, god/) import DOWNWARD into it, which is legal.',
+      from: { path: '^src/vectors/' },
+      to: { path: '^src/', pathNot: '^src/(vectors/|types/)' },
+    },
+    {
       name: 'bots-no-upward',
       severity: 'error',
       comment: 'Layer 1 bots/ may use journal/config/types — never engines or actors.',

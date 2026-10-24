@@ -53,3 +53,42 @@ export interface Conversant {
   /** True iff a (human) player is within earshot — the mirror gate (04: mirror only then). */
   playerInEarshot(): boolean;
 }
+
+/**
+ * The structured relationship beat a `say` may carry (the `leave_conversation{opinion,note,headline}`
+ * payload, 04). When present, the social port moves the speaker's relation toward the addressee + seeds a
+ * high-importance headline memory for BOTH parties — the same writes social/Conversation performs, so a
+ * one-shot tool-driven `say` still closes the conversation→memory/relations loop (R69).
+ */
+export interface SayBeat {
+  /** Relation delta toward the addressee (signed). */
+  opinion: number;
+  /** The short relation note (replaces the prior note). */
+  note: string;
+  /** The headline — seeded as a HIGH-importance social memory for BOTH parties (04). */
+  headline: string;
+}
+
+/**
+ * The villager-facing SOCIAL/ECONOMIC port (layer 0 contract) — the seam the layer-3 ToolRegistry drives
+ * for `say`/`propose_trade` WITHOUT importing social/ (the social-no-peers rule). main.ts binds one per
+ * villager (the speaker `from` is fixed at construction — NEVER a tool arg — so tool input can't inject a
+ * raw settlement `from`/`to`/amount outside a negotiated offer). The concrete impls wrap social/
+ * {@link Conversant}-backed conversation writes + the TradeService/SettlementClient path.
+ */
+export interface VillagerSocial {
+  /**
+   * Speak one line as this villager. `to` (optional) addresses a nearby villager — that villager hears it
+   * (journals chat.said/heard + a social memory). An optional {@link SayBeat} moves the relation toward the
+   * addressee (closes R69). Returns ok:false with a named reason on a usage error (e.g. unknown addressee).
+   * The implementation drops/strips a leading `/` (no command emission — mirror the God-body interceptor).
+   */
+  say(opts: { to?: string; text: string; beat?: SayBeat }): Promise<{ ok: boolean; reason?: string }>;
+  /**
+   * Put a typed offer on the table and settle it via the mod's atomic :8767 listener (the ONLY trade path —
+   * never a raw inventory mutation). `to` is the partner; `give`/`want` are typed items (coin→paulsbrawls:coin
+   * at settlement). Returns the settlement outcome (ok:false names the failure — settlement HTTP/timeout/
+   * reject — so a villager's inventory belief can't silently diverge from server truth).
+   */
+  proposeTrade(opts: { to: string; give: TradeItem[]; want: TradeItem[] }): Promise<{ ok: boolean; reason?: string }>;
+}

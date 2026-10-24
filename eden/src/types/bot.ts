@@ -120,8 +120,17 @@ export interface Bot extends EmitterLike {
   food?: number;
   /** World time — mineflayer's `bot.time.timeOfDay` (0..24000); the night-falls/new-day emitter edges on it. */
   time?: { timeOfDay: number };
-  inventory: { items(): BotItem[] };
-  /** What the bot currently holds, if anything (read by vitals). */
+  /**
+   * Every loaded entity, keyed by id — mineflayer's `bot.entities`. HIGH-1: the world-delta snapshot reads
+   * this for `nearbyEntities` so the critic sees combat/spawn/spotting deltas, not a dead scene. Combat
+   * stock skills already scan it (via cast); surfaced on the seam so captureSnapshot reads it typed. Each
+   * value may be a partial (a not-yet-resolved entity), hence every field optional + the whole map optional.
+   * PLAYER entities carry `username`/`type` instead of `name` — the snapshot falls back through them so
+   * players/villagers are not silently dropped (mirrors bots/signals.ts's `e.name ?? e.username`).
+   */
+  entities?: Record<string, { name?: string; username?: string; type?: string; position?: Vec3Like } | undefined>;
+  inventory: { items(): BotItem[]; slots?: Array<{ name: string } | null> };
+  /** What the bot currently holds, if anything (read by vitals + the equipment snapshot). */
   heldItem?: { name: string } | null;
   /** The open window — a stray one hijacks every clickWindow (R1). */
   currentWindow: BotWindow | null;
@@ -140,6 +149,17 @@ export interface Bot extends EmitterLike {
   chat(message: string): void;
   closeWindow(window: BotWindow): void;
   blockAt(point: Vec3Like): BotBlock | null;
+  /**
+   * Positions of blocks matching `opts.matching`, nearest-first, capped at `count` — mineflayer's
+   * `bot.findBlocks`. HIGH-1: the snapshot uses it to enumerate nearby block types for world delta.
+   * Optional (attaches to a real bot but a not-yet-spawned/minimal bot may lack it).
+   */
+  findBlocks?(opts: {
+    matching: ((b: BotBlock) => boolean) | number | number[];
+    maxDistance?: number;
+    count?: number;
+    point?: Vec3Like;
+  }): Vec3Like[];
   /** Open the container at `block` (a chest/barrel) — used by useChest/deposit/withdraw. */
   openContainer(block: BotBlock): Promise<BotContainer>;
   dig(block: BotBlock): Promise<void>;

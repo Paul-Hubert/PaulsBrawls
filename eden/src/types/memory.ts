@@ -1,5 +1,11 @@
 /** One entry in a villager's memory window — tagged, importance-scored, timestamped. */
 export interface MemoryEntry {
+  /**
+   * Stable unique id (a ulid), assigned at write time. The vector-store key (D-record: embed-at-write):
+   * a stored embedding is re-associated with its entry by this id, so the id must survive eviction and
+   * persistence. Entries persisted before this field existed are assigned one on load (back-compat).
+   */
+  id: string;
   kind: 'event' | 'social' | 'trade' | 'thought' | 'system' | 'lesson';
   text: string;
   tags: string[];

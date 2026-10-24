@@ -49,9 +49,10 @@ test('M6-3 (coin alias): `coin` resolves to paulsbrawls:coin in the settlement P
     want: [{ item: 'bread', count: 2 }],
   });
 
-  const body = server.requests[0]!.body as { give: Array<{ item: string }>; want: Array<{ item: string }> };
-  assert.equal(body.give[0]!.item, 'paulsbrawls:coin', 'coin → paulsbrawls:coin at settlement');
-  assert.equal(body.want[0]!.item, 'bread', 'a normal item is left untouched');
+  // The wire body speaks the mod's contract ({botA,botB,aGives,bGives}); coin resolves on the way out.
+  const body = server.requests[0]!.body as { aGives: Array<{ item: string }>; bGives: Array<{ item: string }> };
+  assert.equal(body.aGives[0]!.item, 'paulsbrawls:coin', 'coin → paulsbrawls:coin at settlement');
+  assert.equal(body.bGives[0]!.item, 'bread', 'a normal item is left untouched');
   await server.close();
 });
 

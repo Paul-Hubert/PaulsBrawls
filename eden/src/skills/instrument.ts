@@ -1,7 +1,11 @@
 // The ONE AST transform Eden keeps (owner #5, D-08). NOT a sandbox, NOT a typecheck:
 //   1. parse with acorn (ecmaVersion 2022) — syntax errors return inline to the author (write_skill);
-//   2. inject a loop-budget call into every loop body — the only in-process answer to a SYNCHRONOUS
-//      `while(true){}` that would freeze the whole host (D-01); reset on every real `await`;
+//   2. inject a loop-budget call into every loop body, AND a macrotask-starvation canary (`__fnTick`)
+//      at every function-body top (CRIT-1/R75) — the only in-process answer to a runaway that would
+//      freeze the whole host (D-01): a SYNCHRONOUS `while(true){}`, or a NON-loop spinner (async
+//      recursion / `.then`-chain / microtask trampoline) that has no loop node to instrument. The loop
+//      counter resets on every real `await`; the canary is count-free so legitimate deep recursion is
+//      never false-aborted (the count would; the canary won't — it fires only on real starvation);
 //   3. install the D-08 syscall shim as PROVIDED SCOPE GLOBALS (not a banned-identifier scan):
 //      `process`/`require('process')` are shadowed by a safe object whose four host-killers throw
 //      SkillForbiddenError. The denylist is FROZEN at four (R45) — determined escapes
@@ -120,8 +124,10 @@ interface Edit {
 }
 
 /**
- * Inject `__loopBudget()` at the top of every loop body and wrap every `await EXPR` as
- * `await __aw(EXPR)` (the await resets the budget — a real yield is not a sync spin). String-splice
+ * Inject `__loopBudget()` at the top of every loop body, a count-free macrotask-starvation canary
+ * (`__fnTick()`) at the top of every FUNCTION body (CRIT-1/R75 — so a runaway with no loop node, e.g.
+ * async recursion or a `.then`/microtask trampoline, still hits the canary), and wrap every `await EXPR`
+ * as `await __aw(EXPR)` (the await resets the LOOP budget — a real yield is not a sync spin). String-splice
  * by AST offsets, applied right-to-left so earlier offsets stay valid.
  */
 export function instrument(code: string): InstrumentResult {
@@ -143,12 +149,30 @@ export function instrument(code: string): InstrumentResult {
       edits.push({ pos: body.end - off, text: '}', order: 1 });
     }
   };
+  // CRIT-1/R75: the canary at every function-body top is the ONLY in-process guard a non-loop runaway
+  // hits (async recursion, `.then`/queueMicrotask/nextTick trampolines — all function nodes, no loop
+  // node). It calls `__fnTick` (the macrotask-starvation canary WITHOUT the loop count), so a deep but
+  // finite synchronous call tree can never trip the 1e6 loop budget — only real starvation aborts it.
+  const injectFnBody = (node: unknown): void => {
+    const body = (node as LoopNode).body;
+    if (body.type === 'BlockStatement') {
+      edits.push({ pos: body.start - off + 1, text: '__fnTick();', order: 0 });
+    } else {
+      // Expression-bodied arrow (`x => EXPR`): comma-operator wrap — keeps the value, robust for object
+      // literals (`() => ({a:1})` → `() => ((__fnTick(),{a:1}))`), and never needs a `return`.
+      edits.push({ pos: body.start - off, text: '(__fnTick(),', order: 0 });
+      edits.push({ pos: body.end - off, text: ')', order: 1 });
+    }
+  };
   walkSimple(parsed.program, {
     WhileStatement: injectLoopBody,
     DoWhileStatement: injectLoopBody,
     ForStatement: injectLoopBody,
     ForInStatement: injectLoopBody,
     ForOfStatement: injectLoopBody,
+    FunctionDeclaration: injectFnBody,
+    FunctionExpression: injectFnBody,
+    ArrowFunctionExpression: injectFnBody,
     AwaitExpression: (node: unknown): void => {
       const arg = (node as AwaitNode).argument;
       edits.push({ pos: arg.start - off, text: '__aw(', order: 0 });
@@ -178,6 +202,8 @@ export interface Shim {
   sleep: (ms: number) => Promise<void>;
   __loopBudget: () => void;
   __aw: <T>(p: T) => T;
+  /** CRIT-1/R75: the function-body macrotask-starvation canary (count-free `__loopBudget`). */
+  __fnTick: () => void;
   /** Authored-scope global value-constructors (see the import-site note): the same module instances on
    *  `ctx`, so `new Vec3()` ≡ `new ctx.Vec3()` and `new GoalNear()` ≡ `new ctx.goals.GoalNear()`. */
   Vec3: new (x: number, y: number, z: number) => { x: number; y: number; z: number };
@@ -204,7 +230,7 @@ export function compile(code: string): CompileResult {
     // D-08: provided-scope globals ARE the shim — `new Function` is the design, not a footgun here.
     const factory = new Function(
       '__shim',
-      `"use strict";\nconst { process, require, sleep, __loopBudget, __aw, Vec3, GoalNear } = __shim;\nreturn (${inst.source});`,
+      `"use strict";\nconst { process, require, sleep, __loopBudget, __aw, __fnTick, Vec3, GoalNear } = __shim;\nreturn (${inst.source});`,
     ) as SkillFactory;
     return { ok: true, factory };
   } catch (e) {
@@ -242,14 +268,20 @@ function createSafeRequire(safeProcess: object): (id: string) => unknown {
 export interface LoopBudget {
   __loopBudget: () => void;
   __aw: <T>(p: T) => T;
+  /** CRIT-1/R75: run the progress canary WITHOUT touching the loop count — injected at function-body tops. */
+  __fnTick: () => void;
 }
 
 /** Create a loop budget — `__loopBudget` ticks (throws past `max`), `__aw` resets it on every await.
- *  `checkProgress` is an OPTIONAL engine-injected SYNCHRONOUS guard run on every loop tick (gap W). The
- *  count-reset-on-await assumption breaks when a loop `await`s an immediately-resolved promise: it resets
- *  `count` every iteration (a microtask yield) yet NEVER drains the macrotask queue, so every timer-based
- *  supervisor (wall-clock timeout, stall detector) is starved and can't fire. `checkProgress` runs inside
- *  the loop body — the only unstarvable path — so the engine can abort a macrotask-starving loop. */
+ *  `checkProgress` is an OPTIONAL engine-injected SYNCHRONOUS guard run on every loop tick AND every
+ *  function entry (gap W / CRIT-1). The count-reset-on-await assumption breaks when a loop `await`s an
+ *  immediately-resolved promise (it resets `count` every iteration yet never drains the macrotask queue,
+ *  starving every timer-based supervisor), and breaks WORSE for a runaway with no loop node at all (async
+ *  recursion / `.then` trampoline) — there `__loopBudget` is never even called. `checkProgress` runs from
+ *  both `__loopBudget` (loop bodies) and `__fnTick` (function bodies) — the only unstarvable paths — so the
+ *  engine can abort either. `__fnTick` deliberately does NOT touch `count`: a deep but finite synchronous
+ *  call tree (recursive flood-fill, build-plan walk, A*) can exceed 1e6 function entries between awaits and
+ *  must not false-trip the loop budget — only genuine macrotask starvation (the time-based canary) aborts it. */
 export function createLoopBudget(max: number = DEFAULT_LOOP_BUDGET, checkProgress?: () => void): LoopBudget {
   let count = 0;
   return {
@@ -262,6 +294,11 @@ export function createLoopBudget(max: number = DEFAULT_LOOP_BUDGET, checkProgres
     __aw: <T>(p: T): T => {
       count = 0;
       return p;
+    },
+    // CRIT-1/R75: function-entry canary. Runs the macrotask-starvation guard with NO count increment, so
+    // it catches a non-loop runaway (recursion / microtask trampoline) without false-aborting deep recursion.
+    __fnTick: (): void => {
+      checkProgress?.();
     },
   };
 }
@@ -279,6 +316,7 @@ export function makeShim(runtime: SkillRuntime, shared?: LoopBudget): Shim {
     sleep: runtime.sleep,
     __loopBudget: budget.__loopBudget,
     __aw: budget.__aw,
+    __fnTick: budget.__fnTick,
     Vec3: Vec3 as unknown as Shim['Vec3'],
     GoalNear: goals.GoalNear as unknown as Shim['GoalNear'],
   };

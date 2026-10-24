@@ -61,7 +61,7 @@ Supporting modules: [rcon.ts](../eden/live-tests/rcon.ts) (typed, multi-packet-s
 - cooperation: `combatRunners(host)` = distinct villagers whose successful `skill.run` touched a combat
   skill (kill-mob / authored fight skill).
 
-## The three scenarios
+## The four scenarios
 
 ### `farm-wheat` (baseline — run first)
 - **Roster:** `Firmin` (farmer). **Arena:** peaceful lit box; `farmland` bed + 9 mature `wheat[age=7]`.
@@ -95,6 +95,35 @@ Supporting modules: [rcon.ts](../eden/live-tests/rcon.ts) (typed, multi-packet-s
 - **Surface:** `bot.pvp.attack` (the `kill-mob` tick loop), armor-manager auto-equip, multi-villager
   scheduling under the LLM concurrency cap — **UNVALIDATED real pvp**. Expect gaps in pvp targeting / the
   combat tick / armor equip.
+
+### `detect-and-defend` (operator-driven — run last)
+- **Roster:** `Aldric` (`archer`) + `Bertrand` (`swordsman`). **Goal:** *detect hostiles BEFORE they attack
+  and kill them WITHOUT taking damage* — the archer from a high spot with the bow, the swordsman intercepting
+  on the ground.
+- **Hands-off world (by design):** the arena sets ONLY two non-destructive gamerules (`keepInventory`,
+  `doImmediateRespawn`) — **no terrain fill, no forced time/difficulty, no summoned mobs.** The operator
+  hand-builds the world during a **manual-setup pause** (`setupPauseMs` default 90 s; override
+  `EDEN_LIVE_SETUP_PAUSE_MS`) that holds the run after the bots connect + are equipped, BEFORE tasks inject:
+  (1) build a small tower beside the archer so it can `find-high-spot` and perch, (2) place a zombie spawner
+  in aggro range. The operator owns `difficulty ≥ easy` + darkness around the spawner (zombies need
+  block-light 0). The parent supervisor folds the pause into its hard-kill grace.
+- **Prepare:** both villagers → survival, clear, `give iron_sword` + `bow` + 64 `arrow`, full iron armor
+  (`item replace … armor.*`); optional `tp` to an editable `MUSTER` constant (default: no tp).
+- **Task:** one per villager, run concurrently — write + run a detect-and-engage skill. The archer composes
+  the new stock **`shoot-mob`** (ranged: equip bow → aim → draw to full charge → release, repeat) +
+  **`find-high-spot`** (highest standable block nearby); the swordsman composes `kill-mob` (or `shoot-mob`
+  while the target is far). `maxRetries 4`, no objective `check`.
+- **Detection is the real M5 seam:** the signal adapter's bounded `bot.entities` poll fires `entity-spotted`
+  on a hostile ENTERING perception ([bots/signals.ts](../eden/src/bots/signals.ts)); the new `archer`/
+  `swordsman` role defaults ([roles.json](../eden/roles.json)) escalate ONE interrupt-priority deliberation
+  → the villager engages before a hit lands.
+- **Asserts (PASS core):** proactive `entity-spotted` reflex fired ∧ a combat `skill.run{ok}` exists ∧
+  neither villager `world.death` ∧ no `system.error`. **Reported, not gated** (the refinement targets the
+  loop hardens toward, docs/20): `★ no damage taken` (any `hurt`-reflex fired/-suppressed or a sub-20 vitals
+  snapshot), `★ archer engaged at range`, `★ skill.admit`.
+- **Surface:** real-mineflayer bow charging (`activateItem`/`deactivateItem` + `lookAt`), the
+  `entity-spotted` poll under a live spawner, and an LLM-latency reflex racing an approaching zombie (the
+  swordsman's "no damage" is the hard case; the tower archer's elevation makes its no-damage free).
 
 ### Cooperation dispatch — decision
 

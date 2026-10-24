@@ -33,7 +33,11 @@ export class MemoryJournal implements IJournal {
       if (q.id !== undefined && e.id !== q.id) return false;
       if (q.since !== undefined && e.at < q.since) return false;
       if (q.until !== undefined && e.at > q.until) return false;
-      if (q.ref !== undefined && !Object.values(e.refs).includes(q.ref)) return false;
+      // LOW-1: mirror the real Journal — a ref match hits only the three indexed typed paths
+      // (rolloutId/runId/skill), not every ref value, so the fake's semantics track the indexes.
+      if (q.ref !== undefined && e.refs.rolloutId !== q.ref && e.refs.runId !== q.ref && e.refs.skill !== q.ref) {
+        return false;
+      }
       return true;
     });
     // `events` is insertion order (chronological). A limit selects the most-recent N (the tail).

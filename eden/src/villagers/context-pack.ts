@@ -210,7 +210,22 @@ export class ContextPackBuilder {
 
   private renderTrigger(i: ContextPackInput): string {
     const lines = i.triggers.length > 0 ? [...i.triggers] : ['(réveil sans déclencheur explicite)'];
-    if (i.hint) lines.push(`Indice: ${i.hint}`);
+    if (i.hint === 'authoring') {
+      // R73: an AUTHORING wake-up exists to PRODUCE a reusable skill. State the objective explicitly so the
+      // villager doesn't just run existing primitives and call `done` — that leaves the critic nothing to
+      // judge and the rollout churns with zero verdicts. The acceptable outcome is a write_skill draft, then
+      // a run_skill trial of it. If a skill for this goal already exists but is DEFECTIVE (e.g. it reports
+      // success without doing any work), the right move is to REWRITE it (write_skill → a new version).
+      lines.push(
+        'OBJECTIF (authoring) : tu dois ÉCRIRE ou AMÉLIORER une compétence réutilisable avec write_skill, ' +
+          'puis l’essayer avec run_skill. Exécuter des skills existants puis « done » SANS write_skill n’est ' +
+          'PAS une issue acceptable — il faut un brouillon à soumettre au jugement de Dieu. Si une compétence ' +
+          'pour ce but existe déjà mais est DÉFECTUEUSE (p. ex. elle réussit sans rien faire : tilled:0, sown:0), ' +
+          'RÉÉCRIS-la avec write_skill (nouvelle version) au lieu de la relancer en boucle.',
+      );
+    } else if (i.hint) {
+      lines.push(`Indice: ${i.hint}`);
+    }
     return lines.join('\n');
   }
 

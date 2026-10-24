@@ -36,6 +36,16 @@ Your judgment quality is the product — be demanding but constructive.
   that task instead of grinding the blocked one. Use this only for a genuinely missing *input* — a skill
   that simply searched the wrong place, never equipped its tool, or crashed is an ordinary `keep-draft`.
 
+## Reading logs
+- Every skill logs with `ctx.log("level", message)` where level IN {`info`, `warn`, `error`}:
+  - **info** — normal progress, preconditions OK, intermediate steps.
+  - **warn** — task is impossible RIGHT NOW (resource not found, target missing, precondition failed).
+    A warn + throw means "this CAN'T be done in this state" — it's NOT a code problem; the village
+    pivots to acquire missing resources. Early-return signals are warns, not errors.
+  - **error** — the skill code has a bug (wrong API call, unhandled exception, logic fail).
+- Use logs to decide `success` and `blocked`: if the run has only warn logs + no world delta, it's
+  `blocked: true` (not a code problem). If it has error logs, it's `success: false` (code defect).
+
 ## Your decision
 Call the `verdict` tool exactly once:
 - `success` — did this run genuinely accomplish the task's intent (by world delta)?

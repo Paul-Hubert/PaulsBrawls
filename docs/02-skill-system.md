@@ -174,11 +174,19 @@ The pipeline a draft passes before it can run:
    tool-result feedback, exactly like v1. Nothing else is rejected — no banned
    identifiers, no import scanning. Full power (P3).
 2. **Instrument** — the one AST transform we keep: inject a cycle-counter call into
-   every loop body. This is **not** a sandbox and **not** a typecheck; it is the only
-   possible in-process answer to a *synchronous* `while (true) {}`, which would
-   freeze the entire host (all ten villagers + God) and which no timer-based
-   watchdog can catch. Budget default 1e6 iterations, reset on every `await` that
-   actually yields. Exceeding it throws `SkillStalledError('loop budget')`.
+   every loop body, **and a count-free macrotask-starvation canary at every
+   function-body top** (CRIT-1/R75). This is **not** a sandbox and **not** a
+   typecheck; it is the only possible in-process answer to a runaway that would
+   freeze the entire host (all ten villagers + God) and that no timer-based watchdog
+   can catch — a *synchronous* `while (true) {}` (the loop counter), **or** a runaway
+   with **no loop node** (async recursion, a `.then`/microtask trampoline) that the
+   loop instrument never sees (the function-entry canary). The loop budget defaults to
+   1e6 iterations, reset on every `await` that actually yields; exceeding it throws
+   `SkillStalledError('loop budget')`. The function-entry canary is **count-free** on
+   purpose: a deep but finite call tree (recursive flood-fill, build-plan walk, A*) can
+   exceed 1e6 function entries between awaits, so ticking the count there would
+   false-abort it — only the time-based starvation check (gap W, D-07) aborts a
+   function spin, and only when the macrotask queue has genuinely stalled.
 3. **Manifest sanity** — params/returns schemas compile; signature renders; name free
    or versioning an existing skill.
 

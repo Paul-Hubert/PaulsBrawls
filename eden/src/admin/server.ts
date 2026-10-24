@@ -125,7 +125,20 @@ export class AdminServer {
     });
   }
 
-  /** Listen on 127.0.0.1 (pass port 0 for ephemeral); resolves with the actually-bound port. */
+  /**
+   * Listen on 127.0.0.1 (pass port 0 for ephemeral); resolves with the actually-bound port.
+   *
+   * SECURITY MODEL (owner #9, accepted — see docs/05 §Admin API): the loopback bind is the ONLY
+   * boundary. There is no token and no Origin/Host check, so the mutating verbs (`/pause`, `/resume`,
+   * `/skills/:name/quarantine`, `/villagers/:name/prompt`, `/scenario/*`) are reachable by ANY local
+   * process, and — because `readBody` JSON-parses any body regardless of content-type — plausibly by a
+   * drive-by `text/plain` form POST from a page the operator visits. `/villagers/:name/prompt` injects
+   * text straight into a villager's inbox, which is a deliberation input: combined with the LLM-authored
+   * skill surface this is an unauthenticated path into `write_skill` (see CRIT-4 in REVIEW-FINDINGS.md).
+   * This is ACCEPTED on the assumption the host runs on a single-user, trusted machine. Do NOT expose
+   * :8770 to other users/networks without first adding a bearer token (note: the Java mod calls :8770,
+   * so a token requires updating that caller too).
+   */
   start(): Promise<{ port: number }> {
     return new Promise((resolve) => {
       this.http.listen(this.boundPort, '127.0.0.1', () => {
@@ -155,6 +168,8 @@ export class AdminServer {
       if (req.method === 'POST') return await this.routePost(req, res, path);
       return this.routeGet(res, url, path);
     } catch (err) {
+      // LOW-3: an oversized POST body aborts in readBody with a typed error → 413, not a 500.
+      if (err instanceof BodyTooLargeError) return send(res, 413, { error: err.message });
       send(res, 500, { error: err instanceof Error ? err.message : String(err) });
     }
   }
@@ -239,8 +254,17 @@ export class AdminServer {
       if (!this.o.onQuarantine) return send(res, 503, { error: 'quarantine control not wired' });
       const body = await readBody(req);
       const reason = typeof body.reason === 'string' ? body.reason : 'admin kill switch';
+      // Existence check FIRST (mirroring /prompt) — resolve the skill + its real version so an unknown
+      // skill 404s WITHOUT leaving a phantom skill.quarantine{version:-1} audit event (LOW-2). When the
+      // skill accessor is unwired we trust onQuarantine's boolean (it 404s after the fact).
+      let version = -1;
+      if (this.o.skill) {
+        const found = this.o.skill(quarantine, {}) as { version?: number } | undefined;
+        if (found === undefined) return send(res, 404, { error: `no skill ${quarantine}` });
+        if (typeof found.version === 'number') version = found.version;
+      }
       // Journal BEFORE acting (05) — the admin poke shows in the history it renders.
-      this.journal.append('admin', 'skill.quarantine', { name: quarantine, version: -1, reason }, { skill: quarantine });
+      this.journal.append('admin', 'skill.quarantine', { name: quarantine, version, reason }, { skill: quarantine });
       const ok = this.o.onQuarantine(quarantine, reason);
       return ok ? send(res, 200, { quarantined: quarantine }) : send(res, 404, { error: `no skill ${quarantine}` });
     }
@@ -306,9 +330,34 @@ function send(res: ServerResponse, status: number, json: unknown): void {
   res.end(JSON.stringify(json));
 }
 
+/** LOW-3: cap the POST body. The largest legit body is a prompt/quarantine reason — 64 KB is generous. */
+const MAX_BODY_BYTES = 64 * 1024;
+
+/** Thrown by {@link readBody} past {@link MAX_BODY_BYTES}; mapped to 413 in {@link AdminServer.route}. */
+class BodyTooLargeError extends Error {
+  constructor(seen: number) {
+    super(`admin: request body exceeds ${MAX_BODY_BYTES} bytes (saw ${seen}+) — refused (LOW-3)`);
+    this.name = 'BodyTooLargeError';
+  }
+}
+
 async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
-  for await (const c of req) chunks.push(c as Buffer);
+  let size = 0;
+  let overflow = false;
+  for await (const c of req) {
+    const buf = c as Buffer;
+    size += buf.length;
+    if (size > MAX_BODY_BYTES) {
+      // Stop BUFFERING past the cap (bound the local OOM on the single-process host) but keep draining the
+      // stream so the connection can carry a clean 413 response back instead of resetting the socket.
+      overflow = true;
+      chunks.length = 0;
+      continue;
+    }
+    chunks.push(buf);
+  }
+  if (overflow) throw new BodyTooLargeError(size);
   const raw = Buffer.concat(chunks).toString('utf8');
   if (!raw) return {};
   try {

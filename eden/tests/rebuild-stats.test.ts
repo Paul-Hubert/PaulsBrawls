@@ -16,7 +16,7 @@ import type { RunReport } from '../src/types/index';
 function runReport(over: Partial<RunReport>): RunReport {
   return {
     runId: 'r', skill: 'go-to', version: 1, villager: 'Firmin', args: {}, outcome: { ok: true },
-    startedAt: 1, durationMs: 10, pulses: 1, deepestDepth: 0, callTree: [],
+    startedAt: 1, durationMs: 10, pulses: 1, deepestDepth: 0, callTree: [], logs: [],
     worldBefore: null, worldAfter: null, ...over,
   };
 }
@@ -80,3 +80,4 @@ test('rebuild-stats on an empty journal yields empty views (no crash)', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+

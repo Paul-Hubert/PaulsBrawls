@@ -30,6 +30,21 @@ export interface FakeBlock {
   name: string;
   position: Vec3;
 }
+/**
+ * A loaded entity as the fake models it. Mirrors the real mineflayer shape the village reads:
+ *  • `name` for mobs/items; `username`/`type` for PLAYER entities (the snapshot labels them — FIX 2);
+ *  • `isValid` — true while alive, flips false on death (the kill loop's terminator — FIX 1);
+ *  • `height` — bow aim reads it (shoot-mob); `id` — the signal adapter's dedupe handle.
+ */
+export interface FakeEntity {
+  name?: string;
+  username?: string;
+  type?: string;
+  position?: Vec3;
+  id?: number;
+  height?: number;
+  isValid?: boolean;
+}
 export interface FakeWindow {
   id: number;
   type?: string;
@@ -70,8 +85,11 @@ export class FakeBot extends EventEmitter {
   readonly time = { timeOfDay: 1000 };
   // ── M5 entities seam — mineflayer's `bot.entities` (id→entity). The reactivity signal adapter
   //    (bots/signals.ts) derives a hurt's attacker from the nearest hostile here; combat skills scan it.
-  //    NOT on the narrowed Bot seam (read via cast); defaults empty, seed with setEntities() in tests. ──
-  entities: Record<string, { name?: string; position?: Vec3 } | undefined> = {};
+  //    NOT on the narrowed Bot seam (read via cast); defaults empty, seed with setEntities() in tests.
+  //    Combat: real mineflayer entities carry `isValid` (flips false on death) + `height` (bow aim) — a
+  //    seeded/spawned entity defaults isValid:true so a `while (target.isValid)` kill loop terminates once
+  //    pvp.attack kills it. PLAYER entities expose `username`/`type` (not `name`) — modeled for the snapshot. ──
+  entities: Record<string, FakeEntity | undefined> = {};
 
   currentWindow: FakeWindow | null = null;
   readonly clicks: ClickRecord[] = [];
@@ -140,9 +158,16 @@ export class FakeBot extends EventEmitter {
       if (this.entity) this.entity.position = { x: goal.x, y: goal.y, z: goal.z };
     },
   };
-  /** pvp seam — only `stop` is in the abort sequence (R4); records its order. */
+  /** pvp seam — `stop` is in the abort sequence (R4); `attack` models mineflayer-pvp's combat loop:
+   *  it starts attacking the target and (here, synchronously) "kills" it by flipping `isValid` false, so a
+   *  kill-mob `while (target.isValid)` loop terminates — the real plugin flips isValid on the death packet. */
   readonly pvp = {
     stop: () => void this.calls.push('pvp.stop'),
+    attack: (target: FakeEntity): Promise<void> => {
+      this.calls.push('pvp.attack');
+      if (target) target.isValid = false; // simulate the kill — the loop's gate goes false (FIX 1)
+      return Promise.resolve();
+    },
   };
   /** collectblock seam — abort clears `targets` and calls `cancelTask` first (R4/R10). */
   readonly collectBlock = {
@@ -176,6 +201,12 @@ export class FakeBot extends EventEmitter {
     this.loadedPlugins.push(plugin);
     this.calls.push('loadPlugin');
   }
+  /** Model a load-bearing plugin that FAILED to attach (its `bot.<name>` property never appears) — the
+   *  case real mineflayer hits on a silent load failure but the fake otherwise hardcodes as always-present.
+   *  Lets the loadPlugins-missing-plugin regression (FIX 4) exercise the journal-the-absence path. */
+  dropLoadBearingPlugin(name: 'pvp' | 'armorManager' | 'collectBlock'): void {
+    Reflect.deleteProperty(this, name);
+  }
   /** Disconnect — real mineflayer emits `end` on quit, so the pool's onEnd path is reachable from the fake. */
   quit(_reason?: string): void {
     this.calls.push('quit');
@@ -191,9 +222,13 @@ export class FakeBot extends EventEmitter {
   setTime(timeOfDay: number): void {
     this.time.timeOfDay = timeOfDay;
   }
-  /** Seed the entities table (the signal adapter's attacker derivation + combat skills read it) — M5. */
-  setEntities(map: Record<string, { name?: string; position?: Vec3 }>): void {
-    this.entities = { ...map };
+  /** Seed the entities table (the signal adapter's attacker derivation + combat skills read it) — M5.
+   *  Each entity defaults `isValid:true` (a live body) unless the test sets it explicitly, so a combat
+   *  kill loop terminates only after pvp.attack flips it false (FIX 1). */
+  setEntities(map: Record<string, FakeEntity>): void {
+    const seeded: Record<string, FakeEntity> = {};
+    for (const [k, e] of Object.entries(map)) seeded[k] = { isValid: true, ...e };
+    this.entities = seeded;
   }
 
   // ── M1: chest seam (deposit/withdraw helpers) ────────────────────────
@@ -378,34 +413,66 @@ export class FakeBot extends EventEmitter {
     const name = this.blocks.get(key(pos));
     return name ? { name, position: pos } : null;
   }
-  /** Nearest block matching `opts.matching` (a name predicate, or an id / id[] resolved via the registry)
-   *  within `maxDistance` of the bot — mirrors mineflayer's bot.findBlock so the `find-block` stock skill
-   *  is exercisable in CI. */
-  findBlock(opts: {
+  /** R76 — model real mineflayer's per-section PALETTE PRE-CHECK (`isBlockInSection`). Before scanning a
+   *  chunk section block-by-block, mineflayer runs the `matching` FUNCTION against each palette entry —
+   *  a SYNTHETIC `Block.fromStateId(stateId, 0)` that has a `name` but `position: null` and NO world
+   *  neighbours. If no palette entry matches, the whole section is SKIPPED. So a matcher that reads
+   *  `b.position` or calls `bot.blockAt(...)` (e.g. an "air directly above" check) returns false for every
+   *  synthetic palette block → every section is skipped → findBlock returns null though matching blocks are
+   *  everywhere. The fix is doctrine: a findBlock matcher must test ONLY `block.name`/type; do air-above,
+   *  position-dedup, and neighbour checks AFTER, on the returned positions. We mirror the pre-check here so
+   *  this whole class of bug (22 dead `till-and-sow` versions) is caught in CI instead of only live. */
+  private paletteEligibleNames(matching: (b: FakeBlock) => boolean): Set<string> {
+    const eligible = new Set<string>();
+    for (const name of new Set(this.blocks.values())) {
+      // Synthetic palette block: name set, position null, no neighbours — exactly Block.fromStateId.
+      const synthetic = { name, position: null } as unknown as FakeBlock;
+      if (matching(synthetic)) eligible.add(name);
+    }
+    return eligible;
+  }
+
+  /** Positions of blocks matching `opts.matching`, nearest-first, capped at `count` — mirrors
+   *  mineflayer's bot.findBlocks (incl. the R76 palette pre-check for function matchers). */
+  findBlocks(opts: {
     matching: ((b: FakeBlock) => boolean) | number | number[];
     maxDistance?: number;
+    count?: number;
     point?: Vec3;
-  }): FakeBlock | null {
+  }): Vec3[] {
     const origin = opts.point ?? this.entity.position;
     const max = opts.maxDistance ?? 16;
+    const count = opts.count ?? 1;
+    const fn = typeof opts.matching === 'function' ? opts.matching : null;
+    // Palette pre-check: a function matcher only reaches blocks whose NAME passed the synthetic test (R76).
+    const eligible = fn ? this.paletteEligibleNames(fn) : null;
     const matches = (b: FakeBlock): boolean => {
-      if (typeof opts.matching === 'function') return opts.matching(b);
-      const ids = Array.isArray(opts.matching) ? opts.matching : [opts.matching];
+      if (fn) return eligible!.has(b.name) && fn(b);
+      const ids = Array.isArray(opts.matching) ? opts.matching : [opts.matching as number];
       return ids.includes(this.idFor(b.name));
     };
-    let best: FakeBlock | null = null;
-    let bestDist = Infinity;
+    const hits: Array<{ pos: Vec3; dist: number }> = [];
     for (const [k, name] of this.blocks) {
       const [x, y, z] = k.split(',').map(Number) as [number, number, number];
       const block: FakeBlock = { name, position: { x, y, z } };
       if (!matches(block)) continue;
       const dist = Math.hypot(x - origin.x, y - origin.y, z - origin.z);
-      if (dist <= max && dist < bestDist) {
-        best = block;
-        bestDist = dist;
-      }
+      if (dist <= max) hits.push({ pos: { x, y, z }, dist });
     }
-    return best;
+    hits.sort((a, b) => a.dist - b.dist);
+    return hits.slice(0, count).map((h) => h.pos);
+  }
+
+  /** Nearest block matching `opts.matching` (a name predicate, or an id / id[] resolved via the registry)
+   *  within `maxDistance` of the bot — mirrors mineflayer's bot.findBlock (a thin findBlocks → blockAt). */
+  findBlock(opts: {
+    matching: ((b: FakeBlock) => boolean) | number | number[];
+    maxDistance?: number;
+    count?: number;
+    point?: Vec3;
+  }): FakeBlock | null {
+    const [pos] = this.findBlocks(opts);
+    return pos ? this.blockAt(pos) : null;
   }
   /** Build a grounded trunk plus optional disconnected floating logs (the R10 trap). */
   plantTree(base: Vec3, trunkHeight: number, floating: Vec3[] = []): void {

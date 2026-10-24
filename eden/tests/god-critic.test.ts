@@ -17,7 +17,7 @@ function report(over: Partial<RunReport> = {}): RunReport {
   return {
     runId: 'run-1', rolloutId: 'roll-1', skill: 'collect-oak-logs', version: 1, villager: 'Firmin',
     args: {}, outcome: { ok: true, value: { collected: 3 } }, startedAt: 0, durationMs: 100, pulses: 3,
-    deepestDepth: 0, callTree: [], worldBefore: SNAP(), worldAfter: SNAP([{ name: 'oak_log', count: 3 }]),
+    deepestDepth: 0, callTree: [], logs: [], worldBefore: SNAP(), worldAfter: SNAP([{ name: 'oak_log', count: 3 }]),
     ...over,
   };
 }
@@ -129,7 +129,7 @@ test('M3-4 (D-12(i) check-veto): an unmet check forces success:false / no admit,
 test('M3-4 (R34): a clean exit with an unmet check is NOT progress — vetoed', async () => {
   const { verdict, llm } = await judgeWith(verdictCall({ success: true, critique: 'exit propre', libraryAction: 'admit' }), {
     task: task({ check: { item: 'oak_log', count: 3 } }),
-    report: report({ outcome: { ok: true, value: {} }, worldBefore: SNAP(), worldAfter: SNAP() }), // returned cleanly, world unchanged
+    report: report({ outcome: { ok: true, value: {} }, logs: [], worldBefore: SNAP(), worldAfter: SNAP() }), // returned cleanly, world unchanged
   });
   try {
     assert.equal(verdict.success, false, 'completion ≠ progress (R34): a clean return with no world delta fails the check');
@@ -154,7 +154,7 @@ test('M3-4 (D-12, passing check is NOT an auto-admit): a satisfied check still l
 test('M3-4 (R35): a quiet run (no failures, no delta) with no check is a legitimate pass — not auto-failed', async () => {
   const { verdict, llm } = await judgeWith(verdictCall({ success: true, critique: 'patrouille effectuée', libraryAction: 'none' }), {
     task: task({ check: undefined }),
-    report: report({ outcome: { ok: true, value: {} }, worldBefore: SNAP(), worldAfter: SNAP() }),
+    report: report({ outcome: { ok: true, value: {} }, logs: [], worldBefore: SNAP(), worldAfter: SNAP() }),
   });
   try {
     assert.equal(verdict.success, true, 'quiet ≠ futile (R35): the critic does not auto-fail a no-delta run');
@@ -171,6 +171,54 @@ test('M3-4 (voidDivineOverreach): a success achieved by divine intervention is v
     assert.equal(verdict.success, false, 'divine action can never inflate the ledger');
     assert.notEqual(verdict.libraryAction, 'admit');
     assert.match(verdict.critique, /divin|intervention|overreach/i);
+  } finally {
+    await llm.close();
+  }
+});
+
+test('MED-2a (admit↔success rail): a {success:false, admit} verdict does NOT admit (forced keep-draft)', async () => {
+  // No check on the task and no divine assist — the prior rails do not fire, so this isolates the new
+  // admit↔success coupling: the model self-contradicts (success:false but libraryAction:admit). Admission
+  // requires the critic's own success flag, so the rail must downgrade admit → keep-draft (R48).
+  const { verdict, llm } = await judgeWith(
+    verdictCall({ success: false, critique: 'fragile mais générique', libraryAction: 'admit' }),
+    { task: task({ check: undefined }) },
+  );
+  try {
+    assert.equal(verdict.success, false, 'the non-success verdict is preserved');
+    assert.equal(verdict.libraryAction, 'keep-draft', 'a non-success verdict can never admit (R48)');
+    assert.match(verdict.critique, /admission|succès|R48/i, 'the critique names why admission was refused');
+  } finally {
+    await llm.close();
+  }
+});
+
+test('MED-2a (a rail-forced failure also blocks admit): a failed check + admit lands keep-draft, not admit', async () => {
+  // The check-veto rail already forces success:false; the admit↔success rail then guarantees no admission
+  // even though the model said admit. (The check-veto rail also downgrades admit, so this is belt-and-braces
+  // — it pins that the coupling holds for a rail-FORCED failure, not just a model-declared one.)
+  const { verdict, llm } = await judgeWith(verdictCall({ success: true, critique: 'on dirait bon', libraryAction: 'admit' }), {
+    task: task({ check: { item: 'oak_log', count: 3 } }),
+    report: report({ worldAfter: SNAP([]) }), // ZERO oak_log — the check fails, forcing success:false
+  });
+  try {
+    assert.equal(verdict.success, false);
+    assert.equal(verdict.libraryAction, 'keep-draft', 'a rail-forced non-success never admits');
+  } finally {
+    await llm.close();
+  }
+});
+
+test('MED-2a (a genuine success still admits): the rail does not block a success:true admit', async () => {
+  // Guard against over-firing: the rail must only block admit when success is false. A clean success with
+  // a satisfied check must still admit.
+  const { verdict, llm } = await judgeWith(verdictCall({ success: true, critique: 'propre et générique', libraryAction: 'admit' }), {
+    task: task({ check: { item: 'oak_log', count: 3 } }),
+    report: report({ worldAfter: SNAP([{ name: 'oak_log', count: 3 }]) }),
+  });
+  try {
+    assert.equal(verdict.success, true);
+    assert.equal(verdict.libraryAction, 'admit', 'a genuine success is still admitted (the rail is one-directional)');
   } finally {
     await llm.close();
   }
@@ -205,3 +253,4 @@ test('M3-4: a non-tool reply degrades to a safe keep-draft verdict (never throws
     await llm.close();
   }
 });
+

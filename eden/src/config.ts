@@ -78,7 +78,18 @@ export interface EdenConfig {
   };
   settlement: { url: string };
   admin: { port: number };
-  journal: { vitalsIntervalSeconds: number; debugPrompts: boolean; retentionDays: number };
+  journal: {
+    vitalsIntervalSeconds: number;
+    debugPrompts: boolean;
+    retentionDays: number;
+    /**
+     * Where memory/skill/QA embedding vectors live (D-record: embed-at-write on the eden.db spine).
+     * "sqlite-vec" = the native vec0 store (default; self-degrades to the keyword floor if the extension
+     * fails to load on this platform). "off" = never construct a store → keyword floor for everyone
+     * (CI/no-model boots, or a machine where sqlite-vec won't load).
+     */
+    vectorStore: 'sqlite-vec' | 'off';
+  };
 }
 
 /** The defaulted skeleton (villagers come from the user). */
@@ -131,6 +142,7 @@ export const DEFAULT_CONFIG: Omit<EdenConfig, 'villagers'> = {
     debugPrompts: false,
     // G1: "configurable 7-day retention" has no key yet — hardcoded default, owner call pending.
     retentionDays: 7,
+    vectorStore: 'sqlite-vec',
   },
 };
 
@@ -330,14 +342,21 @@ export function parseConfig(input: unknown): { config: EdenConfig; warnings: str
 
   // journal (alias-aware)
   const jrnRaw = applyAliases('journal', isObj(raw['journal']) ? raw['journal'] : {}, warnings);
-  warnUnknown('journal', jrnRaw, ['vitalsIntervalSeconds', 'debugPrompts'], warnings);
+  warnUnknown('journal', jrnRaw, ['vitalsIntervalSeconds', 'debugPrompts', 'retentionDays', 'vectorStore'], warnings);
   if (num(jrnRaw, 'vitalsIntervalSeconds', d.journal.vitalsIntervalSeconds) < 5) {
     warnings.push('config: journal.vitalsIntervalSeconds < 5 floods the journal — consider raising it');
+  }
+  const vsRaw = str(jrnRaw, 'vectorStore', d.journal.vectorStore);
+  if (vsRaw !== 'sqlite-vec' && vsRaw !== 'off') {
+    warnings.push(`config: journal.vectorStore "${vsRaw}" is not "sqlite-vec" | "off" — using "sqlite-vec"`);
   }
   const journal = {
     vitalsIntervalSeconds: num(jrnRaw, 'vitalsIntervalSeconds', d.journal.vitalsIntervalSeconds),
     debugPrompts: bool(jrnRaw, 'debugPrompts', d.journal.debugPrompts),
-    retentionDays: d.journal.retentionDays,
+    // MED-12: actually READ the configured retention (was hardcoded to the default + the key warned as
+    // unknown — worse than either clean option). G1's owner call resolved to a plain config key.
+    retentionDays: num(jrnRaw, 'retentionDays', d.journal.retentionDays),
+    vectorStore: (vsRaw === 'off' ? 'off' : 'sqlite-vec') as 'sqlite-vec' | 'off',
   };
 
   const config: EdenConfig = { minecraft, scenario, provider, apiKeyEnv: undefined, villagers, god, behavior, llm, skills, settlement, admin, journal };
@@ -390,7 +409,13 @@ export function assertIdentity(villagers: readonly { name: string }[], godName: 
 /** Read a config file (JSONC tolerated), validate, forward warnings to onWarn, return the config. */
 export function loadConfig(path: string, onWarn?: (warning: string) => void): EdenConfig {
   const text = readFileSync(path, 'utf8');
-  const parsed: unknown = JSON.parse(stripJsonComments(text, { trailingCommas: true }));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonComments(text, { trailingCommas: true }));
+  } catch (e) {
+    // LOW-5: name the offending file (S10) — a bare SyntaxError gives no path on a multi-file boot.
+    throw new Error(`config: ${path} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+  }
   const { config, warnings } = parseConfig(parsed);
   if (onWarn) for (const w of warnings) onWarn(w);
   return config;

@@ -144,7 +144,14 @@ test('R21: a connection-reset that NEVER recovers gives up after maxRetries and 
   const client = new LlmClient({ providers: providers('http://127.0.0.1:1/v1'), journal, fetchImpl: alwaysReset, maxRetries: 2 });
   await assert.rejects(client.chat(ask()), /reset|fetch failed/);
   assert.equal(calls, 3, 'the initial attempt + exactly maxRetries (2) retries, then it gives up');
-  assert.equal(journal.query({ kinds: ['llm.call'] }).length, 0, 'a failed call never journals a success metric');
+  // MED-8: the exhausted-resets failure journals ONE `llm.call` with a failure finishReason + the retry
+  // count (never a success metric) so the cost/throughput oracle sees the failed attempt before the throw.
+  const failCalls = journal.query({ kinds: ['llm.call'] });
+  assert.equal(failCalls.length, 1, 'a failed call journals exactly one llm.call (the failure, not a success)');
+  const fp = failCalls[0]!.payload as Record<string, unknown>;
+  assert.equal(fp['finishReason'], 'error', 'a non-timeout/non-HTTP failure journals finishReason "error"');
+  assert.equal(fp['retries'], 2, 'the retry count is carried on the failure event');
+  assert.equal(fp['promptTokens'], 0, 'a failed call has no usage');
 });
 
 test('R21 (EPIPE/UND_ERR_SOCKET): other transient socket codes are also retried', async () => {
@@ -246,4 +253,46 @@ test('R21: HTTP 500 is an error, not a silent retry-forever', async () => {
   const client = new LlmClient({ providers: providers('http://127.0.0.1:1/v1'), journal, fetchImpl: errFetch, maxRetries: 4 });
   await assert.rejects(client.chat(ask()));
   assert.equal(calls, 1, 'a 4xx/5xx is surfaced, not retried as if it were a reset');
+  // MED-8: the HTTP error journals an llm.call carrying the status in the finishReason (no `status` field
+  // in the kind), so a provider outage shows as errors with their code instead of suspicious quiet.
+  const ev = journal.query({ kinds: ['llm.call'] })[0]!;
+  assert.equal((ev.payload as Record<string, unknown>)['finishReason'], 'error:http-500');
+});
+
+test('MED-8: a timeout journals an llm.call with finishReason "timeout" before throwing', async () => {
+  const journal = new MemoryJournal();
+  const hangingFetch: typeof fetch = (_url, init) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    });
+  const client = new LlmClient({ providers: providers('http://127.0.0.1:1/v1'), journal, timeoutMs: 30, fetchImpl: hangingFetch });
+  await assert.rejects(client.chat(ask({ refs: { rolloutId: 'rT' } })), (e: unknown) => e instanceof LlmTimeoutError);
+  const ev = journal.query({ kinds: ['llm.call'] })[0]!;
+  assert.equal((ev.payload as Record<string, unknown>)['finishReason'], 'timeout');
+  assert.equal(ev.refs.rolloutId, 'rT', 'the failure event carries the caller refs');
+});
+
+test('HIGH-2: an over-budget request journals a system.error (observed, not blocked) and still sends', async () => {
+  const journal = new MemoryJournal();
+  const okBody = {
+    choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  };
+  let sent = false;
+  const capFetch: typeof fetch = () => {
+    sent = true;
+    return Promise.resolve(new Response(JSON.stringify(okBody), { status: 200, headers: { 'content-type': 'application/json' } }));
+  };
+  // A tiny-budget provider + a long message → estimateTokens(message) > inputTokenBudget.
+  const tiny = new ProviderRegistry({
+    strong: { baseUrl: 'http://127.0.0.1:1/v1', model: 'strong-model', inputTokenBudget: 5 },
+    fast: { baseUrl: 'http://127.0.0.1:1/v1', model: 'fast-model', inputTokenBudget: 5 },
+  });
+  const client = new LlmClient({ providers: tiny, journal, fetchImpl: capFetch });
+  const result = await client.chat(ask({ messages: [{ role: 'user', content: 'x'.repeat(400) }] }));
+  assert.equal(result.content, 'ok', 'the request is still sent (observe, never block — non-breaking)');
+  assert.ok(sent, 'the over-budget request reached the provider');
+  const warn = journal.query({ kinds: ['system.error'] });
+  assert.equal(warn.length, 1, 'an over-budget request journals exactly one observability event');
+  assert.match((warn[0]!.payload as { message: string }).message, /OVER input budget/);
 });

@@ -80,7 +80,7 @@ export function buildEvalRoster(count: number): EvalRoster {
     skills: { runDefaultTimeoutMs: 120000, stallSeconds: 20, maxCallDepth: 8, maxSkillLines: 400, probationRuns: 3, autoQuarantineAfter: 5 },
     settlement: { url: 'http://127.0.0.1:8767/trade/execute' },
     admin: { port: 8770 },
-    journal: { vitalsIntervalSeconds: 10, debugPrompts: false, retentionDays: 7 },
+    journal: { vitalsIntervalSeconds: 10, debugPrompts: false, retentionDays: 7, vectorStore: 'off' },
   };
 
   return { villagers, god: { name: godName }, config, embeddings: 'off', heartbeatSeconds: EVAL_HEARTBEAT_SECONDS };

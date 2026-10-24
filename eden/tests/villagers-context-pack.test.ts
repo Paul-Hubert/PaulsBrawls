@@ -43,6 +43,7 @@ function runReport(over: Partial<RunReport> = {}): RunReport {
     pulses: 5,
     deepestDepth: 0,
     callTree: [],
+    logs: [],
     worldBefore: SNAP,
     worldAfter: SNAP,
     ...over,
@@ -139,6 +140,22 @@ test('M3-1 (§7): exemplar full code only when authoring; one-liners otherwise; 
   assert.match(fa, /VÉRIFIE avant de réussir/, 'authoring wake-up carries the verify-before-success doctrine');
   assert.match(fa, /attribuer le gain à CETTE/, 'doctrine demands attributing a delta to THIS run');
   assert.ok(!/VÉRIFIE avant de réussir/.test(fr), 'reactive wake-up omits the verify-before-success doctrine');
+});
+
+test('R73 (§2): the authoring hint DEMANDS a write_skill draft — run-existing + done is not acceptable', () => {
+  // An authoring rollout exists to produce a reusable skill. The DÉCLENCHEUR section must state that
+  // objective so the villager doesn't just run existing primitives and `done` (the live 0-verdict churn).
+  const authoring = new ContextPackBuilder({ journal: new MemoryJournal() }).build(baseInput({ hint: 'authoring' }));
+  const other = new ContextPackBuilder({ journal: new MemoryJournal() }).build(baseInput({ hint: 'survie' }));
+  const fa = authoring.messages.find((m) => m.role === 'system')!.content!;
+  const fo = other.messages.find((m) => m.role === 'system')!.content!;
+  assert.match(fa, /OBJECTIF \(authoring\)/, 'the authoring hint renders the explicit authoring objective');
+  assert.match(fa, /write_skill/, 'it names write_skill as the required outcome');
+  assert.match(fa, /n’est\s+PAS une issue acceptable|PAS une issue acceptable/, 'running existing skills + done is explicitly NOT acceptable');
+  assert.match(fa, /RÉÉCRIS-la/, 'a defective existing skill should be rewritten, not re-run');
+  // A non-authoring hint renders the plain "Indice:" line, NOT the authoring objective.
+  assert.ok(!/OBJECTIF \(authoring\)/.test(fo), 'a non-authoring hint omits the authoring objective');
+  assert.match(fo, /Indice: survie/, 'a non-authoring hint renders as the plain indice line');
 });
 
 test('M3-1 (P2): the stock primitive palette rides on authoring packs, deduped vs exemplars + retrieved', () => {
@@ -271,3 +288,4 @@ test('M3-1: journals brain.wakeup with the section sizes + trim count (D-11 obse
   assert.equal(ev[0]!.refs.rolloutId, 'roll-1', 'the wake-up is tied to its rollout (refs.rolloutId)');
   assert.equal(ev[0]!.actor, 'villager:Firmin', 'the actor is the villager (R41)');
 });
+

@@ -14,6 +14,7 @@ import { join } from 'node:path';
 
 import { monotonicFactory } from 'ulid';
 
+import { estimateTokens } from '../render/tokens';
 import type { Refs } from '../types/index';
 import type { JournalAppender } from '../journal/journal';
 
@@ -221,6 +222,10 @@ export class LlmClient {
     this.dataDir = opts.dataDir ?? '.eden-data';
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.now = opts.now ?? Date.now;
+    // CRIT-3: capture the key ONCE here into a private field. Every `attempt()` reads `this.apiKey`,
+    // never `process.env` per-call — so once main.ts scrubs `process.env[apiKeyEnv]`/OPENAI_API_KEY
+    // after construction (real-boot path only), a skill body can no longer read the key off
+    // `globalThis.process.env` yet this client keeps working from the captured copy.
     this.apiKey = opts.apiKey ?? process.env.OPENAI_API_KEY;
   }
 
@@ -239,6 +244,21 @@ export class LlmClient {
     if (isDeepSeekBaseUrl(provider.baseUrl)) {
       wireBody['thinking'] = { type: 'disabled' };
     }
+    // HIGH-2: observe (never block) an over-budget request. The request is still sent verbatim — hard
+    // truncation here would risk regressing currently-working calls — but if the assembled messages
+    // exceed the provider's inputTokenBudget (D-11), journal it so the eventual provider
+    // `context_length_exceeded` 400 has a cause trail instead of looking like an inexplicable failure.
+    const estInputTokens = estimateTokens(req.messages.map((m) => m.content ?? '').join('\n'));
+    if (provider.inputTokenBudget > 0 && estInputTokens > provider.inputTokenBudget) {
+      // The client journals (never console-logs — R23/its no-logger posture); the admin WS stream + the
+      // dashboard surface this `system.error`, so an over-budget request is observable without coupling
+      // llm/ to logger.ts (mirrors vectors/'s injected-callback discipline).
+      const msg =
+        `llm call ${callId} (${provider.model}, tier ${req.tier}, caller ${req.caller}) is OVER input budget: ` +
+        `~${estInputTokens} est. tokens > inputTokenBudget ${provider.inputTokenBudget} — sending anyway (may 400 context_length_exceeded)`;
+      this.journal.append(req.caller, 'system.error', { message: msg }, { ...req.refs, llmCallId: callId });
+    }
+
     const started = this.now();
     const timeoutMs = req.timeoutMs ?? this.timeoutMs;
 
@@ -251,9 +271,44 @@ export class LlmClient {
           retries++;
           continue;
         }
+        // MED-8: a failed call (timeout / HTTP error / exhausted resets) journals an `llm.call` with a
+        // failure finishReason + the retry count BEFORE re-throwing, so the cost/throughput oracle counts
+        // the attempt and a provider outage reads as errors, not as suspicious quiet. We reuse the existing
+        // `llm.call` kind (no new kind); the HTTP status (when any) is folded into the finishReason string.
+        this.journalFailure(req, provider, callId, this.now() - started, retries, e);
         throw e;
       }
     }
+  }
+
+  /** MED-8: append an `llm.call` for a failed attempt (timeout / HTTP error / exhausted resets). */
+  private journalFailure(
+    req: LlmRequest,
+    provider: ProviderEntry,
+    callId: string,
+    latencyMs: number,
+    retries: number,
+    e: unknown,
+  ): void {
+    let finishReason: string;
+    if (e instanceof LlmTimeoutError) finishReason = 'timeout';
+    else if (e instanceof LlmHttpError) finishReason = `error:http-${e.status}`; // HTTP status folded in (no `status` field in the kind)
+    else finishReason = 'error';
+    this.journal.append(
+      req.caller,
+      'llm.call',
+      {
+        caller: req.caller,
+        model: provider.model,
+        tier: req.tier,
+        latencyMs,
+        promptTokens: 0,
+        completionTokens: 0,
+        finishReason,
+        retries,
+      },
+      { ...req.refs, llmCallId: callId },
+    );
   }
 
   private async attempt(

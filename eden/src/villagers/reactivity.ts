@@ -14,7 +14,7 @@
 // social/ (the dependency law). The wake-up itself is INJECTED (a WakeupFn) so this module needn't know
 // how to build a context pack — main.ts owns that (it's the only layer that may touch the Brain + roster).
 
-import type { Bot } from '../types/bot';
+import type { Bot, EmitterLike } from '../types/bot';
 import type { IJournal } from '../journal/journal';
 import type { RunnerRef } from '../types/index';
 import { logger } from '../logger';
@@ -35,10 +35,15 @@ export interface VillagerReactivityOptions {
   vitalsFor: (villager: string) => FilterContext;
   /** Below this health an edge fires `health-low` (defaults to the EventRouter's S7 default of 6). */
   healthLowThreshold?: number;
+  /** The usernames of OUR bots (villagers + avatar) — handed to the signal adapter so chat from one of
+   *  them tags `villager-chat`, never `player-chat` (a villager must not react to its own/peer speech). */
+  botNames?: ReadonlySet<string>;
 }
 
 interface PerBot {
   router: EventRouter;
+  /** The adapter's synthetic-signal bus — kept so {@link VillagerReactivity.signalInbox} can pulse it. */
+  signals: EmitterLike;
   detachSignals: () => void;
 }
 
@@ -60,7 +65,7 @@ export class VillagerReactivity {
   attach(villager: string, bot: Bot): void {
     if (!this.roles.has(villager)) return;
     this.detachOne(villager); // reconnect-safe — drop the stale router bound to the previous bot instance
-    const adapter = attachReactivitySignals(bot);
+    const adapter = attachReactivitySignals(bot, this.o.botNames ? { botNames: this.o.botNames } : {});
     const runner: RunnerRef = { name: villager, role: this.roles.get(villager) as string, tier: 'mortal' };
     const subRouter = new SubscriptionRouter({
       villager,
@@ -86,12 +91,25 @@ export class VillagerReactivity {
       ...(this.o.healthLowThreshold !== undefined ? { healthLowThreshold: this.o.healthLowThreshold } : {}),
     });
     router.attach();
-    this.attached.set(villager, { router, detachSignals: adapter.detach });
+    this.attached.set(villager, { router, signals: adapter.signals, detachSignals: adapter.detach });
   }
 
   /** Pump the 30 s coarse clock across every attached router (the host arms a 30 s timer that calls this). */
   tick(): void {
     for (const pb of this.attached.values()) pb.router.tick();
+  }
+
+  /**
+   * Raise an `inbox` event for a villager (HIGH-3) — main.ts wires this to VillagerInbox's delivery hook.
+   * Pulses the per-bot adapter bus so the EventRouter's `inbox` row fires, routing through subscriptions
+   * exactly like any other signal (so the seeded `inbox → deliberate` reflex wakes the villager). A no-op
+   * if the villager isn't attached (e.g. its bot is disconnected) — the message stays queued for drain.
+   */
+  signalInbox(villager: string): void {
+    const pb = this.attached.get(villager);
+    if (!pb) return;
+    // The bus is a node EventEmitter; EmitterLike narrows out `emit` (only the listen side is on the seam).
+    (pb.signals as unknown as { emit(event: string): void }).emit('inbox');
   }
 
   /** How many subscriptions a villager holds — the admin /villagers surface (was hardcoded 0). */

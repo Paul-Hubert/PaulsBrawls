@@ -272,3 +272,18 @@ test('trading-post.json is valid and has 3 villagers', () => {
   assert.equal(result.name, 'trading-post');
   assert.equal(result.villagers.length, 3);
 });
+
+test('detect-and-defend.json is valid: an archer + a swordsman, kitted, with a godPrompt', () => {
+  const scenarioPath = fileURLToPath(new URL('../scenarios/detect-and-defend.json', import.meta.url));
+  const result = loadScenario(scenarioPath);
+  assert.equal(result.name, 'detect-and-defend');
+  assert.equal(result.villagers.length, 2);
+  // The two roles that carry the entity-spotted reflexes (roles.json) — the proactive-detection seam.
+  assert.deepEqual(result.villagers.map((v) => v.role).sort(), ['archer', 'swordsman']);
+  assert.ok(result.villagers.every((v) => v.persona), 'both have a persona');
+  // Both carry full iron armor + sword + bow + arrows → 7 /give commands each.
+  assert.equal(result.setupCommands.length, 14);
+  assert.ok(result.setupCommands.some((c) => c.includes('minecraft:bow')), 'a bow is given');
+  assert.ok(result.setupCommands.some((c) => c.includes('minecraft:arrow')), 'arrows are given');
+  assert.ok((result.god.godPrompt ?? '').includes('ZERO damage'), 'the no-damage mission is in the godPrompt');
+});

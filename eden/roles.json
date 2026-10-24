@@ -35,6 +35,23 @@
     { "on": "entity-spotted", "filter": { "entityKind": "hostile", "within": 16 }, "handler": { "kind": "deliberate", "hint": "un ennemi est repéré — décide d'attaquer, d'alerter ou de te replier", "priority": "interrupt" }, "cooldownMs": 5000 }
   ],
 
+  "archer": [
+    // Took damage despite the high ground → fight back at the nearest hostile (zero-token backstop). Overrides
+    // everyone's hurt→flee so the archer does not leap off its tower; normally an elevated archer is never hit.
+    { "on": "hurt", "filter": { "notWhileRunning": ["defend-self"] }, "handler": { "kind": "skill", "name": "defend-self", "args": {} }, "cooldownMs": 1000 },
+    // A hostile entered perception (≤24 — the poll's full range) → deliberate at top priority: shoot it from
+    // the high spot with the bow (shoot-mob) BEFORE it can close. This IS "detect before they attack".
+    { "on": "entity-spotted", "filter": { "entityKind": "hostile", "within": 24 }, "handler": { "kind": "deliberate", "hint": "un ennemi hostile est repéré — depuis ton point haut, abats-le à l'arc (run_skill shoot-mob) AVANT qu'il ne t'atteigne, sans descendre de la tour", "priority": "interrupt" }, "cooldownMs": 4000 }
+  ],
+
+  "swordsman": [
+    // Took damage → fight the nearest hostile (zero-token backstop, overrides everyone's hurt→flee — D-15).
+    { "on": "hurt", "filter": { "notWhileRunning": ["defend-self"] }, "handler": { "kind": "skill", "name": "defend-self", "args": {} }, "cooldownMs": 1000 },
+    // A hostile entered perception (≤20) → deliberate: intercept and cut it down (kill-mob), or soften it with
+    // the bow first while it is still far (shoot-mob) — kill it BEFORE it lands a hit. "Detect before attack."
+    { "on": "entity-spotted", "filter": { "entityKind": "hostile", "within": 20 }, "handler": { "kind": "deliberate", "hint": "un ennemi hostile est repéré — intercepte-le et abats-le (run_skill kill-mob, ou shoot-mob s'il est encore loin) AVANT qu'il ne te touche", "priority": "interrupt" }, "cooldownMs": 4000 }
+  ],
+
   "farmer": [
     // A new day began → harvest the home field (a free reflex; the skill reads the farmer's home anchor).
     { "on": "new-day", "handler": { "kind": "skill", "name": "harvest-field", "args": {} } }

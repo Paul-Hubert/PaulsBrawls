@@ -7,9 +7,9 @@ export default tseslint.config(
     // `**/.eden-data*/**` covers the live journal dir AND the preserved run snapshots (.eden-data.run1,
     // live-tests/.runs/<x>/.eden-data, …) — all hold generated skill `.js` the lint gate must not judge,
     // mirroring the gitignore's `.eden-data*/`. live-tests/.runs/** also holds per-run evidence + configs.
-    // .smoke/** is gitignored, throwaway smoke-harness scripts (Node CLI: console/process/Buffer by
-    // design) — not shipped code, never part of the lint gate.
-    ignores: ['node_modules/**', '**/.eden-data*/**', 'live-tests/.runs/**', 'dist/**', 'coverage/**', '**/*.cjs', '.smoke/**'],
+    // .smoke/** and .review-scratch/** are gitignored, throwaway harness/review scratch scripts (Node
+    // CLI: console/process/Buffer by design) — not shipped code, never part of the lint gate.
+    ignores: ['node_modules/**', '**/.eden-data*/**', 'live-tests/.runs/**', 'dist/**', 'coverage/**', '**/*.cjs', '.smoke/**', '.review-scratch/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

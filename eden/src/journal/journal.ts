@@ -11,6 +11,16 @@ import { type JournalKind, type PayloadOf, isKnownKind } from './kinds';
 
 type DB = Database.Database;
 
+/**
+ * The journal kinds {@link Journal.prune} may delete past the retention horizon. STRICT invariant: a kind
+ * is prunable ONLY if NO view in views/ folds it for durable derived state — otherwise replaying a pruned
+ * journal would diverge from the live fold (the rebuild==live design law). These two are the high-volume
+ * OBSERVABILITY summaries: `vitals` (the per-bot snapshot cadence) and `system.loop-lag` (the backpressure
+ * canary spikes). Verified against views/index.ts (folds: skill.run / conversation.* / trade.* /
+ * god.task-closed / god.verdict / rolloutId-tagged) — neither prunable kind appears there.
+ */
+const PRUNABLE_KINDS: readonly JournalKind[] = ['vitals', 'system.loop-lag'] as const;
+
 /** Live consumer of appended events (e.g. the admin WS stream). */
 export type JournalListener = (event: JournalEvent) => void;
 /** Returned by `subscribe` — call it to detach the listener. */
@@ -43,8 +53,11 @@ export class Journal implements IJournal {
   private readonly listeners = new Set<JournalListener>();
   private readonly insertStmt: Database.Statement;
 
-  constructor(dbPath: string) {
-    this.db = new Database(dbPath);
+  constructor(db: DB | string) {
+    // Accept an OPEN handle (so main.ts can share ONE connection with the VectorStore — "one spine, one
+    // connection") or a path (the standalone/test/rebuild-stats callers). Pragmas are idempotent on a
+    // shared handle.
+    this.db = typeof db === 'string' ? new Database(db) : db;
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('synchronous = NORMAL');
     this.db.exec(`
@@ -105,8 +118,13 @@ export class Journal implements IJournal {
       params.push(q.until);
     }
     if (q.ref !== undefined) {
-      clauses.push("EXISTS (SELECT 1 FROM json_each(journal.refs) WHERE json_each.value = ?)");
-      params.push(q.ref);
+      // LOW-1: query the three typed ref paths so the `json_extract` expression indexes (rollout/run/skill,
+      // the ones every caller queries by) apply. The old `json_each(refs).value` was a full value-scan that
+      // could NOT use those indexes → O(table) ref lookups on the unbounded journal.
+      clauses.push(
+        "(json_extract(refs, '$.rolloutId') = ? OR json_extract(refs, '$.runId') = ? OR json_extract(refs, '$.skill') = ?)",
+      );
+      params.push(q.ref, q.ref, q.ref);
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const hasLimit = typeof q.limit === 'number' && q.limit > 0;
@@ -132,6 +150,24 @@ export class Journal implements IJournal {
   count(): number {
     const r = this.db.prepare('SELECT COUNT(*) AS n FROM journal').get() as { n: number };
     return r.n;
+  }
+
+  /**
+   * Retention (config `journal.retentionDays`): delete rows older than the cutoff, but ONLY the
+   * high-volume OBSERVABILITY kinds {@link PRUNABLE_KINDS} that NO view in views/ folds for durable
+   * derived state (vitals per-bot snapshots + the loop-lag canary spikes). This is the bound on the
+   * otherwise-unbounded journal. It must NEVER touch a kind any view consumes, or replay-from-the-pruned-
+   * journal would no longer equal the live fold (the rebuild==live invariant). `now` is injectable so the
+   * caller controls the clock (tests pass a fixed `now`; the host passes Date.now()). Returns rows deleted.
+   */
+  prune(retentionDays: number, now: number = Date.now()): number {
+    if (!(retentionDays > 0)) return 0; // 0/negative/NaN ⇒ retention disabled (keep everything)
+    const cutoff = now - retentionDays * 24 * 60 * 60 * 1000;
+    const placeholders = PRUNABLE_KINDS.map(() => '?').join(', ');
+    const info = this.db
+      .prepare(`DELETE FROM journal WHERE at < ? AND kind IN (${placeholders})`)
+      .run(cutoff, ...PRUNABLE_KINDS);
+    return info.changes;
   }
 
   /** Close the underlying database (call on host shutdown). */

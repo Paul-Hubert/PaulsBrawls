@@ -15,6 +15,7 @@ import { join } from 'node:path';
 
 import { MemoryJournal } from './fakes/memory-journal';
 import { ScriptedLlm } from './fakes/scripted-llm';
+import { FakeVectorStore } from './fakes/vector-store';
 import { EmbeddingsService } from '../src/llm/embeddings';
 import { LlmClient, ProviderRegistry } from '../src/llm/client';
 import { VillagerMemory, MemorySummarizer } from '../src/villagers/memory';
@@ -157,19 +158,21 @@ test('M6-1 (recency half-life): two equally-relevant, equally-important memories
   assert.match(ranked[0]!.text, /soir/, 'the more recent of two equal memories ranks first');
 });
 
-test('M6-1: relevance = max(embedding cosine, keyword overlap) — a semantic backend lifts a keyword-poor match', async () => {
+test('M6-1: relevance = max(embedding cosine, keyword overlap) — a semantic backend (now sourced from the vector store) lifts a keyword-poor match', async () => {
   const journal = new MemoryJournal();
-  // A backend that returns identical vectors for the query + one entry (cosine 1) and orthogonal for the
-  // other — so the "semantically identical but keyword-poor" entry wins on the cosine half of max(...).
+  // Embed-at-write: the backend embeds each entry's text at remember() and the query at retrieve().
+  // 'écho' shares NO keyword with the query 'cible', so only the stored COSINE can lift it.
   const embeddings = new EmbeddingsService({
     backend: async (texts: string[]) =>
-      texts.map((t) => (t.includes('cible') ? [1, 0, 0] : t.includes('bruit') ? [0, 1, 0] : [1, 0, 0])),
+      texts.map((t) => (/cible|[ée]cho/.test(t) ? [1, 0, 0] : [0, 1, 0])),
   });
-  const mem = new VillagerMemory({ villager: 'Firmin', dataDir: tmp(), journal, worldId: 'w1', embeddings });
-  mem.remember({ kind: 'event', text: 'cible importante', importance: 5 });
+  const vectors = new FakeVectorStore(); // the cosine now comes from the store, not a re-embed of the pool
+  const mem = new VillagerMemory({ villager: 'Firmin', dataDir: tmp(), journal, worldId: 'w1', embeddings, vectors });
+  mem.remember({ kind: 'event', text: 'un écho lointain', importance: 5 }); // keyword-poor, same topic as 'cible'
   mem.remember({ kind: 'event', text: 'bruit de fond', importance: 5 });
+  await mem.flushVectors(); // the per-write embeds must land before recall
   const ranked = await mem.retrieve('cible', 5);
-  assert.match(ranked[0]!.text, /cible/, 'the cosine-matched entry ranks first');
+  assert.match(ranked[0]!.text, /écho/, 'the cosine-matched (keyword-poor) entry ranks first via the store');
 });
 
 test('M6-1 (relations): moveRelation accumulates a score + replaces the note; relations() reflects it', () => {
@@ -278,7 +281,7 @@ async function summarizerHarness(content: string | null): Promise<{ result: impo
     journal,
   });
   const summarizer = new MemorySummarizer(client);
-  const evicted = [{ kind: 'event' as const, text: 'mined oak', importance: 3, at: 0, tags: [] }];
+  const evicted = [{ id: 'e0', kind: 'event' as const, text: 'mined oak', importance: 3, at: 0, tags: [] }];
   const result = await summarizer.summarize('Firmin', '', evicted);
   return { result, close: () => llm.close() };
 }

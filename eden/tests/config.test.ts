@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { parseConfig, loadConfig, DEFAULT_CONFIG } from '../src/config';
 
@@ -20,9 +23,20 @@ test('parses a minimal config and fills defaults', () => {
   assert.equal(config.skills.stallSeconds, 20);
   assert.equal(config.skills.maxSkillLines, 400);
   assert.equal(config.journal.vitalsIntervalSeconds, 10);
-  // G1: retention has no key yet — hardcoded default 7 days.
+  // MED-12: retentionDays defaults to 7 when the key is absent (the key is now wired, see below).
   assert.equal(config.journal.retentionDays, 7);
   assert.deepEqual(warnings, []);
+});
+
+test('MED-12: journal.retentionDays is read from config — no unknown-key warning + the value flows through', () => {
+  const raw = minimal();
+  raw['journal'] = { retentionDays: 30 };
+  const { config, warnings } = parseConfig(raw);
+  assert.equal(config.journal.retentionDays, 30, 'the configured retention is honored, not the hardcoded default');
+  assert.ok(
+    !warnings.some((w) => w.includes('retentionDays')),
+    `retentionDays is a known key now — no unknown-key warning expected, got: ${JSON.stringify(warnings)}`,
+  );
 });
 
 test('D-11/R47: warns when the strong tier budget is below the reserve floor (declared M0-3, active M3)', () => {
@@ -103,6 +117,17 @@ test('the shipped eden.example.json validates with zero warnings', () => {
   assert.deepEqual(config.villagers, []);
 });
 
+test('LOW-5: a malformed config file throws an error that NAMES the file path (S10)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eden-cfg-'));
+  const bad = join(dir, 'eden.json');
+  writeFileSync(bad, '{ "minecraft": { "port": 25599, } oops not json');
+  assert.throws(
+    () => loadConfig(bad),
+    (e: unknown) => e instanceof Error && e.message.includes(bad) && /not valid JSON/.test(e.message),
+    'the parse error must name the offending file path',
+  );
+});
+
 test('golden: a fully-defaulted validated config object', () => {
   const { config } = parseConfig(minimal());
   assert.deepEqual(config, {
@@ -150,6 +175,6 @@ test('golden: a fully-defaulted validated config object', () => {
     },
     settlement: { url: 'http://127.0.0.1:8767/trade/execute' },
     admin: { port: 8770 },
-    journal: { vitalsIntervalSeconds: 10, debugPrompts: false, retentionDays: 7 },
+    journal: { vitalsIntervalSeconds: 10, debugPrompts: false, retentionDays: 7, vectorStore: 'sqlite-vec' },
   });
 });

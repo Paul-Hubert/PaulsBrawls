@@ -210,6 +210,43 @@ test('POST /skills/:name/quarantine journals actor:admin BEFORE quarantining', a
   const r = await post(`http://127.0.0.1:${port}/skills/mine/quarantine`, { reason: 'kill switch' });
   assert.equal(r.status, 200);
   assert.deepEqual(quarantined, ['mine']);
+  // LOW-2: the journaled version is the skill's REAL version (from the accessor), not a -1 placeholder.
+  const qev = journal.events.find((e) => e.kind === 'skill.quarantine' && (e.payload as any).name === 'mine');
+  assert.equal((qev!.payload as any).version, 3, 'the actual version is journaled, not version:-1');
+});
+
+test('LOW-2: POST quarantine on an unknown skill 404s WITHOUT a phantom skill.quarantine event', async (t) => {
+  const journal = new MemoryJournal();
+  const admin = new AdminServer({
+    ...baseDeps(journal),
+    // onQuarantine should never even be reached for an unknown skill (existence check 404s first).
+    onQuarantine: () => {
+      assert.fail('onQuarantine must not run for a skill the accessor cannot resolve');
+    },
+  });
+  const { port } = await admin.start();
+  t.after(() => admin.stop());
+
+  const r = await post(`http://127.0.0.1:${port}/skills/nope/quarantine`, { reason: 'kill switch' });
+  assert.equal(r.status, 404);
+  assert.equal(journal.events.length, 0, 'an unknown skill 404s without a stray quarantine entry');
+});
+
+test('LOW-3: an oversized POST body is refused with 413, not OOM/500', async (t) => {
+  const journal = new MemoryJournal();
+  const admin = new AdminServer({ ...baseDeps(journal), onPrompt: () => true });
+  const { port } = await admin.start();
+  t.after(() => admin.stop());
+
+  // 128 KB > the 64 KB readBody cap — the body never fully buffers; the route maps the abort to 413.
+  const huge = 'x'.repeat(128 * 1024);
+  const res = await fetch(`http://127.0.0.1:${port}/villagers/Firmin/prompt`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: huge }),
+  });
+  assert.equal(res.status, 413);
+  await res.body?.cancel();
 });
 
 test('POST /villagers/:name/prompt journals inbox.delivered BEFORE delivery, zero engine machinery', async (t) => {

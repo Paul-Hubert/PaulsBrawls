@@ -10,6 +10,28 @@ plan's own seed hypotheses was refuted; see notes).
 loop convergence / silently drops durable behavior. Medium = claim↔code drift on a load-bearing
 invariant. Low/Nit. **Confidence:** Confirmed (code verified) vs Hypothesis (needs a live run).
 
+## Remediation status (2026-06-16)
+
+**Fixed & verified green (`npm run check`, 601 tests):** CRIT-2 (partial — R77 host-killer guard),
+CRIT-3 (env-scrub); HIGH-1, HIGH-2 (bounded
+rendering + over-budget warning), HIGH-3 (signals bridged), HIGH-4 (social wired live), HIGH-6
+(loopback-trust documented); MED-1, MED-2a/2b, MED-4, MED-5, MED-6 (claim corrected), MED-8, MED-9,
+MED-12, MED-14; LOW-1, LOW-2, LOW-3, LOW-5, LOW-6, LOW-7, LOW-8. (20 findings + CRIT-3.)
+
+**Still open (need design / owner decision):**
+- **CRIT-1** — recursion/microtask wedge. Held for a dedicated exploration (a prompt exists); fix is
+  function-body loop-budget injection and/or worker isolation.
+- **CRIT-2** — `globalThis.process.exit` host-kill. **Partially fixed (R77):** `guardHostKillers` now
+  neutralizes `process.exit/reallyExit/abort/kill` on the real process object (closes the `process.*`
+  vector incl. the `globalThis`/`Function`-ctor/`require` routes). **Residual open:** OS-kill via
+  `import('node:child_process')` and fs writes — full closure still needs worker/VM isolation.
+- **CRIT-4** — chat→`write_skill` RCE. **Widened** by HIGH-3 (player-chat bridged) + HIGH-4 (`say`/live
+  conversation). CRIT-3's env-scrub defangs the worst payload, but the RCE path itself is open — a
+  background task chip was filed for the data-only / worker-isolation design pass. Decide before exposing
+  villagers to untrusted players.
+- Deferred features noted in-line: MED-6 QA-cache *persistence* (claim corrected; persistence needs a
+  dataDir wired from main.ts); LOW-10 coin out-of-band settle (gated by unreviewed Java `:8767` validation).
+
 ## Headline
 
 The codebase is unusually disciplined (clean deps, ~94% line coverage, exhaustive docs). The defects
@@ -37,6 +59,9 @@ are therefore not sloppiness — they cluster in three places the architecture's
 - **Fix:** inject `__loopBudget()` at the top of every `FunctionDeclaration`/`FunctionExpression`/`ArrowFunctionExpression` body too. Real defense-in-depth: run skills on a killable worker thread.
 
 ### CRIT-2 — `globalThis.process.exit/.kill/.abort` bypasses the D-08 host-killer denylist
+> **Status: PARTIALLY FIXED (R77, 2026-06-16).** `guardHostKillers` in `main.ts` neutralizes the four
+> methods on the real `process` object at real boot, closing the `process.*` host-kill vector below.
+> Residual: OS-kill via `import('node:child_process')` / fs writes remain — full closure needs worker isolation.
 - **Location:** `src/skills/instrument.ts:56` (frozen 4-method denylist), `:200-214` (compile wrapper shadows only the *local* `process`).
 - **Claim:** the shim "neuters EXACTLY these four `process` methods" so "the host process stays alive" (instrument.ts:50-56; deliverable test `skills-instrument.test.ts`).
 - **Reality:** the wrapper does `const { process, require, … } = __shim` — it shadows only the bare identifier. `globalThis` is untouched, so `globalThis.process.exit(1)` calls the real process. The header comment admits `globalThis.process` is reachable "BY DESIGN" but frames it only as a sandbox-escape curiosity, never as defeating the host-kill guarantee the D-08 test "proves." Verified by the reviewer (instrument.ts:205-208).

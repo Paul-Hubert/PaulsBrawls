@@ -10,6 +10,7 @@ dist/
 coverage/
 ecosystem.config.cjs
 .smoke/
+.review-scratch/
 live-tests/.runs/
 providers.json
 api-keys.env

@@ -70,6 +70,10 @@
     // WAL + synchronous=NORMAL on the shared loop; lag-monitor threshold (1000ms) is hardcoded, not a key.
     // TODO(G1): "configurable 7-day retention window" for vitals / subscription.fired has no key yet —
     //   owner call to add `journal.retentionDays` or keep 7d hardcoded. Treated as hardcoded-7d for now.
-    "debugPrompts": false           // true = write full LLM transcripts to .eden-data/llm/<id>.json
+    "debugPrompts": false,          // true = write full LLM transcripts to .eden-data/llm/<id>.json
+    // Where memory/skill/QA embedding vectors live (D-16: embed-at-write on the eden.db spine via sqlite-vec).
+    // "sqlite-vec" (default) self-degrades to the keyword floor if the native extension can't load (R74).
+    // "off" forces the keyword floor (for CI / a machine where the native sqlite-vec extension won't load).
+    "vectorStore": "sqlite-vec"
   }
 }

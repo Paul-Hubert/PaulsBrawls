@@ -55,6 +55,14 @@ test('catalogue: every task carrying an objective check has a positive count', (
   }
 });
 
+test('catalogue: setupPauseMs, when present, is a non-negative finite number (manual-setup window)', () => {
+  for (const s of SCENARIOS) {
+    if (s.setupPauseMs !== undefined) {
+      assert.ok(Number.isFinite(s.setupPauseMs) && s.setupPauseMs >= 0, `${s.name}: bad setupPauseMs ${s.setupPauseMs}`);
+    }
+  }
+});
+
 test('catalogue: arena commands are absolute (no ~/^ relative coords) — re-applicable before each boot', () => {
   for (const s of SCENARIOS) {
     for (const cmd of s.arena) {

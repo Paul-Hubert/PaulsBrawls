@@ -133,58 +133,70 @@ export class Brain {
     let searchCalls = 0;
     let activeTools = toolDefs;
 
-    for (let turn = 0; turn < this.maxToolTurns && !done; turn++) {
-      const result = await this.client.chat({ messages, tools: activeTools, tier: input.tier, caller, refs });
-      messages.push({
-        role: 'assistant',
-        content: result.content,
-        toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
-      });
-
-      if (result.toolCalls.length === 0) {
-        // The model stopped issuing calls — treat its content as an implicit done (clean close).
-        done = { summary: result.content ?? '' };
-        break;
-      }
-
-      // Dispatch EVERY call in the turn and append a result for EACH — R20: complete the pair before
-      // the next provider call, even when `done` is one of several calls.
-      let sawDone = false;
-      for (const call of result.toolCalls) {
-        if (call.name === 'search_skills') searchCalls++;
-        const outcome = await this.tools.dispatch(call, ctx);
-        toolCalls++;
-        this.journal.append(caller, 'brain.tool-call', { villager: input.villager, tool: call.name, ok: outcome.ok ?? true }, refs);
-        messages.push({ role: 'tool', content: outcome.content, toolCallId: call.id, name: call.name });
-        if (outcome.authored) {
-          authoredDraft = outcome.authored;
-          ctx.draft = outcome.authored; // subsequent run_skill of this name trials the new draft (P2)
-        }
-        if (outcome.ran) lastRunReport = outcome.ran;
-        if (outcome.reportedToGod !== undefined) reportsToGod.push(outcome.reportedToGod);
-        if (outcome.done) {
-          done = outcome.done;
-          sawDone = true;
-        }
-      }
-      // Defensive R20 guard: ensure no tool call in this turn was left unanswered.
-      completeDanglingPairs(messages);
-      if (sawDone) break;
-      // R60 breaker: once the search budget is spent, withdraw search_skills and force action this wake-up.
-      if (searchCalls >= SEARCH_CALL_CAP && activeTools.some((t) => t.function.name === 'search_skills')) {
-        activeTools = activeTools.filter((t) => t.function.name !== 'search_skills');
+    // MED-9: every brain.wakeup MUST get a matching brain.done. An LLM/tool throw inside the
+    // deliberation loop unwinds past the terminal append, leaving a dangling deliberation in the
+    // journal/replay. The finally guarantees the terminal event (with a failure summary on throw),
+    // then the throw propagates so the caller still sees the error (we never swallow it).
+    let threw = false;
+    try {
+      for (let turn = 0; turn < this.maxToolTurns && !done; turn++) {
+        const result = await this.client.chat({ messages, tools: activeTools, tier: input.tier, caller, refs });
         messages.push({
-          role: 'user',
-          content:
-            'Assez de recherches — search_skills est désormais désactivé pour ce réveil. Les outils, les ' +
-            'exemples et les skills déjà vus suffisent. AGIS maintenant : écris/compose un skill (write_skill) ' +
-            'puis essaie-le (run_skill), ou termine (done). N’explore plus.',
+          role: 'assistant',
+          content: result.content,
+          toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
         });
-      }
-    }
 
-    if (!done) done = { summary: '(plafond de tours d’outils atteint)' };
-    this.journal.append(caller, 'brain.done', { villager: input.villager, summary: done.summary, mood: done.mood, toolCalls }, refs);
+        if (result.toolCalls.length === 0) {
+          // The model stopped issuing calls — treat its content as an implicit done (clean close).
+          done = { summary: result.content ?? '' };
+          break;
+        }
+
+        // Dispatch EVERY call in the turn and append a result for EACH — R20: complete the pair before
+        // the next provider call, even when `done` is one of several calls.
+        let sawDone = false;
+        for (const call of result.toolCalls) {
+          if (call.name === 'search_skills') searchCalls++;
+          const outcome = await this.tools.dispatch(call, ctx);
+          toolCalls++;
+          this.journal.append(caller, 'brain.tool-call', { villager: input.villager, tool: call.name, ok: outcome.ok ?? true }, refs);
+          messages.push({ role: 'tool', content: outcome.content, toolCallId: call.id, name: call.name });
+          if (outcome.authored) {
+            authoredDraft = outcome.authored;
+            ctx.draft = outcome.authored; // subsequent run_skill of this name trials the new draft (P2)
+          }
+          if (outcome.ran) lastRunReport = outcome.ran;
+          if (outcome.reportedToGod !== undefined) reportsToGod.push(outcome.reportedToGod);
+          if (outcome.done) {
+            done = outcome.done;
+            sawDone = true;
+          }
+        }
+        // Defensive R20 guard: ensure no tool call in this turn was left unanswered.
+        completeDanglingPairs(messages);
+        if (sawDone) break;
+        // R60 breaker: once the search budget is spent, withdraw search_skills and force action this wake-up.
+        if (searchCalls >= SEARCH_CALL_CAP && activeTools.some((t) => t.function.name === 'search_skills')) {
+          activeTools = activeTools.filter((t) => t.function.name !== 'search_skills');
+          messages.push({
+            role: 'user',
+            content:
+              'Assez de recherches — search_skills est désormais désactivé pour ce réveil. Les outils, les ' +
+              'exemples et les skills déjà vus suffisent. AGIS maintenant : écris/compose un skill (write_skill) ' +
+              'puis essaie-le (run_skill), ou termine (done). N’explore plus.',
+          });
+        }
+      }
+    } catch (err) {
+      threw = true;
+      throw err; // re-throw AFTER the finally appends the terminal event — never swallow the error.
+    } finally {
+      // Guarantee the terminal event on EVERY exit path — clean close, tool-turn ceiling, OR a throw.
+      // On a throw `done` is still undefined; name the failure so the dangling deliberation is legible.
+      if (!done) done = { summary: threw ? '(LLM error)' : '(plafond de tours d’outils atteint)' };
+      this.journal.append(caller, 'brain.done', { villager: input.villager, summary: done.summary, mood: done.mood, toolCalls }, refs);
+    }
 
     return {
       villager: input.villager,

@@ -156,7 +156,7 @@ export function baseConfig(props: ServerProps, roster: VillagerConfig[], provide
     skills: { runDefaultTimeoutMs: 120000, stallSeconds: 20, maxCallDepth: 8, maxSkillLines: 400, probationRuns: 3, autoQuarantineAfter: 5 },
     settlement: { url: 'http://127.0.0.1:8767/trade/execute' },
     admin: { port: 8770 },
-    journal: { vitalsIntervalSeconds: 10, debugPrompts: true, retentionDays: 7 },
+    journal: { vitalsIntervalSeconds: 10, debugPrompts: true, retentionDays: 7, vectorStore: 'sqlite-vec' },
   };
 }
 

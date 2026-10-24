@@ -103,12 +103,18 @@ export class SubscriptionStore {
     return true;
   }
 
-  /** Enable/disable without removing — the quarantine auto-disable path (04) + admin toggles. */
+  /** Enable/disable without removing — the quarantine auto-disable path (04) + admin toggles. Journals
+   *  the flip (P4: every mutation journals — add/remove already do; LOW-8 closes setEnabled's silence). */
   setEnabled(id: string, enabled: boolean): void {
     const sub = this.byId.get(id);
     if (!sub || sub.enabled === enabled) return;
     sub.enabled = enabled;
     this.persist(sub.villager);
+    this.journal.append(
+      `villager:${sub.villager}`,
+      enabled ? 'subscription.enabled' : 'subscription.disabled',
+      { id, villager: sub.villager },
+    );
   }
 
   /** One subscription by id. */

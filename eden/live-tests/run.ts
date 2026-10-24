@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { logger } from '../src/logger';
-import { makeRunDir, type Scenario } from './harness';
+import { makeRunDir, setupPauseMsOf, type Scenario } from './harness';
 import { SCENARIOS } from './catalogue';
 import { loadApiKeys, setupProviderEnv, DEFAULT_PROVIDER } from './config';
 
@@ -74,7 +74,9 @@ function parseArgs(): { scenarioName: string | undefined; providerName: string }
 async function superviseScenario(scenario: Scenario, providerName: string): Promise<SupervisedResult> {
   const runDir = makeRunDir(scenario.name);
   const t0 = Date.now();
-  const killAfter = scenario.timeoutMs + KILL_GRACE_MS;
+  // Fold any manual-setup pause into the grace so the parent does not SIGKILL a child that is (correctly)
+  // waiting for the operator to build the tower + place the spawner before tasks even start.
+  const killAfter = scenario.timeoutMs + KILL_GRACE_MS + setupPauseMsOf(scenario);
   logger.info('live-test', `── ${scenario.name} ── ${scenario.description}`);
   logger.info('live-test', `  provider:${providerName} — spawning isolated child (hard-kill after ${(killAfter / 1000).toFixed(0)}s) → ${runDir}`);
 

@@ -9,19 +9,45 @@
 import type { RunReport } from '../types/index';
 import { renderSnapshot } from './snapshot';
 
+// HIGH-2 (the safe part): the per-field render caps. A skill's return `value`, its `error`, and its
+// `args` are LLM/mineflayer-controlled and unbounded — a verbose error or a huge return value is a
+// primary context-overflow contributor. We truncate each rendered field to a few KB with an elision
+// marker so one fat field can't blow the whole prompt. (This is a render-side guard only; the
+// request-level token-budget enforcement is owned elsewhere — HIGH-2's other half.)
+const MAX_FIELD_CHARS = 4000;
+
+/**
+ * Truncate an already-rendered field to {@link MAX_FIELD_CHARS}, marking how much was elided.
+ * Coerces non-strings to their `String()` form first — `stableJson(undefined)` is `undefined`
+ * (a clean OK run with no value), which must render as the literal `"undefined"` as before, not throw.
+ */
+function cap(rendered: string | undefined, max = MAX_FIELD_CHARS): string {
+  const s = String(rendered);
+  if (s.length <= max) return s;
+  const elided = s.length - max;
+  return `${s.slice(0, max)}…[+${elided} chars elided]`;
+}
+
 /** Render a {@link RunReport} to a compact, deterministic evidence block. */
 export function renderRunReport(r: RunReport): string {
   const lines: string[] = [];
   lines.push(`skill=${r.skill} v${r.version} villager=${r.villager} durationMs=${r.durationMs} pulses=${r.pulses}`);
-  lines.push(`args=${stableJson(r.args)}`);
+  lines.push(`args=${cap(stableJson(r.args))}`);
   if (r.outcome.ok) {
-    lines.push(`outcome=OK value=${stableJson(r.outcome.value)}`);
+    lines.push(`outcome=OK value=${cap(stableJson(r.outcome.value))}`);
   } else {
-    lines.push(`outcome=FAIL errorKind=${r.outcome.errorKind ?? '(none)'} error=${r.outcome.error}`);
+    lines.push(`outcome=FAIL errorKind=${r.outcome.errorKind ?? '(none)'} error=${cap(r.outcome.error)}`);
   }
   if (r.aborted) lines.push(`aborted=${r.aborted}`);
   if (r.callTree.length > 0) {
     lines.push(`callTree: ${r.callTree.map((f) => `${f.skill}@v${f.version}${f.ok ? '' : '✗'}(${f.ms}ms)`).join(' → ')}`);
+  }
+  if (r.logs.length > 0) {
+    lines.push('--- LOGS ---');
+    for (const log of r.logs) {
+      const badge = log.level === 'error' ? '✗' : log.level === 'warn' ? '⚠' : 'ℹ';
+      lines.push(`${badge} [${log.level}@${log.ms}ms] ${log.message}`);
+    }
   }
   lines.push('--- monde AVANT ---');
   lines.push(r.worldBefore ? renderSnapshot(r.worldBefore) : '(aucun)');

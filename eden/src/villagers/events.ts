@@ -120,9 +120,27 @@ export class EventRouter {
     this.bound.length = 0;
   }
 
-  /** Pump the coarse clock — the host calls this every 30 s; tests call it deterministically. */
+  /**
+   * Pump the coarse clock — the host calls this every 30 s; tests call it deterministically. Besides
+   * emitting `tick-30s`, it RE-EVALUATES the `time` row (the hysteresis-edged night-falls/new-day phase):
+   * mineflayer's native `time` fires ~20 Hz, so rather than forward that stream (and either churn the
+   * mapper or throttle it and risk dropping the very crossing we want), the day/night phase is sampled on
+   * THIS 30 s cadence — the same poll cadence the docs assign the coarse clock (04). A phase lasts minutes,
+   * so 30 s sampling always catches the crossing; the mapper's own latch keeps it one-edge-per-transition.
+   */
   tick(): void {
     this.emit({ type: 'tick-30s' });
+    this.pumpRow('time');
+  }
+
+  /** Run one emitter row's mapper (reading live bot state) and emit if it produces an event. Used by
+   *  {@link tick} to sample the `time` phase off the coarse clock — keeps the registry the single source
+   *  of the mapping (S1) instead of duplicating the phase logic here. A no-op if the row isn't present. */
+  private pumpRow(raw: string): void {
+    const row = this.registry.find((r) => r.raw === raw);
+    if (!row) return;
+    const event = row.map();
+    if (event) this.emit(event);
   }
 
   /** Wrap a normalized event in its Envelope and hand it to the sink. */

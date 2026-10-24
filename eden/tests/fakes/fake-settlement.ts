@@ -68,9 +68,43 @@ export class FakeSettlement {
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', () => {
-      this.requests.push({ url: req.url, body: body ? JSON.parse(body) : {} });
+      const parsed: unknown = body ? JSON.parse(body) : {};
+      this.requests.push({ url: req.url, body: parsed });
+      // Mirror the mod's contract check (VillageHttpListener.validateShape) so a wrong-shape POST 400s
+      // here exactly as it would against the real :8767 — this is what catches REG-1 (a body sent as
+      // {from,to,give,want} instead of {botA,botB,aGives,bGives}) in CI instead of only on a live server.
+      const problem = validateShape(parsed);
+      if (problem) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: problem }));
+        return;
+      }
       res.writeHead(this.status, { 'content-type': 'application/json' });
       res.end(JSON.stringify(this.replyBody));
     });
   }
+}
+
+/** The mod's MAX_OFFER_LINES / MAX_STACK_COUNT (VillageHttpListener). */
+const MAX_OFFER_LINES = 6;
+const MAX_STACK_COUNT = 512;
+
+/** Port of VillageHttpListener.validateShape — returns the mod's error string, or null when valid. */
+function validateShape(req: unknown): string | null {
+  if (typeof req !== 'object' || req === null) return 'empty request';
+  const r = req as { botA?: unknown; botB?: unknown; aGives?: unknown; bGives?: unknown };
+  if (typeof r.botA !== 'string' || r.botA.trim() === '') return 'missing botA';
+  if (typeof r.botB !== 'string' || r.botB.trim() === '') return 'missing botB';
+  if (r.botA === r.botB) return 'botA and botB are the same';
+  if (!Array.isArray(r.aGives) || !Array.isArray(r.bGives)) return 'missing aGives/bGives';
+  if (r.aGives.length === 0 && r.bGives.length === 0) return 'nothing to trade';
+  if (r.aGives.length > MAX_OFFER_LINES || r.bGives.length > MAX_OFFER_LINES) {
+    return `too many item lines (max ${MAX_OFFER_LINES})`;
+  }
+  for (const spec of [...r.aGives, ...r.bGives]) {
+    const s = spec as { item?: unknown; count?: unknown };
+    if (typeof s.item !== 'string' || s.item.trim() === '') return 'missing item name';
+    if (typeof s.count !== 'number' || s.count < 1 || s.count > MAX_STACK_COUNT) return `bad count for ${String(s.item)}`;
+  }
+  return null;
 }

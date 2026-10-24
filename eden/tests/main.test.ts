@@ -4,7 +4,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { start } from '../src/main';
+import { start, guardHostKillers } from '../src/main';
+import { MemoryJournal } from './fakes/memory-journal';
+import { SkillForbiddenError } from '../src/skills/instrument';
 
 test('the assembled M0 spine boots, serves /status + /journal, and journals system.boot', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'eden-host-'));
@@ -43,4 +45,26 @@ test('the assembled M0 spine boots, serves /status + /journal, and journals syst
     warns.events.some((e: { payload: { message: string } }) => e.payload.message.includes('wat')),
     'the unknown config key was journaled as a config-warning',
   );
+});
+
+test('CRIT-2/R77: guardHostKillers neutralizes the four process host-killers and journals; restore reinstates them', () => {
+  const journal = new MemoryJournal();
+  let realCalled = false;
+  const mark = (): void => { realCalled = true; };
+  const target: Record<string, unknown> = { exit: mark, reallyExit: mark, abort: mark, kill: mark };
+
+  const restore = guardHostKillers(journal, target);
+  for (const m of ['exit', 'reallyExit', 'abort', 'kill'] as const) {
+    assert.throws(
+      () => (target[m] as (...a: unknown[]) => unknown)(1),
+      (e: unknown) => e instanceof SkillForbiddenError,
+      `process.${m} must throw SkillForbiddenError, not kill the host`,
+    );
+  }
+  assert.equal(realCalled, false, 'the real host-killer must never run while guarded');
+  assert.equal(journal.events.filter((e) => e.kind === 'system.error').length, 4, 'each blocked call journals system.error');
+
+  restore();
+  (target['exit'] as () => void)();
+  assert.equal(realCalled, true, 'restore() must reinstate the original method');
 });

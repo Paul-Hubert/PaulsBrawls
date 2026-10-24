@@ -104,8 +104,10 @@ test('Subscription and RunReport shapes compile', () => {
     pulses: 3,
     deepestDepth: 0,
     callTree: [],
+    logs: [],
     worldBefore: null,
     worldAfter: null,
   };
   assert.equal(report.outcome.ok, true);
 });
+

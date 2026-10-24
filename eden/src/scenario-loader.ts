@@ -100,7 +100,13 @@ function parseVillager(name: string, raw: Raw): VillagerConfig {
  */
 export function loadScenario(scenarioPath: string): ScenarioLoadResult {
   const text = readFileSync(scenarioPath, 'utf8');
-  const raw: Raw = JSON.parse(stripJsonComments(text)) as Raw;
+  let raw: Raw;
+  try {
+    raw = JSON.parse(stripJsonComments(text)) as Raw;
+  } catch (e) {
+    // LOW-5: name the offending file (S10) so a malformed scenario points at its own path.
+    throw new Error(`config: ${scenarioPath} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+  }
 
   const name = asStr(raw['name'], 'unnamed');
   const description = asStr(raw['description'], '');

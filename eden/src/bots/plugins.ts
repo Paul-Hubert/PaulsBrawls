@@ -47,11 +47,26 @@ export interface PluginSet {
 /** The real plugins. Tests inject fakes to exercise the fallible-load path without real wiring. */
 const REAL_PLUGINS: PluginSet = { pvp, armorManager, tool, collectBlock, autoEat };
 
+/** The load-bearing plugins whose ABSENCE after load must be made visible in the journal, not just warned
+ *  (a missing pvp/armorManager/collectBlock silently degrades combat/survival/gather — R16 keeps the bot
+ *  online, but the operator needs to SEE it). `bot.<key>` is the runtime property each plugin attaches. */
+const LOAD_BEARING: ReadonlyArray<{ key: keyof PluginSet; prop: 'pvp' | 'armorManager' | 'collectBlock' }> = [
+  { key: 'pvp', prop: 'pvp' },
+  { key: 'armorManager', prop: 'armorManager' },
+  { key: 'collectBlock', prop: 'collectBlock' },
+];
+
 export interface LoadPluginsOptions {
   /** Override the plugin set (tests). Missing keys fall back to the real plugin. */
   plugins?: Partial<PluginSet>;
   /** Warning sink — defaults to the logger (R16/R41). */
   onWarn?: (message: string) => void;
+  /**
+   * Called once per LOAD-BEARING plugin that did NOT attach after the load loop (pvp/armorManager/
+   * collectBlock). main.ts/pool wires this to a journal `system.error` so the absence is VISIBLE (S10);
+   * the bot stays online regardless (R16). Defaults to a no-op (the warn already happened on the failed load).
+   */
+  onMissing?: (plugin: string) => void;
 }
 
 /**
@@ -77,4 +92,15 @@ export function loadPlugins(bot: Bot, opts: LoadPluginsOptions = {}): void {
   // auto-eat needs explicit activation; the loader only wires the class (R17).
   bot.autoEat?.setOpts?.(AUTO_EAT_OPTS);
   bot.autoEat?.enableAuto();
+
+  // After loading, ASSERT the load-bearing plugins actually attached. A failed/silent load leaves
+  // `bot.<prop>` undefined; warn (R16/R41) AND surface it via onMissing → journal system.error (S10), so a
+  // dead combat/survival/gather plugin is visible instead of a confusing "skill calls bot.pvp" later.
+  const onMissing = opts.onMissing;
+  for (const { prop } of LOAD_BEARING) {
+    if (bot[prop] === undefined) {
+      warn(`load-bearing plugin "${prop}" did not attach after load — degraded (R16)`);
+      onMissing?.(prop);
+    }
+  }
 }

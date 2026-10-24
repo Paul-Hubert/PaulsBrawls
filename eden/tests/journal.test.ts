@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { Journal } from '../src/journal/journal';
 import type { JournalKind, PayloadOf } from '../src/journal/kinds';
+import { SkillStatsView } from '../src/views/index';
 
 function tmpJournal(t: TestContext): Journal {
   const dir = mkdtempSync(join(tmpdir(), 'eden-jrnl-'));
@@ -66,6 +67,20 @@ test('query filters by kind, actor, ref, and since', async (t) => {
   assert.deepEqual(recent.map((e) => e.kind), ['system.error']);
 });
 
+test('LOW-1: a ref match hits the indexed typed paths (rolloutId/runId/skill), not every ref value', (t) => {
+  const j = tmpJournal(t);
+  j.append('villager:Remy', 'system.bot-connected', { name: 'Remy' }, { rolloutId: 'R9' });
+  j.append('villager:Firmin', 'system.bot-connected', { name: 'Firmin' }, { runId: 'run-1', skill: 'mine' });
+  // A ref carried ONLY on a non-indexed path (taskId) is intentionally NOT matched — the query rides the
+  // three json_extract expression indexes (rollout/run/skill), which is what every caller queries by.
+  j.append('engine', 'god.task-proposed', { taskId: 'T42', goal: 'g', trigger: 'idle' }, { taskId: 'T42' });
+
+  assert.equal(j.query({ ref: 'R9' }).length, 1, 'rolloutId matches');
+  assert.equal(j.query({ ref: 'run-1' }).length, 1, 'runId matches');
+  assert.equal(j.query({ ref: 'mine' }).length, 1, 'skill matches');
+  assert.equal(j.query({ ref: 'T42' }).length, 0, 'a taskId-only ref is not matched (non-indexed path)');
+});
+
 test('full query is chronological; a limit returns the most recent N in order', (t) => {
   const j = tmpJournal(t);
   for (let i = 0; i < 5; i++) j.append('engine', 'system.error', { message: `e${i}` });
@@ -108,4 +123,49 @@ test('appending an unregistered kind throws (S1 guard)', (t) => {
     () => j.append('engine', 'made.up.kind' as JournalKind, {} as PayloadOf<'system.boot'>),
     /unregistered kind/,
   );
+});
+
+// FIX 3 (journal grew unbounded): retentionDays was parsed but never consumed. prune() now bounds the
+// journal by deleting old OBSERVABILITY rows (vitals + system.loop-lag) — and ONLY those, so no view fold
+// over a durable kind is affected (the rebuild==live invariant). `now` is injectable to control the clock.
+test('prune deletes old prunable rows, keeps durable + recent rows, and leaves a view fold unchanged', (t) => {
+  const j = tmpJournal(t);
+  // Durable rows a view folds (SkillStatsView reads skill.run) — these must SURVIVE prune.
+  const run = (skill: string): PayloadOf<'skill.run'> => ({
+    runId: 'r-' + skill, skill, version: 1, villager: 'Firmin', args: {}, outcome: { ok: true },
+    startedAt: 1, durationMs: 10, pulses: 1, deepestDepth: 0, callTree: [], logs: [],
+    worldBefore: null, worldAfter: null,
+  });
+  j.append('engine', 'skill.run', run('mine'));
+  j.append('engine', 'skill.run', run('craft'));
+  // High-volume observability rows (prunable) — vitals + loop-lag.
+  j.append('bot:Firmin', 'vitals', { name: 'Firmin', health: 20, food: 20, position: [0, 64, 0], held: null, currentRun: null });
+  j.append('engine', 'system.loop-lag', { p99: 12, max: 1500 });
+
+  // The live fold BEFORE prune (what a view holds at runtime).
+  const before = new SkillStatsView();
+  for (const e of j.query()) before.fold(e);
+
+  // Prune with a far-future `now` so the just-appended rows count as "older than the retention horizon".
+  const FAR_FUTURE = Date.now() + 30 * 24 * 60 * 60 * 1000; // +30 days
+  const deleted = j.prune(7, FAR_FUTURE);
+  assert.equal(deleted, 2, 'exactly the two prunable rows (vitals + loop-lag) were deleted');
+  assert.equal(j.query({ kinds: ['vitals'] }).length, 0, 'vitals pruned');
+  assert.equal(j.query({ kinds: ['system.loop-lag'] }).length, 0, 'loop-lag pruned');
+  assert.equal(j.query({ kinds: ['skill.run'] }).length, 2, 'durable skill.run rows untouched');
+
+  // A fresh fold over the pruned journal equals the pre-prune fold — the rebuild==live invariant holds,
+  // because no view ever folded the pruned kinds.
+  const after = new SkillStatsView();
+  for (const e of j.query()) after.fold(e);
+  assert.deepEqual(after.value(), before.value(), 'the SkillStatsView fold is identical post-prune');
+
+  // A recent prunable row (within the horizon) is NOT pruned.
+  j.append('engine', 'system.loop-lag', { p99: 1, max: 9 });
+  assert.equal(j.prune(7, Date.now()), 0, 'a fresh prunable row is inside the retention horizon');
+  assert.equal(j.query({ kinds: ['system.loop-lag'] }).length, 1, 'the recent loop-lag row survives');
+
+  // retentionDays <= 0 disables pruning entirely (keep everything).
+  assert.equal(j.prune(0, FAR_FUTURE), 0, 'retention disabled when retentionDays is 0');
+  assert.equal(j.query({ kinds: ['system.loop-lag'] }).length, 1, 'nothing deleted with retention disabled');
 });

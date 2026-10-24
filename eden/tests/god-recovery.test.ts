@@ -30,7 +30,7 @@ test('M3-6 (D-09): boot recovery abandons an open task’s live rollout, clears 
   const rollout = god.openRollout(t.id); // sets t.currentRolloutId
   assert.equal(t.currentRolloutId, rollout.id);
   library.upsertDraft({ name: 'collect-oak-logs', summary: 's', params: { type: 'object', properties: {} }, returns: { type: 'object', properties: {} }, code: 'async function f(b,a,c){}', author: { kind: 'villager', name: 'Firmin' } });
-  god.fileTicket({ rolloutId: rollout.id, report: { runId: 'run-1', rolloutId: rollout.id, skill: 'collect-oak-logs', version: 1, villager: 'Firmin', args: {}, outcome: { ok: false, error: 'crashed mid-trial' }, startedAt: 0, durationMs: 1, pulses: 0, deepestDepth: 0, callTree: [], worldBefore: null, worldAfter: null }, source: 'rollout' });
+  god.fileTicket({ rolloutId: rollout.id, report: { runId: 'run-1', rolloutId: rollout.id, skill: 'collect-oak-logs', version: 1, villager: 'Firmin', args: {}, outcome: { ok: false, error: 'crashed mid-trial' }, startedAt: 0, durationMs: 1, pulses: 0, deepestDepth: 0, callTree: [], logs: [], worldBefore: null, worldAfter: null }, source: 'rollout' });
 
   // --- boot recovery (startup step 7) ---
   const n = god.recoverRollouts();
@@ -64,3 +64,4 @@ test('M3-6 (D-09): a task with no live rollout is untouched by recovery', () => 
   assert.equal(n, 0);
   assert.equal(t.currentRolloutId, undefined);
 });
+

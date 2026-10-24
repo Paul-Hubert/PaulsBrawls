@@ -57,6 +57,38 @@ test('instrument wraps non-block loop bodies too (while(x) stmt)', () => {
   assert.match(out.source, /\{__loopBudget\(\);b\.tick\(\);\}/);
 });
 
+test('CRIT-1/R75: instrument injects a function-entry canary (__fnTick) at every function body', () => {
+  // A non-loop runaway (async recursion / .then trampoline) has NO loop node — the function-body canary
+  // is the only synchronous guard it hits. Named decl, expression-bodied arrow, and .then callbacks must
+  // all get one, and the whole thing must still compile (the comma-wrap can't produce invalid syntax).
+  const decl = instrument('async function f(b, a, c) { function rec(n) { return rec(n + 1); } return rec(0); }');
+  assert.ok(decl.ok);
+  assert.match(decl.ok ? decl.source : '', /function rec\(n\) \{__fnTick\(\);/);
+  // expression-bodied arrow → comma-operator wrap, value preserved (no `return`, safe for object literals).
+  const arrow = instrument('async function f(b, a, c) { return [1].map((x) => x + 1); }');
+  assert.match(arrow.ok ? arrow.source : '', /\(__fnTick\(\),x \+ 1\)/);
+  // a .then callback IS a function node → instrumented (this is what closes the microtask-trampoline vector).
+  const thenCb = instrument('async function f(b, a, c) { return Promise.resolve().then((v) => v); }');
+  assert.match(thenCb.ok ? thenCb.source : '', /then\(\(v\) => \(__fnTick\(\),v\)\)/);
+  assert.ok(compile('async function f(b, a, c) { const g = () => ({ ok: true }); return g(); }').ok, 'object-literal arrow still compiles');
+});
+
+test('CRIT-1/R75: __fnTick runs the progress guard WITHOUT touching the loop count (no false-abort of deep recursion)', () => {
+  let ticks = 0;
+  const budget = createLoopBudget(3, () => {
+    ticks++;
+  });
+  // 1000 function-entry ticks: the guard runs each time, but the COUNT is untouched (else this would
+  // throw 'loop budget' past 3) — a deep but finite call tree can never false-trip the 1e6 loop budget.
+  for (let i = 0; i < 1000; i++) budget.__fnTick();
+  assert.equal(ticks, 1000, 'the guard ran on every function entry');
+  // the loop count is still pristine: __loopBudget ticks 1,2,3 (ok), the 4th (>3) throws.
+  budget.__loopBudget();
+  budget.__loopBudget();
+  budget.__loopBudget();
+  assert.throws(() => budget.__loopBudget(), (e: unknown) => e instanceof SkillStalledError);
+});
+
 // ── D-08: the syscall shim (the deliverable test) ────────────────────────────
 test('D-08: process.exit(0) throws SkillForbiddenError and the host stays alive', async () => {
   await assert.rejects(

@@ -88,12 +88,19 @@ test('M5-2: a sub with no cooldownMs is never in cooldown', () => {
 });
 
 test('M5-2: setEnabled toggles a sub without removing it (the quarantine auto-disable path, 04)', () => {
-  const store = new SubscriptionStore({ dataDir: tmp(), journal: new MemoryJournal() });
+  const journal = new MemoryJournal();
+  const store = new SubscriptionStore({ dataDir: tmp(), journal });
   const sub = store.add({ villager: 'Firmin', on: 'hurt', handler: { kind: 'skill', name: 'flee', args: {} }, source: 'self' });
   store.setEnabled(sub.id, false);
   assert.equal(store.get(sub.id)?.enabled, false);
   store.setEnabled(sub.id, true);
   assert.equal(store.get(sub.id)?.enabled, true);
+  // LOW-8: every mutation journals (P4). The flips emit subscription.disabled then .enabled.
+  assert.equal(journal.query({ kinds: ['subscription.disabled'] }).length, 1);
+  assert.equal(journal.query({ kinds: ['subscription.enabled'] }).length, 1);
+  // A no-op flip (already in that state) journals nothing.
+  store.setEnabled(sub.id, true);
+  assert.equal(journal.query({ kinds: ['subscription.enabled'] }).length, 1, 'no-op flip does not re-journal');
 });
 
 // ── FilterEvaluator: the clause registry (P5) — each clause in isolation + AND-composition ─────────

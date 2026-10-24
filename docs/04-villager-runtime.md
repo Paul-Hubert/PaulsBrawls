@@ -207,10 +207,16 @@ Port v1's proven design with two simplifications; full spec stays
 - **Episodic window** (~200 entries) → evicted batches fold into a persisted
   archive (cap 2000) + rolling life summary via one `fast` LLM call that also
   returns keyword enrichment, importance bumps, and up to two "lesson" insights.
-- **Entries**: `{kind: event|social|trade|thought|system, text, tags, importance 0-10, at}`.
+- **Entries**: `{id, kind: event|social|trade|thought|system|lesson, text, tags, importance 0-10, at}`.
+  `id` (a ulid, assigned at write) is the vector-store key — the text is immutable, so the vector is
+  never stale (D-16).
 - **Retrieval** (feeds context-pack §6): `0.5·relevance + 0.25·recency + 0.25·importance`,
-  relevance = max(multilingual-embedding cosine, keyword overlap); embeddings
-  lazily batched off the hot path; three consecutive failures fall back to keywords-only.
+  relevance = max(multilingual-embedding cosine, keyword overlap). **Embed-at-write (D-16):** each
+  entry's embedding is computed ONCE at `remember()` (off the hot path) and persisted in `eden.db` via
+  `sqlite-vec`; **recall embeds only the query** (1 inference) then KNNs the stored vectors in C —
+  replacing the old "re-embed the whole window+archive on every recall" (~7.3 s on a full pool). The
+  keyword floor stays live: embeddings OR the vector backend off/unavailable → keywords-only, never an
+  error (R38, extended to the store — R74).
 - **Simplification 1:** drop v1's `refuteBlockedBeliefs` special-case — God's
   critique loop now owns belief correction (a verdict contradicting a stored
   "impossible" memory triggers a `remember` correction in the critique delivery).

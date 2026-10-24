@@ -237,12 +237,29 @@ keeps this consistent with S5's ban on event-sourcing for live state. The discip
 writers append facts; readers fold facts into views. This is what makes the future
 website trustworthy — it renders the same facts the system acted on.
 
+**Embedding vectors live in the spine too (D-16).** Memory (and, as they migrate, skill-retrieval and the
+curriculum QA-cache) store their embeddings in a `sqlite-vec` `vec0` virtual table in the same `eden.db`,
+on the same `better-sqlite3` connection as the journal (distinct tables → S2 intact). Vectors are
+embed-at-write (computed once, immutable text → never stale) and are NOT a derived view — they are
+primary state the journal does not duplicate. The native extension is optional: if it fails to load,
+retrieval degrades to the keyword floor and the host never crashes (R74).
+
 ## Admin API (v0, ships with M0–M7)
 
 Localhost HTTP on `admin.port` (default 8770), no auth (same posture as v1; a token
 gate is a config flag away when the website goes non-local). **As of M7 every route
 below is implemented** (the M0 skeleton served `/status` `/journal` `/kinds` + the WS;
 M7 added the rest) — see the "As-built (M7)" note above for the wiring.
+
+> **Trust model (accepted, owner #9).** The 127.0.0.1 bind is the *only* boundary — there is
+> no token and no Origin/Host check, and `readBody` JSON-parses any body regardless of
+> content-type. So the mutating verbs are reachable by **any local process**, and plausibly by
+> a **drive-by `text/plain` form POST** from a page the operator visits. `POST
+> /villagers/:name/prompt` injects text into a villager's inbox (a deliberation input), which —
+> with the LLM-authored skill surface — is an unauthenticated path toward `write_skill` (CRIT-4
+> in `eden/REVIEW-FINDINGS.md`). This is **explicitly accepted on the assumption the host runs on
+> a single-user, trusted machine.** Before exposing :8770 to other users or a network, add a
+> bearer token on the mutating verbs — and update the Java mod's `:8770` caller to send it.
 
 | Route | Returns |
 |---|---|
