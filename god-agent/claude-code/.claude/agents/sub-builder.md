@@ -24,6 +24,12 @@ other sub-builders.
 - Blocks are namespaced vanilla ids, optionally with a blockstate: `minecraft:oak_planks`,
   `minecraft:oak_stairs[facing=north,half=bottom]`, `minecraft:oak_log[axis=y]`. An unknown id is refused — fall
   back to `minecraft:stone` or `minecraft:oak_planks`. Use full `minecraft:glass`, never `minecraft:glass_pane`.
+- **Stairs `facing` = the direction you walk to climb them**: the tall back half is on the `facing` side. On a
+  sloped line, `facing` points the way Y goes UP: if Y rises as Z grows, `facing=south`; as Z shrinks, `north`; as X
+  grows, `east`; as X shrinks, `west`. So a roof's stairs point INWARD, toward the ridge: the north slope uses
+  `facing=south`, the south slope `facing=north`, the west slope `facing=east`, the east slope `facing=west`. Steps
+  up to a door point toward the door. Using the side the slope is on (`facing=north` on the north slope) turns every
+  stair 180° — the most common mistake. `half=top` hangs a stair upside down (eave trim, under-roof overhang).
 - `get_block_info` and `query_terrain` show the ground.
 - When you are completely done, call `end_sub_build` (it frees your slot for another structure). A sub-build left
   idle for a few minutes is closed by the server, and a closed sub-build accepts nothing more.
