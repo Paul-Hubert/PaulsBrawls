@@ -77,10 +77,11 @@ public class ChatBot {
      * fine for a 16 000-token cap — we're budgeting, not accounting.
      *
      * <p>OpenAiTokenCountEstimator is stateless and thread-safe, so one
-     * instance serves every player.
+     * instance serves every player. It throws on images, so it is wrapped in
+     * {@link ImageAwareTokenEstimator} (or /build and /prove crash).
      */
     private static final TokenCountEstimator TOKEN_ESTIMATOR =
-        new OpenAiTokenCountEstimator("gpt-4o");
+        new ImageAwareTokenEstimator(new OpenAiTokenCountEstimator("gpt-4o"));
 
     public ConcurrentHashMap<UUID, ChatMemory> memories = new ConcurrentHashMap<>();
 

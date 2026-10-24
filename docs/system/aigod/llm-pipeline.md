@@ -4,7 +4,7 @@ title: AI God — ChatBot LLM request pipeline
 system: aigod
 summary: ChatBot internals - per-player token-window memory, per-turn message list, tool-spec assembly, the response/tool loop, Wait deferrals, depth cap, error path, threading, timeouts, provider builders.
 tags: [aigod, chatbot, langchain4j, memory, tokenwindowchatmemory, tool-loop, threading, executor, provider, openai, lmstudio, ollama, anthropic]
-sources: [src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/GodService.java, src/main/java/com/paul/brawl/MainThread.java, src/main/java/com/paul/brawl/ImageMime.java, src/main/java/com/paul/brawl/BlockInfoJson.java, src/main/java/com/paul/brawl/LLMCommand.java, src/main/java/com/paul/brawl/GodToolGate.java, src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/PlayerDataCollector.java, src/main/java/com/paul/brawl/ChatMessageHistory.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodActionQueue.java, src/main/java/com/paul/brawl/GodScheduler.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/MCPConfig.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/ChatCommand.java, build.gradle]
+sources: [src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/ImageAwareTokenEstimator.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/GodService.java, src/main/java/com/paul/brawl/MainThread.java, src/main/java/com/paul/brawl/ImageMime.java, src/main/java/com/paul/brawl/BlockInfoJson.java, src/main/java/com/paul/brawl/LLMCommand.java, src/main/java/com/paul/brawl/GodToolGate.java, src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/PlayerDataCollector.java, src/main/java/com/paul/brawl/ChatMessageHistory.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodActionQueue.java, src/main/java/com/paul/brawl/GodScheduler.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/MCPConfig.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/ChatCommand.java, build.gradle]
 verified_at: 98cb908
 ---
 
@@ -22,7 +22,7 @@ tool calls, and either loops (`sendFunctionOutputs`), defers (`Wait`), or ends t
 |---|---|---|
 | `MAX_FUNCTION_CALL_DEPTH` | `100` | `ChatBot.java:42` |
 | `MAX_MEMORY_TOKENS` | `16_000` | `ChatBot.java:70` |
-| `TOKEN_ESTIMATOR` | `new OpenAiTokenCountEstimator("gpt-4o")` (static, shared) | `ChatBot.java:82-83` |
+| `TOKEN_ESTIMATOR` | `new ImageAwareTokenEstimator(new OpenAiTokenCountEstimator("gpt-4o"))` (static, shared); an image counts a fixed 425 tokens, because the OpenAI estimator throws on `ImageContent` | `ChatBot.java:83-84`, `ImageAwareTokenEstimator.java` |
 | Dynamic-context main-thread hop timeout | 5 s | `ChatBot.java:514` |
 | World-tool main-thread hop timeout (`MainThread.call`) | 5 s | `MainThread.java:22` |
 | LLM HTTP timeout | `LLMConfig.timeoutSeconds`, default `180` | `LLMConfig.java:64` |
@@ -275,6 +275,11 @@ restores the avatar directly with `ChatBotActions.restoreAvatarOnMain` (bug #5),
 - ~~**Image MIME label:** the image is always tagged `"image/jpeg"`~~ **Fixed (bug #9):** the label is now
   `ImageMime.sniff(bytes)` (`ChatBot.java:243`), which reports PNG for the client's `NativeImage` bytes. See
   [images-and-client.md](images-and-client.md).
+- ~~**Every builtin `/build` and `/prove` crashed**~~ **Fixed (2026-10-24):** LangChain4j 1.0.0's
+  `OpenAiTokenCountEstimator` throws `IllegalArgumentException: Unknown content type: ImageContent`, and
+  `TokenWindowChatMemory.add` calls it, so the screenshot message never reached the model (the exception surfaced
+  as "Error executing task on Server"). `ImageAwareTokenEstimator` counts the text with the OpenAI estimator and
+  each image as 425 tokens (`ImageAwareTokenEstimatorTest`).
 - ~~**Stale comment:** `ChatBotFunctions.runOnMain` says "only 4 workers in sharedExecutor"~~ — corrected in phase C;
   `runOnMain` itself is gone since docs/27 phase 2 (its hop is now `MainThread.call`).
 - **Error path is silent to the player** — a timeout or 4xx just ends the session; the player sees nothing.

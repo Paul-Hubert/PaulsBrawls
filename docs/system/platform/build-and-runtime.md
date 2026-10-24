@@ -194,7 +194,7 @@ from the repo.
 
 ## Java unit tests (`src/test/java/com/paul/brawl/`)
 
-Thirty JUnit 5 classes (974 test cases, counting parameterized and dynamic ones), run with `./gradlew test`;
+Thirty-one JUnit 5 classes (979 test cases, counting parameterized and dynamic ones), run with `./gradlew test`;
 the 8 of `AgentE2ETest` are skipped unless `OPENCODE_BIN` points at an opencode binary, and the 13 of
 `ClaudeCodeE2ETest` plus one `McpClaudeCodeInteropTest` case unless `CLAUDE_BIN` points at `claude` (use `--rerun`
 after changing either variable). None boots Minecraft, so command trees, packets and
@@ -215,6 +215,7 @@ loopback port against the official MCP Java SDK client ([aigod/mcp-servers.md](.
 | `GodActionQueueTest` | 4 | `GodActionQueue` | Actions drain before bulk build placements; a withdrawn action never runs (bug #7 review) |
 | `GodToolGateTest` | 3 | `GodToolGate` | MCP tools refused for a bodiless prayer or a disabled bridge (bug #8) |
 | `ImageMimeTest` | 3 | `ImageMime` | MIME sniffing of image bytes for `/prove`/`/build` (bug #9) |
+| `ImageAwareTokenEstimatorTest` | 5 | `ImageAwareTokenEstimator` | The chat memory accepts a screenshot; an image counts 425 tokens, text exactly as the OpenAI estimator (the builtin `/build` crash, 2026-10-24) |
 | `ItemIdsTest` | 3 | `ItemIds` | Registry-id extraction from an item string (components/NBT stripped, `minecraft:` default) (bug #6) |
 | `GodServiceTest` | 12 | `GodService`, `GodSessionManager` | Every God clamp/refusal (typed `WorldOutcome`), the owner gate on the body, gestures only for a manifested owner, session generations |
 | `BuildServiceTest` | 7 | `BuildService`, `BuildShapes` | Line walk, 128-block cap before allocation, unknown block, no pivot, offline player |

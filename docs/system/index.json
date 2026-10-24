@@ -480,6 +480,7 @@
       ],
       "sources": [
         "src/main/java/com/paul/brawl/ChatBot.java",
+        "src/main/java/com/paul/brawl/ImageAwareTokenEstimator.java",
         "src/main/java/com/paul/brawl/ChatBotFunctions.java",
         "src/main/java/com/paul/brawl/GodService.java",
         "src/main/java/com/paul/brawl/MainThread.java",
@@ -515,7 +516,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 21075
+      "bytes": 21780
     },
     {
       "id": "aigod.mcp-gateway",
@@ -1992,7 +1993,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 26353
+      "bytes": 26571
     },
     {
       "id": "platform.entrypoints-and-wiring",

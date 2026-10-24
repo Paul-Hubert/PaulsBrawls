@@ -52,8 +52,8 @@ They copy the remapped jar into the paths set by `mods_folder` / `client_mods_fo
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
-The Java side has thirty JUnit 5 classes (974 test cases) under `src/test/java/com/paul/brawl/`, each covering a
-Minecraft-free helper: `TradeMath`, `ImageMime`, `BuildGuard`, `GodToolGate`, `GodClamps`, `ItemIds`, `FlagGlow`,
+The Java side has thirty-one JUnit 5 classes (979 test cases) under `src/test/java/com/paul/brawl/`, each covering a
+Minecraft-free helper: `TradeMath`, `ImageMime`, `ImageAwareTokenEstimator`, `BuildGuard`, `GodToolGate`, `GodClamps`, `ItemIds`, `FlagGlow`,
 `GibberMath`, `BlockInfoJson`, `EdenRetry`, `GodActionQueue`, `AgentTickets`, plus `GodService` and `BuildService` (the
 world layer's rules, run against the `RecordingGodWorld` / `RecordingBuildWorld` test helpers) and the MCP contract
 tests `GodMcpServerTest` / `BuilderMcpServerTest` (the real `god`/`builder` servers on a loopback port, driven by the
@@ -176,7 +176,8 @@ checklist passes with external.
 The full request pipeline lives in [ChatBot.java](src/main/java/com/paul/brawl/ChatBot.java). It uses
 **LangChain4j** (Chat Completions) with **client-side memory** instead of the OpenAI Responses API's
 `previousResponseId` chaining. Every turn rebuilds the full message list from the player's
-`TokenWindowChatMemory` (capped at `MAX_MEMORY_TOKENS = 16_000`, budgeted by `OpenAiTokenCountEstimator("gpt-4o")`)
+`TokenWindowChatMemory` (capped at `MAX_MEMORY_TOKENS = 16_000`, budgeted by `OpenAiTokenCountEstimator("gpt-4o")` wrapped in
+`ImageAwareTokenEstimator`, since the bare estimator throws on a screenshot)
 and resends it. The blocking `ChatModel.chat` is wrapped in `CompletableFuture.supplyAsync` on an unbounded
 virtual-thread-per-task executor (`llm-worker-N`, [LLMConfig.sharedExecutor](src/main/java/com/paul/brawl/LLMConfig.java)).
 
