@@ -88,9 +88,12 @@ claude -p --input-format stream-json --output-format stream-json --verbose --age
 - **Sessions.** `createSession` mints a UUID. The first turn uses `--session-id`; after the process's `system/init`
   the next turn uses `--resume`, so the player's conversation continues. `/pray reset` (a new id) starts fresh.
   Claude Code keeps the transcripts under the server user's `~/.claude/projects/`.
-- **Result.** The `result` text of the LAST `result` message. Claude Code runs sub-agents in the background: the
-  planner answers once when it launches them, and again when Claude Code wakes it with their completion; the
-  process exits after that, and the last answer is the one told to the admin.
+- **Result.** The `result` text of the LAST `result` message. Sub-agents are made synchronous
+  (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `ClaudeCodeClient.agentEnvironment`): launched in one message they
+  still run in parallel, and the builder answers once they have all returned. With background sub-agents (the
+  default) the builder answered at every completion, and `claude -p` cancelled whatever still ran 10 minutes after
+  its last answer: on 2026-10-24 a ziggurat was cut off at 4 758 blocks. "The last `result` counts" stays, for a
+  runtime that still answers more than once.
 - **Failures.** The binary cannot start, or a server in `system/init.mcp_servers` is `failed`/`needs-auth`
   (the turn is killed rather than answered without tools), or the process dies without a result → `DOWN`.
   No exit within the timeout → the process tree is killed, `TIMEOUT`. An error result, an aborted turn, or an

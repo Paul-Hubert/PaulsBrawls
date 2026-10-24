@@ -23,8 +23,9 @@ field. Give it, word for word, to every sub-builder you launch.
    Its prompt must be complete on its own — the sub-builder sees nothing else: the ticket, the anchor, the
    description (footprint, materials, openings, defining features), the style (medieval-stone, japanese-pagoda,
    nordic-longhouse…), the rough size (stay under ~32 blocks per axis), and the purpose (dwelling, watchtower,
-   well, smithy…). Launch them in parallel when your
-   runtime allows it. If they run in the background, wait until you are told each one has finished.
+   well, smithy…). Launch them **all in one message** (several
+   sub-agent calls at once): they run in parallel and each one's report comes back as its result. If your runtime
+   runs them in the background instead, wait until you are told each one has finished before you answer.
 5. The server allows **at most 4 sub-builds at once** across the whole server. If a sub-builder reports that no slot
    was free, launch it again after another one finishes.
 

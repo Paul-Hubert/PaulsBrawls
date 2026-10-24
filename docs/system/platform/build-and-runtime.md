@@ -194,7 +194,7 @@ from the repo.
 
 ## Java unit tests (`src/test/java/com/paul/brawl/`)
 
-Thirty-one JUnit 5 classes (979 test cases, counting parameterized and dynamic ones), run with `./gradlew test`;
+Thirty-one JUnit 5 classes (980 test cases, counting parameterized and dynamic ones), run with `./gradlew test`;
 the 8 of `AgentE2ETest` are skipped unless `OPENCODE_BIN` points at an opencode binary, and the 13 of
 `ClaudeCodeE2ETest` plus one `McpClaudeCodeInteropTest` case unless `CLAUDE_BIN` points at `claude` (use `--rerun`
 after changing either variable). None boots Minecraft, so command trees, packets and
@@ -225,7 +225,7 @@ loopback port against the official MCP Java SDK client ([aigod/mcp-servers.md](.
 | `AgentClientTest` | 3 | `AgentClient` | opencode reply parsing (final text, `info.error`), the agent-down path |
 | `AgentTurnsTest` | 7 | `AgentTurns` | A second `/build` or prayer never kills the running turn's ticket; simultaneous prayers start one turn; a prayer turn gets `agentIdleTimeoutSeconds` |
 | `SubBuildsSweeperTest` | 3 | `SubBuilds` | The periodic sweep releases idle leases with no call, stops when closed |
-| `ClaudeCodeClientTest` | 9 | `ClaudeCodeClient`, `GodAgentConfig`, `god-agent/claude-code/` | Command line, stdin message, result/stream parsing, `NO_PROXY`, the `agentKind` switch, agent bodies equal `god-agent/prompts/*.md` |
+| `ClaudeCodeClientTest` | 10 | `ClaudeCodeClient`, `GodAgentConfig`, `god-agent/claude-code/` | Command line (`--effort` too), stdin message, result/stream parsing, `NO_PROXY`, synchronous sub-agents, the `agentKind` switch, agent bodies equal `god-agent/prompts/*.md` |
 | `McpProtocolConformanceTest` | 78 | `McpHttpEndpoint`, both servers | MCP test bench: raw JSON-RPC/HTTP conformance, auth, Origin, body cap, garbage |
 | `McpToolFuzzTest` | 514 | every advertised MCP tool | MCP test bench: shape attacks refused with no effect; seeded value fuzz within the clamps |
 | `McpTicketMatrixTest` | 222 | every advertised MCP tool | MCP test bench: every tool × every wrong ticket/session/lease/pivot is refused and changes nothing |

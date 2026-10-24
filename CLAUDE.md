@@ -52,7 +52,7 @@ They copy the remapped jar into the paths set by `mods_folder` / `client_mods_fo
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
-The Java side has thirty-one JUnit 5 classes (979 test cases) under `src/test/java/com/paul/brawl/`, each covering a
+The Java side has thirty-one JUnit 5 classes (980 test cases) under `src/test/java/com/paul/brawl/`, each covering a
 Minecraft-free helper: `TradeMath`, `ImageMime`, `ImageAwareTokenEstimator`, `BuildGuard`, `GodToolGate`, `GodClamps`, `ItemIds`, `FlagGlow`,
 `GibberMath`, `BlockInfoJson`, `EdenRetry`, `GodActionQueue`, `AgentTickets`, plus `GodService` and `BuildService` (the
 world layer's rules, run against the `RecordingGodWorld` / `RecordingBuildWorld` test helpers) and the MCP contract
@@ -443,7 +443,9 @@ architecture.
 - **Claude Code (`agentKind = claude-code`) gotchas**, all found by `ClaudeCodeE2ETest` against 2.1.309:
   `allow` rules in a project `.claude/settings.json` are ignored until the workspace is trusted interactively, so
   the permissions are passed with `--settings`; `--setting-sources ""` also drops the project agents (use
-  `project`); sub-agents run in the background, so a builder answers twice and the LAST `result` counts; a refused
+  `project`); sub-agents run in the background by default, and `claude -p` cancels them 10 min after the
+  builder's last answer (a live build was cut off), so the client sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
+  (synchronous sub-agents, still parallel when launched in one message; the LAST `result` still counts); a refused
   API key (401) is retried ten times with backoff unless the client stops at the first `api_retry`; a tool's
   `structuredContent` reaches the model instead of its text; the prayer goes on stdin as UTF-8, because argv
   follows the server's locale; and with `HTTPS_PROXY` set, the loopback MCP calls went to the proxy (found live),

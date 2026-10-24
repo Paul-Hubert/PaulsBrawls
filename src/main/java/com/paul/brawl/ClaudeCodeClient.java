@@ -150,9 +150,8 @@ public final class ClaudeCodeClient implements AgentBackend {
         if (!Files.isDirectory(dir)) return Reply.fail(Failure.DOWN, "agent directory missing: " + dir);
         ProcessBuilder pb = new ProcessBuilder(command(sessionId, agent)).directory(dir.toFile());
         if (cleanEnvironment) pb.environment().clear();
-        pb.environment().remove("CLAUDECODE"); // a server started from a Claude Code session must not look nested
         pb.environment().putAll(env);
-        bypassProxyForLoopback(pb.environment());
+        agentEnvironment(pb.environment());
         Process p;
         try {
             p = pb.start();
@@ -195,6 +194,21 @@ public final class ClaudeCodeClient implements AgentBackend {
         }
         return parseResult(r);
     }
+
+    /**
+     * Fixes the turn's environment (package-private for tests): not nested, loopback past any proxy, and
+     * synchronous sub-agents. With background sub-agents a builder's turn ends while they still run, and
+     * {@code claude -p} cancels whatever is still running 10 minutes after the main agent's last reply (found
+     * live: a ziggurat cut off at 4 758 blocks). Synchronous sub-agents launched in one message still run in
+     * parallel, and the builder only answers once they have all returned.
+     */
+    static void agentEnvironment(Map<String, String> env) {
+        env.remove("CLAUDECODE"); // a server started from a Claude Code session must not look nested
+        env.put(SYNC_SUBAGENTS_ENV, "1");
+        bypassProxyForLoopback(env);
+    }
+
+    static final String SYNC_SUBAGENTS_ENV = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
 
     /**
      * The MCP servers are on loopback: with {@code HTTPS_PROXY}/{@code HTTP_PROXY} set for the model API, Claude Code

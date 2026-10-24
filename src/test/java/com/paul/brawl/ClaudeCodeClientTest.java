@@ -112,6 +112,16 @@ class ClaudeCodeClientTest {
     }
 
     @Test
+    void subAgentsAreSynchronousAndTheTurnIsNotNested() {
+        // Background sub-agents are cancelled 10 min after the builder's last reply (a live build was cut off).
+        Map<String, String> env = new java.util.HashMap<>(Map.of("CLAUDECODE", "1"));
+        ClaudeCodeClient.agentEnvironment(env);
+        assertEquals("1", env.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"));
+        assertFalse(env.containsKey("CLAUDECODE"));
+        assertEquals("127.0.0.1,localhost,::1", env.get("NO_PROXY"));
+    }
+
+    @Test
     void aMissingBinaryOrDirectoryIsDown() throws Exception {
         Path dir = Files.createTempDirectory("cc-client");
         try {
