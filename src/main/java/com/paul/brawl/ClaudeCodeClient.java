@@ -35,7 +35,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * claude -p --input-format stream-json --output-format stream-json --verbose
  *        --agent &lt;god|builder&gt; --mcp-config .mcp.json --strict-mcp-config
  *        --settings settings.json --setting-sources project --permission-mode dontAsk
- *        (--session-id &lt;uuid&gt; | --resume &lt;uuid&gt;) [--model &lt;model&gt;]
+ *        (--session-id &lt;uuid&gt; | --resume &lt;uuid&gt;) [--model &lt;model&gt;] [--effort &lt;level&gt;]
  * </pre>
  *
  * <ul>
@@ -69,6 +69,7 @@ public final class ClaudeCodeClient implements AgentBackend {
     private final String bin;
     private final Path dir;
     private final String model;
+    private final String effort;
     private final Map<String, String> env;
     /** Tests only: start from an empty environment instead of the server's. */
     private final boolean cleanEnvironment;
@@ -84,15 +85,26 @@ public final class ClaudeCodeClient implements AgentBackend {
      * @param env   added to the inherited environment (the mod passes the MCP token and URL)
      */
     public ClaudeCodeClient(String bin, Path dir, String model, Map<String, String> env) {
-        this(bin, dir, model, env, false);
+        this(bin, dir, model, "", env, false);
+    }
+
+    /** @param effort {@code --effort} (low, medium, high, xhigh, max); blank = Claude Code's default */
+    public ClaudeCodeClient(String bin, Path dir, String model, String effort, Map<String, String> env) {
+        this(bin, dir, model, effort, env, false);
     }
 
     /** {@code cleanEnvironment}: the process gets ONLY {@code env} (tests isolate HOME, PATH and the API endpoint). */
     ClaudeCodeClient(String bin, Path dir, String model, Map<String, String> env, boolean cleanEnvironment) {
+        this(bin, dir, model, "", env, cleanEnvironment);
+    }
+
+    private ClaudeCodeClient(String bin, Path dir, String model, String effort, Map<String, String> env,
+                             boolean cleanEnvironment) {
         this.cleanEnvironment = cleanEnvironment;
         this.bin = bin;
         this.dir = dir.toAbsolutePath().normalize();
         this.model = model == null ? "" : model.trim();
+        this.effort = effort == null ? "" : effort.trim();
         this.env = Map.copyOf(env);
     }
 
@@ -111,6 +123,7 @@ public final class ClaudeCodeClient implements AgentBackend {
             "--permission-mode", "dontAsk"));
         cmd.addAll(started.contains(sessionId) ? List.of("--resume", sessionId) : List.of("--session-id", sessionId));
         if (!model.isEmpty()) cmd.addAll(List.of("--model", model));
+        if (!effort.isEmpty()) cmd.addAll(List.of("--effort", effort));
         return cmd;
     }
 

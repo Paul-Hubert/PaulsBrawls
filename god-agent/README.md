@@ -75,7 +75,7 @@ trusted by the mod: tickets, clamps and caps are enforced server-side.
    ```properties
    godAgent=external
    agentKind=claude-code
-   # optional: claudeBin=/path/to/claude, claudeDir=god-agent/claude-code, claudeModel=sonnet
+   # optional: claudeBin=/path/to/claude, claudeDir=god-agent/claude-code, claudeModel=sonnet, claudeEffort=high
    ```
 
 4. Restart the server. Each `/pray`, `/prove` or `/build` then runs:

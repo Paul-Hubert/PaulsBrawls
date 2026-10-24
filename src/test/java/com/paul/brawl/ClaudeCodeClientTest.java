@@ -49,6 +49,9 @@ class ClaudeCodeClientTest {
         assertEquals("sonnet", cmd.get(cmd.indexOf("--model") + 1));
         assertFalse(new ClaudeCodeClient("claude", Path.of("x"), " ", Map.of()).command(sid, "god").contains("--model"),
             "a blank model is Claude Code's default");
+        assertFalse(cmd.contains("--effort"), "no effort set = Claude Code's default");
+        List<String> high = new ClaudeCodeClient("claude", Path.of("x"), "opus", " high ", Map.of()).command(sid, "builder");
+        assertEquals("high", high.get(high.indexOf("--effort") + 1));
         assertFalse(sid.equals(c.createSession("again")), "every session is new");
     }
 

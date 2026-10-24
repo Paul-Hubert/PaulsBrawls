@@ -74,7 +74,7 @@ The command (checked with Claude Code 2.1.309):
 ```
 claude -p --input-format stream-json --output-format stream-json --verbose --agent <god|builder>
        --mcp-config <dir>/.mcp.json --strict-mcp-config --settings <dir>/settings.json
-       --setting-sources project --permission-mode dontAsk (--session-id <uuid> | --resume <uuid>) [--model <claudeModel>]
+       --setting-sources project --permission-mode dontAsk (--session-id <uuid> | --resume <uuid>) [--model <claudeModel>] [--effort <claudeEffort>]
 ```
 
 - **Isolation.** `--strict-mcp-config` loads only the two servers. `--setting-sources project` keeps out the
@@ -198,8 +198,8 @@ See `god-agent/README.md`. With Claude Code:
    `ANTHROPIC_API_KEY` in the server's environment.
 2. Copy `god-agent/claude-code/` next to the server (or point `claudeDir` at it).
 3. In `god_agent.properties`: `godAgent=external`, `agentKind=claude-code`, and optionally `claudeBin` (default
-   `claude` on PATH), `claudeDir` (default `god-agent/claude-code`) and `claudeModel` (blank = Claude Code's
-   default). Restart the server. No other process is needed.
+   `claude` on PATH), `claudeDir` (default `god-agent/claude-code`), `claudeModel` (blank = Claude Code's
+   default) and `claudeEffort` (`--effort`: `low` … `max`, blank = default). Restart the server. No other process is needed.
 4. To check the servers by hand: `claude mcp add --transport http god http://127.0.0.1:8771/mcp/god --header
    "Authorization: Bearer $PAULSBRAWLS_MCP_TOKEN"` (and the same for `builder`) in any scratch directory, then
    `claude mcp list` should show both `✔ Connected`. `gradle mcpProbe` checks them without Claude Code.

@@ -58,10 +58,12 @@ public class GodAgentConfig {
     /** opencode Basic-auth password; {@value #AGENT_PASSWORD_ENV} wins when set. Blank = no auth header. */
     public String agentPassword = "";
 
-    /** Claude Code ({@code agentKind = claude-code}): the executable, the agent directory, the model (blank = default). */
+    /** Claude Code ({@code agentKind = claude-code}): the executable, the agent directory, the model and the effort
+     *  ({@code --effort}: low, medium, high, xhigh, max; blank = default). */
     public String claudeBin = "claude";
     public String claudeDir = "god-agent/claude-code";
     public String claudeModel = "";
+    public String claudeEffort = "";
 
     /** Agent names: opencode agents (god-agent/opencode.json) or Claude Code agents (claude-code/.claude/agents/). */
     public String godAgentName = "god";
@@ -134,6 +136,7 @@ public class GodAgentConfig {
         p.setProperty("claudeBin", claudeBin);
         p.setProperty("claudeDir", claudeDir);
         p.setProperty("claudeModel", claudeModel);
+        p.setProperty("claudeEffort", claudeEffort);
         p.setProperty("godAgentName", godAgentName);
         p.setProperty("builderAgentName", builderAgentName);
         p.setProperty("turnTimeoutSeconds", Integer.toString(turnTimeoutSeconds));
@@ -167,6 +170,7 @@ public class GodAgentConfig {
         claudeBin = p.getProperty("claudeBin", claudeBin).trim();
         claudeDir = p.getProperty("claudeDir", claudeDir).trim();
         claudeModel = p.getProperty("claudeModel", claudeModel).trim();
+        claudeEffort = p.getProperty("claudeEffort", claudeEffort).trim();
         godAgentName = p.getProperty("godAgentName", godAgentName).trim();
         builderAgentName = p.getProperty("builderAgentName", builderAgentName).trim();
         turnTimeoutSeconds = parseInt(p.getProperty("turnTimeoutSeconds"), turnTimeoutSeconds);
@@ -181,6 +185,7 @@ public class GodAgentConfig {
             + ", mcpToken=" + (effectiveToken().isBlank() ? "unset" : "set")
             + ", agentKind=" + agentKind
             + (claudeCode() ? ", claude=" + claudeBin + " in " + claudeDir + (claudeModel.isBlank() ? "" : " model " + claudeModel)
+                + (claudeEffort.isBlank() ? "" : " effort " + claudeEffort)
                 : ", agentUrl=" + agentUrl)
             + ", agents=" + godAgentName + "/" + builderAgentName
             + ", turnTimeout=" + turnTimeoutSeconds + "s, agentIdle=" + agentIdleTimeoutSeconds

@@ -58,7 +58,7 @@ public final class ExternalAgent {
     /** opencode over HTTP, or Claude Code headless with the MCP token and URL in its environment. */
     static AgentBackend backend(GodAgentConfig cfg) {
         if (cfg.claudeCode()) {
-            return new ClaudeCodeClient(cfg.claudeBin, java.nio.file.Path.of(cfg.claudeDir), cfg.claudeModel,
+            return new ClaudeCodeClient(cfg.claudeBin, java.nio.file.Path.of(cfg.claudeDir), cfg.claudeModel, cfg.claudeEffort,
                 java.util.Map.of(GodAgentConfig.TOKEN_ENV, cfg.effectiveToken(),
                     ClaudeCodeClient.MCP_URL_ENV, "http://127.0.0.1:" + cfg.mcpPort));
         }

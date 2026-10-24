@@ -105,6 +105,7 @@ Source: `VillageConfig.java:23-88`. Eden's side mirrors `maxTradeDistance` as `s
 | `claudeBin` | `claude` | `agentKind = claude-code`: the Claude Code executable (on PATH or a path) |
 | `claudeDir` | `god-agent/claude-code` | `agentKind = claude-code`: the agent directory (`.mcp.json`, `settings.json`, `.claude/agents/`), relative to the server's working directory |
 | `claudeModel` | `""` | `agentKind = claude-code`: `--model` (blank = Claude Code's default) |
+| `claudeEffort` | `""` | `agentKind = claude-code`: `--effort` (`low`, `medium`, `high`, `xhigh`, `max`; blank = Claude Code's default) |
 | `godAgentName` / `builderAgentName` | `god` / `builder` | agent names (opencode agents, or Claude Code `--agent`) |
 | `turnTimeoutSeconds` | `300` | cap on one prayer turn |
 | `agentIdleTimeoutSeconds` | `180` | the avatar's idle watchdog during a prayer turn (time allowed between two `god` calls); never below the builtin `max(idleTimeoutSeconds, waitMaxSeconds + 5)` |
