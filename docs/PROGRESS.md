@@ -3,6 +3,15 @@
 One dated section per session: what was done, decisions taken, what's next,
 surprises. Newest first.
 
+## 2026-10-24 — `.\gradlew build` on Windows: two test fixes (Java mod, not Eden)
+- `McpTcpNoDelayTest` launched its child JVM with `-cp <test classpath>` on the command line: ~31 000 characters
+  here, ~33 700 with Windows paths, over the 32 767-character Windows limit (`CreateProcess error=206`). The
+  classpath now goes through an `@argfile`.
+- `ClaudeCodeClientTest`'s prompt drift check expected LF; Git for Windows checks the `.md` files out with CRLF.
+  It now normalizes line endings (verified: with CRLF files it failed before, passes after).
+- Checked: a generated wrapper `./gradlew build` with the default `gradle.properties` is green (Linux; no Windows
+  machine here).
+
 ## 2026-10-24 — `/construction ticket`: build from your own Claude Code session (Java mod, not Eden)
 - An op-only `/construction ticket [minutes]` mints a builder ticket bound to the admin and their pivot, shown only
   to them (click to copy), for an interactive MCP client such as Claude Code; `/construction ticket revoke` kills it

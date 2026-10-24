@@ -155,8 +155,10 @@ class ClaudeCodeClientTest {
         Map<String, String> tools = Map.of("god", "mcp__god__*", "builder", "Agent(sub-builder), mcp__builder__*",
             "sub-builder", "mcp__builder__*");
         for (var e : tools.entrySet()) {
-            String agent = Files.readString(Path.of("god-agent", "claude-code", ".claude", "agents", e.getKey() + ".md"));
-            String prompt = Files.readString(Path.of("god-agent", "prompts", e.getKey() + ".md"));
+            // Line endings normalized: Git for Windows checks these out with CRLF (core.autocrlf), which is not drift.
+            String agent = Files.readString(Path.of("god-agent", "claude-code", ".claude", "agents", e.getKey() + ".md"))
+                .replace("\r\n", "\n");
+            String prompt = Files.readString(Path.of("god-agent", "prompts", e.getKey() + ".md")).replace("\r\n", "\n");
             assertTrue(agent.startsWith("---\nname: " + e.getKey() + "\n"), e.getKey());
             int end = agent.indexOf("\n---\n", 4);
             String front = agent.substring(0, end);

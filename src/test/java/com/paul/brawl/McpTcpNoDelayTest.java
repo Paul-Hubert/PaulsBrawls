@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -36,8 +37,13 @@ class McpTcpNoDelayTest {
     private static double medianMs(List<String> args) throws Exception {
         List<String> cmd = new ArrayList<>();
         cmd.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
-        cmd.add("-cp");
-        cmd.add(System.getProperty("java.class.path"));
+        // The classpath goes in an @argfile: on Windows it is longer than the 32 767-character command-line limit
+        // (CreateProcess error=206), so `.\gradlew build` failed there.
+        Path argfile = Files.createTempFile("mcp-latency", ".args");
+        argfile.toFile().deleteOnExit();
+        String cp = System.getProperty("java.class.path").replace("\\", "\\\\").replace("\"", "\\\"");
+        Files.writeString(argfile, "-cp \"" + cp + "\"\n", StandardCharsets.UTF_8);
+        cmd.add("@" + argfile);
         cmd.add(McpLatencyMain.class.getName());
         cmd.addAll(args);
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();

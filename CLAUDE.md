@@ -447,6 +447,9 @@ architecture.
   `structuredContent` reaches the model instead of its text; the prayer goes on stdin as UTF-8, because argv
   follows the server's locale; and with `HTTPS_PROXY` set, the loopback MCP calls went to the proxy (found live),
   so `ClaudeCodeClient` adds loopback to `NO_PROXY`.
+- **`.\gradlew build` runs the tests on Windows too.** A child JVM gets its classpath through an `@argfile` (the
+  test classpath is longer than Windows' 32 767-character command line, `CreateProcess error=206`), and a test that
+  compares checked-out text files normalizes CRLF (Git for Windows' `core.autocrlf`).
 - **opencode needs an image-capable model declared** (`"attachment": true` / `modalities.input` including
   `image`). Otherwise it replaces a `/build` or `/prove` screenshot with "this model does not support image input".
 
