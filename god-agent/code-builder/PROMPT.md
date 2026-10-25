@@ -14,77 +14,93 @@
 
 ---
 
-You build structures in a running Minecraft 1.21.1 server by **writing and running Node.js scripts**. The
-server's mod exposes a `builder` MCP server; `mcp-build.mjs` in this directory is its client. Code is how
-you get shapes that are tedious or impossible to place by hand: domes, spheres, arches, spirals, curves,
-terrain-following walls, pixel art, repeated modules, symmetry.
+You build structures in a running Minecraft 1.21.1 server by **writing and running Node.js scripts** that use
+the component library in `lib/`. The server's mod exposes a `builder` MCP server; `mcp-build.mjs` is its client
+and `lib/build.mjs` drives it. Reuse before you write: most structures are library components with parameters.
 
 ## The connection
 
 - `PAULSBRAWLS_MCP_TOKEN` and `PAULSBRAWLS_TICKET` are already in your environment. Never print them, never
   write them to a file.
-- First run `node mcp-build.mjs`. It must print `OK, ticket valid. Pivot (absolute): …`. If it fails, stop
-  and tell me the error: "Ticket … inconnu ou expiré" means I need a new ticket, HTTP 401 a wrong token,
+- First run `node mcp-build.mjs`. It must print `OK, ticket valid. Pivot (absolute): …`. If it fails, stop and
+  tell me the error: "Ticket … inconnu ou expiré" means I need a new ticket, HTTP 401 a wrong token,
   "connection refused" a stopped server.
-- Use only `mcp-build.mjs` to reach the server. No other network calls, no RCON, no `/` commands, and do not
-  touch any file outside this directory.
+- Reach the server only through `mcp-build.mjs` / `lib/build.mjs`. No other network calls, no RCON, no `/`
+  commands, and do not touch any file outside this directory.
+- Server rules (the server enforces them; a refusal is a French `McpError` message, read it and fix the
+  script): 128 blocks per call, **at most 4 sub-builds open on the whole server**, anchors within ±256 of the
+  pivot, a sub-build idle for 2 minutes is closed. A placed block replaces what is there, air included.
 
-## The API
+## The library (`lib/index.mjs` re-exports everything)
 
-```js
-import { open } from './mcp-build.mjs';
-const b = await open();                     // b.pivot = {x,y,z}, absolute
-console.log(await b.blockInfo());           // the blocks around the pivot (offsets from it)
-console.log(await b.terrain(x, z, 32));     // ASCII relief map around an absolute X/Z
-const sb = await b.begin('dome', 0, 0, 0);  // sub-build anchored at pivot + (0,0,0)
-try {
-  await sb.place('minecraft:stone_bricks', points);  // [[x,y,z], ...] offsets from the ANCHOR
-} finally {
-  await sb.end();                           // always free the slot
-}
-```
+Points are `[x, y, z]` offsets; X east+, Y up+, Z south+. A **plan** is `[{ block, points }]` in placement order;
+later layers win where they overlap (an `air` layer after a wall cuts the opening).
 
-- `place` dedupes, rounds, and sends 128 blocks per call (the server's cap). It throws `McpError` with the
-  server's French message on any refusal; let it surface, read it, fix the script.
-- At most **4 sub-builds open on the whole server**. A sub-build left idle for a few minutes is closed by the
-  server. Anchors are within ±256 of the pivot on each axis.
-- A placed block replaces what is there, air included: placing `minecraft:air` clears.
-- Order matters for blocks that need support (torches, doors, lanterns, carpets, crops): place the support first.
+- **Geometry** (`geom.mjs`, points only): `line(a, b)`, `polyline(pts)`, `box(a, b)`, `hollowBox`, `walls` (sides
+  only), `frame` (edges), `rectRing(x0, z0, x1, z1, y)`, `disc(cx, y, cz, r)`, `ring(cx, y, cz, r, t)`,
+  `cylinder(cx, cz, r, y0, y1, { hollow })`, `sphere(c, r)`, `sphereShell(c, r, t)`, `dome(c, r)`,
+  `archOpening(w, h)` / `archRing(w, h, t)` (2D cells) + `extrude(cells, axis, depth)`,
+  `spiralSquare(cx, cz, half, y0, y1)` / `helix(...)`, `gableRoof({ x0, z0, x1, z1, base, ridge, overhang })`,
+  `hipRoof(...)`, `coneRoof(cx, cz, r, base)` (roofs return `{ slope: [{ p, dir }], ridge, … }`, `dir` = the
+  stair's facing), `bbox`, `uniq`, `subtract`.
+- **Blockstates** (`blockstate.mjs`): `withProps(id, { facing, half, axis… })`, `rotateBlock(b, turns)`,
+  `mirrorBlock(b, 'x'|'z')`, `rotateDir`, `dirStep`. Turns are clockwise seen from above (north → east).
+- **Plans** (`plan.mjs`): `layer(block, points)`, `concat(...plans)`, `translate`, `rotate(plan, turns)`,
+  `mirror(plan, axis)`, `placeAt(plan, { at, turns, mirror })`, `swapBlocks(plan, { from: to })`, `stats(plan)`.
+  Rotating or mirroring a plan fixes every blockstate (stair facing and shape, log axis, door hinge, fence sides).
+  `resolve` (used by build) keeps the last block per position, computes stair corner shapes and fence/wall
+  connections from the final layout, and orders passes: air, structure (bottom-up), attachments last.
+- **Palettes** (`palettes.mjs`): presets `stoneCastle`, `oakCottage`, `sandstone`, `deepslate`; roles `wall trim
+  floor accent pillar roof roofStairs roofSlab glass light door fence path bars stairs`.
+  `palette('oakCottage', { roof: 'minecraft:bricks' })`. An unknown role throws.
+- **Components** (`components.mjs`), every option defaulted, `palette` = a preset name or a palette:
+  - `tower({ radius, height, roof: 'flat'|'cone'|'dome'|'none', crenellations, overhang, stairs: 'auto'|'spiral'|'ladder'|'none', openings: [{ side, y, height, width, door }], landings: [y], windowSides, windowEvery, lights })` — centred on (0,0,0).
+  - `wall({ from: [x, z], to: [x, z], y, height, thickness, walkway, crenellations: 'both'|'outer'|'none', outer, lights })` — axis-aligned.
+  - `gatehouse({ width (odd), height, depth, sideWidth, upperFloor, bodyHeight, sideDoors, turrets, portcullis })` — passage along Z centred on x = 0, front at z = 0.
+  - `house({ w, d, floors, floorHeight, roof: 'gable'|'hip', door: side, furnish })` — footprint x 0..w-1, z 0..d-1.
+  - `bridge({ length, width, rise, railings, lights, pierDepth })` — along +X, centred on z = 0.
+  - `stairsBetween(a, b, { width, block, landing, fill })` — a straight flight, either end higher.
+  - `castle({ size, towerRadius, towerHeight, towerRoof, wallHeight, wallThickness, gate: {…} })` — composes all of the above.
+  - `door(id, [x, y, z], facing)` — both halves.
+- **Build** (`build.mjs`): `await build(plan, { label, anchor: [ax, ay, az], live, yes, parallel })` dry-runs by
+  default (counts per material, bounding box, nothing placed); `live: true` places. It dedupes, sends 128 per
+  call, runs air + structure in up to `parallel` sub-builds (by region), then attachments in one more, ends
+  every sub-build in `finally`, retries for 10 min while the 4 slots are busy, refuses over 5 000 positions
+  without `yes`, and prints the server-confirmed count. `cliOptions()` reads `--build --yes --anchor=x,y,z
+  --parallel=N --key=value`. `sliceMap(plan, y)` prints an ASCII top view of one level.
+- Example: `examples/castle.mjs` (`node examples/castle.mjs --size=20 --palette=deepslate`).
 
-## Coordinates and blocks
+## Blocks
 
-- X east+ / west-, Y up+ / down-, Z south+ / north-. One unit = one block. `y = 0` is the pivot block's level;
-  build from `y = 1` on flat ground unless the terrain says otherwise.
-- Ids are namespaced vanilla ids with an optional blockstate: `minecraft:oak_log[axis=x]`,
-  `minecraft:spruce_stairs[facing=east,half=top]`, `minecraft:oak_slab[type=top]`. An unknown id is refused.
-- **Stairs `facing` = the direction you walk to climb them** (the tall back half is on that side). A roof's
-  stairs point INWARD, toward the ridge: the north slope uses `facing=south`, the south slope `facing=north`,
-  the west slope `facing=east`, the east slope `facing=west`. Steps up to a door point toward the door. In code:
-  `facing` is the horizontal direction in which Y increases along the slope. `half=top` hangs a stair upside
-  down (eaves, overhangs).
-- Logs: `axis=y` for pillars, `axis=x`/`axis=z` for beams running along that axis.
+- Namespaced vanilla ids with an optional blockstate: `minecraft:oak_log[axis=x]`,
+  `minecraft:spruce_stairs[facing=east,half=top]`. **The server silently drops a blockstate it cannot parse**
+  (it places the bare block), so get properties right; an unknown id is refused.
+- **Stairs `facing` = the direction you walk to climb them**: the way Y rises along the slope. Roof stairs
+  point INWARD to the ridge (north slope `facing=south`, …); `half=top` hangs one upside down (eaves). The
+  roof functions and components already do this; in new code, derive `facing` from the slope, never guess.
+- Logs: `axis=y` posts, `axis=x`/`axis=z` beams along that axis. Doors need both halves (`door()`).
 
 ## How to work
 
-1. **Look first.** Print `blockInfo()` and, for anything larger than ~16 blocks, `terrain()`. Note the ground
-   height around the footprint.
-2. **Plan in a few sentences**: footprint, height, palette (2–4 main blocks + accents), parts, anchors.
-3. **One script per structure** in this directory (`build-<name>.mjs`). Put the geometry in pure functions that
-   return point lists (`box`, `hollowBox`, `cylinder`, `sphereShell`, `line`, `roofGable`, …), and keep the
-   palette in one object at the top so it is easy to change.
-4. **Check before placing**: print the block count per material and the bounding box. Over ~5 000 blocks, ask me
-   first. Never place the same position twice with different blocks in one pass unless that is intended
-   (the last one wins).
-5. **Place in passes**, each its own `place` calls: structure (floor, walls, roof), then openings (doors and
-   windows cleared with air or set as glass), then interior (light every ~6 blocks, furniture that fits the
-   purpose), then exterior (foundation, path, trim). Close the sub-build in `finally`.
-6. **Verify**: after building, `blockInfo()` only covers the pivot's surroundings, so trust the server's
-   counts, and tell me which parts to look at in game. When I report a problem, fix the script and re-run
-   only the part that changed.
-7. **Report** at the end: what was built, where (absolute coordinates of the anchor and the bounding box),
-   the block count, and the script file names so I can re-run them.
+1. **Look.** Run `node mcp-build.mjs`, then print `blockInfo()` and, for anything over ~16 blocks, `terrain()`
+   (`const b = await open(); console.log(await b.terrain(b.pivot.x, b.pivot.z, 32))`). Note the ground height
+   over the footprint: `y = 0` in a plan is the ground course, so pick the anchor's Y from the terrain.
+2. **Plan in a few sentences**: footprint, height, palette, which components with which parameters, anchors.
+3. **Compose from the library first.** Write one script `build-<name>.mjs` here that builds the plan from
+   components (`placeAt` to position, rotate and mirror them) and calls `build(plan, { label, ...cliOptions(),
+   anchor })`, with the parameters at the top or taken from `--key=value`.
+4. **New geometry only when no component fits.** If it is reusable (a shape or a part you could build again
+   with other parameters), add it to `lib/geom.mjs` or `lib/components.mjs` with defaults and a doc comment,
+   plus a test in `test/` (`node --test` must pass: run it in this directory). One-off details may stay in the
+   script.
+5. **Dry-run** (`node build-<name>.mjs`): check the counts, the bounding box and a few `sliceMap` levels. Over
+   5 000 positions, ask me before `--yes`.
+6. **Build** (`node build-<name>.mjs --build`, `--parallel=2..4` for big ones). If the slots are busy another
+   build is running: let it wait. On a refusal, fix the script and re-run only the part that failed.
+7. **Report**: what was built, the absolute anchor and bounding box, the counts (planned and server-confirmed),
+   the script name and the parameters to change for a variant, and what I should check in game.
 
-Keep scripts small and readable. No dependencies beyond Node's standard library and `mcp-build.mjs`.
+Keep scripts small and readable. No dependencies beyond Node's standard library and this directory.
 
 ## My request
 
