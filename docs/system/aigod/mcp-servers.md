@@ -25,6 +25,8 @@ sources:
   - src/test/java/com/paul/brawl/GodMcpServerTest.java
   - src/test/java/com/paul/brawl/AgentTicketsTest.java
   - docs/system/aigod/mcp-test-bench.md
+  - god-agent/code-builder/mcp-build.mjs
+  - god-agent/code-builder/lib/build.mjs
 verified_at: a84125f
 ---
 
@@ -90,6 +92,11 @@ or else from `mcpToken` in `god_agent.properties`. When both are blank, `ensureT
 - Besides `/pray` and `/build`, an op can mint a builder ticket for their own MCP client with
   `/construction ticket [minutes]` (1..480 min, default 60; refused while a `/build` turn of theirs runs, so it never
   revokes a running build). `/construction ticket revoke` and `/godbody off` kill it.
+- With that ticket, an op's **own** interactive Claude Code session can also build by running code:
+  `god-agent/code-builder/` holds a plain-HTTP client (`mcp-build.mjs`, `tools/call` with the bearer token and the
+  ticket) and a component library whose `lib/build.mjs` sends plans through `begin_sub_build` / `place_blocks` (128
+  per call) / `end_sub_build`. It is a client only: every rule above still runs in the mod, and code execution is
+  never given to the `/build` agent (any player can type `/build`). See `god-agent/README.md`.
 
 ## Tool metadata (for an LLM client)
 

@@ -105,8 +105,17 @@ trusted by the mod: tickets, clamps and caps are enforced server-side.
       A useful allowlist is `"permissions": {"allow": ["mcp__builder__*"]}` in your project's `.claude/settings.json`.
    3. `/construction ticket revoke` when done (or let it expire). A `/build` of yours replaces it.
    4. To build **by writing code** (domes, spirals, curves…), paste [code-builder/PROMPT.md](code-builder/PROMPT.md)
-      into a session started in `god-agent/code-builder/`; its scripts use `mcp-build.mjs` (128 blocks a call).
-      Only in your own session: never give Bash to the `/build` agent, since any player can type `/build`.
+      into a session started in `god-agent/code-builder/`. Only in your own session: never give Bash to the
+      `/build` agent, since any player can type `/build`. What is there (Node ESM, standard library only):
+      - `mcp-build.mjs`: the `builder` client (`open()` → pivot, `blockInfo`, `terrain`, `begin` → `place` / `end`).
+      - `lib/`: pure geometry (`geom.mjs`: line, box, walls, cylinder, sphere, dome, arch, spiral, gable/hip/cone
+        roofs), blockstates that survive rotation and mirroring (`blockstate.mjs`), plans (`plan.mjs`: layers,
+        transforms, last-write-wins dedupe, stair-shape and fence/wall connection fixing), palettes with named
+        roles (`palettes.mjs`), parameterized components (`components.mjs`: `tower`, `wall`, `gatehouse`,
+        `house`, `bridge`, `stairsBetween`, `castle`), and `build.mjs` (dry run by default; passes, 128 per call,
+        up to 4 parallel sub-builds, a 5 000-block guard, retries while the slots are busy, `--key=value` options).
+      - `examples/castle.mjs`: `node examples/castle.mjs` dry-runs a castle; `--build --anchor=x,y,z` places it.
+      - `test/`: `node --test` (run in `code-builder/`), no server needed.
 
    The servers listen on 127.0.0.1 only. From another machine use `ssh -L 8771:127.0.0.1:8771 <server>`; never widen
    the bind. In PowerShell, put the token in the header as `"Authorization: Bearer $env:PAULSBRAWLS_MCP_TOKEN"`.

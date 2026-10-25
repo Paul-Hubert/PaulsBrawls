@@ -606,7 +606,9 @@
         "src/test/java/com/paul/brawl/BuilderMcpServerTest.java",
         "src/test/java/com/paul/brawl/GodMcpServerTest.java",
         "src/test/java/com/paul/brawl/AgentTicketsTest.java",
-        "docs/system/aigod/mcp-test-bench.md"
+        "docs/system/aigod/mcp-test-bench.md",
+        "god-agent/code-builder/mcp-build.mjs",
+        "god-agent/code-builder/lib/build.mjs"
       ],
       "verified_at": "a84125f",
       "path": "docs/system/aigod/mcp-servers.md",
@@ -620,7 +622,7 @@
         "Tests",
         "Related"
       ],
-      "bytes": 16859
+      "bytes": 17481
     },
     {
       "id": "aigod.mcp-test-bench",

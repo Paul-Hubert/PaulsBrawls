@@ -12,7 +12,8 @@
 //   await sb.place('minecraft:stone', points);    // points: [[x,y,z], ...] offsets from the anchor
 //   await sb.end();
 //
-// Run `node mcp-build.mjs` alone to check the connection and print the pivot.
+// Run `node mcp-build.mjs` alone to check the connection and print the pivot. For whole structures, use the
+// component library in lib/ and its build() (passes, dedupe, dry run, size guard, parallel sub-builds).
 
 const MAX_PER_CALL = 128;
 
@@ -40,9 +41,9 @@ export async function open({
         });
         const body = await res.text();
         if (!res.ok) throw new McpError(`${name}: HTTP ${res.status} ${body.slice(0, 200)}`);
-        // Plain JSON, or one SSE event ("data: {...}").
-        const json = JSON.parse(body.trimStart().startsWith('data:')
-            ? body.split('\n').find(l => l.startsWith('data:')).slice(5) : body);
+        // Plain JSON, or one SSE event (optional "event:"/"id:" lines, then "data: {...}" lines).
+        const json = JSON.parse(body.trimStart().startsWith('{') ? body
+            : body.trim().split(/\r?\n\r?\n/)[0].split(/\r?\n/).filter(l => l.startsWith('data:')).map(l => l.slice(5)).join('\n'));
         if (json.error) throw new McpError(`${name}: ${json.error.message}`);
         const text = (json.result.content || []).map(c => c.text).join('\n');
         if (json.result.isError) throw new McpError(`${name}: ${text}`);
@@ -64,30 +65,33 @@ export async function open({
             const { data } = await call('begin_sub_build', { label, anchor_x: ax, anchor_y: ay, anchor_z: az });
             const sub = data.sub_build;
             let placed = 0;
-            return {
+            const sb = {
                 id: sub,
                 anchor: { x: data.anchor_x, y: data.anchor_y, z: data.anchor_z },
                 get placed() { return placed; },
+                /** One place_blocks call (at most 128 points); returns the server's text ("N bloc(s) … placé(s)."). */
+                async placeRaw(block, points) {
+                    if (points.length > MAX_PER_CALL) throw new McpError(`placeRaw: ${points.length} > ${MAX_PER_CALL} points`);
+                    const { text } = await call('place_blocks', { sub_build: sub, block,
+                        xs: points.map(p => Math.round(p[0])), ys: points.map(p => Math.round(p[1])),
+                        zs: points.map(p => Math.round(p[2])) });
+                    placed += points.length;
+                    return text;
+                },
                 /** Places `block` at every [x,y,z] (offsets from the anchor); dedupes, then 128 per call. */
                 async place(block, points) {
-                    const seen = new Set(), xs = [], ys = [], zs = [];
-                    for (const [x, y, z] of points) {
-                        const k = `${x},${y},${z}`;
-                        if (seen.has(k)) continue;
-                        seen.add(k);
-                        xs.push(Math.round(x)); ys.push(Math.round(y)); zs.push(Math.round(z));
+                    const seen = new Set(), pts = [];
+                    for (const p of points) {
+                        const q = p.map(Math.round), k = q.join(',');
+                        if (!seen.has(k)) { seen.add(k); pts.push(q); }
                     }
-                    for (let i = 0; i < xs.length; i += MAX_PER_CALL) {
-                        await call('place_blocks', { sub_build: sub, block,
-                            xs: xs.slice(i, i + MAX_PER_CALL), ys: ys.slice(i, i + MAX_PER_CALL),
-                            zs: zs.slice(i, i + MAX_PER_CALL) });
-                    }
-                    placed += xs.length;
-                    return xs.length;
+                    for (let i = 0; i < pts.length; i += MAX_PER_CALL) await sb.placeRaw(block, pts.slice(i, i + MAX_PER_CALL));
+                    return pts.length;
                 },
                 /** Frees the slot. Call it in a finally. */
                 end: () => call('end_sub_build', { sub_build: sub }),
             };
+            return sb;
         },
     };
 }
