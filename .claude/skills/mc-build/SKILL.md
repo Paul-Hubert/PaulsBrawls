@@ -12,14 +12,16 @@ The first word starting with `bld-` is the **ticket**. The rest is the **build r
 `PAULSBRAWLS_TICKET` from the environment, or ask for one before placing anything. Everything you can do without
 the server (reading, planning, writing and dry-running the script, tests) needs no ticket.
 
-You work in `god-agent/code-builder/` (paths below are relative to it). `PROMPT.md` there is the library's API
+You work in `god-agent/code-builder/` (paths below are relative to it, except `references/`, `assets/` and
+`scripts/`, which are in this skill's directory, `.claude/skills/mc-build/` at the repo root, i.e.
+`../../.claude/skills/mc-build/` from `god-agent/code-builder/`). `PROMPT.md` there is the library's API
 reference: read it first, every time, because it is kept up to date with the code. This skill adds the workflow
 around it and the lessons that live builds taught. `references/` has the details:
 
 - `references/blocks.md`: blockstates, placement order, water, crops, light, job sites. Read it before you write blocks.
 - `references/creatures.md`: spawning, 1.21.1 NBT, statues, villager work and panic, mob behaviour. Read it before you spawn anything.
 - `references/proofs.md`: proving with `walk` that an enclosure holds. Read it when the build contains or keeps out a creature: a pen, a prison, a farm, a keep, a gate.
-- `assets/build-template.mjs`: the skeleton of a build script. Copy it to `build-<name>.mjs`.
+- `assets/build-template.mjs`: the skeleton of a build script. Copy it to `god-agent/code-builder/build-<name>.mjs`.
 - `scripts/survey.mjs`: block info and terrain maps around the pivot in one call.
 
 ## The rules that keep the server and the secrets safe
@@ -74,7 +76,7 @@ long ticket (e.g. `/construction ticket 240`). Always compare the new pivot with
 
 ### 3. Survey the site
 
-Run `node .claude/skills/mc-build/scripts/survey.mjs` (block info, terrain at radius 16, 32 and 64, and radius 64 at
+Run `node ../../.claude/skills/mc-build/scripts/survey.mjs` (block info, terrain at radius 16, 32 and 64, and radius 64 at
 ±64 offsets). Add `--radius=R --at=x,z` (absolute coordinates) for a specific spot. From the maps, note:
 
 - **The ground height over the footprint.** `y = 0` in a plan is the ground course: the anchor's Y is
@@ -108,7 +110,7 @@ leaves a major choice open (where, how big, which style) that would change most 
 
 ### 5. Compose the script from the library
 
-Copy `assets/build-template.mjs` to `build-<name>.mjs` and fill it in:
+Copy `../../.claude/skills/mc-build/assets/build-template.mjs` to `build-<name>.mjs` and fill it in:
 
 - **Components first.** Most structures are library components with parameters, placed with
   `placeAt(plan, { at, turns, mirror })`. Transforms fix every blockstate (stair facing, log axis, door hinge, bed

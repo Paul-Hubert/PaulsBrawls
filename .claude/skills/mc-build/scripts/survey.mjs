@@ -1,10 +1,10 @@
 // Survey for a build: the blocks around the pivot, then terrain maps at radius 16, 32 and 64 around it and radius 64
 // at ±64 offsets (the server caps one map at radius 64). Prints each map's header line (biome, Y range, slope) and
 // the map itself, or "(flat)" when it is blank.
-//   node .claude/skills/mc-build/scripts/survey.mjs                  # around the pivot
-//   node .claude/skills/mc-build/scripts/survey.mjs --at=-200,640 --radius=48   # one map at an absolute x,z
+//   node ../../.claude/skills/mc-build/scripts/survey.mjs                  # from god-agent/code-builder/, around the pivot
+//   node ../../.claude/skills/mc-build/scripts/survey.mjs --at=-200,640 --radius=48   # one map at an absolute x,z
 // Needs PAULSBRAWLS_MCP_TOKEN and PAULSBRAWLS_TICKET, like mcp-build.mjs.
-const { open } = await import(new URL('../../../../mcp-build.mjs', import.meta.url));
+const { open } = await import(new URL('../../../../god-agent/code-builder/mcp-build.mjs', import.meta.url));
 
 const args = Object.fromEntries(process.argv.slice(2).map(a => /^--([^=]+)=(.*)$/.exec(a)?.slice(1) ?? [a, true]));
 const b = await open().catch(e => { console.error(String(e.message || e)); process.exit(1); });
