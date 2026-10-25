@@ -439,6 +439,122 @@ export function earthworks({
     return concat(layer(water, moat), layer(glacis, bank));
 }
 
+// --------------------------------------------------------------------------------------------------- cellBlock
+
+/**
+ * Where everything sits in a cellBlock(opts), without building it (same options). Local frame: x = 0..L-1 along the
+ * corridor (cell partitions every cellW + 1, the end walls at 0 and L-1), z = 0..D-1 across it: row 0 north of the
+ * corridor, row 1 (rows = 2) south of it; y = 0 is the floor, the cells' roof is at height + 1, the building's at `top`.
+ * cells: [{ row, index, x0, x1, z0, z1 (the interior, inclusive), door (its lower half, in the front wall), button (on
+ * the corridor side), back (the middle of the back row: a job-site block goes here; a bed fills its west end), spawn
+ * (a free floor cell for a creature's feet), facing (the way into the cell) }].
+ */
+export function cellBlockLayout({ cells = 6, rows = 2, cellW = 3, cellD = 4, height = 3, corridor = 3, catwalk = true } = {}) {
+    const L = cells * (cellW + 1) + 1;
+    const F0 = cellD + 1, C0 = cellD + 2, C1 = cellD + 1 + corridor, F1 = C1 + 1;
+    const D = (rows === 2 ? F1 + cellD + 1 : F1) + 1;
+    const list = [];
+    for (let r = 0; r < rows; r++) for (let i = 0; i < cells; i++) {
+        const x0 = i * (cellW + 1) + 1, dx = x0 + half(cellW - 1);
+        const [z0, z1, front, back, facing, out] = r === 0
+            ? [1, cellD, F0, 1, 'north', 1]
+            : [F1 + 1, F1 + cellD, F1, F1 + cellD, 'south', -1];
+        const mid = r === 0 ? z0 + half(cellD) : z1 - half(cellD);
+        list.push({ row: r, index: i, x0, x1: x0 + cellW - 1, z0, z1, door: [dx, 1, front], button: [dx + 1, 2, front + out],
+            back: [dx, 1, back], spawn: [dx, 1, mid], facing });
+    }
+    return { L, D, top: catwalk ? height + 5 : height + 1, fronts: rows === 2 ? [F0, F1] : [F0],
+        corridor: { z0: C0, z1: C1, mid: C0 + half(corridor - 1) }, cells: list };
+}
+
+/**
+ * A block of locked cells along a corridor (layout: cellBlockLayout). Each cell is cellW × cellD inside and `height`
+ * high under its own roof, with one `bed` (both halves, along its back wall; null: none), a `window` beside the door
+ * (cellW >= 3; a full block, never an opening: babies fit through 1 × 1 holes), a hanging lantern, and an iron `door`
+ * onto the corridor whose `button` is on the corridor side only, on the wall block beside the door's upper half (the
+ * block it powers). With rows = 2 the cells face each other across the corridor.
+ * entrances: the corridor's ends ('west' x = 0, 'east' x = L-1) that get a door; entranceButtons: 'inside' (default,
+ * the corridor is the guard side), 'outside', 'both' or 'none'.
+ * catwalk: a guards' storey over everything: the cell roofs are its floor, railed along the corridor, which stays
+ * open below; a ladder from the corridor floor at the end without an entrance (or beside it) to a landing across the
+ * corridor; windows high in the long walls; roof at height + 5. Without it the corridor is roofed at height + 1.
+ * Nothing in a cell reaches past its walls, roof or door: walk() from a cell's spawn stays inside its interior.
+ */
+export function cellBlock({
+    cells = 6, rows = 2, cellW = 3, cellD = 4, height = 3, corridor = 3, bed = 'minecraft:red_bed',
+    door: doorId = 'minecraft:iron_door', button = 'minecraft:stone_button', window = 'minecraft:glass',
+    catwalk = true, entrances = ['west'], entranceButtons = 'inside', lights = true, palette,
+} = {}) {
+    const P = pal(palette);
+    if (rows !== 1 && rows !== 2) throw new Error('cellBlock: rows must be 1 or 2 (the sides of one corridor)');
+    if (cells < 1) throw new Error('cellBlock: cells must be >= 1');
+    if (cellW < 2 || cellD < 2) throw new Error('cellBlock: cellW and cellD must be >= 2 (the door, its button and the bed)');
+    if (height < 2) throw new Error('cellBlock: height must be >= 2 (a door)');
+    if (corridor < 2) throw new Error('cellBlock: corridor must be >= 2 (buttons facing each other need their own cells)');
+    for (const s of entrances) if (s !== 'west' && s !== 'east') throw new Error(`cellBlock: entrance '${s}' must be 'west' or 'east' (the corridor's ends)`);
+    const lay = cellBlockLayout({ cells, rows, cellW, cellD, height, corridor, catwalk });
+    const { L, D, top, fronts } = lay, { z0: C0, z1: C1, mid: cmid } = lay.corridor;
+    const X = L - 1, Z = D - 1, H = height, F0 = fronts[0], F1 = fronts[1];
+    const press = facing => withProps(button, { face: 'wall', facing });
+    const hanging = withProps(P.light, { hanging: 'true' });
+    const plan = [];
+    // Floors; the shell up to the roof; partitions and cell fronts up to the cells' roof.
+    plan.push(...layer(P.trim, box([0, 0, 0], [X, 0, Z])), ...layer(P.path, box([1, 0, C0], [X - 1, 0, C1])));
+    for (const c of lay.cells) plan.push(...layer(P.floor, box([c.x0, 0, c.z0], [c.x1, 0, c.z1])));
+    plan.push(...layer(P.wall, walls([0, 1, 0], [X, top - 1, Z])));
+    const spans = rows === 2 ? [[1, F0], [F1, Z - 1]] : [[1, F0]];
+    const inner = [];
+    for (let k = 1; k < cells; k++) for (const [za, zb] of spans) inner.push(...box([k * (cellW + 1), 1, za], [k * (cellW + 1), H, zb]));
+    for (const f of fronts) inner.push(...box([1, 1, f], [X - 1, H, f]));
+    plan.push(...layer(P.wall, inner));
+    if (catwalk) {
+        plan.push(...layer(P.floor, [...box([0, H + 1, 0], [X, H + 1, F0]), ...(rows === 2 ? box([0, H + 1, F1], [X, H + 1, Z]) : [])]));
+        plan.push(...layer(P.trim, box([0, top, 0], [X, top, Z])));
+    } else {
+        plan.push(...layer(P.trim, box([0, H + 1, 0], [X, H + 1, Z])));
+    }
+    // The cells: door, corridor-side button, window, bed, lantern.
+    for (const c of lay.cells) {
+        plan.push(...door(doorId, c.door, c.facing));
+        plan.push(...layer(press(rotateDir(c.facing, 2)), [c.button]));
+        if (window && cellW >= 3) plan.push(...layer(window, [[c.door[0] - 1, 2, c.door[2]]]));
+        if (bed) {
+            plan.push(...layer(withProps(bed, { facing: 'east', part: 'foot' }), [[c.x0, 1, c.back[2]]]));
+            plan.push(...layer(withProps(bed, { facing: 'east', part: 'head' }), [[c.x0 + 1, 1, c.back[2]]]));
+        }
+        if (lights) plan.push(...layer(hanging, [[c.door[0], H, c.spawn[2]]]));
+    }
+    // Entrances at the corridor's ends; the button beside each door's upper half, on the side(s) asked for.
+    for (const side of entrances) {
+        const x = side === 'west' ? 0 : X, inward = side === 'west' ? 'east' : 'west';
+        plan.push(...door(doorId, [x, 1, cmid], inward));
+        const at = facing => [x + dirStep(facing)[0], 2, cmid + 1];
+        if (entranceButtons === 'inside' || entranceButtons === 'both') plan.push(...layer(press(inward), [at(inward)]));
+        if (entranceButtons === 'outside' || entranceButtons === 'both') plan.push(...layer(press(rotateDir(inward, 2)), [at(rotateDir(inward, 2))]));
+    }
+    const every6 = (from, to) => { const xs = []; for (let x = from; x <= to; x += 6) xs.push(x); return xs; };
+    if (catwalk) {
+        // The ladder's end: the one without an entrance; if both have one, the ladder stands beside the east door.
+        const lend = entrances.includes('east') && !entrances.includes('west') ? 'west' : 'east';
+        const lx = lend === 'east' ? X - 1 : 1, lz = entrances.includes(lend) ? C0 : cmid;
+        const rail = [];
+        for (let x = 1; x <= X - 1; x++) if (Math.abs(x - lx) > 1) for (const f of fronts) rail.push([x, H + 2, f]);
+        plan.push(...layer(P.fence, rail));
+        plan.push(...layer(P.floor, line([lx, H + 1, C0], [lx, H + 1, C1]).filter(p => p[2] !== lz)));
+        plan.push(...layer(withProps('minecraft:ladder', { facing: rotateDir(lend, 2) }), line([lx, 1, lz], [lx, H + 1, lz])));
+        const win = [];
+        for (let x = 2; x <= X - 2; x += 3) win.push([x, H + 3, 0], [x, H + 3, Z]);
+        plan.push(...layer(window || P.glass, win));
+        if (lights) {
+            const over = [cmid, F0 - 1, ...(rows === 2 ? [F1 + 1] : [])];
+            plan.push(...layer(hanging, every6(3, X - 3).flatMap(x => over.map(z => [x, top - 1, z]))));
+        }
+    } else if (lights) {
+        plan.push(...layer(hanging, every6(3, X - 3).map(x => [x, H, cmid])));
+    }
+    return plan;
+}
+
 // ------------------------------------------------------------------------------------------------------ castle
 
 /**

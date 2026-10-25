@@ -68,6 +68,7 @@ later layers win where they overlap (an `air` layer after a wall cuts the openin
   - `bridge({ length, width, rise, railings, lights, pierDepth })` — along +X, centred on z = 0.
   - `stairsBetween(a, b, { width, block, landing, fill })` — a straight flight, either end higher.
   - `castle({ size, towerRadius, towerHeight, towerRoof, wallHeight, wallThickness, gate: {…} })` — composes all of the above.
+  - `cellBlock({ cells, rows: 1|2, cellW, cellD, height, corridor, bed, door, button, window, catwalk, entrances: ['west'|'east'], entranceButtons })` — locked cells along a corridor (x along it): a bed, an iron door, its button on the corridor side only, a glass window; a guards' catwalk storey over it. `cellBlockLayout(opts)` gives each cell's interior, door, spawn and back cell (a job site goes there: `bed: null, catwalk: false` makes workshop stalls).
   - `door(id, [x, y, z], facing)` — both halves.
 - **Build** (`build.mjs`): `await build(plan, { label, anchor: [ax, ay, az], live, yes, parallel })` dry-runs by
   default (counts per material, bounding box, nothing placed); `live: true` places. It dedupes, sends 128 per
@@ -82,7 +83,8 @@ later layers win where they overlap (an `air` layer after a wall cuts the openin
   trapdoors), `small` (1 high). Conservative: jumps 1, never onto a fence or wall block, falls any height, swims,
   climbs ladders and vines; it does not model digging, teleporting, flying or spiders climbing walls.
 - Example: `examples/castle.mjs` (`node examples/castle.mjs --size=20 --palette=deepslate`). A large one:
-  `build-bronze-town.mjs` (a walled town with a barbican, a citadel and a keep, ~110 000 positions). Build
+  `build-bronze-town.mjs` (a walled town with a barbican, a citadel and a keep, ~110 000 positions);
+  `build-labor-prison.mjs` (cells, stalls and fields proven escape-proof with `walk`, creatures spawned last). Build
   briefs for particular structures live in `prompts/` (e.g. `prompts/labor-prison.md`).
 
 ## Blocks

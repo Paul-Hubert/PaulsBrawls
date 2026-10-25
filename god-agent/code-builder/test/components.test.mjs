@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tower, squareTower, wall, gatehouse, house, bridge, stairsBetween, earthworks, castle, door } from '../lib/components.mjs';
+import { tower, squareTower, wall, gatehouse, house, bridge, stairsBetween, earthworks, castle, door, cellBlock, cellBlockLayout } from '../lib/components.mjs';
 import { resolve, stats, rotate, mirror, isAir } from '../lib/plan.mjs';
-import { parseBlock, dirStep, rotateDir, DIRS } from '../lib/blockstate.mjs';
+import { parseBlock, dirStep, rotateDir, rotatePoint, DIRS } from '../lib/blockstate.mjs';
 import { palette, PALETTES } from '../lib/palettes.mjs';
+import { walk } from '../lib/walk.mjs';
 
 const K = p => p.join(',');
 const world = plan => new Map(resolve(plan).layers.flatMap(l => l.points.map(p => [K(p), l.block])));
@@ -28,6 +29,11 @@ function assertSupported(plan, name) {
             const other = at([p[0], p[1] + (props.half === 'lower' ? 1 : -1), p[2]]);
             assert.ok(other && parseBlock(other).id === id, `${name}: door half at ${k} has no other half`);
             if (props.half === 'lower') assert.ok(solid(at([p[0], p[1] - 1, p[2]])), `${name}: door at ${k} stands on nothing`);
+        } else if (id.endsWith('_button') && props.face === 'wall') {
+            assert.ok(solid(at(add(p, rotateDir(props.facing, 2)))), `${name}: ${b} at ${k} is on no wall`);
+        } else if (id.endsWith('_bed')) {
+            const other = at(add(p, props.part === 'foot' ? props.facing : rotateDir(props.facing, 2)));
+            assert.ok(other && parseBlock(other).id === id && parseBlock(other).props.part !== props.part, `${name}: bed half at ${k} has no other half`);
         }
     }
 }
@@ -213,4 +219,54 @@ test('wall overhang and the flat house roof', () => {
     assert.ok(!hw.get('3,6,4'), 'the deck is open inside the parapet');
     assert.ok(isAir(hw.get('2,2,8')), 'bronzeAge windows are open');
     assertSupported(h, 'flat house');
+});
+
+test('cellBlock: each cell has a whole bed, an iron door, a corridor-side button that powers it, and holds its prisoner', () => {
+    const opts = { cells: 3, rows: 2, cellW: 3, cellD: 4, height: 3, corridor: 3, entranceButtons: 'both' };
+    const p = cellBlock(opts), lay = cellBlockLayout(opts), w = world(p);
+    assert.equal(lay.cells.length, 6);
+    assert.deepEqual([lay.L, lay.D], [13, 15]);
+    for (const c of lay.cells) {
+        const name = `cell ${c.row}/${c.index}`;
+        const inCell = k => { const [x, y, z] = k.split(',').map(Number); return x >= c.x0 && x <= c.x1 && z >= c.z0 && z <= c.z1 && y >= 1 && y <= 3; };
+        const beds = [...w].filter(([k, b]) => /_bed\[/.test(b) && inCell(k));
+        assert.deepEqual(beds.map(([, b]) => parseBlock(b).props.part).sort(), ['foot', 'head'], `${name}: one whole bed`);
+        assert.match(w.get(K(c.door)), /^minecraft:iron_door\[.*half=lower/, `${name}: iron door`);
+        const btn = w.get(K(c.button));
+        assert.match(btn, /stone_button/, `${name}: button`);
+        assert.ok(c.button[2] >= lay.corridor.z0 && c.button[2] <= lay.corridor.z1, `${name}: the button is in the corridor`);
+        const powered = add(c.button, rotateDir(parseBlock(btn).props.facing, 2));
+        assert.deepEqual([Math.abs(powered[0] - c.door[0]), powered[1], powered[2]], [1, 2, c.door[2]], `${name}: the button's wall block touches the door's upper half`);
+        assert.equal(w.get(K([c.door[0] - 1, 2, c.door[2]])), 'minecraft:glass', `${name}: a window, not a hole`);
+        for (const walker of ['villager', 'small']) {
+            const { cells, out } = walk(p, c.spawn, { walker });
+            assert.equal(out, null, `${name}: a ${walker} gets out`);
+            const stray = [...cells].find(k => !inCell(k));
+            assert.equal(stray, undefined, `${name}: a ${walker} reaches ${stray}`);
+        }
+    }
+    // Entrance with buttons on both sides, the ladder at the other end, the catwalk roofed over.
+    const { mid } = lay.corridor;
+    assert.match(w.get(K([0, 1, mid])), /iron_door/);
+    assert.match(w.get(K([1, 2, mid + 1])), /stone_button.*facing=east/);
+    assert.match(w.get(K([-1, 2, mid + 1])), /stone_button.*facing=west/);
+    assert.match(w.get(K([11, 1, mid])), /ladder\[facing=west\]/);
+    assert.match(w.get(K([11, 4, mid])), /ladder/, 'the ladder reaches the landing');
+    assert.ok(isAir(w.get(K([6, 5, mid])) ?? 'minecraft:air'), 'the corridor is open under the catwalk');
+    assert.ok(w.get(K([6, 8, mid])), 'roofed at height + 5');
+    assertSupported(p, 'cellBlock');
+    // Turned, the cells still hold; a workshop variant (no bed, no catwalk) is roofed at height + 1.
+    const turned = rotate(p, 1);
+    assertSupported(turned, 'cellBlock turned');
+    for (const c of lay.cells.slice(0, 2)) assert.equal(walk(turned, rotatePoint(c.spawn, 1)).out, null, 'turned cell holds');
+    const ws = cellBlock({ cells: 2, rows: 1, cellD: 3, bed: null, catwalk: false, entrances: ['east'] });
+    const ww = world(ws);
+    assert.ok(![...ww.values()].some(b => /_bed|ladder/.test(b)), 'no bed, no ladder');
+    assert.ok(ww.get(K([4, 4, 6])), 'corridor roofed at height + 1');
+    assert.match(ww.get(K([8, 1, cellBlockLayout({ cells: 2, rows: 1, cellD: 3 }).corridor.mid])), /iron_door/, 'east entrance');
+    assertSupported(ws, 'workshop row');
+    assert.throws(() => cellBlock({ cellW: 1 }), /cellW/);
+    assert.throws(() => cellBlock({ rows: 3 }), /rows/);
+    assert.throws(() => cellBlock({ corridor: 1 }), /corridor/);
+    assert.throws(() => cellBlock({ entrances: ['north'] }), /entrance/);
 });
