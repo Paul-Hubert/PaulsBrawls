@@ -95,7 +95,7 @@ or else from `mcpToken` in `god_agent.properties`. When both are blank, `ensureT
 - With that ticket, an op's **own** interactive Claude Code session can also build by running code:
   `god-agent/code-builder/` holds a plain-HTTP client (`mcp-build.mjs`, `tools/call` with the bearer token and the
   ticket) and a component library whose `lib/build.mjs` sends plans through `begin_sub_build` / `place_blocks` (128
-  per call) / `end_sub_build`. It is a client only: every rule above still runs in the mod, and code execution is
+  per call) / `end_sub_build`, then creatures through `spawn_mobs` (an admin ticket, which this one is). It is a client only: every rule above still runs in the mod, and code execution is
   never given to the `/build` agent (any player can type `/build`). See `god-agent/README.md`.
 
 ## Tool metadata (for an LLM client)
@@ -109,7 +109,7 @@ Every tool carries, besides its French description (`McpTools.Meta`):
 | Server | Read-only | Destructive | Idempotent writes |
 |---|---|---|---|
 | god | `get_player_context`, `query_terrain`, `body_tools`, `wait` | `punish`, `change_weather`, `spawn_creature`, `body_call` | `offer_trade` (replaces the pending offer), `change_weather`, `appear`, `vanish`, `end_session` |
-| builder | `get_build_origin`, `get_block_info`, `query_terrain` | `place_block`, `place_line`, `place_blocks` (they overwrite blocks) | the three `place_*`, `end_sub_build` |
+| builder | `get_build_origin`, `get_block_info`, `query_terrain` | `place_block`, `place_line`, `place_blocks` (they overwrite blocks) | the three `place_*`, `end_sub_build` (`spawn_mobs` is a non-destructive, non-idempotent write) |
 
 **Structured output.** `get_build_origin` (`{x, y, z}`) and `begin_sub_build` (`{sub_build, anchor_x, anchor_y,
 anchor_z}`, the anchor absolute) declare an `outputSchema` and return `structuredContent` next to the same facts in
@@ -131,7 +131,10 @@ minted the ticket (`Raycaster.getLastPos`).
 | `place_block` | `sub_build`, `x`, `y`, `z`, `block` | One block at anchor + offset |
 | `place_line` | `sub_build`, `x1..z2`, `block` | `BuildGuard.lineBlocks` must be ≤ **128**, checked before any position is allocated |
 | `place_blocks` | `sub_build`, `xs`, `ys`, `zs`, `block` | The arrays must have equal lengths, each ≤ **128** (checked before copying) |
+| `spawn_mobs` | `sub_build`, `entity`, `xs`, `ys`, `zs`, `nbt?`, `persistent?` | One creature per anchor + offset (the feet's block). **Admin tickets only** (`/construction ticket`, `Ticket.admin`): a `/build` ticket is refused, since any player can type `/build`. At most **16** per call (`BuildGuard.MAX_MOBS_PER_CALL`) and **128** per lease (`Lease.reserveMobs`; a refused call gives its reservation back). The Wither and the Ender Dragon are refused (`BuildGuard.DENIED_MOBS`), and so is anything that is not a `MobEntity`. `nbt` is SNBT, as for `/summon` (≤ 4096 chars); its `Passengers` are dropped, so a rider cannot bring in a denied creature. Without NBT the mob is `initialize`d as `/summon` does. Persistent unless `persistent: false`. |
 | `end_sub_build` | `sub_build` | Closes the lease and releases its slot |
+
+Spawns (`BuildService.spawn` → `MinecraftBuildWorld.spawnAll`) take the same bulk lane and 30 s wait as placements.
 
 Placements go through `BuildService.place`:
 - the block must be known (`ChatBotActions.isKnownBlock`, parsed like `/setblock`);

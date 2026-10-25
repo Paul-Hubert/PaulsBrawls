@@ -33,6 +33,7 @@ public final class SubBuilds {
         final int[] anchor; // absolute
         final int epoch;
         volatile long lastUse;
+        private final java.util.concurrent.atomic.AtomicInteger mobs = new java.util.concurrent.atomic.AtomicInteger();
 
         Lease(String id, UUID player, String label, int[] anchor, int epoch, long now) {
             this.id = id;
@@ -47,6 +48,20 @@ public final class SubBuilds {
         public UUID player() { return player; }
         public String label() { return label; }
         public int[] anchor() { return anchor.clone(); }
+
+        /** Reserve {@code n} of this lease's {@link BuildGuard#MAX_MOBS_PER_SUB_BUILD} spawns; false (none taken) if they do not fit. */
+        public boolean reserveMobs(int n) {
+            while (true) {
+                int m = mobs.get();
+                if (m + n > BuildGuard.MAX_MOBS_PER_SUB_BUILD) return false;
+                if (mobs.compareAndSet(m, m + n)) return true;
+            }
+        }
+
+        /** Give back a reservation whose spawn was refused. */
+        public void returnMobs(int n) {
+            mobs.updateAndGet(m -> Math.max(0, m - n));
+        }
     }
 
     /** {@code lease} on success, else the refusal the model reads. */

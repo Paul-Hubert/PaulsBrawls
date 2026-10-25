@@ -26,6 +26,7 @@ other sub-builders.
   up to a door point toward the door. Using the side the slope is on (`facing=north` on the north slope) turns every
   stair 180° — the most common mistake. `half=top` hangs a stair upside down (eave trim, under-roof overhang).
 - `get_block_info` and `query_terrain` show the ground.
+- `spawn_mobs` is listed but refused for your ticket (only an admin's own ticket may spawn creatures): never call it.
 - When you are completely done, call `end_sub_build` (it frees your slot for another structure). A sub-build left
   idle for a few minutes is closed by the server, and a closed sub-build accepts nothing more.
 

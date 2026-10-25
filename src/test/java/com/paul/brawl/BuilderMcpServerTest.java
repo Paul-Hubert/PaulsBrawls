@@ -84,7 +84,7 @@ class BuilderMcpServerTest {
     void listsExactlyThePrimitivesWithTicketRequired() {
         List<McpSchema.Tool> tools = client.listTools().tools();
         assertEquals(List.of("begin_sub_build", "end_sub_build", "get_block_info", "get_build_origin",
-                "place_block", "place_blocks", "place_line", "query_terrain"),
+                "place_block", "place_blocks", "place_line", "query_terrain", "spawn_mobs"),
             tools.stream().map(McpSchema.Tool::name).sorted().collect(Collectors.toList()));
         for (McpSchema.Tool t : tools) {
             assertTrue(required(t).contains("ticket"), t.name() + " requires a ticket");
@@ -131,6 +131,55 @@ class BuilderMcpServerTest {
         assertEquals(0, BuildGuard.active(), "end_sub_build releases the slot");
         assertTrue(call(client, "place_block", args("sub_build", sb, "x", 0, "y", 0, "z", 0, "block", "minecraft:stone")).isError(),
             "a closed sub-build accepts nothing");
+    }
+
+    @Test
+    void spawnMobsRelativeToTheAnchorWithItsCaps() {
+        String sb = begin(10, 0, -5);
+        McpSchema.CallToolResult r = call(client, "spawn_mobs", args("sub_build", sb, "entity", "minecraft:cow",
+            "xs", List.of(0), "ys", List.of(0), "zs", List.of(0)));
+        assertTrue(r.isError(), "a /build ticket cannot spawn");
+        assertTrue(text(r).contains("/construction ticket"), text(r));
+        ticket = tickets.mint(AgentTickets.Kind.BUILDER, admin, 0, 600_000, true).id(); // the admin's own ticket
+
+        r = call(client, "spawn_mobs", args("sub_build", sb, "entity", "minecraft:villager",
+            "xs", List.of(0, 2), "ys", List.of(1, 1), "zs", List.of(0, 0),
+            "nbt", "{VillagerData:{profession:\"minecraft:farmer\"}}"));
+        assertFalse(r.isError(), text(r));
+        assertEquals("2 créature(s) minecraft:villager apparue(s).", text(r));
+        assertEquals(List.of("110,65,195 minecraft:villager {VillagerData:{profession:\"minecraft:farmer\"}} true",
+            "112,65,195 minecraft:villager {VillagerData:{profession:\"minecraft:farmer\"}} true"), world.spawned);
+
+        r = call(client, "spawn_mobs", args("sub_build", sb, "entity", "minecraft:zombie", "xs", List.of(0), "ys", List.of(0),
+            "zs", List.of(0), "persistent", false));
+        assertFalse(r.isError(), text(r));
+        assertTrue(world.spawned.get(2).endsWith(" null false"), "no NBT, not persistent: " + world.spawned.get(2));
+
+        for (String[] bad : new String[][] { { "minecraft:wither", null }, { "ender_dragon", null }, { "minecraft:unicorn", null },
+                { "minecraft:armor_stand", null }, { "minecraft:cow", "{NoAI:1b" }, { "minecraft:cow", "{" + "x".repeat(5000) + "}" } }) {
+            Map<String, Object> a = args("sub_build", sb, "entity", bad[0], "xs", List.of(0), "ys", List.of(0), "zs", List.of(0));
+            if (bad[1] != null) a.put("nbt", bad[1]);
+            assertTrue(call(client, "spawn_mobs", a).isError(), "refused: " + bad[0] + " " + bad[1]);
+        }
+        List<Integer> seventeen = new ArrayList<>();
+        for (int i = 0; i <= BuildGuard.MAX_MOBS_PER_CALL; i++) seventeen.add(i);
+        r = call(client, "spawn_mobs", args("sub_build", sb, "entity", "minecraft:cow", "xs", seventeen, "ys", seventeen, "zs", seventeen));
+        assertTrue(r.isError());
+        assertTrue(text(r).startsWith("Appel refusé"), text(r));
+        assertEquals(3, world.spawned.size(), "nothing refused reached the world");
+
+        // A sub-build spawns at most MAX_MOBS_PER_SUB_BUILD; refused calls above gave their reservation back.
+        List<Integer> sixteen = seventeen.subList(0, BuildGuard.MAX_MOBS_PER_CALL);
+        int left = BuildGuard.MAX_MOBS_PER_SUB_BUILD - 3;
+        while (left >= sixteen.size()) {
+            assertFalse(call(client, "spawn_mobs", args("sub_build", sb, "entity", "minecraft:cow", "xs", sixteen, "ys", sixteen, "zs", sixteen)).isError());
+            left -= sixteen.size();
+        }
+        r = call(client, "spawn_mobs", args("sub_build", sb, "entity", "minecraft:cow", "xs", sixteen, "ys", sixteen, "zs", sixteen));
+        assertTrue(r.isError());
+        assertTrue(text(r).contains("par sous-construction"), text(r));
+        assertFalse(call(client, "spawn_mobs", args("sub_build", begin(0, 0, 0), "entity", "minecraft:cow",
+            "xs", sixteen, "ys", sixteen, "zs", sixteen)).isError(), "a new sub-build has its own budget");
     }
 
     @Test

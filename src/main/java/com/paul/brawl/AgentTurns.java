@@ -212,7 +212,7 @@ public final class AgentTurns {
         if (buildTurns.putIfAbsent(player, RESERVED) != null) return new ManualTicket(null, m, origin, MANUAL_BUILD_RUNNING);
         try {
             subBuilds.endAll(player); // leases of the replaced ticket
-            AgentTickets.Ticket t = tickets.mint(AgentTickets.Kind.BUILDER, player, 0, m * 60_000L);
+            AgentTickets.Ticket t = tickets.mint(AgentTickets.Kind.BUILDER, player, 0, m * 60_000L, true);
             return new ManualTicket(t, m, origin, null);
         } finally {
             buildTurns.remove(player, RESERVED);

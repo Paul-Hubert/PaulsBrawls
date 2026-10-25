@@ -1,5 +1,6 @@
 package com.paul.brawl;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -105,11 +106,19 @@ final class McpBench implements AutoCloseable {
         return tickets.mint(AgentTickets.Kind.GOD, id, GodSessionManager.generation(), 600_000).id();
     }
 
-    /** {@code /build}: give {@code name} a pivot if missing and mint a builder ticket. */
+    /**
+     * {@code /construction ticket}: give {@code name} a pivot if missing and mint an admin builder ticket (it can do
+     * all a {@code /build} ticket can, and spawn creatures, so every builder tool is exercised for real).
+     */
     String builderTicket(String name) {
+        return builderTicket(name, true);
+    }
+
+    /** {@link #builderTicket(String)}, or a {@code /build} turn's ticket when {@code admin} is false. */
+    String builderTicket(String name, boolean admin) {
         UUID id = player(name);
         buildWorld.origins.putIfAbsent(id, new int[] { 100, 64, 200 });
-        return tickets.mint(AgentTickets.Kind.BUILDER, id, 0, 600_000).id();
+        return tickets.mint(AgentTickets.Kind.BUILDER, id, 0, 600_000, admin).id();
     }
 
     /** Fresh state for one case: no session, no lease, no recorded effect. Tickets are dropped too. */
@@ -122,6 +131,8 @@ final class McpBench implements AutoCloseable {
         godWorld.calls.clear();
         buildWorld.placed.clear();
         buildWorld.batches.clear();
+        buildWorld.spawned.clear();
+        buildWorld.spawnBatches.clear();
         body.calls.clear();
         bridge.set(true);
         for (UUID id : players.values()) {
@@ -223,6 +234,7 @@ final class McpBench implements AutoCloseable {
                 case "block" -> "minecraft:stone";
                 case "item", "give_item", "take_item" -> "minecraft:diamond";
                 case "entity" -> "minecraft:cow";
+                case "nbt" -> "{PersistenceRequired:1b}";
                 case "tool" -> "move-to-position";
                 default -> "fuzz";
             };
@@ -257,6 +269,9 @@ final class McpBench implements AutoCloseable {
         }
         synchronized (buildWorld.placed) {
             for (String c : buildWorld.placed) all.add("place: " + c);
+        }
+        synchronized (buildWorld.spawned) {
+            for (String c : buildWorld.spawned) all.add("spawn: " + c);
         }
         return all;
     }
@@ -322,6 +337,12 @@ final class McpBench implements AutoCloseable {
         }
         synchronized (buildWorld.batches) {
             for (int n : buildWorld.batches) range("place batch", n, 1, BuildGuard.MAX_BLOCKS_PER_CALL);
+        }
+        synchronized (buildWorld.spawnBatches) {
+            for (int n : buildWorld.spawnBatches) range("spawn batch", n, 1, BuildGuard.MAX_MOBS_PER_CALL);
+        }
+        synchronized (buildWorld.spawned) {
+            for (String s : buildWorld.spawned) assertFalse(BuildGuard.deniedMob(s.split(" ")[1]), "denied creature spawned: " + s);
         }
         assertTrue(BuildGuard.active() >= 0 && BuildGuard.active() <= BuildGuard.MAX_CONCURRENT_SUB_BUILDS,
             "BuildGuard slots: " + BuildGuard.active());

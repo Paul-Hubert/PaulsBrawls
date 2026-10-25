@@ -17,7 +17,8 @@ public final class AgentTickets {
     public enum Kind { GOD, BUILDER }
 
     /** {@code generation} is {@link GodSessionManager#generation()} at minting (god tickets only). */
-    public record Ticket(String id, Kind kind, UUID player, long generation, long expiresAtMillis) {}
+    /** {@code admin}: an admin took it for their own client ({@code /construction ticket}), not a {@code /build} turn. */
+    public record Ticket(String id, Kind kind, UUID player, long generation, long expiresAtMillis, boolean admin) {}
 
     private final Map<String, Ticket> tickets = new ConcurrentHashMap<>();
     /** Tickets whose turn already spoke to the player through {@code say}. */
@@ -38,11 +39,16 @@ public final class AgentTickets {
      * Synchronized so that concurrent mints for one player still leave exactly one live (McpConcurrencyTest).
      */
     public synchronized Ticket mint(Kind kind, UUID player, long generation, long ttlMillis) {
+        return mint(kind, player, generation, ttlMillis, false);
+    }
+
+    /** {@link #mint(Kind, UUID, long, long)}, marked {@code admin} (only an admin ticket may spawn creatures). */
+    public synchronized Ticket mint(Kind kind, UUID player, long generation, long ttlMillis, boolean admin) {
         revoke(player, kind);
         byte[] b = new byte[16];
         random.nextBytes(b);
         String id = (kind == Kind.GOD ? "god-" : "bld-") + Base64.getUrlEncoder().withoutPadding().encodeToString(b);
-        Ticket t = new Ticket(id, kind, player, generation, clock.getAsLong() + ttlMillis);
+        Ticket t = new Ticket(id, kind, player, generation, clock.getAsLong() + ttlMillis, admin);
         tickets.put(id, t);
         return t;
     }

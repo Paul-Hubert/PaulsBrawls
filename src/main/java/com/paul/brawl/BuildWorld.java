@@ -30,4 +30,17 @@ public interface BuildWorld {
      * offset, in the player's world. Completes with a short report, or exceptionally with a {@link WorldRefusal}.
      */
     CompletableFuture<String> place(UUID player, int[] origin, List<int[]> offsets, String block);
+
+    /** Whether {@code entity} names an entity type {@code /summon} accepts. */
+    boolean isKnownEntity(String entity);
+
+    /** Whether {@code nbt} parses as an SNBT compound, as {@code /summon} reads it. */
+    boolean isValidNbt(String nbt);
+
+    /**
+     * Queue one spawn task on the bulk lane: an {@code entity} with {@code nbt} (null: none) centred on the block at
+     * {@code origin + offset} for every offset, kept from despawning when {@code persistent}. Only mobs: anything
+     * else completes exceptionally with a {@link WorldRefusal}. Completes with how many spawned.
+     */
+    CompletableFuture<Integer> spawn(UUID player, int[] origin, List<int[]> offsets, String entity, String nbt, boolean persistent);
 }

@@ -132,7 +132,7 @@ class McpConcurrencyTest {
             McpSyncClient c = bench.client(i % 2 == 0 ? AgentMcpServers.GOD_PATH : AgentMcpServers.BUILDER_PATH);
             return c.listTools().tools().size();
         });
-        for (int i = 0; i < counts.size(); i++) assertEquals(i % 2 == 0 ? 14 : 8, counts.get(i), "client " + i);
+        for (int i = 0; i < counts.size(); i++) assertEquals(i % 2 == 0 ? 14 : 9, counts.get(i), "client " + i);
     }
 
     @Test

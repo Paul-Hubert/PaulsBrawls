@@ -21,6 +21,12 @@ class RecordingBuildWorld implements BuildWorld {
     final List<String> placed = Collections.synchronizedList(new ArrayList<>());
     /** The size of every place() batch that reached the world (one per tool call). */
     final List<Integer> batches = Collections.synchronizedList(new ArrayList<>());
+    final Set<String> knownEntities = new HashSet<>(Set.of("minecraft:cow", "minecraft:villager", "minecraft:zombie",
+        "minecraft:wither", "minecraft:ender_dragon", "minecraft:armor_stand"));
+    /** One entry per spawned creature: "x,y,z entity nbt persistent". */
+    final List<String> spawned = Collections.synchronizedList(new ArrayList<>());
+    /** The size of every spawn() batch that reached the world. */
+    final List<Integer> spawnBatches = Collections.synchronizedList(new ArrayList<>());
 
     @Override public boolean isOnline(UUID player) { return online.contains(player); }
 
@@ -37,5 +43,27 @@ class RecordingBuildWorld implements BuildWorld {
         batches.add(offsets.size());
         for (int[] o : offsets) placed.add((origin[0] + o[0]) + "," + (origin[1] + o[1]) + "," + (origin[2] + o[2]) + " " + block);
         return CompletableFuture.completedFuture(offsets.size() + " bloc(s) " + block + " placé(s).");
+    }
+
+    @Override public boolean isKnownEntity(String entity) { return knownEntities.contains(entity); }
+
+    /** A stand-in for SNBT parsing: one balanced {…}. */
+    @Override public boolean isValidNbt(String nbt) {
+        int depth = 0;
+        for (char c : nbt.toCharArray()) {
+            if (c == '{') depth++;
+            else if (c == '}' && --depth < 0) return false;
+        }
+        return nbt.startsWith("{") && nbt.endsWith("}") && depth == 0;
+    }
+
+    @Override public CompletableFuture<Integer> spawn(UUID player, int[] origin, List<int[]> offsets, String entity, String nbt, boolean persistent) {
+        if (!online.contains(player)) return CompletableFuture.failedFuture(new WorldRefusal(MinecraftBuildWorld.OFFLINE));
+        if (entity.equals("minecraft:armor_stand")) return CompletableFuture.failedFuture(new WorldRefusal("Refusé : pas une créature."));
+        spawnBatches.add(offsets.size());
+        for (int[] o : offsets) {
+            spawned.add((origin[0] + o[0]) + "," + (origin[1] + o[1]) + "," + (origin[2] + o[2]) + " " + entity + " " + nbt + " " + persistent);
+        }
+        return CompletableFuture.completedFuture(offsets.size());
     }
 }

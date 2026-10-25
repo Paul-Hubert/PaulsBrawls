@@ -36,7 +36,7 @@ class McpTicketMatrixTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> BODY_TOOLS = Set.of("appear", "vanish", "body_tools", "body_call");
-    private static final Set<String> LEASE_TOOLS = Set.of("place_block", "place_line", "place_blocks", "end_sub_build");
+    private static final Set<String> LEASE_TOOLS = Set.of("place_block", "place_line", "place_blocks", "spawn_mobs", "end_sub_build");
     private static final Set<String> ORIGIN_TOOLS = Set.of("get_build_origin", "get_block_info", "begin_sub_build");
 
     private McpBench bench;
@@ -137,6 +137,10 @@ class McpTicketMatrixTest {
             Map<String, String> l = live(b);
             b.bridge.set(false);
             return l;
+        }));
+        c.add(new Condition("a /build turn's ticket (not an admin's)", "builder", "spawn_mobs"::equals, (b, t) -> {
+            Map<String, String> l = live(b);
+            return with(l, "builder", b.builderTicket("alice", false)); // replaces alice's admin ticket; her lease stays
         }));
         c.add(new Condition("bob's sub-build with alice's ticket", "builder", LEASE_TOOLS::contains, (b, t) -> {
             Map<String, String> l = live(b);

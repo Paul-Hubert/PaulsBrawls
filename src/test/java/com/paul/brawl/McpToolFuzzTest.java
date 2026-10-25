@@ -210,6 +210,11 @@ class McpToolFuzzTest {
                     int last = bench.buildWorld.batches.get(bench.buildWorld.batches.size() - 1);
                     assertEquals(reported, last, what + ": the count told to the agent is what was placed");
                 }
+                if (server.equals("builder") && tool.equals("spawn_mobs") && !env.path("result").path("isError").asBoolean()) {
+                    int reported = Integer.parseInt(McpBench.capture(text, "^(\\d+) créature"));
+                    int last = bench.buildWorld.spawnBatches.get(bench.buildWorld.spawnBatches.size() - 1);
+                    assertEquals(reported, last, what + ": the count told to the agent is what spawned");
+                }
             }
             bench.assertWorldInvariants();
         }

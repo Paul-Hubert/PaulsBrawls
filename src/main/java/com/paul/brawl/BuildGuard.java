@@ -21,6 +21,19 @@ public final class BuildGuard {
     public static final int MAX_CONCURRENT_SUB_BUILDS = 4;
     /** Blocks one PlaceLine / PlaceBlocks call may place (each call is one main-thread task). */
     public static final int MAX_BLOCKS_PER_CALL = 128;
+    /** Creatures one {@code spawn_mobs} call may spawn, and one sub-build in all. */
+    public static final int MAX_MOBS_PER_CALL = 16;
+    public static final int MAX_MOBS_PER_SUB_BUILD = 128;
+    /** SNBT one spawn may carry, in characters. */
+    public static final int MAX_NBT_CHARS = 4096;
+    /** Creatures a build never spawns: they wreck the world around them. */
+    public static final java.util.Set<String> DENIED_MOBS = java.util.Set.of("minecraft:wither", "minecraft:ender_dragon");
+
+    /** Whether {@code entity} (namespace optional, any case) is in {@link #DENIED_MOBS}. */
+    public static boolean deniedMob(String entity) {
+        String id = entity.trim().toLowerCase(java.util.Locale.ROOT);
+        return DENIED_MOBS.contains(id.contains(":") ? id : "minecraft:" + id);
+    }
 
     private static final AtomicInteger ACTIVE = new AtomicInteger();
     private static final AtomicInteger EPOCH = new AtomicInteger();

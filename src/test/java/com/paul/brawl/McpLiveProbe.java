@@ -34,7 +34,7 @@ public final class McpLiveProbe {
     static final Set<String> GOD_TOOLS = Set.of("appear", "body_call", "body_tools", "change_weather", "end_session",
         "get_player_context", "offer_trade", "punish", "query_terrain", "reward", "say", "spawn_creature", "vanish", "wait");
     static final Set<String> BUILDER_TOOLS = Set.of("begin_sub_build", "end_sub_build", "get_block_info", "get_build_origin",
-        "place_block", "place_blocks", "place_line", "query_terrain");
+        "place_block", "place_blocks", "place_line", "query_terrain", "spawn_mobs");
 
     /** Tools annotated {@code readOnlyHint: true} (an LLM client may run them concurrently, they change nothing). */
     static final Set<String> GOD_READ_ONLY = Set.of("body_tools", "get_player_context", "query_terrain", "wait");

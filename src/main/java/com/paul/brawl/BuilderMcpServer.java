@@ -35,6 +35,9 @@ import io.modelcontextprotocol.spec.McpSchema;
 public final class BuilderMcpServer {
 
     static final String TICKET_DOC = "Le ticket de construction donné dans la demande (commence par 'bld-').";
+    /** spawn_mobs with a {@code /build} ticket: any player can type /build, only an admin takes /construction ticket. */
+    static final String ADMIN_ONLY = "Refusé : faire apparaître des créatures demande un ticket d'admin "
+        + "(/construction ticket), pas un ticket /build.";
 
     /** Structured output of {@code get_build_origin}: the pivot's absolute coordinates. */
     static final Map<String, Object> ORIGIN_OUT = outputObject(Map.of(
@@ -152,6 +155,39 @@ public final class BuilderMcpServer {
                             + xs.length + ", " + ys.length + ", " + zs.length + ").");
                     }
                     return build.place(p, l.anchor(), BuildShapes.points(xs, ys, zs), str(a, "block"));
+                })),
+            tool("spawn_mobs", Meta.write("Faire apparaître des créatures", false, false),
+                "Fait apparaître une créature du type donné à chaque décalage xs[i], ys[i], zs[i] depuis l'ancre de la "
+                    + "sous-construction (centrée sur le bloc ; au plus " + BuildGuard.MAX_MOBS_PER_CALL + " par appel, "
+                    + BuildGuard.MAX_MOBS_PER_SUB_BUILD + " par sous-construction). Seulement des créatures (mobs) ; "
+                    + "le Wither et l'Ender Dragon sont refusés. Persistantes (ne disparaissent pas) sauf persistent=false. "
+                    + "Réservé aux tickets d'admin (/construction ticket) : un ticket /build est refusé.",
+                McpTools.Schema.object().str("ticket", TICKET_DOC, true)
+                    .str("sub_build", "L'identifiant rendu par begin_sub_build.", true)
+                    .str("entity", "Type de créature comme pour /summon, ex. minecraft:villager.", true)
+                    .intArray("xs", "Décalages X.", true).intArray("ys", "Décalages Y (les pieds).", true).intArray("zs", "Décalages Z.", true)
+                    .str("nbt", "Données SNBT comme pour /summon (facultatif), ex. {NoAI:1b} ou "
+                        + "{VillagerData:{profession:\"minecraft:farmer\",level:2,type:\"minecraft:plains\"}}. Sans NBT, "
+                        + "la créature est initialisée comme par /summon (équipement, variante).", false)
+                    .bool("persistent", "Empêcher la disparition naturelle (défaut : oui).", false),
+                withLease((p, l, a) -> {
+                    int cap = BuildGuard.MAX_BLOCKS_PER_CALL; // parse bound; BuildService refuses over MAX_MOBS_PER_CALL
+                    int[] xs = McpTools.intArray(a, "xs", cap), ys = McpTools.intArray(a, "ys", cap), zs = McpTools.intArray(a, "zs", cap);
+                    if (xs.length != ys.length || ys.length != zs.length) {
+                        throw new McpTools.BadArgs("xs, ys et zs doivent avoir la même longueur ("
+                            + xs.length + ", " + ys.length + ", " + zs.length + ").");
+                    }
+                    AgentTickets.Ticket t = tickets.resolve(optStr(a, "ticket"), AgentTickets.Kind.BUILDER);
+                    if (t == null || !t.admin()) return WorldOutcome.refused(ADMIN_ONLY);
+                    if (!l.reserveMobs(xs.length)) {
+                        return WorldOutcome.refused("Refusé : au plus " + BuildGuard.MAX_MOBS_PER_SUB_BUILD
+                            + " créatures par sous-construction. Ouvre-en une autre.");
+                    }
+                    Boolean persistent = McpTools.optBool(a, "persistent");
+                    WorldOutcome o = build.spawn(p, l.anchor(), BuildShapes.points(xs, ys, zs), str(a, "entity"),
+                        optStr(a, "nbt"), persistent == null || persistent);
+                    if (o.refused()) l.returnMobs(xs.length);
+                    return o;
                 })),
             tool("end_sub_build", Meta.write("Fermer la sous-construction", false, true),
                 "Ferme la sous-construction et libère sa place pour une autre.",

@@ -78,6 +78,41 @@ public final class BuildService {
         return place(player, origin, BuildShapes.line(x, y, z, x2, y2, z2), block);
     }
 
+    /**
+     * Spawn {@code entity} at {@code origin + offset} for every offset (≤ {@link BuildGuard#MAX_MOBS_PER_CALL}), as one
+     * bulk-lane task, then wait. Refused: an empty or oversized call, a denied or unknown entity, bad or oversized
+     * NBT, a non-mob entity, or nothing spawned.
+     */
+    public WorldOutcome spawn(UUID player, int[] origin, List<int[]> offsets, String entity, String nbt, boolean persistent) {
+        if (offsets.isEmpty()) return WorldOutcome.refused("Aucune créature à faire apparaître.");
+        if (offsets.size() > BuildGuard.MAX_MOBS_PER_CALL) {
+            return WorldOutcome.refused("Appel refusé : " + offsets.size() + " créatures demandées, au plus "
+                + BuildGuard.MAX_MOBS_PER_CALL + " par appel.");
+        }
+        if (entity == null || entity.isBlank()) return WorldOutcome.refused("Type de créature vide.");
+        String id = entity.trim();
+        if (BuildGuard.deniedMob(id)) return WorldOutcome.refused("Refusé : '" + id + "' ne peut pas apparaître dans une construction.");
+        if (!world.isKnownEntity(id)) return WorldOutcome.refused("Créature inconnue : '" + id + "'.");
+        String data = nbt == null || nbt.isBlank() ? null : nbt.trim();
+        if (data != null && data.length() > BuildGuard.MAX_NBT_CHARS) {
+            return WorldOutcome.refused("NBT trop long : " + data.length() + " caractères, au plus " + BuildGuard.MAX_NBT_CHARS + ".");
+        }
+        if (data != null && !world.isValidNbt(data)) return WorldOutcome.refused("NBT mal formé : '" + abbreviate(data) + "'.");
+        CompletableFuture<WorldOutcome> f;
+        try {
+            f = world.spawn(player, origin, offsets, id, data, persistent).thenApply(n -> n == 0
+                ? WorldOutcome.refused("Aucune créature n'est apparue (position hors du monde ?).")
+                : WorldOutcome.done(n + " créature(s) " + id + " apparue(s)."));
+        } catch (WorldRefusal r) {
+            return WorldOutcome.refused(r.getMessage());
+        }
+        return await(f);
+    }
+
+    private static String abbreviate(String s) {
+        return s.length() <= 80 ? s : s.substring(0, 77) + "...";
+    }
+
     public int[] origin(UUID player) {
         try {
             return world.origin(player);
@@ -114,6 +149,9 @@ public final class BuildService {
         } catch (TimeoutException te) {
             return WorldOutcome.refused("Placement toujours en file après " + PLACE_WAIT_SECONDS + " s (serveur gelé ou arrêté ?).");
         } catch (ExecutionException ee) {
+            if (ee.getCause() instanceof java.util.concurrent.CancellationException) {
+                return WorldOutcome.refused("Placement annulé (construction arrêtée par un administrateur ou par l'arrêt du serveur).");
+            }
             return WorldOutcome.refused(ee.getCause() instanceof WorldRefusal r ? r.getMessage()
                 : "Erreur côté serveur pendant le placement.");
         } catch (java.util.concurrent.CancellationException ce) {
