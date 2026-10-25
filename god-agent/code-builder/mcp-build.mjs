@@ -16,6 +16,7 @@
 // component library in lib/ and its build() (passes, dedupe, dry run, size guard, parallel sub-builds).
 
 const MAX_PER_CALL = 128;
+const MAX_MOBS_PER_CALL = 16; // spawn_mobs; a sub-build spawns at most 128 in all
 
 export class McpError extends Error {}
 
@@ -28,7 +29,7 @@ export async function open({
     if (!ticket) throw new McpError('PAULSBRAWLS_TICKET is not set (the bld-… ticket from /construction ticket)');
     let id = 0;
 
-    async function call(name, args = {}) {
+    async function rpc(method, params, what) {
         const res = await fetch(`${url}/mcp/builder`, {
             method: 'POST',
             headers: {
@@ -36,15 +37,20 @@ export async function open({
                 'Content-Type': 'application/json',
                 Accept: 'application/json, text/event-stream',
             },
-            body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method: 'tools/call',
-                params: { name, arguments: { ticket, ...args } } }),
+            body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }),
         });
         const body = await res.text();
-        if (!res.ok) throw new McpError(`${name}: HTTP ${res.status} ${body.slice(0, 200)}`);
+        if (!res.ok) throw new McpError(`${what}: HTTP ${res.status} ${body.slice(0, 200)}`);
         // Plain JSON, or one SSE event (optional "event:"/"id:" lines, then "data: {...}" lines).
         const json = JSON.parse(body.trimStart().startsWith('{') ? body
             : body.trim().split(/\r?\n\r?\n/)[0].split(/\r?\n/).filter(l => l.startsWith('data:')).map(l => l.slice(5)).join('\n'));
-        if (json.error) throw new McpError(`${name}: ${json.error.message}`);
+        if (json.error) throw new McpError(`${what}: ${json.error.message}`);
+        return json.result;
+    }
+
+    async function call(name, args = {}) {
+        const result = await rpc('tools/call', { name, arguments: { ticket, ...args } }, name);
+        const json = { result };
         const text = (json.result.content || []).map(c => c.text).join('\n');
         if (json.result.isError) throw new McpError(`${name}: ${text}`);
         return { text, data: json.result.structuredContent };
@@ -55,6 +61,8 @@ export async function open({
     return {
         pivot,
         call,
+        /** The tool names the server offers (spawn_mobs needs a mod built after it was added). */
+        tools: async () => (await rpc('tools/list', {}, 'tools/list')).tools.map(t => t.name),
         /** The blocks around the pivot (offsets from it), as the server's text. */
         blockInfo: async () => (await call('get_block_info')).text,
         /** ASCII relief map around an absolute X/Z (default: the player), radius 8..64. */
@@ -88,6 +96,21 @@ export async function open({
                     for (let i = 0; i < pts.length; i += MAX_PER_CALL) await sb.placeRaw(block, pts.slice(i, i + MAX_PER_CALL));
                     return pts.length;
                 },
+                /**
+                 * Spawns `entity` at every [x,y,z] (offsets from the anchor, the feet's block), 16 per call; opts:
+                 * nbt (SNBT, as for /summon), persistent (default true). Returns how many the server spawned.
+                 */
+                async spawn(entity, points, { nbt, persistent } = {}) {
+                    let n = 0;
+                    for (let i = 0; i < points.length; i += MAX_MOBS_PER_CALL) {
+                        const chunk = points.slice(i, i + MAX_MOBS_PER_CALL).map(p => p.map(Math.round));
+                        const { text } = await call('spawn_mobs', { sub_build: sub, entity,
+                            xs: chunk.map(p => p[0]), ys: chunk.map(p => p[1]), zs: chunk.map(p => p[2]),
+                            ...(nbt ? { nbt } : {}), ...(persistent === false ? { persistent: false } : {}) });
+                        n += Number(/^(\d+) créature/.exec(text)?.[1] ?? 0);
+                    }
+                    return n;
+                },
                 /** Frees the slot. Call it in a finally. */
                 end: () => call('end_sub_build', { sub_build: sub }),
             };
@@ -100,6 +123,8 @@ if (process.argv[1]?.endsWith('mcp-build.mjs')) {
     try {
         const b = await open();
         console.log(`OK, ticket valid. Pivot (absolute): x=${b.pivot.x} y=${b.pivot.y} z=${b.pivot.z}`);
+        const spawns = (await b.tools()).includes('spawn_mobs');
+        console.log(spawns ? 'spawn_mobs: available.' : 'spawn_mobs: MISSING (the server runs a mod built before it; rebuild and restart).');
     } catch (e) {
         console.error(String(e.message || e));
         process.exit(1);

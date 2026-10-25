@@ -120,6 +120,68 @@ export function tower({
     return plan;
 }
 
+// ------------------------------------------------------------------------------------------------- squareTower
+
+/**
+ * A rectangular tower, footprint x = 0..w-1, z = 0..d-1, its roof deck at y = height. Hollow, with a floor at each
+ * of `floors` (default: every `storey` blocks, leaving at least 2 blocks of headroom under the roof), a ladder up
+ * the inside corner clockwise next to the `ladder` side through every floor and the roof (null: none), and an
+ * arrow slit every other cell of each face on each storey: 1 × 1 air at eye level, which nothing walks through.
+ * openings: [{ side, y = 1, width = 1, height = 2, door = false, at }] cut through a face, centred on `at` (the
+ * x or z along that face; default its middle); keep them off the ladder's corner. The roof: a parapet and
+ * alternating merlons on the rim; overhang pushes them one block out on a projecting course.
+ */
+export function squareTower({
+    w = 7, d = 7, height = 16, storey = 5, floors = null, ladder = 'west', openings = [], slits = true,
+    crenellations = true, overhang = true, lights = true, palette,
+} = {}) {
+    const P = pal(palette);
+    if (w < 4 || d < 4) throw new Error('squareTower: w and d must be >= 4');
+    if (height < 4) throw new Error('squareTower: height must be >= 4');
+    const X = w - 1, Z = d - 1;
+    const levels = floors ?? Array.from({ length: Math.floor(height / storey) }, (_, i) => (i + 1) * storey).filter(y => y + 3 <= height);
+    for (const y of levels) if (y < 1 || y + 3 > height) throw new Error(`squareTower: floor ${y} is not between 1 and height - 3 (${height - 3})`);
+    const face = (side, a, y) => ({ north: [a, y, 0], south: [a, y, Z], west: [0, y, a], east: [X, y, a] })[side];
+    const span = side => (side === 'north' || side === 'south' ? X : Z);
+    const plan = [];
+    plan.push(...layer(P.trim, box([0, 0, 0], [X, 0, Z])), ...layer(P.wall, walls([0, 1, 0], [X, height - 1, Z])));
+    for (const y of levels) plan.push(...layer(P.floor, box([1, y, 1], [X - 1, y, Z - 1])));
+    plan.push(...layer(P.trim, box([0, height, 0], [X, height, Z])));
+    const o = overhang ? 1 : 0;
+    if (overhang) plan.push(...layer(P.trim, rectRing(-1, -1, X + 1, Z + 1, height)));
+    if (crenellations) {
+        plan.push(...layer(P.wall, rectRing(-o, -o, X + o, Z + o, height + 1)));
+        plan.push(...layer(P.wall, rectRing(-o, -o, X + o, Z + o, height + 2).filter(([x, , z]) => (x + z) % 2 === 0)));
+    }
+    if (slits) {
+        const cells = [];
+        for (const fy of [0, ...levels]) for (const side of DIRS) for (let a = 2; a <= span(side) - 2; a += 2) cells.push(face(side, a, fy + 2));
+        plan.push(...layer('minecraft:air', cells));
+    }
+    for (const op of openings) {
+        if (!DIRS.includes(op.side)) throw new Error(`squareTower: unknown opening side '${op.side}'`);
+        const y0 = op.y ?? 1, h = op.height ?? 2, wd = op.width ?? 1, at = op.at ?? half(span(op.side));
+        const cells = [];
+        for (let k = -half(wd - 1); k <= wd - 1 - half(wd - 1); k++) for (let y = y0; y < y0 + h; y++) cells.push(face(op.side, at + k, y));
+        plan.push(...layer('minecraft:air', cells));
+        if (op.door) plan.push(...door(P.door, face(op.side, at, y0), rotateDir(op.side, 2)));
+    }
+    // Ladder and lantern corners: [x, z] inside, and the way the ladder faces (away from its wall).
+    const CORNER = { west: [[1, 1], 'east'], north: [[X - 1, 1], 'south'], east: [[X - 1, Z - 1], 'west'], south: [[1, Z - 1], 'north'] };
+    if (ladder) {
+        if (!CORNER[ladder]) throw new Error(`squareTower: unknown ladder side '${ladder}'`);
+        const [[lx, lz], facing] = CORNER[ladder];
+        plan.push(...layer(withProps('minecraft:ladder', { facing }), line([lx, 1, lz], [lx, height, lz])));
+    }
+    if (lights) {
+        const [lx, lz] = CORNER[rotateDir(ladder || 'west', 2)][0]; // the corner opposite the ladder
+        plan.push(...layer(P.light, [0, ...levels].map(fy => [lx, fy + 1, lz])));
+        const r = overhang || !crenellations ? 0 : 1;
+        plan.push(...layer(P.light, [[r, height + 1, r], [X - r, height + 1, r], [r, height + 1, Z - r], [X - r, height + 1, Z - r]]));
+    }
+    return plan;
+}
+
 // -------------------------------------------------------------------------------------------------------- wall
 
 /**
@@ -127,11 +189,12 @@ export function tower({
  * `thickness` blocks thick, centred on the line. walkway: the top is a walkway in trim (needs thickness >= 3).
  * crenellations: 'outer' (needs `outer`, the side facing away from the courtyard), 'both' or 'none'.
  * A parapet course and alternating merlons sit above the walkway on the crenellated faces; lights put a
- * lantern every 8 blocks on the inner face (or on the parapet when both faces are crenellated).
+ * lantern every 8 blocks on the inner face (or on the parapet when both faces are crenellated). overhang: a
+ * course of trim one block out from each crenellated face at walkway level (nothing climbs past it).
  */
 export function wall({
     from = [0, 0], to = [15, 0], y = 0, height = 6, thickness = 3, walkway = true, crenellations = 'both',
-    outer = null, lights = true, palette,
+    outer = null, overhang = false, lights = true, palette,
 } = {}) {
     const P = pal(palette);
     const dx = to[0] - from[0], dz = to[1] - from[1];
@@ -152,6 +215,7 @@ export function wall({
     for (const fz of faces) {
         plan.push(...layer(P.wall, line([0, top + 1, fz], [L - 1, top + 1, fz])));
         plan.push(...layer(P.wall, line([0, top + 2, fz], [L - 1, top + 2, fz]).filter(([x]) => x % 2 === 0)));
+        if (overhang) { const oz = fz === z0 ? z0 - 1 : z1 + 1; plan.push(...layer(P.trim, line([0, top, oz], [L - 1, top, oz]))); }
     }
     if (lights && walkway && thickness >= 3) {
         const inner = faces.length === 2 ? null : faces[0] === z0 ? z1 : z0;
@@ -223,7 +287,8 @@ export function gatehouse({
 /**
  * A timber-framed house. The footprint is x = 0..w-1, z = 0..d-1 (walls included) whatever the door side;
  * `floors` storeys of `floorHeight`, log posts at the corners and log beams (axis along each beam) at every
- * storey top. roof: 'gable' (ridge along the longer side) or 'hip'. door: the side the front door is on.
+ * storey top. roof: 'gable' (ridge along the longer side), 'hip' or 'flat' (a roof deck over the whole footprint
+ * and a parapet of `fence` around it). door: the side the front door is on.
  * furnish: a crafting table, a furnace and a chest along the back wall, a hanging lantern per storey, a ladder
  * between storeys.
  */
@@ -264,6 +329,8 @@ export function house({ w = 7, d = 9, floors = 1, floorHeight = 4, roof = 'gable
     } else if (roof === 'hip') {
         const h = hipRoof({ x0: 0, z0: 0, x1: X, z1: Z, base: top + 1, overhang: 1 });
         plan.push(...stairLayers(P.roofStairs, h.slope), ...layer(withProps(P.roofSlab, { type: 'bottom' }), h.ridge));
+    } else if (roof === 'flat') {
+        plan.push(...layer(P.roof, box([0, top + 1, 0], [X, top + 1, Z])), ...layer(P.fence, rectRing(0, 0, X, Z, top + 2)));
     } else throw new Error(`house: unknown roof '${roof}'`);
     // Door, step, torches.
     plan.push(...door(P.door, [cxd, 1, 0], 'south'));
@@ -341,6 +408,35 @@ export function stairsBetween(a, b, { width = 1, block, landing, fill = false, f
         prev = y;
     }
     return concat(layer(fillBlock || P.wall, under), layer(landing || P.floor, flat), stairLayers(block || P.stairs, cells));
+}
+
+// -------------------------------------------------------------------------------------------------- earthworks
+
+/**
+ * Siege earthworks around the rectangle x0..x1 × z0..z1 (the outer faces of a wall ring), in square rings by
+ * distance from it: a glacis `glacisRun` blocks wide sloping down from `glacisHeight` against the faces (solid
+ * columns from y = 1), a flat berm `berm` wide, then a moat `moatWidth` wide whose water fills the ground course
+ * y = 0 and `moatDepth` - 1 blocks below it. clear: [[x0, z0, x1, z1]] areas left without glacis (tower footprints,
+ * a barbican's yard, an approach); the moat is never cleared, so bridge it.
+ */
+export function earthworks({
+    x0, z0, x1, z1, glacisHeight = 4, glacisRun = 8, berm = 6, moatWidth = 5, moatDepth = 3, clear = [],
+    glacis = 'minecraft:coarse_dirt', water = 'minecraft:water',
+} = {}) {
+    if ([x0, z0, x1, z1].some(v => !Number.isFinite(v))) throw new Error('earthworks: x0, z0, x1, z1 are required');
+    const R = glacisRun + berm + moatWidth;
+    const inClear = (x, z) => clear.some(([a, b, c, e]) => x >= Math.min(a, c) && x <= Math.max(a, c) && z >= Math.min(b, e) && z <= Math.max(b, e));
+    const bank = [], moat = [];
+    for (let z = z0 - R; z <= z1 + R; z++) for (let x = x0 - R; x <= x1 + R; x++) {
+        const dist = Math.max(x0 - x, x - x1, z0 - z, z - z1);
+        if (dist >= 1 && dist <= glacisRun && !inClear(x, z)) {
+            const h = Math.ceil((glacisHeight * (glacisRun - dist + 1)) / glacisRun);
+            for (let y = 1; y <= h; y++) bank.push([x, y, z]);
+        } else if (dist > glacisRun + berm) {
+            for (let y = 0; y > -moatDepth; y--) moat.push([x, y, z]);
+        }
+    }
+    return concat(layer(water, moat), layer(glacis, bank));
 }
 
 // ------------------------------------------------------------------------------------------------------ castle

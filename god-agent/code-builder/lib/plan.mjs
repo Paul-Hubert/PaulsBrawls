@@ -36,6 +36,23 @@ export function placeAt(plan, { at = [0, 0, 0], turns = 0, mirror: m = null } = 
     return translate(p, at[0], at[1], at[2]);
 }
 
+// ------------------------------------------------------------------------------------------------------ spawns
+
+/**
+ * A spawn group for build({ spawns }): `entity` (e.g. 'minecraft:villager') at every point (the block its feet stand
+ * in), with optional nbt (SNBT, as for /summon) and persistent (default true). Kept apart from block layers.
+ */
+export const spawns = (entity, points, { nbt, persistent } = {}) => [{ entity, points, nbt, persistent }];
+
+/** placeAt for spawn groups: mirror, turn, then move their points like a plan's (nbt is not rewritten). */
+export function placeSpawns(groups, { at = [0, 0, 0], turns = 0, mirror: m = null } = {}) {
+    return groups.map(g => ({ ...g, points: g.points.map(p => {
+        let q = m ? mirrorPoint(p, m) : p;
+        if (turns) q = rotatePoint(q, turns);
+        return [q[0] + at[0], q[1] + at[1], q[2] + at[2]];
+    }) }));
+}
+
 /** Replaces blocks by a mapping { from: to } on the base id (properties kept), e.g. a palette swap after the fact. */
 export function swapBlocks(plan, mapping) {
     return plan.map(l => {

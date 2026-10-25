@@ -5,3 +5,4 @@ export * from './plan.mjs';
 export * from './palettes.mjs';
 export * from './components.mjs';
 export * from './build.mjs';
+export * from './walk.mjs';

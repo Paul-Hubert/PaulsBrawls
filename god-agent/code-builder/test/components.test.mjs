@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tower, wall, gatehouse, house, bridge, stairsBetween, castle, door } from '../lib/components.mjs';
+import { tower, squareTower, wall, gatehouse, house, bridge, stairsBetween, earthworks, castle, door } from '../lib/components.mjs';
 import { resolve, stats, rotate, mirror, isAir } from '../lib/plan.mjs';
 import { parseBlock, dirStep, rotateDir, DIRS } from '../lib/blockstate.mjs';
 import { palette, PALETTES } from '../lib/palettes.mjs';
@@ -165,4 +165,52 @@ test('palettes: presets are complete, overrides apply, typos are refused', () =>
     assert.ok([...t.values()].some(b => b === 'minecraft:deepslate_bricks'));
     assert.deepEqual(door('minecraft:oak_door', [0, 1, 0], 'south').map(l => l.block),
         ['minecraft:oak_door[facing=south,half=lower,hinge=left]', 'minecraft:oak_door[facing=south,half=upper,hinge=left]']);
+});
+
+test('squareTower: hollow storeys, 1×1 slits, a ladder through every floor, openings and a door, all supported', () => {
+    const t = squareTower({ w: 7, d: 9, height: 17, floors: [6, 11], ladder: 'north',
+        openings: [{ side: 'west', y: 12, width: 3, at: 6 }, { side: 'south', door: true }] });
+    const w = world(t);
+    assert.equal(w.get('3,6,4'), 'minecraft:spruce_planks', 'a floor at 6');
+    assert.ok(!w.get('3,3,4'), 'hollow below it');
+    for (const fy of [0, 6, 11]) {
+        assert.ok(isAir(w.get(K([2, fy + 2, 0]))), `slit at y=${fy + 2}`);
+        assert.ok(!isAir(w.get(K([2, fy + 3, 0]))) && !isAir(w.get(K([2, fy + 1, 0]))), 'a slit is one block tall');
+    }
+    const ladders = [...w].filter(([, b]) => /ladder/.test(b)).map(([k]) => k.split(',').map(Number));
+    assert.equal(ladders.length, 17, 'ladder from y=1 through the floors to the roof deck');
+    assert.ok(ladders.every(([x, , z]) => x === 5 && z === 1));
+    for (const z of [5, 6, 7]) for (const y of [12, 13]) assert.ok(isAir(w.get(K([0, y, z]))), `west opening at z=${z} y=${y}`);
+    assert.match(w.get('3,1,8'), /spruce_door\[.*facing=north/, 'the door faces in');
+    assert.match(w.get('-1,18,-1'), /stone_bricks/, 'the parapet stands on the overhang');
+    assertSupported(t, 'squareTower');
+    assertSupported(rotate(t, 1), 'squareTower turned');
+    assert.throws(() => squareTower({ height: 10, floors: [8] }), /height - 3/);
+    assert.throws(() => squareTower({ ladder: 'up' }), /ladder side/);
+});
+
+test('earthworks: a glacis falling away from the faces, a berm, then the moat; clear areas stay bare', () => {
+    const e = earthworks({ x0: 0, z0: 0, x1: 20, z1: 20, glacisHeight: 4, glacisRun: 8, berm: 3, moatWidth: 2, moatDepth: 3, clear: [[5, -8, 9, -1]] });
+    const w = world(e);
+    const top = (x, z) => { let y = 0; while (w.get(K([x, y + 1, z]))) y++; return y; };
+    assert.deepEqual([1, 2, 3, 4, 5, 6, 7, 8].map(d => top(12, -d)), [4, 4, 3, 3, 2, 2, 1, 1], 'two blocks per level, down to the berm');
+    assert.equal(top(12, -9), 0, 'the berm is bare');
+    assert.equal(top(7, -2), 0, 'cleared');
+    for (const y of [0, -1, -2]) assert.equal(w.get(K([12, y, -12])), 'minecraft:water', `moat at y=${y}`);
+    assert.ok(!w.get('12,-3,-12') && !w.get('12,0,-14'), 'three deep, two wide');
+    assert.ok(!w.get('10,1,10') && !w.get('10,0,10'), 'nothing inside the ring');
+    assert.equal(w.get('-12,0,-12'), 'minecraft:water', 'square corners');
+});
+
+test('wall overhang and the flat house roof', () => {
+    const w = world(wall({ from: [0, 0], to: [10, 0], height: 6, thickness: 3, crenellations: 'outer', outer: 'north', overhang: true }));
+    for (let x = 0; x <= 10; x++) assert.equal(w.get(K([x, 5, -2])), 'minecraft:polished_andesite', `lip at x=${x}`);
+    assert.ok(!w.get('5,5,2'), 'no lip on the inner face');
+    const h = house({ w: 7, d: 9, floorHeight: 4, roof: 'flat', palette: 'bronzeAge' });
+    const hw = world(h);
+    for (const [x, z] of [[0, 0], [6, 8], [3, 4]]) assert.equal(hw.get(K([x, 5, z])), 'minecraft:packed_mud', `roof deck at ${x},${z}`);
+    assert.match(hw.get('0,6,0'), /mud_brick_wall/, 'parapet');
+    assert.ok(!hw.get('3,6,4'), 'the deck is open inside the parapet');
+    assert.ok(isAir(hw.get('2,2,8')), 'bronzeAge windows are open');
+    assertSupported(h, 'flat house');
 });

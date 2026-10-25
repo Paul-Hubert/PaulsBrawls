@@ -30,6 +30,8 @@ and `lib/build.mjs` drives it. Reuse before you write: most structures are libra
 - Server rules (the server enforces them; a refusal is a French `McpError` message, read it and fix the
   script): 128 blocks per call, **at most 4 sub-builds open on the whole server**, anchors within ±256 of the
   pivot, a sub-build idle for 2 minutes is closed. A placed block replaces what is there, air included.
+  Creatures (`spawn_mobs`, this ticket only, never a `/build` one): 16 per call, 128 per sub-build, mobs only, no
+  Wither or Ender Dragon. `node mcp-build.mjs` says whether the running mod has `spawn_mobs`.
 
 ## The library (`lib/index.mjs` re-exports everything)
 
@@ -50,14 +52,19 @@ later layers win where they overlap (an `air` layer after a wall cuts the openin
   Rotating or mirroring a plan fixes every blockstate (stair facing and shape, log axis, door hinge, fence sides).
   `resolve` (used by build) keeps the last block per position, computes stair corner shapes and fence/wall
   connections from the final layout, and orders passes: air, structure (bottom-up), attachments last.
-- **Palettes** (`palettes.mjs`): presets `stoneCastle`, `oakCottage`, `sandstone`, `deepslate`; roles `wall trim
+  Creatures are kept apart from blocks: `spawns(entity, points, { nbt, persistent })` makes a group (a point is
+  the block the feet stand in), `placeSpawns(groups, { at, turns, mirror })` moves groups like `placeAt`.
+- **Palettes** (`palettes.mjs`): presets `stoneCastle`, `oakCottage`, `sandstone`, `deepslate`, `bronzeAge` (mud
+  brick, open windows: its `glass` is air); roles `wall trim
   floor accent pillar roof roofStairs roofSlab glass light door fence path bars stairs`.
   `palette('oakCottage', { roof: 'minecraft:bricks' })`. An unknown role throws.
 - **Components** (`components.mjs`), every option defaulted, `palette` = a preset name or a palette:
   - `tower({ radius, height, roof: 'flat'|'cone'|'dome'|'none', crenellations, overhang, stairs: 'auto'|'spiral'|'ladder'|'none', openings: [{ side, y, height, width, door }], landings: [y], windowSides, windowEvery, lights })` — centred on (0,0,0).
-  - `wall({ from: [x, z], to: [x, z], y, height, thickness, walkway, crenellations: 'both'|'outer'|'none', outer, lights })` — axis-aligned.
+  - `squareTower({ w, d, height, storey, floors: [y], ladder: side|null, openings: [{ side, y, height, width, door, at }], slits, crenellations, overhang, lights })` — footprint x 0..w-1, z 0..d-1; hollow storeys, 1 × 1 arrow slits, a ladder through every floor.
+  - `wall({ from: [x, z], to: [x, z], y, height, thickness, walkway, crenellations: 'both'|'outer'|'none', outer, overhang, lights })` — axis-aligned.
   - `gatehouse({ width (odd), height, depth, sideWidth, upperFloor, bodyHeight, sideDoors, turrets, portcullis })` — passage along Z centred on x = 0, front at z = 0.
-  - `house({ w, d, floors, floorHeight, roof: 'gable'|'hip', door: side, furnish })` — footprint x 0..w-1, z 0..d-1.
+  - `house({ w, d, floors, floorHeight, roof: 'gable'|'hip'|'flat', door: side, furnish })` — footprint x 0..w-1, z 0..d-1.
+  - `earthworks({ x0, z0, x1, z1, glacisHeight, glacisRun, berm, moatWidth, moatDepth, clear: [[x0, z0, x1, z1]], glacis, water })` — glacis, berm and moat around a wall ring's outer faces.
   - `bridge({ length, width, rise, railings, lights, pierDepth })` — along +X, centred on z = 0.
   - `stairsBetween(a, b, { width, block, landing, fill })` — a straight flight, either end higher.
   - `castle({ size, towerRadius, towerHeight, towerRoof, wallHeight, wallThickness, gate: {…} })` — composes all of the above.
@@ -67,8 +74,16 @@ later layers win where they overlap (an `air` layer after a wall cuts the openin
   call, runs air + structure in up to `parallel` sub-builds (by region), then attachments in one more, ends
   every sub-build in `finally`, retries for 10 min while the 4 slots are busy, refuses over 5 000 positions
   without `yes`, and prints the server-confirmed count. `cliOptions()` reads `--build --yes --anchor=x,y,z
-  --parallel=N --key=value`. `sliceMap(plan, y)` prints an ASCII top view of one level.
-- Example: `examples/castle.mjs` (`node examples/castle.mjs --size=20 --palette=deepslate`).
+  --parallel=N --key=value`. `sliceMap(plan, y)` prints an ASCII top view of one level. `build(plan, { spawns })`
+  spawns the groups once every block stands (128 per sub-build); the dry run counts them; over 32 needs `yes`.
+- **Walk** (`walk.mjs`): `walk(plan, start, { walker })` → `{ cells, out }`, the feet cells a creature reaches on
+  foot from `start` over the plan (flat ground below y = 0), and `out`, the first cell where it got away (null:
+  contained). Walkers: `villager` (opens wooden doors only), `zombie` (breaks them), `player` (opens doors, gates,
+  trapdoors), `small` (1 high). Conservative: jumps 1, never onto a fence or wall block, falls any height, swims,
+  climbs ladders and vines; it does not model digging, teleporting, flying or spiders climbing walls.
+- Example: `examples/castle.mjs` (`node examples/castle.mjs --size=20 --palette=deepslate`). A large one:
+  `build-bronze-town.mjs` (a walled town with a barbican, a citadel and a keep, ~110 000 positions). Build
+  briefs for particular structures live in `prompts/` (e.g. `prompts/labor-prison.md`).
 
 ## Blocks
 

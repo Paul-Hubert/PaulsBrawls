@@ -16,16 +16,24 @@ const SLOTS_BUSY = /tournent déjà/;
 
 const fmtBox = b => (b ? `x ${b.min[0]}..${b.max[0]}, y ${b.min[1]}..${b.max[1]}, z ${b.min[2]}..${b.max[2]} (${b.size.join('×')})` : 'empty');
 
-/** A printable summary: totals, the bounding box (relative to the anchor), counts per material. */
-export function summary(plan, { label = 'build', anchor = [0, 0, 0] } = {}) {
+/** A printable summary: totals, the bounding box (relative to the anchor), counts per material, then per creature. */
+export function summary(plan, { label = 'build', anchor = [0, 0, 0], spawns = [] } = {}) {
     const s = stats(plan);
+    const mobs = {};
+    for (const g of spawns) mobs[g.entity] = (mobs[g.entity] || 0) + g.points.length;
     const lines = [
         `${label}: ${s.total} positions (${s.solid} blocks + ${s.air} air), anchor offset ${anchor.join(',')} from the pivot`,
         `  bounding box (from the anchor): ${fmtBox(s.bbox)}`,
         ...Object.entries(s.byMaterial).sort((a, b) => b[1] - a[1]).map(([id, n]) => `  ${String(n).padStart(6)}  ${id}`),
+        ...(spawns.length ? [`  creatures, spawned last: ${spawnCount(spawns)}`] : []),
+        ...Object.entries(mobs).map(([id, n]) => `  ${String(n).padStart(6)}  ${id}`),
     ];
     return { text: lines.join('\n'), stats: s };
 }
+
+const spawnCount = groups => groups.reduce((n, g) => n + g.points.length, 0);
+export const MOBS_PER_SUB_BUILD = 128;
+export const CONFIRM_SPAWNS_OVER = 32;
 
 /**
  * A top-down ASCII map of one horizontal slice (y, from the anchor) of a resolved plan: one character per block,
@@ -100,18 +108,22 @@ async function placeLayers(sb, layers, log, tag) {
 
 /**
  * Dry run unless live. Options: label, anchor [ax, ay, az] (offset from the pivot), live, yes, parallel (1..4),
- * client (an open() result; opened from the environment when missing), waitSlotsMs (default 10 min), retryMs, log.
- * Returns { summary, placed, confirmed } (placed/confirmed only when live).
+ * spawns (groups from spawns(): creatures spawned once every block stands, ≤ 128 per sub-build), client (an
+ * open() result; opened from the environment when missing), waitSlotsMs (default 10 min), retryMs, log.
+ * Returns { summary, placed, confirmed, spawned } (placed/confirmed/spawned only when live).
  */
 export async function build(plan, {
-    label = 'build', anchor = [0, 0, 0], live = false, yes = false, parallel = 1, client = null,
+    label = 'build', anchor = [0, 0, 0], live = false, yes = false, parallel = 1, client = null, spawns = [],
     waitSlotsMs = 10 * 60_000, retryMs = 15_000, confirmOver = CONFIRM_OVER, log = console.log,
 } = {}) {
-    const sum = summary(plan, { label, anchor });
+    const sum = summary(plan, { label, anchor, spawns });
     log(sum.text);
     if (!live) { log('  (dry run: nothing placed; pass --build to place it)'); return { summary: sum }; }
     if (sum.stats.total > confirmOver && !yes) {
         throw new Error(`${label}: ${sum.stats.total} positions is over ${confirmOver}; ask first, then re-run with --yes`);
+    }
+    if (spawnCount(spawns) > CONFIRM_SPAWNS_OVER && !yes) {
+        throw new Error(`${label}: ${spawnCount(spawns)} creatures is over ${CONFIRM_SPAWNS_OVER}; ask first, then re-run with --yes`);
     }
     const n = Math.max(1, Math.min(4, parallel));
     const { layers } = resolve(plan);
@@ -142,9 +154,26 @@ export async function build(plan, {
             await sb.end().catch(e => log(`  ${tag}: end_sub_build failed: ${e.message}`));
         }
     }
+    // Phase 3: creatures, into the finished structure; one sub-build per 128.
+    let spawned = 0;
+    const queue = spawns.flatMap(g => g.points.map(p => ({ g, p })));
+    for (let i = 0, part = 1; i < queue.length; i += MOBS_PER_SUB_BUILD, part++) {
+        const tag = `${label}:mobs${queue.length > MOBS_PER_SUB_BUILD ? `#${part}` : ''}`;
+        const sb = await beginWithRetry(client, tag, anchor, { waitSlotsMs, retryMs, log });
+        try {
+            const batch = queue.slice(i, i + MOBS_PER_SUB_BUILD);
+            for (const g of new Set(batch.map(e => e.g))) {
+                const n = await sb.spawn(g.entity, batch.filter(e => e.g === g).map(e => e.p), { nbt: g.nbt, persistent: g.persistent });
+                spawned += n;
+                log(`  ${tag} ${n} × ${g.entity}`);
+            }
+        } finally {
+            await sb.end().catch(e => log(`  ${tag}: end_sub_build failed: ${e.message}`));
+        }
+    }
     const a = client.pivot ? [client.pivot.x + anchor[0], client.pivot.y + anchor[1], client.pivot.z + anchor[2]] : anchor;
-    log(`${label}: placed ${sum.stats.total} positions, server confirmed ${confirmed}. Anchor (absolute): ${a.join(', ')}`);
-    return { summary: sum, placed: sum.stats.total, confirmed, anchorAbs: a };
+    log(`${label}: placed ${sum.stats.total} positions, server confirmed ${confirmed}${queue.length ? `; ${spawned} of ${queue.length} creatures spawned` : ''}. Anchor (absolute): ${a.join(', ')}`);
+    return { summary: sum, placed: sum.stats.total, confirmed, spawned, anchorAbs: a };
 }
 
 /**

@@ -46,6 +46,16 @@ export const PALETTES = {
         fence: 'minecraft:deepslate_brick_wall', path: 'minecraft:cobbled_deepslate', bars: 'minecraft:iron_bars',
         stairs: 'minecraft:polished_deepslate_stairs',
     },
+    // Mud brick on limestone socles, cedar timber, bronze (waxed copper) fittings. Windows are open (glass is air),
+    // so a 1-tall window is a slit nothing walks through.
+    bronzeAge: {
+        wall: 'minecraft:mud_bricks', trim: 'minecraft:smooth_sandstone', floor: 'minecraft:spruce_planks',
+        accent: 'minecraft:waxed_cut_copper', pillar: 'minecraft:stripped_spruce_log', roof: 'minecraft:packed_mud',
+        roofStairs: 'minecraft:mud_brick_stairs', roofSlab: 'minecraft:mud_brick_slab', glass: 'minecraft:air',
+        light: 'minecraft:lantern', door: 'minecraft:spruce_door', fence: 'minecraft:mud_brick_wall',
+        path: 'minecraft:packed_mud', bars: 'minecraft:waxed_copper_grate',
+        stairs: 'minecraft:smooth_sandstone_stairs',
+    },
 };
 
 export const ROLES = Object.keys(PALETTES.stoneCastle);
