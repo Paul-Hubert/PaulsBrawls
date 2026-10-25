@@ -45,3 +45,10 @@ test('the way in: reachable cells include the far side of an open gate', () => {
     assert.ok(cells.has('3,1,0'), 'through the opening');
     assert.throws(() => walk(pen(2), mid, { walker: 'ghost' }), /unknown walker/);
 });
+
+test('a plan over 150 000 positions is walked (no Math.min(...) stack overflow)', () => {
+    const big = concat(layer('minecraft:stone', box([0, -5, 0], [449, -5, 449])), pen(2)); // 202 500 positions underground
+    const { cells, out } = walk(big, mid);
+    assert.equal(cells.size, 25);
+    assert.equal(out, null);
+});

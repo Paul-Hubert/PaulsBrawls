@@ -6,6 +6,7 @@
 
 import { resolve } from './plan.mjs';
 import { parseBlock } from './blockstate.mjs';
+import { bbox } from './geom.mjs';
 
 const WOOD_DOOR = /^minecraft:(?!iron_door$)[a-z_]+_door$/;
 /** Built-in walkers: height in blocks, and the blocks it gets through. */
@@ -35,10 +36,10 @@ export function walk(plan, start, { walker = 'villager', ground = 0, margin = 2,
         const id = parseBlock(l.block).id;
         for (const p of l.points) at.set(`${p[0]},${p[1]},${p[2]}`, id);
     }
-    const xs = [], ys = [], zs = [];
-    for (const k of at.keys()) { const [x, y, z] = k.split(',').map(Number); xs.push(x); ys.push(y); zs.push(z); }
-    const box = xs.length
-        ? { x0: Math.min(...xs) - margin, x1: Math.max(...xs) + margin, z0: Math.min(...zs) - margin, z1: Math.max(...zs) + margin, y1: Math.max(...ys) + margin }
+    // bbox loops: Math.min(...xs) overflows the call stack past ~120 000 points.
+    const b = bbox([...at.keys()].map(k => k.split(',').map(Number)));
+    const box = b
+        ? { x0: b.min[0] - margin, x1: b.max[0] + margin, z0: b.min[2] - margin, z1: b.max[2] + margin, y1: b.max[1] + margin }
         : { x0: -margin, x1: margin, z0: -margin, z1: margin, y1: margin };
     const block = (x, y, z) => at.get(`${x},${y},${z}`) ?? (y <= ground ? 'minecraft:ground' : 'minecraft:air');
     const opens = id => !!W.opens && W.opens.test(id);

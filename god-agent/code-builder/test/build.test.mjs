@@ -91,3 +91,10 @@ test('cliOptions and sliceMap', () => {
     const m = sliceMap(concat(layer('minecraft:stone', [[0, 0, 0], [1, 0, 0]]), layer('minecraft:oak_stairs[facing=east]', [[0, 0, 1]])), 0);
     assert.match(m, /\n##\n>\./);
 });
+
+test('sliceMap and a parallel live build handle plans over 150 000 positions', async () => {
+    const big = layer('minecraft:stone', box([0, 0, 0], [449, 0, 449])); // 202 500 positions
+    assert.match(sliceMap(big, 0).split('\n')[0], /x 0\.\.449/);
+    const r = await build(big, { live: true, yes: true, parallel: 4, client: fakeClient(), log: () => {} });
+    assert.equal(r.confirmed, 202500);
+});

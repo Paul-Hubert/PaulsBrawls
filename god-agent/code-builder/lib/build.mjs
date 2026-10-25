@@ -9,6 +9,7 @@
 // server slots are busy (another /build) is retried every 15 s for up to `waitSlotsMs`.
 
 import { resolve, stats } from './plan.mjs';
+import { bbox } from './geom.mjs';
 
 export const CONFIRM_OVER = 5000;
 const MAX_PER_CALL = 128;
@@ -52,8 +53,8 @@ export function sliceMap(plan, y) {
     }
     const all = layers.flatMap(l => l.points);
     if (!all.length) return '(empty)';
-    const xs = all.map(p => p[0]), zs = all.map(p => p[2]);
-    const [x0, x1, z0, z1] = [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)];
+    const { min, max } = bbox(all); // not Math.min(...): it overflows the call stack on big plans
+    const [x0, x1, z0, z1] = [min[0], max[0], min[2], max[2]];
     const rows = [`y=${y}  x ${x0}..${x1} (east ->), z ${z0}..${z1} (south down); stairs ^v<> = facing`];
     for (let z = z0; z <= z1; z++) {
         let r = '';
@@ -68,8 +69,8 @@ export function sliceMap(plan, y) {
 function regions(layers, n) {
     const pts = layers.flatMap(l => l.points);
     if (n <= 1 || pts.length < 2 * MAX_PER_CALL) return [layers];
-    const xs = pts.map(p => p[0]), zs = pts.map(p => p[2]);
-    const axis = Math.max(...xs) - Math.min(...xs) >= Math.max(...zs) - Math.min(...zs) ? 0 : 2;
+    const { size } = bbox(pts);
+    const axis = size[0] >= size[2] ? 0 : 2;
     const sorted = pts.map(p => p[axis]).sort((a, b) => a - b);
     const cuts = Array.from({ length: n - 1 }, (_, i) => sorted[Math.floor(((i + 1) * sorted.length) / n)]);
     const regionOf = v => cuts.filter(c => v >= c).length;

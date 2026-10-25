@@ -84,7 +84,9 @@ later layers win where they overlap (an `air` layer after a wall cuts the openin
   climbs ladders and vines; it does not model digging, teleporting, flying or spiders climbing walls.
 - Example: `examples/castle.mjs` (`node examples/castle.mjs --size=20 --palette=deepslate`). A large one:
   `build-bronze-town.mjs` (a walled town with a barbican, a citadel and a keep, ~110 000 positions);
-  `build-labor-prison.mjs` (cells, stalls and fields proven escape-proof with `walk`, creatures spawned last). Build
+  `build-labor-prison.mjs` (cells, stalls and fields proven escape-proof with `walk`, creatures spawned last);
+  `build-babylon.mjs` (a 180 × 180 walled city, ~205 000 positions: Ishtar Gate, ziggurat, terraced gardens, pixel-art
+  reliefs, a village with a villager per house, a light grid over every open surface). Build
   briefs for particular structures live in `prompts/` (e.g. `prompts/labor-prison.md`).
 
 ## Blocks
