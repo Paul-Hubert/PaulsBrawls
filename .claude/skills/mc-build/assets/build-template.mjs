@@ -18,7 +18,7 @@ export const plan = [];
 const add = (...parts) => plan.push(...concat(...parts));
 const creatures = [];   // spawn groups, from spawns()
 const zones = [];       // { name, start: [x, y, z], bounds: [x0, y0, z0, x1, y1, z1] }: a creature there must stay inside
-const outside = null;   // a feet cell beyond the walls for the zombie check, e.g. [S / 2, 1, S + 20]; null: none
+const outside = null;   // a feet cell beyond the walls for the zombie checks, e.g. [S / 2, 1, S + 20]; null: none
 
 /** A point (or [dx, dz] direction with dir) through a placeAt transform, to keep data in step with the blocks. */
 const at = (p, { at: a = [0, 0, 0], turns = 0 }) => { const q = rotatePoint(p, turns); return [q[0] + a[0], q[1] + a[1], q[2] + a[2]]; };
@@ -34,8 +34,8 @@ const at = (p, { at: a = [0, 0, 0], turns = 0 }) => { const q = rotatePoint(p, t
 // ------------------------------------------------------------------------------------------------------- proofs
 
 /**
- * From every zone's start a villager and a 1-high walker must stay inside the zone's bounds; zombies from
- * `outside` must reach no zone. Prints one line per check; returns false if any fails.
+ * From every zone's start a villager and a 1-high walker must stay inside the zone's bounds; zombies and baby
+ * zombies from `outside` must reach no zone. Prints one line per check; returns false if any fails.
  */
 function prove() {
     const inside = (b, [x, y, z]) => x >= b[0] && x <= b[3] && y >= b[1] && y <= b[4] && z >= b[2] && z <= b[5];
@@ -57,11 +57,14 @@ function prove() {
         const r = [outside[0] - 8, outside[2] - 8, outside[0] + 8, outside[2] + 8];
         for (const l of layers) for (const [x, , z] of l.points) { r[0] = Math.min(r[0], x - 8); r[1] = Math.min(r[1], z - 8); r[2] = Math.max(r[2], x + 8); r[3] = Math.max(r[3], z + 8); }
         const ring = layer('minecraft:barrier', Array.from({ length: 48 }, (_, y) => rectRing(r[0], r[1], r[2], r[3], y + 1)).flat());
-        const z = walk(concat(layers, ring), outside, { walker: 'zombie' });
-        const reached = zones.filter(zn => [...z.cells].some(k => inside(zn.bounds, k.split(',').map(Number))));
-        const good = !z.out && !reached.length;
-        ok &&= good;
-        console.log(`  walk ${good ? 'ok  ' : 'FAIL'} ${'zombie from outside'.padEnd(20)} ${z.cells.size} cells, reaches ${reached.map(x => x.name).join(', ') || 'no zone'}`);
+        // Baby zombies too: a 1 × 1 arrow slit at y = 2 lets them into a tower that an adult cannot enter.
+        for (const walker of ['zombie', 'small']) {
+            const z = walk(concat(layers, ring), outside, { walker });
+            const reached = zones.filter(zn => [...z.cells].some(k => inside(zn.bounds, k.split(',').map(Number))));
+            const good = !z.out && !reached.length;
+            ok &&= good;
+            console.log(`  walk ${good ? 'ok  ' : 'FAIL'} ${`${walker} from outside`.padEnd(20)} ${z.cells.size} cells, reaches ${reached.map(x => x.name).join(', ') || 'no zone'}`);
+        }
     }
     return ok;
 }

@@ -23,6 +23,7 @@ around it and the lessons that live builds taught. `references/` has the details
 - `references/proofs.md`: proving with `walk` that an enclosure holds. Read it when the build contains or keeps out a creature: a pen, a prison, a farm, a keep, a gate.
 - `assets/build-template.mjs`: the skeleton of a build script. Copy it to `god-agent/code-builder/build-<name>.mjs`.
 - `scripts/survey.mjs`: block info and terrain maps around the pivot in one call.
+- `scripts/slice.mjs`: top views of one window of a build script's plan, at the levels you ask for.
 
 ## The rules that keep the server and the secrets safe
 
@@ -96,11 +97,14 @@ Known builds in the production world (October 2026; the survey is the truth, thi
 | Ziggurat and Ishtar gate | around x 9, z 264 |
 | Cottage | around x 44, z 147 |
 | Unidentified builds | x 11..122, z 589..860 |
+| Babylon (moat included; built 2026-10-26 by `build-babylon.mjs`, anchor -195, -61, 924; 41 villagers, so re-run its blocks with `--mobs=none`) | x -214..4, z 897..1123 |
 
 ### 4. Plan
 
 Decide the footprint, height, zones, palette, the components with their main parameters, the anchors, and the
-creature counts. Size it to the request and the free space.
+creature counts. Size it to the request and the free space. A short request ("make babylon, walled out, village,
+ziggurat, hanging gardens, fort and palace with great gate") is a brief to design in full: choose the parts, their
+layout and the details yourself, generously, and bring them all in one plan.
 
 Then write the script and dry-run it **before** asking for the go: nothing is placed, and the user can approve the
 plan, the size and the creature count in one round trip instead of three, while the ticket is still running.
@@ -126,6 +130,13 @@ Copy `../../.claude/skills/mc-build/assets/build-template.mjs` to `build-<name>.
   the script.
 - Parameters at the top or from `--key=value` (`cliOptions()` parses numbers and booleans); the header comment
   says what the structure is, its local frame, how to run it, and which parameters give a variant.
+- **Decorations over a component can block it.** A course, band or ring you draw around a gatehouse also runs
+  across its passage (it did on Babylon's gates): leave the passage cells out.
+- **Big plans** (Babylon was ~205 000 positions): never spread a whole point list into `Math.min(...)`,
+  `Math.max(...)` or `push(...)`. Past ~120 000 arguments it overflows the call stack. Loop, or use `bbox()`
+  (`walk`, `sliceMap` and `build` do).
+- No Python on this PC: for edits at several spots, use Edit, or `node -` with a heredoc that throws when a search
+  string is missing (so a missed replace fails loudly), keeping CRLF in the files that use it (`.gitignore`).
 
 ### 6. Prove, dry-run, inspect
 
@@ -134,6 +145,9 @@ Copy `../../.claude/skills/mc-build/assets/build-template.mjs` to `build-<name>.
 - `--slice=N` prints the top view at y = N. Look at the ground floor (y = 1), a door or window level (y = 2), each
   walkway or floor level, and the roofs. Check doors, openings, stairs (`^v<>` show the facing) and that parts touch
   where they should and nowhere else. The legend's letters repeat past ~40 materials, so read it alongside the counts.
+  Look at the y = 1 slice of every gate and doorway. Past ~100 blocks wide the full slice is unreadable: run
+  `node ../../.claude/skills/mc-build/scripts/slice.mjs build-<name>.mjs --win=x0,z0,x1,z1 --y=1,9` for one window
+  (plan coordinates) at each level, area by area.
 - **Enclosures:** the containment proof runs inside the script on every dry run and throws if it fails
   (`references/proofs.md`). Never build an enclosure whose proof fails.
 - `node --test` again if you touched `lib/`.

@@ -43,8 +43,9 @@ Print one line per zone (`ok` / `FAIL`, cells reached, where it got out or stray
 
 `walk` returns at the first cell past the plan's box, so a walk that starts outside stops almost at once and proves
 nothing. Wrap the plan in a **barrier ring** that is never built (a tall `minecraft:barrier` wall around the plan and
-the start), walk from the start outside with `zombie` (and `small` for baby zombies), then check that no reached cell
-falls in any zone. The template does this when `outside` is set.
+the start), walk from the start outside with `zombie` **and** `small` (baby zombies), then check that no reached cell
+falls in any zone. The template does both when `outside` is set. Don't skip `small`: on Babylon, `zombie` from
+outside passed while `small` got into the city (the tower-slit row below).
 
 ## What usually fails, and the fix
 
@@ -56,6 +57,7 @@ falls in any zone. The template does this when `outside` is set.
 | out through a door | a wooden door | an iron door, its button on the guard side |
 | into the next enclosure | a shared door or gap | its own walls; check strays, not only `out` |
 | zombie reaches a zone | a wooden door on the way in, a gap, a pool to swim | iron doors or fence gates on the only way in; close the gap |
+| `small` from outside reaches a zone, `zombie` does not | `squareTower`'s 1 × 1 arrow slit at y = 2 on a wall tower's outer face: in through it, up the tower's ladder, then off the walkway's open inner edge | fill the tower's whole y = 2 ring with wall except its door (Babylon's `midTower` / `cornerTower`); slits higher up stay |
 
 ## Line of sight and panic, for open-air zones
 

@@ -81,6 +81,20 @@ must hold a creature (a 1 × 1 hole at y = 2 lets a baby or a chicken through): 
   soul torch 10.
 - In open ground where a post would be in the way, set a full light block (shroomlight, froglight, sea lantern)
   flush into the ground course.
+- **Over a whole build:** `surfaceLights()` in `build-babylon.mjs` puts a shroomlight on a 10-block grid. In each
+  grid column it replaces the topmost plain floor, roof or ground block. If the top is a crop or flower, it lights the
+  soil under it and removes the plant. If the top is stairs, leaves, water or the like, it tries the 8 neighbouring
+  columns. Run it after everything else is composed and before the proofs. It only reaches open surfaces, so closed
+  rooms need their own lights. Move it into `lib/` (with a test) when a second build needs it.
+- **Where the components leave dark spots** (and what fixed them on Babylon):
+  - `squareTower` gives one lantern per storey, in a corner. Up to about 7 × 7 inside that is enough. From 9 × 9 the
+    far corner stays dark, so hang a lantern under each ceiling (`[0, floor - 1, 0]` in the tower's frame).
+  - A hanging lantern 10 up (a tall hall) barely lights the floor: add light blocks flush in the floor every 6.
+  - `house()` has one lantern per storey, in the middle. A long house (w 23) has dark ends: add lanterns.
+  - Narrow terraces (a ziggurat's 4-wide rings) miss most points of a 10-block grid: lanterns on the edge every 8,
+    off the side where stairs arrive.
+  - A dark tower storey matters even behind an iron door. A mob that spawns there climbs the ladder to the walkway
+    and drops into the enclosure.
 
 ## Job sites, beds and bells are points of interest
 
