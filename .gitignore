@@ -123,3 +123,6 @@ run/super-flat-builds/
 
 # minecraft-mcp-server's own history from before it was vendored (it was a separate repo)
 minecraft-mcp-server/.git-standalone/
+
+# The standalone server scripts/setup-server.mjs makes (worlds, jars, configs)
+/server/

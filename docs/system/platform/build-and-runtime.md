@@ -238,6 +238,30 @@ loopback port against the official MCP Java SDK client ([aigod/mcp-servers.md](.
 | `AgentE2ETest` | 8 | `AgentTurns`, `AgentClient`, `god-agent/` | The REAL opencode binary with the repo's agents, the real MCP servers; only the LLM (`ScriptedLlm`) and Minecraft are stand-ins. Skipped without `OPENCODE_BIN` ([aigod/external-agent.md](../aigod/external-agent.md)) |
 | `ClaudeCodeE2ETest` | 13 | `AgentTurns`, `ClaudeCodeClient`, `god-agent/claude-code/` | The REAL Claude Code (`claude -p`) with the repo's agents, the real MCP servers; only the LLM (`ScriptedAnthropic`, Anthropic Messages API) and Minecraft are stand-ins. Skipped without `CLAUDE_BIN` |
 
+## A standalone server: `scripts/setup-server.mjs`
+
+`run/` holds no server jar (Loom fetches the server for `runServer`; `run/README.md`). For a server like production
+(`PaulsBrawlsVanilla`: a Fabric launcher `server.jar`, installer 1.0.3 with loader 0.16.14, plus Fabric API
+0.116.3, the mod, WorldEdit, Simple Voice Chat and Universal Shops, `run.bat` = `java -Xmx10G -jar server.jar`),
+`node scripts/setup-server.mjs [dir]` builds one from a clone into `server/` (gitignored):
+- **Launcher:** `fabric-server-launch.jar` from `meta.fabricmc.net`, for `minecraft_version` and `loader_version` in
+  `gradle.properties`, installer 1.1.2. On first start it downloads Mojang's server jar and the libraries. Mojang's jar
+  may not be redistributed, so it is not in git or LFS.
+- **Mods:** Fabric API `fabric_version` from the Fabric Maven, checked against its published `.sha512`; the other three
+  pinned to production's versions from the Modrinth CDN, SHA-512 hard-coded (equal to production's jars).
+  `--no-extras` skips those three. Older versions of the same jars are removed.
+- **The mod:** `gradlew remapJar`, not `build`, whose `copyToMods`/`copyToClientMods` finalizers write to
+  `mods_folder`. `--skip-build` reuses `build/libs`.
+- **Runtime files, never overwritten:** `prompt.txt`, `build_prompt.txt`, `mcp_config.properties` (from `run/`, the
+  same as production's), and `god-agent/claude-code/`. `server.properties` is seeded from `run/`'s with port 25565,
+  RCON off (its password is public here), `online-mode=false`.
+- **Start scripts and EULA:** `start.bat` / `start.sh` (`--memory`, default 4G). `eula.txt` is written only with
+  `--accept-eula`.
+
+Verified 2026-10-26 from a fresh clone: setup ran, and a first start loaded all 5 mods (86 with Fabric API's modules)
+and the mod's initializer, then stopped at the EULA. After that stop the JVM does not exit: WorldEdit's "WorldEdit
+Session Manager" `java.util.Timer` is non-daemon (thread dump), so the window must be closed.
+
 ## `run/` — the dev server working directory (`./gradlew runServer`)
 
 Tracked files (`git ls-files run/`):

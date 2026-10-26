@@ -44,7 +44,17 @@ features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 ```
 
 The Gradle wrapper is tracked (`gradlew`, `gradlew.bat`, `gradle/wrapper/`, Gradle 9.1.0), so the commands above
-work on a clean clone; the first run downloads Gradle.
+work on a clean clone; the first run downloads Gradle. `run/` holds no server jar: Loom fetches the server for
+`runServer` ([run/README.md](run/README.md)).
+
+**A standalone server like production** (`PaulsBrawlsVanilla`) from a clone: `node scripts/setup-server.mjs [dir]`
+(default `server/`, gitignored). It downloads the Fabric server launcher for the versions in `gradle.properties`,
+Fabric API, and the production server's other mods (WorldEdit 7.3.8, Simple Voice Chat 2.5.33, Universal Shops
+1.7.1, pinned and SHA-512-checked). It then builds the mod with `remapJar`, not `build`, whose finalizers copy into
+`mods_folder`. It copies `prompt.txt`, `build_prompt.txt`, `mcp_config.properties` and `god-agent/claude-code/`,
+seeds `server.properties` from `run/` (port 25565, RCON off, `online-mode=false` for the bots), and writes
+`start.bat`/`start.sh`. `--accept-eula` writes `eula.txt`; `--no-extras`, `--skip-build` and `--memory=6G` adjust it.
+Mojang's server jar is not redistributable: the launcher downloads it on first start.
 
 `build` is finalized by two `Copy` tasks (`copyToMods`, `copyToClientMods`) in [build.gradle:153-172](build.gradle:153).
 They copy the remapped jar into the paths set by `mods_folder` / `client_mods_folder` in

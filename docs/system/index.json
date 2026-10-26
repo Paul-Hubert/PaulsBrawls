@@ -1988,6 +1988,7 @@
         "The Gradle wrapper is tracked; IDE files are not",
         "CI — what really exists",
         "Java unit tests (`src/test/java/com/paul/brawl/`)",
+        "A standalone server: `scripts/setup-server.mjs`",
         "`run/` — the dev server working directory (`./gradlew runServer`)",
         "`minecraft-mcp-server/` — vendored",
         "`supervisor/` — legacy v1 run-supervision protocol",
