@@ -2,7 +2,7 @@
 id: platform.build-and-runtime
 title: Build, packaging and runtime layout of the Fabric mod
 system: platform
-summary: How the paulsbrawls Fabric mod is built (Loom, versions, jar-in-jar deps, copy tasks), what is tracked in run/, CI reality, the Java unit tests, the empty minecraft-mcp-server gitlink, supervisor/ and .claude/.
+summary: How the paulsbrawls Fabric mod is built (Loom, versions, jar-in-jar deps, copy tasks), what is tracked in run/, CI reality, the Java unit tests, the vendored minecraft-mcp-server, supervisor/ and .claude/.
 tags: [gradle, loom, junit, tests, fabric, build, jar-in-jar, langchain4j, okhttp, mixins, assets, ci, run-dir, server-properties, submodule, supervisor]
 sources: [build.gradle, settings.gradle, gradle.properties, .gitignore, .gitattributes, src/main/resources/fabric.mod.json, src/main/resources/paulsbrawls.mixins.json, src/client/resources/paulsbrawls.client.mixins.json, src/main/java/com/paul/brawl/mixin/ExampleMixin.java, src/client/java/com/paul/brawl/mixin/client/ExampleClientMixin.java, src/main/resources/assets/paulsbrawls/items/coin.json, src/main/resources/assets/paulsbrawls/models/item/coin.json, src/main/resources/assets/paulsbrawls/lang/en_us.json, src/main/resources/assets/paulsbrawls/lang/fr_fr.json, run/server.properties, run/mcp_config.properties, run/eula.txt, run/prompt.txt, supervisor/SUPERVISOR.md, supervisor/check.ps1, .claude/launch.json, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/test/java/com/paul/brawl/TradeMathTest.java, src/test/java/com/paul/brawl/BuildGuardTest.java, src/test/java/com/paul/brawl/FlagGlowTest.java, src/test/java/com/paul/brawl/GodClampsTest.java, src/test/java/com/paul/brawl/BlockInfoJsonTest.java, src/test/java/com/paul/brawl/EdenRetryTest.java, src/test/java/com/paul/brawl/GibberMathTest.java, src/test/java/com/paul/brawl/GodToolGateTest.java, src/test/java/com/paul/brawl/ImageMimeTest.java, src/test/java/com/paul/brawl/ItemIdsTest.java, src/test/java/com/paul/brawl/GodActionQueueTest.java, src/test/java/com/paul/brawl/McpBench.java, src/test/java/com/paul/brawl/McpLiveProbe.java]
 verified_at: 98cb908
@@ -13,8 +13,8 @@ verified_at: 98cb908
 **TL;DR** — `paulsbrawls` is a Fabric Loom project (Minecraft 1.21.1, Java 21, yarn mappings, split
 client/main source sets). LangChain4j + Jackson + OkHttp/Okio/Kotlin stdlib are shipped jar-in-jar via
 `include`. `build` is finalized by two `Copy` tasks that drop the remapped jar into Paul's local mods
-folders. In this checkout there is **no Gradle wrapper and no `.github/` directory** (both are gitignored),
-`minecraft-mcp-server/` is an **empty gitlink** (no `.gitmodules`), and the Java side has eleven JUnit 5 suites
+folders. The Gradle wrapper is tracked, there is **no `.github/` directory** (gitignored),
+`minecraft-mcp-server/` is **vendored** (since 2026-10-26), and the Java side has eleven JUnit 5 suites
 for its Minecraft-free helpers (`./gradlew test`).
 
 ## Toolchain and versions
@@ -173,13 +173,14 @@ the listed package and its simple name to the matching array.
 The item itself is registered in code (`Money.java:18-23`); see
 [../gibber/money-system.md](../gibber/money-system.md).
 
-## Gradle wrapper and IDE files are not tracked
+## The Gradle wrapper is tracked; IDE files are not
 
-`.gitignore` (CRLF line endings) ignores, among others: `.github` (line 1), `.gradle`, `.vscode`,
-`build`, `gradle` (the wrapper directory), `gradlew*` (line 6), `bin/`, `out/`, `.idea/`, `*.jar`, `*.log`.
-So a fresh clone has **no `gradlew`/`gradlew.bat` and no `gradle/wrapper/`** — the `./gradlew …` commands
-in CLAUDE.md assume a locally present wrapper (or use a system Gradle compatible with Loom 1.11).
-`.gitattributes` still declares `/gradlew text eol=lf` and `*.bat text eol=crlf`.
+`gradlew` (executable), `gradlew.bat` and `gradle/wrapper/` (Gradle 9.1.0) are tracked since 2026-10-26, so
+`./gradlew …` works on a fresh clone (`!gradle-wrapper.jar` exempts the wrapper from `*.jar`).
+`.gitattributes` declares `/gradlew text eol=lf` and `*.bat text eol=crlf`. `.gitignore` (CRLF line endings)
+still ignores, among others: `.github` (line 1), `.gradle`, `.vscode`, `build`, `bin/`, `out/`, `.idea/`,
+`*.jar`, `*.log`, and the mod's runtime files in `run/` (`llm_config.properties`, `god_agent.properties`
+(the MCP token and agent password), `bridge_config.properties`, the dev copy `run/god-agent/`).
 
 ## CI — what really exists
 
@@ -268,17 +269,17 @@ the server root for production):
 | `proof_screen.png` | `ImageReceiver` (debug save; the call is commented out at `ImageReceiver.java:22`) | — |
 | `world/data/gibbers_state.dat` | `PlayerPersistentState` (Minecraft `PersistentState`) | on world save after a change |
 
-## `minecraft-mcp-server/` — an empty gitlink
+## `minecraft-mcp-server/` — vendored
 
-`git ls-files -s minecraft-mcp-server` shows mode `160000` (a submodule gitlink) pointing at commit
-`c0e56f2b96b8084b05a83c8882156c6ee1656c61`, but there is **no `.gitmodules`** file, so
-`git submodule update` cannot fetch it and the directory is empty in this checkout. Everything CLAUDE.md
-says about the unified bridge, MCP tools, the v1 village, `verify-mcp-tools.mjs` targets, etc. lives in
-that missing tree.
+Until 2026-10-26 it was a gitlink (mode `160000`, commit `c0e56f2b96b8084b05a83c8882156c6ee1656c61`) with
+**no `.gitmodules`**, three commits ahead of `yuniko-software/minecraft-mcp-server` and pushed nowhere, so a
+clone got an empty directory. Its files are now tracked in this repo (its own `.gitignore` applies; its upstream
+`.github/` is ignored by the root rule), and its old history sits in the ignored `minecraft-mcp-server/.git-standalone/`
+on the machine that vendored it (rename it back to `.git` to use it as a repo again). Run `npm install` in it.
 
-> ⚠ Unverified: all Node code under `minecraft-mcp-server/` (bridge routes, MCP tools, v1 village admin
-> API on 8766). Only the Java clients that call it (`BotBridgeClient`, `MCPGateway`, `VillageCommand`) can
-> be verified.
+> ⚠ Unverified: these docs were written while the tree was missing. Its Node code (bridge routes, MCP tools,
+> v1 village admin API on 8766) has not been re-checked against them; only the Java clients that call it
+> (`BotBridgeClient`, `MCPGateway`, `VillageCommand`) are verified.
 
 ## `supervisor/` — legacy v1 run-supervision protocol
 
@@ -317,8 +318,8 @@ cannot run from a clean clone.
 
 ## Gotchas & known issues
 
-- No Gradle wrapper and no CI workflows are tracked (both gitignored) — CLAUDE.md's `ci.yml` description is unverifiable.
-- `minecraft-mcp-server/` gitlink has no `.gitmodules` entry; the directory is empty.
+- No CI workflows are tracked (`.github` is gitignored) — CLAUDE.md's `ci.yml` description is unverifiable.
+- `minecraft-mcp-server/` is vendored since 2026-10-26; the Node-side pages have not been re-verified against it.
 - `build.gradle:43-47` comment about the stdio MCP transport is stale (code uses `HttpMcpTransport`).
 - `jackson-bom` is pinned to 2.18.2 while the other Jackson artifacts are 2.19.1 (`build.gradle:72`).
 - `fabric.mod.json` `contact`/`suggests` are template leftovers.

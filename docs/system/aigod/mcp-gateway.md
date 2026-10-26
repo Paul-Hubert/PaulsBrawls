@@ -30,8 +30,9 @@ turn. Unknown tool names in a model reply are forwarded to MCP if they are in th
 connect failures back off 30 s; dispatch failures return an error string and force a reconnect on the next call. Config is
 `mcp_config.properties`; admin control is `/mcp` and `/mcp reload`.
 
-> ⚠ Unverified: `minecraft-mcp-server/` is an empty submodule gitlink in this checkout (gitlink `c0e56f2`), so the Node MCP
-> server, its SSE route, its tool list and its Mineflayer plugins cannot be checked. Only the Java client is verified.
+> ⚠ Unverified: `minecraft-mcp-server/` (vendored since 2026-10-26, formerly an empty gitlink to `c0e56f2`) was missing when
+> this page was written: the Node MCP server, its SSE route, its tool list and its Mineflayer plugins have not been
+> re-checked against it. Only the Java client is verified.
 
 ## Components
 

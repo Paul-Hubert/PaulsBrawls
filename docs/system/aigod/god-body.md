@@ -40,8 +40,8 @@ vanish) into `BotBridgeClient` POSTs that are async and never throw. One player 
 (8 per tick); `Wait` deferrals run on `GodScheduler`. The avatar is made invulnerable on `Appear` and mortal again on every
 exit, including `/godbody off` and server stop (bug #5); the bot is auto-op'd on join so it can `/tp`.
 
-> ⚠ Unverified: the Node side of the bridge (`minecraft-mcp-server/`, an empty submodule gitlink in this checkout) is not
-> available. Everything below about what a route *does* inside Mineflayer (e.g. `/appear` → `bot.chat("/tp …")`,
+> ⚠ Unverified: the Node side of the bridge (`minecraft-mcp-server/`, vendored since 2026-10-26) was missing when this
+> page was written and has not been re-checked. Everything below about what a route *does* inside Mineflayer (e.g. `/appear` → `bot.chat("/tp …")`,
 > `/chat` stripping a leading `/`, gesture names `jump`/`sneak`) comes from `GOD_BOT_INTEGRATION_PLAN.md` §4,
 > `VERIFICATION.md` and `CLAUDE.md`, not from code. Only the Java client side is verified.
 

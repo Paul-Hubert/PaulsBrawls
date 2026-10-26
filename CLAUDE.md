@@ -43,8 +43,8 @@ features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 ./gradlew clean
 ```
 
-**No Gradle wrapper in a clean clone:** `gradlew*` and `gradle/` are gitignored (`.gitignore:5-6`). Use a
-local wrapper copy or a system `gradle` (generate one with `gradle wrapper`) before the commands above work.
+The Gradle wrapper is tracked (`gradlew`, `gradlew.bat`, `gradle/wrapper/`, Gradle 9.1.0), so the commands above
+work on a clean clone; the first run downloads Gradle.
 
 `build` is finalized by two `Copy` tasks (`copyToMods`, `copyToClientMods`) in [build.gradle:153-172](build.gradle:153).
 They copy the remapped jar into the paths set by `mods_folder` / `client_mods_folder` in
@@ -96,9 +96,10 @@ npm run rebuild-stats  # rebuild derived views from the journal by replay (must 
 
 ### The unified bridge (drives the Java AI-God's avatar + MCP tools)
 
-> `minecraft-mcp-server/` is a **gitlink (`c0e56f2`) with no `.gitmodules`**, so a clean clone has an empty
-> directory. Every Node-side claim below (tool count, plugins, bridge routes) comes from that external tree and
-> cannot be checked from this repo.
+> `minecraft-mcp-server/` is **vendored** in this repo (since 2026-10-26; it was a separate clone of
+> `yuniko-software/minecraft-mcp-server` with three local commits, last `c0e56f2`). Its upstream `.github/` CI files
+> are not tracked. Its old history is kept locally in the ignored `minecraft-mcp-server/.git-standalone/`. The
+> docs/system pages about the Node side predate it and were written from the Java clients only.
 
 ```powershell
 cd minecraft-mcp-server

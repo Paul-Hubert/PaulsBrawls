@@ -112,7 +112,7 @@ constants and commands) → `## Gotchas & known issues` → `## Related`.
 - **Citations** are written as `` `path:line` `` or `` `path:a-b` `` at `verified_at`. Paths are repo-relative, or a bare
   Java file name when it is unique in the repo.
 - **`> ⚠ Unverified`** marks a claim that could not be checked against code in this checkout. That covers the Node
-  bridge/MCP server (`minecraft-mcp-server/` is an empty submodule) and behaviour inside Minecraft, Fabric or library
+  bridge/MCP server (`minecraft-mcp-server/`, vendored since 2026-10-26 but not re-checked) and behaviour inside Minecraft, Fabric or library
   internals.
 - French in-game strings are quoted verbatim.
 

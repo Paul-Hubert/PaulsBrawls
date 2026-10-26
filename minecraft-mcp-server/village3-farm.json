@@ -1,0 +1,52 @@
+{
+  "settings": {
+    "llm": {
+      "provider": "openai",
+      "baseUrl": "",
+      "model": "gpt-5.4-mini",
+      "apiKey": "",
+      "timeoutMs": 120000,
+      "temperature": 0.9,
+      "maxTokens": 4096
+    },
+    "concurrency": 3,
+    "heartbeatSeconds": 10,
+    "botCooldownMs": 15000,
+    "earshotRadius": 32,
+    "settlementUrl": "http://127.0.0.1:8767",
+    "dataDir": ".village3-farm-data",
+    "maxConversationTurns": 8
+  },
+  "bots": [
+    {
+      "name": "Jacques",
+      "role": "gatherer",
+      "personality": "Glaneur jovial, plaisante tout le temps, ramasse graines et bois pour tout le village. Crée et raffine sa manière de ramasser des graines avec un skill.",
+      "home": {
+        "x": -34,
+        "y": 76,
+        "z": 24
+      }
+    },
+    {
+      "name": "Jean",
+      "role": "farmer",
+      "personality": "Jeune fermier zélé, cherche la meilleure terre près de l'eau pour son champ, réclame sa houe à Pierre après avoir récolté assez de graines, puis houe de la terre près de l'eau et plante les graines, en répétant ce processus pour récolter et créer du pain",
+      "home": {
+        "x": -34,
+        "y": 76,
+        "z": 24
+      }
+    },
+    {
+      "name": "Pierre",
+      "role": "crafter",
+      "personality": "Artisan perfectionniste, déteste le travail bâclé. Rêve d'équiper tout le village en outils en bois : il récolte le bois et en crée des outils à donner à Jean. Il doit aussi créer une table de craft, et un chest, dont il donnera les coordonnées aux autres",
+      "home": {
+        "x": -34,
+        "y": 76,
+        "z": 24
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "settings": {
+    "llm": {
+      "provider": "custom",
+      "baseUrl": "http://127.0.0.1:8799/v1",
+      "model": "eval-mock",
+      "apiKey": "eval-not-needed",
+      "timeoutMs": 30000,
+      "temperature": 0,
+      "maxTokens": 512
+    },
+    "embeddings": { "mode": "off", "model": "" },
+    "dayPlanning": false,
+    "spontaneousChat": false,
+    "concurrency": 2,
+    "heartbeatSeconds": 1000000,
+    "botCooldownMs": 1500,
+    "earshotRadius": 32,
+    "settlementUrl": "http://127.0.0.1:8767",
+    "dataDir": ".village-data-eval",
+    "maxConversationTurns": 8
+  },
+  "bots": [
+    { "name": "EvalMargaux",     "role": "farmer",     "personality": "Fermière d'évaluation, calme et méthodique.",      "home": { "x": 10,  "y": 64, "z": 10 },  "workstation": { "x": 18,  "y": 64, "z": 14 },  "chest": { "x": 11,  "y": 64, "z": 9 } },
+    { "name": "EvalFirmin",      "role": "farmer",     "personality": "Deuxième fermier d'évaluation, stoïque.",          "home": { "x": 26,  "y": 64, "z": 8 },   "workstation": { "x": 30,  "y": 64, "z": 16 },  "chest": { "x": 27,  "y": 64, "z": 7 } },
+    { "name": "EvalBrindille",   "role": "lumberjack", "personality": "Bûcheronne d'évaluation, efficace.",                "home": { "x": -8,  "y": 64, "z": 20 },  "workstation": { "x": -20, "y": 64, "z": 30 },  "chest": { "x": -7,  "y": 64, "z": 19 } },
+    { "name": "EvalCaillou",     "role": "miner",      "personality": "Mineur d'évaluation, taciturne.",                   "home": { "x": -14, "y": 64, "z": 2 },   "workstation": { "x": -22, "y": 64, "z": -6 },  "chest": { "x": -13, "y": 64, "z": 1 } },
+    { "name": "EvalEnclume",     "role": "crafter",    "personality": "Artisan d'évaluation, précis.",                     "home": { "x": 4,   "y": 64, "z": -12 }, "workstation": { "x": 8,   "y": 64, "z": -16 }, "chest": { "x": 5,   "y": 64, "z": -13 } },
+    { "name": "EvalEcu",         "role": "shopkeeper", "personality": "Marchande d'évaluation, vive.",                     "home": { "x": 0,   "y": 64, "z": 0 },   "workstation": { "x": 2,   "y": 64, "z": 4 },   "chest": { "x": 1,   "y": 64, "z": -1 } },
+    { "name": "EvalRempart",     "role": "guard",      "personality": "Garde d'évaluation, loyal.",                        "home": { "x": 14,  "y": 64, "z": -4 },  "workstation": { "x": 16,  "y": 64, "z": 0 } },
+    { "name": "EvalVigie",       "role": "guard",      "personality": "Garde d'évaluation, vigilante.",                    "home": { "x": -4,  "y": 64, "z": -8 },  "workstation": { "x": -6,  "y": 64, "z": -4 } },
+    { "name": "EvalGoujon",      "role": "fisher",     "personality": "Pêcheur d'évaluation, patient.",                    "home": { "x": 22,  "y": 64, "z": 24 },  "workstation": { "x": 28,  "y": 64, "z": 30 },  "chest": { "x": 23,  "y": 64, "z": 23 } },
+    { "name": "EvalBourgmestre", "role": "mayor",      "personality": "Maire d'évaluation, solennel.",                     "home": { "x": 6,   "y": 64, "z": 6 },   "workstation": { "x": 6,   "y": 64, "z": 6 } }
+  ]
+}

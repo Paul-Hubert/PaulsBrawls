@@ -27,7 +27,7 @@ Bots log in only when the Java `/villagers start <scenario>` command POSTs to th
 | LLM | OpenAI-compatible chat completions, two tiers (`strong`, `fast`) resolved from `providers.json` (`eden/src/main.ts:125-138`). |
 | State | SQLite `.eden-data/eden.db` (append-only `journal` table + a `snapshots` table holding God's working state) + JSON/JS files under `.eden-data/` (see [process-config-and-boot.md](process-config-and-boot.md)). |
 | Ports | Holds exactly one port: admin `8770` (bound to `127.0.0.1`, `eden/src/admin/server.ts:131-138`). Calls out to the Java settlement listener `:8767` and the Minecraft server (default `127.0.0.1:25599`). |
-| Not Eden | The Fabric mod (`src/`), the Java `/pray` AI God, and the unified bridge in `minecraft-mcp-server/` (an empty submodule in this checkout). Eden's only Java contacts are the settlement listener, op-on-join, and the `/villagers` command — see [java-integration.md](java-integration.md). |
+| Not Eden | The Fabric mod (`src/`), the Java `/pray` AI God, and the unified bridge in `minecraft-mcp-server/` (vendored in this repo since 2026-10-26). Eden's only Java contacts are the settlement listener, op-on-join, and the `/villagers` command — see [java-integration.md](java-integration.md). |
 
 Two distinct "Gods" exist in the repo: the Java AI-God (`LLMBot`, driven by the unified bridge) and Eden's
 village God (`Dieu`). `config.ts` warns if `god.name` is `LLMBot` (`eden/src/config.ts:378-380`) and throws if a

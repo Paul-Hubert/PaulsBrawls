@@ -46,10 +46,10 @@ commit `98cb908`; where the code and older docs disagree, see [VERIFICATION-NOTE
 
 | Runtime | Path | Start | Status in this checkout |
 |---|---|---|---|
-| Fabric mod (JVM) | `src/` | `./gradlew build` / `runServer` (note: `gradlew` and `gradle/` are **gitignored**, so a clean clone has no wrapper) | Active. Server features load **only on a dedicated server** (`DedicatedServerModInitializer`). |
+| Fabric mod (JVM) | `src/` | `./gradlew build` / `runServer` (the wrapper is tracked since 2026-10-26) | Active. Server features load **only on a dedicated server** (`DedicatedServerModInitializer`). |
 | Eden | `eden/` | `npx tsx src/main.ts eden.json` | Active. |
-| Unified bridge + MCP | `minecraft-mcp-server/` | `npm run unified …` | A gitlink (mode 160000, commit `c0e56f2`) **with no `.gitmodules`** — the directory is empty, so its source cannot be verified here. Java-side contracts are documented from the Java client code. |
-| v1 village brain | `minecraft-mcp-server/src/village/` | `npm run village` | Legacy; same absent submodule. Only reachable from Java via `/village status|pause|resume` (:8766). |
+| Unified bridge + MCP | `minecraft-mcp-server/` | `npm run unified …` | Vendored since 2026-10-26 (it was a gitlink to `c0e56f2` with no `.gitmodules`, empty in a clone). These pages predate that: Java-side contracts are documented from the Java client code, the Node source was not re-verified. |
+| v1 village brain | `minecraft-mcp-server/src/village/` | `npm run village` | Legacy; in the same vendored tree. Only reachable from Java via `/village status|pause|resume` (:8766). |
 
 There are **two Gods**: the Java `/pray` God (avatar login `LLMBot`, chat prefix `Dieu : `) and Eden's village God
 (avatar login `Dieu`). They are separate programs and never share a login.

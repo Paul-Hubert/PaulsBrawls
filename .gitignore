@@ -2,8 +2,6 @@
 .gradle
 .vscode
 build
-gradle
-gradlew*
 
 ##############################
 ## Java
@@ -112,3 +110,16 @@ run/llm_config.properties
 
 # Log4j output of test JVMs started in the repo root (gradle test, McpLatencyMain)
 /logs/
+
+##############################
+## Local runtime state in run/ (written by the mod, or copied in by hand)
+##############################
+# god_agent.properties holds the MCP token and the agent password: never track it
+run/god_agent.properties
+run/bridge_config.properties
+# the dev server's copy of god-agent/ (god-agent/README.md, step 2)
+run/god-agent/
+run/super-flat-builds/
+
+# minecraft-mcp-server's own history from before it was vendored (it was a separate repo)
+minecraft-mcp-server/.git-standalone/

@@ -1,0 +1,82 @@
+{
+  "settings": {
+    "llm": {
+      "provider": "openai",
+      "baseUrl": "",
+      "model": "gpt-4o-mini",
+      "apiKey": "",
+      "timeoutMs": 120000,
+      "temperature": 0.9,
+      "maxTokens": 4096
+    },
+    "concurrency": 3,
+    "heartbeatSeconds": 60,
+    "botCooldownMs": 15000,
+    "earshotRadius": 32,
+    "settlementUrl": "http://127.0.0.1:8767",
+    "dataDir": ".village-data",
+    "maxConversationTurns": 8
+  },
+  "bots": [
+    {
+      "name": "Brindille",
+      "role": "lumberjack",
+      "personality": "Bûcheronne joviale, plaisante tout le temps, compte ses bûches comme un dragon son or. Dépose toujours sa récolte dans le coffre commun pour qu'Enclume puisse fabriquer des outils.",
+      "home": {
+        "x": 28,
+        "y": 64,
+        "z": 5
+      },
+      "workstation": {
+        "x": 24,
+        "y": 64,
+        "z": -8
+      },
+      "chest": {
+        "x": 32,
+        "y": 64,
+        "z": -3
+      }
+    },
+    {
+      "name": "Copeau",
+      "role": "lumberjack",
+      "personality": "Jeune bûcheron zélé, veut impressionner Brindille, ne s'arrête jamais avant d'avoir rempli le coffre commun de bûches.",
+      "home": {
+        "x": 25,
+        "y": 64,
+        "z": 5
+      },
+      "workstation": {
+        "x": 27,
+        "y": 64,
+        "z": -5
+      },
+      "chest": {
+        "x": 32,
+        "y": 64,
+        "z": -3
+      }
+    },
+    {
+      "name": "Enclume",
+      "role": "crafter",
+      "personality": "Artisan perfectionniste, déteste le travail bâclé. Rêve d'équiper tout le village en outils en bois : il prend les bûches du coffre commun, fabrique haches, pioches et pelles, et les range dans ce même coffre.",
+      "home": {
+        "x": 37,
+        "y": 64,
+        "z": 5
+      },
+      "workstation": {
+        "x": 35,
+        "y": 64,
+        "z": -2
+      },
+      "chest": {
+        "x": 32,
+        "y": 64,
+        "z": -3
+      }
+    }
+  ]
+}

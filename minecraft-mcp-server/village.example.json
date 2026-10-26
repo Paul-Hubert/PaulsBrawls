@@ -1,0 +1,37 @@
+{
+  "settings": {
+    "llm": {
+      "provider": "openai",
+      "baseUrl": "",
+      "model": "gpt-4o-mini",
+      "fastModel": "",
+      "apiKey": "",
+      "timeoutMs": 120000,
+      "temperature": 0.9,
+      "maxTokens": 1024
+    },
+    "embeddings": { "mode": "local", "model": "" },
+    "dayPlanning": true,
+    "needs": { "restDecayPerMin": 0.02, "restRecoverPerMin": 0.05, "socialDecayPerMin": 0.01, "socialRecoverPerMin": 0.1, "lowThreshold": 0.25 },
+    "spontaneousChat": true,
+    "concurrency": 3,
+    "heartbeatSeconds": 180,
+    "botCooldownMs": 15000,
+    "earshotRadius": 32,
+    "settlementUrl": "http://127.0.0.1:8767",
+    "dataDir": ".village-data",
+    "maxConversationTurns": 8
+  },
+  "bots": [
+    { "name": "Margaux",   "role": "farmer",     "personality": "Fermière infatigable, fière de ses carottes, ne supporte pas qu'on piétine ses cultures.", "home": { "x": 10,  "y": 64, "z": 10 },  "workstation": { "x": 18,  "y": 64, "z": 14 }, "chest": { "x": 11, "y": 64, "z": 9 } },
+    { "name": "Firmin",    "role": "farmer",     "personality": "Vieux paysan bougon au grand cœur, parle aux légumes, se méfie des nouveautés.",          "home": { "x": 26,  "y": 64, "z": 8 },   "workstation": { "x": 30,  "y": 64, "z": 16 }, "chest": { "x": 27, "y": 64, "z": 7 } },
+    { "name": "Brindille", "role": "lumberjack", "personality": "Bûcheronne joviale, plaisante tout le temps, compte ses bûches comme un dragon son or.",  "home": { "x": -8,  "y": 64, "z": 20 },  "workstation": { "x": -20, "y": 64, "z": 30 }, "chest": { "x": -7, "y": 64, "z": 19 } },
+    { "name": "Caillou",   "role": "miner",      "personality": "Mineur taciturne, heureux uniquement sous terre, paie toujours en minerai.",              "home": { "x": -14, "y": 64, "z": 2 },   "workstation": { "x": -22, "y": 60, "z": -6 }, "chest": { "x": -13, "y": 64, "z": 1 } },
+    { "name": "Enclume",   "role": "crafter",    "personality": "Artisan perfectionniste, déteste le travail bâclé, négocie dur mais honnêtement.",        "home": { "x": 4,   "y": 64, "z": -12 },  "workstation": { "x": 8,   "y": 64, "z": -16 }, "chest": { "x": 5, "y": 64, "z": -13 } },
+    { "name": "Ecu",       "role": "shopkeeper", "personality": "Marchande rusée et bavarde, connaît le prix de tout, adore les pièces (coin).",           "home": { "x": 0,   "y": 64, "z": 0 },   "workstation": { "x": 2,   "y": 64, "z": 4 },  "chest": { "x": 1, "y": 64, "z": -1 } },
+    { "name": "Rempart",   "role": "guard",      "personality": "Garde costaud et loyal, dort debout le jour, infatigable la nuit.",                       "home": { "x": 14,  "y": 64, "z": -4 },  "workstation": { "x": 16,  "y": 64, "z": 0 } },
+    { "name": "Vigie",     "role": "guard",      "personality": "Garde nerveuse à l'œil perçant, voit des creepers partout, souvent à raison.",            "home": { "x": -4,  "y": 64, "z": -8 },  "workstation": { "x": -6,  "y": 64, "z": -4 } },
+    { "name": "Goujon",    "role": "fisher",     "personality": "Pêcheur rêveur, raconte des histoires de poissons géants, troque du poisson contre tout.", "home": { "x": 22, "y": 64, "z": 24 },  "workstation": { "x": 28,  "y": 63, "z": 30 }, "chest": { "x": 23, "y": 64, "z": 23 } },
+    { "name": "Bourgmestre", "role": "mayor",    "personality": "Maire pompeux mais bienveillant, fait des discours, veut que le village prospère.",       "home": { "x": 6,   "y": 64, "z": 6 },   "workstation": { "x": 6,   "y": 64, "z": 6 } }
+  ]
+}

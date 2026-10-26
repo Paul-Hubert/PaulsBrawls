@@ -70,10 +70,10 @@ Driven by [docs/22-rework-followup-prompt.md](../22-rework-followup-prompt.md); 
 | Claim (where) | Code reality |
 |---|---|
 | CI: `.github/workflows/ci.yml` and `eden-ci.yml` gate the build and upload releases (CLAUDE.md) | `.github` is gitignored (`.gitignore:1`) and absent from all of git history. No CI is defined in the repo. |
-| `./gradlew build` etc. (CLAUDE.md) | `gradlew*` and `gradle/` are gitignored (`.gitignore:5-6`), so a clean clone has no wrapper. |
+| ~~`./gradlew build` etc. (CLAUDE.md)~~ | **Fixed 2026-10-26:** the wrapper (`gradlew*`, `gradle/wrapper/`) is tracked; it used to be gitignored, so a clean clone had none. |
 | Copy tasks at `build.gradle:117` (CLAUDE.md) | At `build.gradle:144-163`. |
 | `build.gradle:43-47` comment: MCP uses `StdioMcpTransport` | `MCPGateway` uses `HttpMcpTransport` (`MCPGateway.java:16,219`). |
-| `minecraft-mcp-server/` source is in the repo (CLAUDE.md, README) | Gitlink `c0e56f2` with **no `.gitmodules`**; the directory is empty. All Node-side claims (25 MCP tools, plugin list, bridge routes) are unverifiable here. |
+| `minecraft-mcp-server/` source is in the repo (CLAUDE.md, README) | **Vendored 2026-10-26**: it was gitlink `c0e56f2` with **no `.gitmodules`** (empty in a clone). The Node-side claims (25 MCP tools, plugin list, bridge routes) have not yet been re-checked against the now-present source. |
 | Hard-won lessons "R1–R61" (CLAUDE.md, eden/CLAUDE.md) | `docs/07` runs to R72; `pool.ts` cites R66. |
 | "~400 tests" (CLAUDE.md) | 62 test files and ~530 `test(` call sites. |
 
