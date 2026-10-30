@@ -38,8 +38,8 @@ The server must be in offline mode (bots have no Microsoft accounts). `/bots spa
 "stuck" timer) plus an optional A* budget. A patch that no longer applies fails the install (`--error-on-fail`), and
 `tests/patches.test.ts` fails if one is missing. `patch-package` is a runtime dependency, so `npm install --omit=dev`
 applies them too. To change a patch: edit the file in `node_modules`, then `npx patch-package <package>`.
-`squad.json`'s `pathfinding.astarBudgetMs` (default 0 = off, at most 50) caps the A* time of all bots together per
-50 ms window.
+`squad.json`'s `pathfinding.astarBudgetMs` (default 20, 0 = off, at most 50) caps the A* time of all bots together per
+50 ms window: measured better than no cap at 10-30 moving bots (docs/31 §11).
 
 ## In game
 

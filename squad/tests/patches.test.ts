@@ -345,11 +345,12 @@ test('patch 3e, pathfinder AStar.setBudget: all searches share ms per 50 ms wind
   assert.ok(sc.ms >= 8, `no budget: the tickTimeout (took ${sc.ms.toFixed(1)} ms)`);
 });
 
-test('config: pathfinding.astarBudgetMs defaults to 0 (off), is validated, and applyPathfinding reaches the patched AStar', async () => {
+test('config: pathfinding.astarBudgetMs defaults to 20, is validated, and applyPathfinding reaches the patched AStar', async () => {
   const { parseConfig, applyPathfinding, ConfigError } = await import('../src/config');
   const env = { PAULSBRAWLS_SQUAD_TOKEN: 't' };
-  assert.deepEqual(parseConfig({}, env).pathfinding, { astarBudgetMs: 0, workers: 0 });
-  assert.deepEqual(parseConfig({ pathfinding: { astarBudgetMs: 20 } }, env).pathfinding, { astarBudgetMs: 20, workers: 0 });
+  assert.deepEqual(parseConfig({}, env).pathfinding, { astarBudgetMs: 20, workers: 0 });
+  assert.deepEqual(parseConfig({ pathfinding: { astarBudgetMs: 0 } }, env).pathfinding, { astarBudgetMs: 0, workers: 0 });
+  assert.deepEqual(parseConfig({ pathfinding: { astarBudgetMs: 10 } }, env).pathfinding, { astarBudgetMs: 10, workers: 0 });
   for (const bad of [-1, 51, '20', Number.NaN]) {
     assert.throws(() => parseConfig({ pathfinding: { astarBudgetMs: bad } }, env), ConfigError, `astarBudgetMs ${String(bad)}`);
   }

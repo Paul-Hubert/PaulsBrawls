@@ -38,6 +38,8 @@ export interface PathfindingConfig {
   /**
    * The A* time all bots together may spend per 50 ms window (mineflayer-pathfinder's AStar.setBudget, added by
    * patches/). A search that finds the window spent waits for the next one with its best partial path. 0 = no budget.
+   * Default 20 ms (DEFAULT_ASTAR_BUDGET_MS): measured better than no budget in every moving phase at 10-30 bots
+   * (docs/31 §11): uncapped searches fill the loop, slow every bot down, and time out more.
    */
   astarBudgetMs: number;
   /**
@@ -47,6 +49,8 @@ export interface PathfindingConfig {
   workers: number;
 }
 
+/** The A* budget when squad.json sets none (docs/31 §11). */
+export const DEFAULT_ASTAR_BUDGET_MS = 20;
 /** A budget above the 50 ms window would never bind. */
 export const MAX_ASTAR_BUDGET_MS = 50;
 
@@ -102,7 +106,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
     if (limitsRaw[k] !== undefined) limits[k] = num(limitsRaw[k], DEFAULT_LIMITS[k], `limits.${k}`);
   }
   const pathRaw = (o.pathfinding ?? {}) as Record<string, unknown>;
-  const astarBudgetMs = num(pathRaw.astarBudgetMs, 0, 'pathfinding.astarBudgetMs');
+  const astarBudgetMs = num(pathRaw.astarBudgetMs, DEFAULT_ASTAR_BUDGET_MS, 'pathfinding.astarBudgetMs');
   if (astarBudgetMs > MAX_ASTAR_BUDGET_MS) {
     throw new ConfigError(`squad.json: pathfinding.astarBudgetMs is per 50 ms window, so at most ${MAX_ASTAR_BUDGET_MS}, got ${astarBudgetMs}`);
   }

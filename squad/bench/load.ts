@@ -72,7 +72,7 @@ const VARIANT = {
   /** Overrides of the runtime's Movements (hardening.defaultMovements), e.g. canDig=false,allow1by1towers=false. */
   movements: Object.fromEntries((opt('movements') ?? '').split(',').filter(Boolean).map((kv) => kv.split('=')).map(([k, v]) => [k, v === 'true' ? true : v === 'false' ? false : Number(v)])) as Record<string, unknown>,
   /** The runtime's own A* budget (config pathfinding.astarBudgetMs, the patched AStar.setBudget), not a prototype. */
-  astarBudget: Number(opt('astar-budget') ?? 0),
+  astarBudget: opt('astar-budget') === undefined ? undefined : Number(opt('astar-budget')),
   /** The runtime's pathfinding worker pool (config pathfinding.workers; capped at the cores but one). */
   workers: Number(opt('workers') ?? 0),
   thinkOnCompute: flag('think-on-compute'),
@@ -199,7 +199,7 @@ async function main(): Promise<void> {
   }
 
   const cfg = parseConfig(
-    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: { astarBudgetMs: VARIANT.astarBudget, workers: VARIANT.workers } },
+    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: { ...(VARIANT.astarBudget === undefined ? {} : { astarBudgetMs: VARIANT.astarBudget }), workers: VARIANT.workers } },
     { PAULSBRAWLS_SQUAD_TOKEN: TOKEN },
   );
   const rt = await start(cfg, { connectBots: true, installGuards: true, pool: { createBot, setup } });
