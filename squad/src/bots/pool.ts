@@ -46,6 +46,40 @@ interface Record_ {
   movements?: unknown;
   /** When the current instance last received a packet (the deaf-bot watchdog). */
   lastPacket: number;
+  /** When the current instance spawned (0 while not online): a bot online for part of a window is not "slow". */
+  onlineAt: number;
+  /** The vitals counters (docs/32 C), zeroed by {@link BotPool.readMeters}. */
+  meter: BotCounters;
+}
+
+/**
+ * Cheap per-bot counters, the same signals the load bench reads (bench/lib/probe.ts). They are plain numbers bumped
+ * by the bot's own listeners, so a physics tick costs one increment and allocates nothing; the vitals sampler reads
+ * and zeroes them every 10 s. They live on the pool's record, not on the bot instance, so a reconnect keeps them.
+ */
+export interface BotCounters {
+  /** `physicsTick` events: 20 a second when the bot is smooth; mineflayer drops ticks when the loop is late. */
+  ticks: number;
+  /** Final outcomes of pathfinder searches (`path_update`; a 'partial' result is a search still going). */
+  pathSuccess: number;
+  pathNoPath: number;
+  pathTimeout: number;
+  pathOther: number;
+  /** Path resets by reason (`path_reset`: stuck, block_updated, chunk_loaded, goal_moved…). */
+  resets: Record<string, number>;
+  /** Times the deaf-bot watchdog ended this bot. */
+  deafTrips: number;
+}
+
+/** One bot's counters since the last reset ({@link BotPool.readMeters}), with when it came online (0 = not online). */
+export interface BotMeterReading extends BotCounters {
+  name: string;
+  status: BotStatus;
+  onlineAt: number;
+}
+
+function newCounters(): BotCounters {
+  return { ticks: 0, pathSuccess: 0, pathNoPath: 0, pathTimeout: 0, pathOther: 0, resets: {}, deafTrips: 0 };
 }
 
 export interface BotPoolOptions {
@@ -90,6 +124,7 @@ export class BotPool extends EventEmitter {
       if (rec.status !== 'online' || !rec.bot || now - rec.lastPacket <= deafMs) continue;
       rec.lastReason = `deaf: no packet for ${Math.round((now - rec.lastPacket) / 1000)} s`;
       logger.warn(`bot:${rec.name}`, `${rec.lastReason}; reconnecting`);
+      rec.meter.deafTrips++;
       rec.lastPacket = now; // one end per silence
       try {
         rec.bot.end('deaf');
@@ -102,7 +137,7 @@ export class BotPool extends EventEmitter {
   /** Add a bot and queue its login (staggered). Re-adding a known name is a no-op. */
   add(name: string): void {
     if (this.records.has(name)) return;
-    this.records.set(name, { name, bot: null, status: 'offline', attempts: 0, lastPacket: Date.now() });
+    this.records.set(name, { name, bot: null, status: 'offline', attempts: 0, lastPacket: Date.now(), onlineAt: 0, meter: newCounters() });
     this.enqueue(name);
   }
 
@@ -143,6 +178,22 @@ export class BotPool extends EventEmitter {
 
   names(): string[] {
     return [...this.records.keys()];
+  }
+
+  /**
+   * Every bot's counters since the last reset; with `reset`, zero them (the vitals sampler is the one reader that
+   * resets, every 10 s). Reset reasons keep their keys at 0, so a counted reason never allocates again.
+   */
+  readMeters(reset: boolean): BotMeterReading[] {
+    const out: BotMeterReading[] = [];
+    for (const rec of this.records.values()) {
+      const m = rec.meter;
+      out.push({ name: rec.name, status: rec.status, onlineAt: rec.status === 'online' ? rec.onlineAt : 0, ...m, resets: { ...m.resets } });
+      if (!reset) continue;
+      m.ticks = m.pathSuccess = m.pathNoPath = m.pathTimeout = m.pathOther = m.deafTrips = 0;
+      for (const k in m.resets) m.resets[k] = 0;
+    }
+    return out;
   }
 
   stop(): void {
@@ -213,6 +264,8 @@ export class BotPool extends EventEmitter {
       } catch (e) {
         logger.warn(`bot:${rec.name}`, `post-spawn setup failed: ${(e as Error).message}`);
       }
+      rec.onlineAt = Date.now();
+      this.meter(rec, bot);
       this.setStatus(rec, 'online');
       logger.info(`bot:${rec.name}`, 'online');
       this.emit('online', rec.name, bot);
@@ -232,10 +285,36 @@ export class BotPool extends EventEmitter {
     });
   }
 
+  /**
+   * The vitals listeners, on this bot instance only: they go with it when it ends, and the identity check (R66)
+   * keeps a superseded instance from counting into its replacement's record.
+   */
+  private meter(rec: Record_, bot: Bot): void {
+    const m = rec.meter;
+    bot.on('physicsTick', () => {
+      if (rec.bot === bot) m.ticks++;
+    });
+    bot.on('path_update' as never, ((r: { status?: string }) => {
+      if (rec.bot !== bot) return;
+      const s = r?.status;
+      if (s === 'partial') return;
+      if (s === 'success') m.pathSuccess++;
+      else if (s === 'noPath') m.pathNoPath++;
+      else if (s === 'timeout') m.pathTimeout++;
+      else m.pathOther++;
+    }) as never);
+    bot.on('path_reset' as never, ((reason: unknown) => {
+      if (rec.bot !== bot) return;
+      const k = typeof reason === 'string' ? reason : 'other';
+      m.resets[k] = (m.resets[k] ?? 0) + 1;
+    }) as never);
+  }
+
   private onEnd(rec: Record_, bot: Bot, reason: string): void {
     if (rec.bot !== bot) return; // R66
     const wasOnline = rec.status === 'online';
     rec.bot = null;
+    rec.onlineAt = 0;
     rec.lastReason = rec.lastReason ?? reason;
     this.setStatus(rec, 'offline');
     logger.info(`bot:${rec.name}`, `offline (${rec.lastReason})`);
@@ -269,9 +348,16 @@ function defaultCreateBot(req: SpawnRequest): Bot {
 }
 
 const skipSeen = new Map<string, number>();
+let skippedTotal = 0;
+
+/** Undecodable server packets skipped since the process started, all bots together (one shared decoder patch). */
+export function skippedPackets(): number {
+  return skippedTotal;
+}
 
 /** One line per kind of undecodable packet per minute (protodef printed whole stack traces to stdout). */
 function reportSkipped(s: SkippedPacket): void {
+  skippedTotal++;
   const key = s.message.slice(0, 120);
   const now = Date.now();
   if ((skipSeen.get(key) ?? 0) > now - 60_000) return;

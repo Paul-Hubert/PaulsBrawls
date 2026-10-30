@@ -129,6 +129,8 @@ export class SquadHttp {
         return { ok: true, text: 'squad up', bots: s.deps.roster.all().length, orders: s.deps.runner.running().length };
       case '/api/state':
         return { ok: true, text: '', ...s.state() };
+      case '/api/metrics':
+        return s.metrics();
       case '/api/bots/spawn':
         return s.spawn(who(), admin, str(b.name), players(b.owners));
       case '/api/bots/despawn':

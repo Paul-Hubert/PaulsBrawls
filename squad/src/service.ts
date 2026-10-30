@@ -16,6 +16,7 @@ import { usage } from './script/manifest';
 import type { Notice, Snapshot } from './types';
 import { errorMessage } from './api/errors';
 import type { ClaimRegistry } from './orders/claims';
+import type { Metrics, Vitals } from './vitals/metrics';
 
 export interface Answer {
   ok: boolean;
@@ -33,6 +34,8 @@ export interface ServiceDeps {
   journal: Journal;
   runner: OrderRunner;
   limits: Limits;
+  /** The vitals sampler (main.ts); absent in tests that build a service without one. */
+  vitals?: Vitals;
 }
 
 const ok = (text: string, extra: Record<string, unknown> = {}): Answer => ({ ok: true, text, ...extra });
@@ -67,6 +70,13 @@ export class SquadService {
       stock: store.list('').stock.map((m) => m.name),
       orders: runner.running().map((o) => ({ id: o.id, command: o.command.name, commander: o.commander, bots: o.memberNames(), trial: o.trial })),
     };
+  }
+
+  // -- vitals (docs/32 C) ---------------------------------------------------------------------------------------
+
+  /** `/bots status`: the last 10 s window of the event loop, the process and every bot. Anyone may ask. */
+  metrics(): Metrics | Answer {
+    return this.deps.vitals ? this.deps.vitals.metrics() : no('[Bots] Les mesures du runtime ne sont pas disponibles.');
   }
 
   // -- bots ---------------------------------------------------------------------------------------------------

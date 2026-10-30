@@ -158,3 +158,38 @@ test('show, stop, revert and delete answer in French', async () => {
   const del = await api('/api/commands/delete', { by: PAUL, name: 'salute' });
   assert.match(String(del.json.text), /supprimée \(aussi pour Alice\)/);
 });
+
+test('metrics: the token is needed; the loop, the process and every bot, with the French line', async () => {
+  assert.equal((await api('/api/metrics', {}, 'wrong')).status, 401);
+  // A few physics ticks on the spawned bot, then close a window the way the 10 s timer does.
+  const bot = rt.service.deps.pool.bot('Archer1') as unknown as FakeBot;
+  for (let i = 0; i < 5; i++) bot.emit('physicsTick');
+  bot.emit('path_update', { status: 'noPath', time: 1 });
+  bot.emit('path_reset', 'stuck');
+  rt.service.deps.vitals!.sample();
+  const r = await api('/api/metrics');
+  assert.equal(r.status, 200);
+  const m = r.json as {
+    ok: boolean;
+    text: string;
+    window: { seconds: number; complete: boolean };
+    loop: { p50: number; p99: number; max: number };
+    elu: number;
+    cpuPct: number;
+    rssMb: number;
+    heapMb: number;
+    skippedPackets: number;
+    bots: Array<{ name: string; status: string; ticksPerSec: number | null; path: Record<string, number>; resets: Record<string, number>; deafTrips: number }>;
+  };
+  assert.equal(m.ok, true);
+  assert.equal(m.window.complete, true);
+  for (const v of [m.loop.p50, m.loop.p99, m.loop.max, m.elu, m.cpuPct, m.rssMb, m.heapMb, m.skippedPackets]) assert.equal(typeof v, 'number');
+  assert.ok(m.rssMb > 0);
+  const a = m.bots.find((b) => b.name === 'Archer1');
+  assert.ok(a, 'Archer1 is listed');
+  assert.equal(a.status, 'online');
+  assert.equal(a.path.noPath, 1);
+  assert.deepEqual(a.resets, { stuck: 1 });
+  assert.equal(a.deafTrips, 0);
+  assert.match(m.text, /^\[Bots\] Charge du runtime \(\d+ s\) : ELU \d+,\d\d · boucle p99 \d+ ms \(max \d+\) · CPU \d+ % · RAM \d+ Mo · /);
+});

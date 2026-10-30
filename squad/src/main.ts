@@ -6,7 +6,7 @@
 import { join } from 'node:path';
 
 import { applyPathfinding, loadConfig, type SquadConfig } from './config';
-import { BotPool, type BotPoolOptions } from './bots/pool';
+import { BotPool, skippedPackets, type BotPoolOptions } from './bots/pool';
 import { Journal } from './journal/journal';
 import { LeaseManager } from './leases';
 import { logger } from './logger';
@@ -19,6 +19,8 @@ import { loadStock } from './stock';
 import { checkScript } from './script/check';
 import { SquadHttp } from './http/server';
 import { errorMessage, isBotLeft, isStopped } from './api/errors';
+import { LoopMonitor } from './vitals/lag-monitor';
+import { Vitals } from './vitals/metrics';
 
 export interface Started {
   service: SquadService;
@@ -31,6 +33,9 @@ export async function start(
   cfg: SquadConfig,
   opts: { connectBots?: boolean; installGuards?: boolean; pool?: Pick<BotPoolOptions, 'createBot' | 'setup'> } = {},
 ): Promise<Started> {
+  // The loop monitor first: armed later, it would miss the synchronous boot work (opening the journal, loading the
+  // stock) that it should see.
+  const loop = new LoopMonitor();
   applyPathfinding(cfg.pathfinding);
   const journal = new Journal(join(cfg.dataDir, 'squad.db'));
   const interrupted = journal.markInterrupted();
@@ -40,9 +45,11 @@ export async function start(
   const claims = new ClaimRegistry();
   const pool = new BotPool({ host: cfg.minecraft.host, port: cfg.minecraft.port, version: cfg.minecraft.version, staggerMs: cfg.loginStaggerMs, ...opts.pool });
   const runner = new OrderRunner({ pool, roster, leases, claims, store, journal, limits: cfg.limits });
-  const service = new SquadService({ roster, pool, leases, claims, store, journal, runner, limits: cfg.limits });
+  const vitals = new Vitals({ pool, journal, skipped: skippedPackets, loop });
+  const service = new SquadService({ roster, pool, leases, claims, store, journal, runner, limits: cfg.limits, vitals });
   const http = new SquadHttp(service, { port: cfg.port, token: cfg.token });
 
+  vitals.start();
   pool.on('gone', (name: string, reason: 'died' | 'disconnected') => void runner.botGone(name, reason));
   const port = await http.listen();
   logger.info('squad', `control API, events and MCP on http://127.0.0.1:${port} (/api, /events, /mcp/squad)`);
@@ -63,6 +70,7 @@ export async function start(
   const stop = (): Promise<void> =>
     (stopping ??= (async () => {
       await runner.stopAll('interrupted');
+      vitals.stop();
       pool.stop();
       await http.close();
       journal.close();

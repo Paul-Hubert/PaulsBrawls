@@ -28,8 +28,8 @@ import net.minecraft.util.Formatting;
 
 /**
  * {@code /bots} (docs/29 §9). Admins: spawn, despawn, owners, stop all, list all. Owners: create, fix, order, stop,
- * list, orders, tag, commands, show, share, unshare, delete, revert, ticket. Every call goes to the squad runtime
- * asynchronously; its French answer is shown on the main thread.
+ * list, orders, tag, commands, show, share, unshare, delete, revert, ticket. Anyone: status (the runtime's load).
+ * Every call goes to the squad runtime asynchronously; its French answer is shown on the main thread.
  */
 public final class SquadCommand {
 
@@ -87,6 +87,7 @@ public final class SquadCommand {
                             return b;
                         }))))
                 .then(CommandManager.literal("orders").executes(c -> call(c, "/api/orders/list", b -> b)))
+                .then(CommandManager.literal("status").executes(SquadCommand::status))
                 .then(CommandManager.literal("tag")
                     .then(CommandManager.argument("bot", StringArgumentType.word()).suggests(MY_BOTS)
                         .then(CommandManager.argument("changes", StringArgumentType.greedyString())
@@ -185,7 +186,7 @@ public final class SquadCommand {
             " /bots order NOM [arguments] [@bot …] [--reclaim|--free] — la lancer sur tes bots",
             " /bots stop [all | #id | NOM | @bot] — arrêter",
             " /bots fix NOM [ce qui ne va pas] — la corriger d'après son dernier rapport",
-            " /bots list · orders · commands · show NOM · tag BOT +étiquette -étiquette",
+            " /bots list · orders · commands · show NOM · tag BOT +étiquette -étiquette · status",
             " /bots share NOM JOUEUR… · unshare · delete NOM · revert NOM VERSION · ticket NOM",
         };
         for (String l : lines) src.sendFeedback(() -> Text.literal(l), false);
@@ -356,6 +357,17 @@ public final class SquadCommand {
             src.sendFeedback(() -> Text.literal("[Bots] Ticket d'écriture (2 h) : ").append(t), false);
             src.sendFeedback(() -> Text.literal("Serveur MCP : " + SquadConfig.INSTANCE.url + "/mcp/squad — donne ce ticket à ton agent ; /bots ticket revoke l'annule."), false);
         }));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /**
+     * {@code /bots status} (anyone, docs/32 C): the runtime's load over its last 10 s window — ELU, the loop's p99
+     * and the slowest bot's ticks per second. The line is built by {@link SquadStatusFormat}.
+     */
+    private static int status(CommandContext<ServerCommandSource> c) {
+        ServerCommandSource src = c.getSource();
+        if (!Squad.enabled()) return reply(src, DISABLED);
+        Squad.client().post("/api/metrics", base(src)).thenAccept(r -> src.getServer().execute(() -> reply(src, SquadStatusFormat.format(r))));
         return Command.SINGLE_SUCCESS;
     }
 
