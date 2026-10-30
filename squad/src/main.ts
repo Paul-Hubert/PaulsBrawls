@@ -5,7 +5,8 @@
 
 import { join } from 'node:path';
 
-import { applyPathfinding, loadConfig, type SquadConfig } from './config';
+import { applyPathfinding, loadConfig, pathWorkerCount, type SquadConfig } from './config';
+import { PathWorkerPool } from './bots/pathworkers/client';
 import { BotPool, skippedPackets, type BotPoolOptions } from './bots/pool';
 import { Journal } from './journal/journal';
 import { LeaseManager } from './leases';
@@ -26,6 +27,8 @@ export interface Started {
   service: SquadService;
   http: SquadHttp;
   port: number;
+  /** The pathfinding worker pool, when pathfinding.workers > 0. */
+  pathWorkers?: PathWorkerPool;
   stop(): Promise<void>;
 }
 
@@ -43,7 +46,19 @@ export async function start(
   const store = new CommandStore(join(cfg.dataDir, 'commands'), await loadStock());
   const leases = new LeaseManager(cfg.limits.maxLeaseDepth);
   const claims = new ClaimRegistry();
-  const pool = new BotPool({ host: cfg.minecraft.host, port: cfg.minecraft.port, version: cfg.minecraft.version, staggerMs: cfg.loginStaggerMs, ...opts.pool });
+  const workers = pathWorkerCount(cfg.pathfinding);
+  if (workers < cfg.pathfinding.workers) {
+    logger.warn('squad', `pathfinding.workers ${cfg.pathfinding.workers} capped to ${workers}: one core stays with the main thread`);
+  }
+  const pathWorkers = workers > 0 ? new PathWorkerPool({ workers, version: cfg.minecraft.version }) : undefined;
+  const pool = new BotPool({
+    host: cfg.minecraft.host,
+    port: cfg.minecraft.port,
+    version: cfg.minecraft.version,
+    staggerMs: cfg.loginStaggerMs,
+    pathWorkers,
+    ...opts.pool,
+  });
   const runner = new OrderRunner({ pool, roster, leases, claims, store, journal, limits: cfg.limits });
   const vitals = new Vitals({ pool, journal, skipped: skippedPackets, loop });
   const service = new SquadService({ roster, pool, leases, claims, store, journal, runner, limits: cfg.limits, vitals });
@@ -72,10 +87,11 @@ export async function start(
       await runner.stopAll('interrupted');
       vitals.stop();
       pool.stop();
+      await pathWorkers?.stop();
       await http.close();
       journal.close();
     })());
-  return { service, http, port, stop };
+  return { service, http, port, stop, pathWorkers };
 }
 
 /**

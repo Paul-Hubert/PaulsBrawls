@@ -1,5 +1,5 @@
 diff --git a/node_modules/mineflayer-pathfinder/index.js b/node_modules/mineflayer-pathfinder/index.js
-index b38bd30..b24b761 100644
+index b38bd30..55d7d7a 100644
 --- a/node_modules/mineflayer-pathfinder/index.js
 +++ b/node_modules/mineflayer-pathfinder/index.js
 @@ -1,5 +1,3 @@
@@ -19,7 +19,37 @@ index b38bd30..b24b761 100644
    let returningPos = null
    let stopPathing = false
    const physics = new Physics(bot)
-@@ -454,7 +454,7 @@ function inject (bot) {
+@@ -67,6 +67,14 @@ function inject (bot) {
+     return result
+   }
+ 
++  // The plugin's own planning: like getPathTo, but the search may be offloaded (see getPathFromTo).
++  function planPath (movements, goal) {
++    const generator = bot.pathfinder.getPathFromTo(movements, bot.entity.position, goal, { offload: true })
++    const { value: { result, astarContext: context } } = generator.next()
++    astarContext = context
++    return result
++  }
++
+   bot.pathfinder.getPathFromTo = function * (movements, startPos, goal, options = {}) {
+     const optimizePath = options.optimizePath ?? true
+     const resetEntityIntersects = options.resetEntityIntersects ?? true
+@@ -90,7 +98,13 @@ function inject (bot) {
+       }
+       movements.updateCollisionIndex()
+     }
+-    const astarContext = new AStar(start, movements, goal, timeout, tickTimeout, searchRadius)
++    // bot.pathfinder.searchOffload (optional, set by Squad's pathfinding worker pool) may run the search on another
++    // thread and return a context with the same compute(). Only the plugin's own planning asks for it (options.offload):
++    // a caller that iterates this generator, or calls getPathTo, expects the search to run here and now.
++    const offloaded = options.offload && typeof bot.pathfinder.searchOffload === 'function'
++      ? bot.pathfinder.searchOffload({ start, movements, goal, timeout, tickTimeout, searchRadius })
++      : null
++    const astarContext = offloaded || new AStar(start, movements, goal, timeout, tickTimeout, searchRadius)
+     let result = astarContext.compute()
+     if (optimizePath) result.path = postProcessPath(result.path)
+     yield { result, astarContext }
+@@ -454,7 +468,7 @@ function inject (bot) {
      }
  
      if (path.length === 0) {
@@ -28,7 +58,16 @@ index b38bd30..b24b761 100644
        if (stateGoal && stateMovements) {
          if (stateGoal.isEnd(bot.entity.position.floored())) {
            if (!dynamicGoal) {
-@@ -494,7 +494,7 @@ function inject (bot) {
+@@ -463,7 +477,7 @@ function inject (bot) {
+             fullStop()
+           }
+         } else if (!pathUpdated) {
+-          const results = bot.pathfinder.getPathTo(stateMovements, stateGoal)
++          const results = planPath(stateMovements, stateGoal)
+           bot.emit('path_update', results)
+           path = results.path
+           astartTimedout = results.status === 'partial'
+@@ -494,7 +508,7 @@ function inject (bot) {
                resetPath('dig_error')
              })
              .then(function () {
@@ -37,7 +76,7 @@ index b38bd30..b24b761 100644
                digging = false
              })
          }
-@@ -565,7 +565,7 @@ function inject (bot) {
+@@ -565,7 +579,7 @@ function inject (bot) {
                .then(() => {
                  lockPlaceBlock.release()
                  placing = false
@@ -46,7 +85,7 @@ index b38bd30..b24b761 100644
                })
            })
            .catch(_ignoreError => {})
-@@ -578,7 +578,7 @@ function inject (bot) {
+@@ -578,7 +592,7 @@ function inject (bot) {
      let dz = nextPoint.z - p.z
      if (Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && Math.abs(dy) < 1) {
        // arrived at next point
@@ -55,7 +94,7 @@ index b38bd30..b24b761 100644
        if (stopPathing) {
          stop()
          return
-@@ -629,8 +629,8 @@ function inject (bot) {
+@@ -629,8 +643,8 @@ function inject (bot) {
      }
  
      // check for futility

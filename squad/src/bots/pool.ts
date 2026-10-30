@@ -12,6 +12,13 @@ import { logger } from '../logger';
 import { boundPathfinder, defaultMovements, type AbortableBot } from './hardening';
 import { loadPlugins, pathfinder } from './plugins';
 import { keepDecodersAlive, RECIPES_AS_BYTES, type SkippedPacket } from './protocol';
+import type { MirroredBot } from './pathworkers/client';
+
+/** The pathfinding worker pool's two seams (pathworkers/client.ts): feed it a bot's packets, then hand it the search. */
+export interface PathWorkers {
+  attach(bot: MirroredBot): void;
+  install(bot: MirroredBot): void;
+}
 
 export const SUPPORTED_MINECRAFT_VERSION = '1.21.1'; // R11: server, mod and bot must agree
 const KEEPALIVE_INTERVAL_MS = 90_000; // R13
@@ -92,6 +99,8 @@ export interface BotPoolOptions {
   setup?: (bot: Bot) => void;
   /** Override {@link DEAF_MS} (tests). */
   deafMs?: number;
+  /** The pathfinding workers (config pathfinding.workers > 0); absent = every search on the main thread. */
+  pathWorkers?: PathWorkers;
 }
 
 /**
@@ -249,6 +258,8 @@ export class BotPool extends EventEmitter {
     }
     rec.bot = bot;
     rec.lastPacket = Date.now();
+    // Before the first packet: the workers' mirror needs this bot's login and every chunk it receives.
+    this.withPathWorkers(rec, (pw) => pw.attach(bot as unknown as MirroredBot));
     this.setStatus(rec, 'connecting');
     bot._client?.on?.('packet', () => {
       if (rec.bot === bot) rec.lastPacket = Date.now();
@@ -264,6 +275,7 @@ export class BotPool extends EventEmitter {
       } catch (e) {
         logger.warn(`bot:${rec.name}`, `post-spawn setup failed: ${(e as Error).message}`);
       }
+      this.withPathWorkers(rec, (pw) => pw.install(bot as unknown as MirroredBot));
       rec.onlineAt = Date.now();
       this.meter(rec, bot);
       this.setStatus(rec, 'online');
@@ -283,6 +295,17 @@ export class BotPool extends EventEmitter {
       rec.lastReason = err.message;
       logger.warn(`bot:${rec.name}`, `error: ${err.message}`);
     });
+  }
+
+  /** A failure of the worker pool's wiring must never cost the bot: its searches then simply stay on this thread. */
+  private withPathWorkers(rec: Record_, fn: (pw: PathWorkers) => void): void {
+    const pw = this.opts.pathWorkers;
+    if (!pw) return;
+    try {
+      fn(pw);
+    } catch (e) {
+      logger.warn(`bot:${rec.name}`, `pathfinding workers: ${(e as Error).message}`);
+    }
   }
 
   /**

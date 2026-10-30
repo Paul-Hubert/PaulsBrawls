@@ -10,5 +10,5 @@
     "trialSeconds": 60,
     "maxTrialsPerTurn": 3
   },
-  "pathfinding": { "astarBudgetMs": 0 }
+  "pathfinding": { "astarBudgetMs": 0, "workers": 0 }
 }

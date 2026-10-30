@@ -3,6 +3,7 @@
 
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { availableParallelism } from 'node:os';
 import { resolve } from 'node:path';
 
 const require = createRequire(import.meta.url);
@@ -39,10 +40,18 @@ export interface PathfindingConfig {
    * patches/). A search that finds the window spent waits for the next one with its best partial path. 0 = no budget.
    */
   astarBudgetMs: number;
+  /**
+   * Pathfinding worker threads (docs/32 D, src/bots/pathworkers/): the bots' A* searches run there, over a mirror of
+   * the world, instead of on the main thread. 0 = off: every search on the main thread, as before.
+   */
+  workers: number;
 }
 
 /** A budget above the 50 ms window would never bind. */
 export const MAX_ASTAR_BUDGET_MS = 50;
+
+/** A sane ceiling on pathfinding workers (each one is a thread with its own copy of the registry, ~50 MB). */
+export const MAX_PATH_WORKERS = 16;
 
 export interface SquadConfig {
   minecraft: { host: string; port: number; version: string };
@@ -97,6 +106,10 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
   if (astarBudgetMs > MAX_ASTAR_BUDGET_MS) {
     throw new ConfigError(`squad.json: pathfinding.astarBudgetMs is per 50 ms window, so at most ${MAX_ASTAR_BUDGET_MS}, got ${astarBudgetMs}`);
   }
+  const workers = num(pathRaw.workers, 0, 'pathfinding.workers');
+  if (!Number.isInteger(workers) || workers > MAX_PATH_WORKERS) {
+    throw new ConfigError(`squad.json: pathfinding.workers must be an integer from 0 to ${MAX_PATH_WORKERS}, got ${workers}`);
+  }
   return {
     minecraft: { host, port, version: typeof mc.version === 'string' ? mc.version : '1.21.1' },
     port: num(o.port, 8772, 'port'),
@@ -104,7 +117,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
     dataDir: resolve(baseDir, typeof o.dataDir === 'string' && o.dataDir ? o.dataDir : '.squad-data'),
     limits,
     loginStaggerMs: num(o.loginStaggerMs, 4_000, 'loginStaggerMs'),
-    pathfinding: { astarBudgetMs },
+    pathfinding: { astarBudgetMs, workers },
   };
 }
 
@@ -119,6 +132,14 @@ export function applyPathfinding(p: PathfindingConfig): void {
     throw new ConfigError('mineflayer-pathfinder is not patched (no AStar.setBudget): run npm install in squad/, whose postinstall applies patches/');
   }
   astar.setBudget(p.astarBudgetMs);
+}
+
+/**
+ * The pathfinding workers this machine gets: the configured count, at most one per core other than the main thread's
+ * (a worker that shares the main thread's core takes time from the bots' physics). Logged by the caller when it caps.
+ */
+export function pathWorkerCount(p: PathfindingConfig, cores = availableParallelism()): number {
+  return Math.max(0, Math.min(p.workers, cores - 1));
 }
 
 export function loadConfig(path: string): SquadConfig {

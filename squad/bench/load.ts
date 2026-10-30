@@ -13,7 +13,8 @@
 // those N), --stagger <ms> (default: the runtime's 4000), --center x,z (default: the nearest forest to spawn),
 // --no-pregen; experiments (bench-only, the runtime's defaults stay as they are): --tick-timeout, --think-timeout,
 // --search-radius, --plugins all|none|-autoEat,-hawkEye…, --view short|normal|tiny|<chunks>, --movements canDig=false,…,
-// --astar-budget <ms per 50 ms> (the runtime's pathfinding.astarBudgetMs), --think-on-compute, --lookahead-cap <ticks>, --lookahead-memo <ticks>,
+// --astar-budget <ms per 50 ms> (the runtime's pathfinding.astarBudgetMs), --workers <N> (the runtime's
+// pathfinding.workers, the pathfinding worker pool), --think-on-compute, --lookahead-cap <ticks>, --lookahead-memo <ticks>,
 // --lookahead-blockcache, --stuck-ticks, --mcdata-memo, --cheap-varint, --astar-blockcache, --astar-blockcache-world.
 // The server is read from SERVER_PROPERTIES (default ../run/server.properties). The production server is refused.
 
@@ -72,6 +73,8 @@ const VARIANT = {
   movements: Object.fromEntries((opt('movements') ?? '').split(',').filter(Boolean).map((kv) => kv.split('=')).map(([k, v]) => [k, v === 'true' ? true : v === 'false' ? false : Number(v)])) as Record<string, unknown>,
   /** The runtime's own A* budget (config pathfinding.astarBudgetMs, the patched AStar.setBudget), not a prototype. */
   astarBudget: Number(opt('astar-budget') ?? 0),
+  /** The runtime's pathfinding worker pool (config pathfinding.workers; capped at the cores but one). */
+  workers: Number(opt('workers') ?? 0),
   thinkOnCompute: flag('think-on-compute'),
   lookaheadCap: Number(opt('lookahead-cap') ?? 0),
   lookaheadMemo: Number(opt('lookahead-memo') ?? 0),
@@ -196,7 +199,7 @@ async function main(): Promise<void> {
   }
 
   const cfg = parseConfig(
-    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: { astarBudgetMs: VARIANT.astarBudget } },
+    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: { astarBudgetMs: VARIANT.astarBudget, workers: VARIANT.workers } },
     { PAULSBRAWLS_SQUAD_TOKEN: TOKEN },
   );
   const rt = await start(cfg, { connectBots: true, installGuards: true, pool: { createBot, setup } });
@@ -244,7 +247,13 @@ async function main(): Promise<void> {
       }
       for (const phase of n === 0 ? (['idle'] as Phase[]) : PHASES) {
         if (n > 0) await place(rt, rcon, center as { x: number; z: number }, n);
-        const r = await runPhase(rt, rcon, meters, n, phase, center, serverPid);
+        const r: PhaseResult & { pathWorkers?: unknown } = await runPhase(rt, rcon, meters, n, phase, center, serverPid);
+        if (rt.pathWorkers) {
+          // Cumulative since the start: searches offloaded and answered, and why any stayed on the main thread.
+          const st = rt.pathWorkers.stats();
+          r.pathWorkers = st;
+          log(`path workers: ${st.alive}/${st.workers} alive, ${st.chunks} chunks mirrored, ${st.offloaded} offloaded, ${st.done} answered, fallbacks ${JSON.stringify(st.fallbacks)}, restarts ${st.restarts}`);
+        }
         results.push(r);
         save();
         log(summaryLine(r));
