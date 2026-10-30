@@ -242,7 +242,7 @@ loopback port against the official MCP Java SDK client ([aigod/mcp-servers.md](.
 
 `run/` holds no server jar (Loom fetches the server for `runServer`; `run/README.md`). For a server like production
 (`PaulsBrawlsVanilla`: a Fabric launcher `server.jar`, installer 1.0.3 with loader 0.16.14, plus Fabric API
-0.116.3, the mod, WorldEdit, Simple Voice Chat and Universal Shops, `run.bat` = `java -Xmx10G -jar server.jar`),
+0.116.3, the mod, WorldEdit and Simple Voice Chat (Universal Shops was removed on 2026-10-27, docs/29 §16), `run.bat` = `java -Xmx10G -jar server.jar`),
 `node scripts/setup-server.mjs [dir]` builds one from a clone into `server/` (gitignored):
 - **Launcher:** `fabric-server-launch.jar` from `meta.fabricmc.net`, for `minecraft_version` and `loader_version` in
   `gradle.properties`, installer 1.1.2. On first start it downloads Mojang's server jar and the libraries. Mojang's jar

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "anthropic/claude-opus-5-5",
+  "share": "disabled",
+  "autoupdate": false,
+  "permission": { "*": "deny" },
+  "mcp": {
+    "squad": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8772/mcp/squad",
+      "headers": { "Authorization": "Bearer {env:PAULSBRAWLS_SQUAD_TOKEN}" },
+      "oauth": false,
+      "enabled": true
+    }
+  },
+  "agent": {
+    "squad-author": {
+      "description": "Écrit des commandes de bots Minecraft (squad) à la demande d'un joueur.",
+      "mode": "primary",
+      "prompt": "{file:./prompts/squad-author.md}",
+      "permission": { "*": "deny", "squad_*": "allow" }
+    }
+  }
+}

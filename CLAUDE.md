@@ -10,7 +10,8 @@ features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 - **Gibber** — server-wide money system (a custom `coin` item) with admin gift commands and a periodic salary scheduler.
 - **Capture the Flag** — auto-drops any banner named "Flag" when its holder takes damage, disables elytra while a Flag is carried, and makes flag-holders glow.
 - **AI God** — a LangChain4j-driven `Dieu` who hears prayers (`/pray`), trades, punishes, and rewards. **Has a physical body**: drives a Mineflayer bot (the avatar) over a Node HTTP bridge. Most player-facing strings are French.
-- **AI Village (Eden)** — ten LM-powered villager bots + one God acting through a single shared, God-judged library of typed, composable skills. The brain is **Eden**, a from-scratch rewrite in [eden/](eden/) (one Node process). The mod's only contribution is server-authority: the trade-settlement listener (Eden's villagers settle accepted trades on it), `coin`, op-on-join, and the `/villagers` + `/village` commands.
+- **Squad** — player-owned Mineflayer bots ([docs/29](docs/29-squad-design.md), [squad/README.md](squad/README.md)). An admin spawns bots with owners (`/bots spawn BOT P1 P2…`); a player asks for a command in words (`/bots create NAME …`), the `squad-author` agent (headless Claude Code, MCP tools only) writes one JS file controlling all their bots, checks it (typecheck against mineflayer's types), test-runs it and submits it; `/bots order NAME` runs it. Co-owners reclaim busy bots per role (archers pulled, melee kept; reclaimed bots return). No sandbox (players are trusted). The runtime is one Node process in [squad/](squad/) (`npm start`, `:8772`); the mod's front is `com.paul.brawl.squad`. As built: [docs/system/squad/overview.md](docs/system/squad/overview.md). **New work on bots goes here, not in Eden.**
+- **AI Village (Eden)** — **dead code (owner, 2026-10-26): do not build inside it or keep it in step; copy what is worth having.** Ten LM-powered villager bots + one God acting through a single shared, God-judged library of typed, composable skills. The brain is **Eden**, a from-scratch rewrite in [eden/](eden/) (one Node process). The mod's only contribution is server-authority: the trade-settlement listener (Eden's villagers settle accepted trades on it), `coin`, op-on-join, and the `/villagers` + `/village` commands.
 
 > **Verified reference:** [docs/system/](docs/system/README.md) is a code-checked, per-system reference (with
 > `path:line` citations). [docs/system/VERIFICATION-NOTES.md](docs/system/VERIFICATION-NOTES.md) lists every
@@ -23,6 +24,7 @@ features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 > |---|---|---|---|
 > | **The Fabric mod** | [src/](src/) | `./gradlew …` (JVM) | **Active, permanent.** Gibber, CTF, AI God, `:8767` settlement, op-on-join. |
 > | **Eden** — the AI Village brain | [eden/](eden/) | `tsx eden/src/main.ts` (one Node process) | **Active.** The current village brain (God + 10 villagers). Avatar `Dieu`, admin port `8770`. |
+> | **Squad** — player-owned bots | [squad/](squad/) | `cd squad; npm start` (supervisor + one Node process) | **Active.** `/bots`; port 8772; docs/29. |
 > | **Unified bridge + MCP** | [minecraft-mcp-server/src/unified/](minecraft-mcp-server/src/unified/) | `npm run unified` | **Active.** Drives the **Java AI-God's** avatar (`LLMBot`) and exposes Mineflayer tools to that God. A *different* surface from the village. |
 > | **v1 village brain** | [minecraft-mcp-server/src/village/](minecraft-mcp-server/src/village/) | `npm run village` | **LEGACY / deprecated.** Superseded by Eden. Non-destructive: still runnable, nothing deleted. See [minecraft-mcp-server/DEPRECATED.md](minecraft-mcp-server/DEPRECATED.md). |
 >
@@ -49,8 +51,8 @@ work on a clean clone; the first run downloads Gradle. `run/` holds no server ja
 
 **A standalone server like production** (`PaulsBrawlsVanilla`) from a clone: `node scripts/setup-server.mjs [dir]`
 (default `server/`, gitignored). It downloads the Fabric server launcher for the versions in `gradle.properties`,
-Fabric API, and the production server's other mods (WorldEdit 7.3.8, Simple Voice Chat 2.5.33, Universal Shops
-1.7.1, pinned and SHA-512-checked). It then builds the mod with `remapJar`, not `build`, whose finalizers copy into
+Fabric API, and the production server's other mods (WorldEdit 7.3.8, Simple Voice Chat 2.5.33,
+pinned and SHA-512-checked; Universal Shops was removed, docs/29 §16). It then builds the mod with `remapJar`, not `build`, whose finalizers copy into
 `mods_folder`. It copies `prompt.txt`, `build_prompt.txt`, `mcp_config.properties` and `god-agent/claude-code/`,
 seeds `server.properties` from `run/` (port 25565, RCON off, `online-mode=false` for the bots), and writes
 `start.bat`/`start.sh`. `--accept-eula` writes `eula.txt`; `--no-extras`, `--skip-build` and `--memory=6G` adjust it.
@@ -103,6 +105,21 @@ npm run rebuild-stats  # rebuild derived views from the journal by replay (must 
 - A test that awaits a promise only `unref()`'d timers can resolve must call `holdEventLoopPerTest()` (`eden/tests/fakes/keep-alive.ts`), or Node 22's runner cancels it and every later test in the file (R73).
 - A direct boot (`tsx src/main.ts`) sets `spawnBots:true` + `installProcessGuards:true`; `start()` called from tests defaults both **false**, so tests never connect to a server. The pm2 supervision of the design (D-08) is not in the repo: `ecosystem.config.cjs` is gitignored and absent; `start.ps1` is just `npx tsx src/main.ts eden.json`.
 - The LLM key is read from `process.env.OPENAI_API_KEY` and sent only to the remote (https) provider — never written to a config file or the journal.
+
+### Squad — player-owned bots (Node)
+
+```powershell
+cd squad
+npm install
+cp squad.example.json squad.json   # gitignored: minecraft host/port, token (or PAULSBRAWLS_SQUAD_TOKEN, same as the mod's squad.properties)
+npm start                          # supervisor + runtime on 127.0.0.1:8772 (stop with Ctrl+C; killing npm can leave node running)
+npm run check                      # lint + tsc + node:test on fakes (61 tests)
+npm run live-test                  # real bots + RCON; SERVER_PROPERTIES=../server/server.properties for production
+```
+
+- The bots run in the runtime's single event loop: no lag monitor exists yet (docs/system/squad/overview.md).
+- A server mod whose items mineflayer cannot decode used to leave bots silently deaf (Universal Shops); the
+  protocol hardening in `squad/src/bots/protocol.ts` now drops such packets (docs/29 §16).
 
 ### The unified bridge (drives the Java AI-God's avatar + MCP tools)
 
@@ -390,7 +407,7 @@ run by `npm run check`) — imports run **strictly downward**, an upward import 
 
 - **Config:** [eden/eden.example.json](eden/eden.example.json) → `eden.json` (gitignored). Holds NO key (env-only). Sections: `minecraft`, `provider`, `villagers` (roster: `name`/`role`/`persona`/`items`; `home`/`chest` are not accepted keys — anchors are discovered in the world after spawn, R18/B3.6), `scenario` (wins over `villagers`), `god` (name/desks/budget/`embodiedVerdicts`/`godPrompt`), `behavior`, `llm` (strong/fast providers, `maxConcurrent`, cooldown), `skills`, `settlement.url` (`:8767`), `admin.port` (8770), `journal`.
 - **Data dir** `.eden-data/` (gitignored): `eden.db` (journal), `library/<skill>/skill.json` + `v*.js` (authored code), `bots/<name>.json` (memory + relations), `subscriptions/<name>.json`, `world.json` (world stamp), `llm/*.json` (transcripts).
-- **Port map** (R24 — a registry, never folklore): **8770** Eden admin (its only held port) · **8771 Java `god`/`builder` MCP servers (only with `godAgent = external`, bearer token, docs/27)** · 4096 opencode (`opencode serve`, the external God agent, Basic auth) · 8765/8766 v1 (reserved while coexisting) · **8767 Java settlement (stateless per request; Eden POSTs accepted trades to it, with `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when the mod sets `settlementToken`; `./gradlew runServer` steals it, R29)** · 25565 `PaulsBrawlsVanilla` (RCON 25575, production/eval) · 25599 dev server. **Read `run/server.properties`, never assume the port (R28).**
+- **Port map** (R24 — a registry, never folklore): **8772 Squad runtime (control API, SSE, `/mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN`, docs/29)** · **8770** Eden admin (its only held port) · **8771 Java `god`/`builder` MCP servers (only with `godAgent = external`, bearer token, docs/27)** · 4096 opencode (`opencode serve`, the external God agent, Basic auth) · 8765/8766 v1 (reserved while coexisting) · **8767 Java settlement (stateless per request; Eden POSTs accepted trades to it, with `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when the mod sets `settlementToken`; `./gradlew runServer` steals it, R29)** · 25565 `PaulsBrawlsVanilla` (RCON 25575, production/eval) · 25599 dev server. **Read `run/server.properties`, never assume the port (R28).**
 - **Identity** (R12): Eden's avatar is **`Dieu`** — never v1's `LLMBot`/`GodBot`; villagers use French roster names; the eval harness namespaces every username `EvalBot*`. Minecraft kicks the second login of a name, so every login across all coexisting systems must be pairwise distinct.
 
 ### Live test suite ([docs/19](docs/19-live-test-suite.md), [docs/20](docs/20-live-test-process.md), code in [eden/live-tests/](eden/live-tests/))

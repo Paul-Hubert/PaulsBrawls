@@ -15,7 +15,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..', '..');
 const check = process.argv.includes('--check');
 const REQUIRED = ['id', 'title', 'system', 'summary', 'tags', 'sources', 'verified_at'];
-const SYSTEMS = new Set(['platform', 'gibber', 'ctf', 'aigod', 'eden', 'meta']);
+const SYSTEMS = new Set(['platform', 'gibber', 'ctf', 'aigod', 'eden', 'squad', 'meta']);
 
 const walk = (dir) => readdirSync(dir).flatMap((name) => {
   const p = join(dir, name);

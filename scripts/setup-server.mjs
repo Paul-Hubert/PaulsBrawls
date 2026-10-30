@@ -33,15 +33,15 @@ const MEMORY = opt('memory', '4G');
 const FABRIC_INSTALLER = '1.1.2';
 /**
  * The production server's other mods, pinned to the versions it runs (Modrinth CDN; the SHA-512 is Modrinth's, and
- * equals the production jars'). `prefix` finds an older version of the same mod to replace.
+ * equals the production jars'). `prefix` finds an older version of the same mod to replace. Universal Shops was
+ * removed on 2026-10-27: its Polymer items make mineflayer's decoder fail, which leaves every Squad bot deaf
+ * (docs/29 §16).
  */
 const EXTRAS = [
     { file: 'worldedit-mod-7.3.8.jar', prefix: 'worldedit-mod-', url: 'https://cdn.modrinth.com/data/1u6JkXh5/versions/WTAFvuRx/worldedit-mod-7.3.8.jar',
         sha512: 'e039492df0b486e7ce76d0eaf8cb11eadad2e78220600b8498ab8eef4642a29e310a6bcb4378257553b3639c6d0bc1ebf0f73df3a7a677c6af6baf86716b0bc7' },
     { file: 'voicechat-fabric-1.21.1-2.5.33.jar', prefix: 'voicechat-fabric-', url: 'https://cdn.modrinth.com/data/9eGKb6K1/versions/7NHvY1SY/voicechat-fabric-1.21.1-2.5.33.jar',
         sha512: '514c442a1034f292220c9d2ea20ed4ec6a2d8468d33a6232e733bf5f8d868528a29b61af2f7c0cfcf81ea02ff44868b25af4061cba3feb66ee11a4b90c481a10' },
-    { file: 'universal_shops-1.7.1+1.21.jar', prefix: 'universal_shops-', url: 'https://cdn.modrinth.com/data/cnIatHrN/versions/BfXSBkjs/universal_shops-1.7.1%2B1.21.jar',
-        sha512: 'd03ce8a1cc95b6f62fd30dd59cc2e4054bb59ee632dfbe11652b31d18d00a332c738a5813d200aaba5090a561e3077955efb7137477f70c511eebff80a273da5' },
 ];
 /** What the mod reads from its working directory, copied in when missing (never overwritten). */
 const RUNTIME_FILES = ['run/prompt.txt', 'run/build_prompt.txt', 'run/mcp_config.properties'];

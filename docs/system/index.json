@@ -3,7 +3,7 @@
   "description": "Verified reference for the Paul's Brawls Fabric mod (Gibber money, Capture the Flag, AI God + building, Eden AI village). One entry per document; each document is one MCP resource.",
   "generated_by": "docs/system/build-index.mjs",
   "uri_scheme": "paulsbrawls-docs://<id>",
-  "count": 37,
+  "count": 38,
   "documents": [
     {
       "id": "overview",
@@ -42,7 +42,7 @@
         "How to navigate this corpus",
         "Related"
       ],
-      "bytes": 10628
+      "bytes": 10617
     },
     {
       "id": "readme",
@@ -70,7 +70,7 @@
         "Serving over MCP (intended design)",
         "Related"
       ],
-      "bytes": 10217
+      "bytes": 10725
     },
     {
       "id": "verification-notes",
@@ -113,7 +113,7 @@
         "6. Eden",
         "Related"
       ],
-      "bytes": 32711
+      "bytes": 32818
     },
     {
       "id": "aigod.actions-and-trades",
@@ -413,7 +413,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 27792
+      "bytes": 27824
     },
     {
       "id": "aigod.images-and-client",
@@ -565,7 +565,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 15362
+      "bytes": 15419
     },
     {
       "id": "aigod.mcp-servers",
@@ -622,7 +622,7 @@
         "Tests",
         "Related"
       ],
-      "bytes": 17481
+      "bytes": 18484
     },
     {
       "id": "aigod.mcp-test-bench",
@@ -1294,7 +1294,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 19228
+      "bytes": 19231
     },
     {
       "id": "eden.process-config-and-boot",
@@ -1916,7 +1916,7 @@
       "id": "platform.build-and-runtime",
       "title": "Build, packaging and runtime layout of the Fabric mod",
       "system": "platform",
-      "summary": "How the paulsbrawls Fabric mod is built (Loom, versions, jar-in-jar deps, copy tasks), what is tracked in run/, CI reality, the Java unit tests, the empty minecraft-mcp-server gitlink, supervisor/ and .claude/.",
+      "summary": "How the paulsbrawls Fabric mod is built (Loom, versions, jar-in-jar deps, copy tasks), what is tracked in run/, CI reality, the Java unit tests, the vendored minecraft-mcp-server, supervisor/ and .claude/.",
       "tags": [
         "gradle",
         "loom",
@@ -1996,7 +1996,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 26613
+      "bytes": 29316
     },
     {
       "id": "platform.entrypoints-and-wiring",
@@ -2160,6 +2160,63 @@
         "Related"
       ],
       "bytes": 15391
+    },
+    {
+      "id": "squad.overview",
+      "title": "Squad — player-owned Mineflayer bots ordered by LLM-written commands (as built)",
+      "system": "squad",
+      "summary": "What runs today for /bots — the Node runtime in squad/ (processes, threads, bots, leases, orders, the command dialect, authoring over MCP, storage, HTTP API) and the mod's thin front in com.paul.brawl.squad — with the live results on the production server, the protocol hardening, and what is still unverified.",
+      "tags": [
+        "squad",
+        "bots",
+        "mineflayer",
+        "orders",
+        "leases",
+        "reclaim",
+        "authoring",
+        "mcp",
+        "squad-author",
+        "claude-code",
+        "kits",
+        "8772",
+        "production"
+      ],
+      "sources": [
+        "docs/29-squad-design.md",
+        "squad/src/main.ts",
+        "squad/src/supervisor.ts",
+        "squad/src/bots/pool.ts",
+        "squad/src/bots/protocol.ts",
+        "squad/src/bots/hardening.ts",
+        "squad/src/leases.ts",
+        "squad/src/orders/runner.ts",
+        "squad/src/orders/order.ts",
+        "squad/src/orders/guard.ts",
+        "squad/src/api/squad.ts",
+        "squad/src/api/helpers.ts",
+        "squad/src/script/compile.ts",
+        "squad/src/script/check.ts",
+        "squad/src/script/typecheck-worker.mjs",
+        "squad/src/authoring.ts",
+        "squad/src/http/server.ts",
+        "squad/src/http/mcp.ts",
+        "squad/src/journal/journal.ts",
+        "squad/reference/squad.d.ts",
+        "squad/agent/prompts/squad-author.md",
+        "src/main/java/com/paul/brawl/squad/"
+      ],
+      "verified_at": "2026-10-29 (working tree on branch rework, uncommitted)",
+      "path": "docs/system/squad/overview.md",
+      "headings": [
+        "Processes and threads",
+        "The runtime (`squad/src/`)",
+        "Protocol hardening (found live, docs/29 §16)",
+        "The mod (`src/main/java/com/paul/brawl/squad/`)",
+        "Tests",
+        "State on the production server (`server/`, as of 2026-10-29)",
+        "Not verified yet"
+      ],
+      "bytes": 10521
     }
   ]
 }

@@ -1,0 +1,64 @@
+# Squad — player-owned Mineflayer bots, ordered by LLM-written commands
+
+Design: [docs/29-squad-design.md](../docs/29-squad-design.md). The mod side is `src/main/java/com/paul/brawl/squad/`.
+
+```
+Player ─/bots…─▶ the mod (thin front) ──HTTP + SSE──▶ squad runtime (this folder, one Node process, :8772)
+                                                       ├ the bots (mineflayer), the roster, leases, orders
+/bots create ──▶ squad-author agent (claude -p) ──MCP──┤ check_script / trial_run / submit_command
+                                                       └ commands (.squad-data/commands), journal (squad.db)
+```
+
+## Run it
+
+```powershell
+cd squad
+npm install
+cp squad.example.json squad.json     # gitignored; minecraft host/port, the token (or PAULSBRAWLS_SQUAD_TOKEN)
+npm start                            # the supervisor + the runtime (restarts it if a script wedges it)
+```
+
+The mod reads `squad.properties` in the server's working directory (generated at first start):
+
+| Key | Default | |
+|---|---|---|
+| `url` | `http://127.0.0.1:8772` | the runtime |
+| `token` | generated | must equal the runtime's (`PAULSBRAWLS_SQUAD_TOKEN` wins on both sides) |
+| `agentKind` | `claude-code` | or `opencode` (`opencode serve` on `agentUrl` with `agent/opencode.json`) |
+| `claudeBin`, `claudeDir` | `claude`, `squad/agent/claude-code` | the agent directory (use an absolute path when the server runs elsewhere) |
+| `claudeModel`, `claudeEffort` | Claude Code's defaults | |
+| `authorTimeoutSeconds`, `maxAuthoring` | 900, 2 | |
+| `joinGate`, `allowedBotAddresses` | true, loopback | a bot's name joining from elsewhere is kicked |
+
+The server must be in offline mode (bots have no Microsoft accounts). `/bots spawn` whitelists the bot.
+
+## In game
+
+| | |
+|---|---|
+| `/bots spawn BOT P1 [P2 …]` (admin) | a bot owned by those players; it appears next to the admin |
+| `/bots equip BOT archer\|guard\|miner\|farmer` (admin) | the role's kit, worn and held (archer: chainmail, bow, arrows; guard: iron armor, iron sword, shield; miner: iron tools, torches; farmer: hoe, seeds, bone meal, water), and the role as the bot's tag |
+| `/bots create NAME <what it should do>` | the agent writes it; you are told « Commande NAME prête » with `/bots order NAME` clickable |
+| `/bots order NAME [args] [@bot …] [--reclaim\|--free]` | run it on your bots |
+| `/bots stop [all \| #id \| NAME \| @bot]` | stop orders, or free one bot (it returns to the order it was reclaimed from) |
+| `/bots fix NAME [what is wrong]` | rewrite it from its last run report |
+| `/bots share NAME P…` / `unshare` / `delete` / `revert NAME V` | your commands are private until shared |
+| `/bots list` · `orders` · `commands` · `show NAME` · `tag BOT +t -t` · `ticket NAME` | |
+| admin: `despawn BOT` · `owners BOT add\|remove P…` · `list all` · `stop all` | |
+
+Stock commands everyone has: `come`, `follow`, `defend` (archers reclaimed, melee kept), `gather`, `deposit`,
+`attack`, `bring`.
+
+## A command
+
+One ES module: `export const manifest = { summary, params, roles, duration }` and
+`export default async function (squad, args, ctx)`. Full API: [reference/squad.d.ts](reference/squad.d.ts) (also
+what the agent reads and what `check_script` typechecks against). Examples: [src/stock/](src/stock/).
+
+## Check
+
+```powershell
+npm run check       # lint + tsc + node:test (fakes only, no Minecraft)
+npm run live-test   # real bots on the dev server (run/); ports and RCON password read from its server.properties
+$env:SERVER_PROPERTIES='../server/server.properties'; npm run live-test   # the production server (world left as is)
+```

@@ -47,6 +47,11 @@ corpus can be served to AI agents through an MCP server (one document = one reso
 |---|---|
 | [ctf/capture-the-flag.md](ctf/capture-the-flag.md) | Flag detection, drop-on-damage, elytra lock, glowing, edge cases |
 
+### Squad (player-owned bots, `/bots`)
+| File | Topic |
+|---|---|
+| [squad/overview.md](squad/overview.md) | The `squad/` runtime and the mod's `/bots` front as built: processes and threads, leases and reclaim, orders, the command dialect, authoring over MCP, protocol hardening, kits, production state, what is unverified |
+
 ### AI God (Java `/pray` chatbot) and building
 | File | Topic |
 |---|---|

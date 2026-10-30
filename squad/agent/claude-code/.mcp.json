@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "squad": {
+      "type": "http",
+      "url": "${PAULSBRAWLS_SQUAD_URL:-http://127.0.0.1:8772}/mcp/squad",
+      "headers": { "Authorization": "Bearer ${PAULSBRAWLS_SQUAD_TOKEN}" }
+    }
+  }
+}

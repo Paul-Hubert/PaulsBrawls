@@ -42,6 +42,9 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 		// Eden village — scenario control (/villagers start|stop|restart).
 		VillagersCommand.register();
 
+		// Squad (docs/29): player-owned bots, /bots, a thin front over the squad runtime (squad/).
+		com.paul.brawl.squad.SquadCommand.register();
+
 		// Track the live server so off-thread callers (idle watchdog) can
 		// reach the bot without holding a player reference.
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
@@ -50,6 +53,7 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 			VillageHttpListener.start(server);
 			// docs/27: the god/builder MCP servers, only when godAgent = external.
 			ExternalAgent.start();
+			com.paul.brawl.squad.Squad.start(server);
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			GodActionQueue.clear();
@@ -59,6 +63,7 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 			BuildGuard.cancelAll(); // bug #7: no sub-build keeps placing into a stopping world
 			GodSessionManager.forceEndSession();
 			ExternalAgent.stop();
+			com.paul.brawl.squad.Squad.stop();
 			ChatBotActions.setServer(null);
 			VillageHttpListener.stop();
 		});
@@ -66,6 +71,13 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 		// Op bots on join so they can run /tp, /spreadplayers, /give, etc.
 		// Covers: the God-body avatar (LLMBot), Eden's avatar (Dieu), and any
 		// active scenario villager bots (populated by /villagers start|restart).
+		// Squad bots: the join gate (a bot's name from elsewhere is kicked), arrival next to the admin, missed lines.
+		// Squad bots are never op'd: they are not in the list below.
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+			var player = handler.getPlayer();
+			if (player != null) com.paul.brawl.squad.Squad.onJoin(player, handler::disconnect);
+		});
+
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
 			var player = handler.getPlayer();
 			if (player == null) return;
