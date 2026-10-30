@@ -32,6 +32,15 @@ The mod reads `squad.properties` in the server's working directory (generated at
 
 The server must be in offline mode (bots have no Microsoft accounts). `/bots spawn` whitelists the bot.
 
+**Patched dependencies.** `npm install` runs `patch-package` (postinstall), which applies [patches/](patches/) to
+`node_modules`: the library hot spots of [docs/31](../docs/31-squad-performance-review.md) §3.3 (prismarine-physics'
+`PlayerState` requires, minecraft-protocol's packet framing, mineflayer-pathfinder's look-ahead, A* block lookups and
+"stuck" timer) plus an optional A* budget. A patch that no longer applies fails the install (`--error-on-fail`), and
+`tests/patches.test.ts` fails if one is missing. `patch-package` is a runtime dependency, so `npm install --omit=dev`
+applies them too. To change a patch: edit the file in `node_modules`, then `npx patch-package <package>`.
+`squad.json`'s `pathfinding.astarBudgetMs` (default 0 = off, at most 50) caps the A* time of all bots together per
+50 ms window.
+
 ## In game
 
 | | |

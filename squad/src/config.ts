@@ -2,7 +2,10 @@
 // environment variable wins, so the same secret can be exported once for the mod and the runtime.
 
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
+
+const require = createRequire(import.meta.url);
 
 export const TOKEN_ENV = 'PAULSBRAWLS_SQUAD_TOKEN';
 
@@ -29,6 +32,18 @@ export interface Limits {
   maxScriptLines: number;
 }
 
+/** Process-wide pathfinding settings, applied once at start (applyPathfinding). */
+export interface PathfindingConfig {
+  /**
+   * The A* time all bots together may spend per 50 ms window (mineflayer-pathfinder's AStar.setBudget, added by
+   * patches/). A search that finds the window spent waits for the next one with its best partial path. 0 = no budget.
+   */
+  astarBudgetMs: number;
+}
+
+/** A budget above the 50 ms window would never bind. */
+export const MAX_ASTAR_BUDGET_MS = 50;
+
 export interface SquadConfig {
   minecraft: { host: string; port: number; version: string };
   /** Loopback port of the control API, the SSE stream and the MCP server. */
@@ -38,6 +53,7 @@ export interface SquadConfig {
   limits: Limits;
   /** Milliseconds between two bot logins (I1: a burst trips the server's login throttle). */
   loginStaggerMs: number;
+  pathfinding: PathfindingConfig;
 }
 
 export const DEFAULT_LIMITS: Limits = {
@@ -76,6 +92,11 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
   for (const k of Object.keys(DEFAULT_LIMITS) as Array<keyof Limits>) {
     if (limitsRaw[k] !== undefined) limits[k] = num(limitsRaw[k], DEFAULT_LIMITS[k], `limits.${k}`);
   }
+  const pathRaw = (o.pathfinding ?? {}) as Record<string, unknown>;
+  const astarBudgetMs = num(pathRaw.astarBudgetMs, 0, 'pathfinding.astarBudgetMs');
+  if (astarBudgetMs > MAX_ASTAR_BUDGET_MS) {
+    throw new ConfigError(`squad.json: pathfinding.astarBudgetMs is per 50 ms window, so at most ${MAX_ASTAR_BUDGET_MS}, got ${astarBudgetMs}`);
+  }
   return {
     minecraft: { host, port, version: typeof mc.version === 'string' ? mc.version : '1.21.1' },
     port: num(o.port, 8772, 'port'),
@@ -83,7 +104,21 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
     dataDir: resolve(baseDir, typeof o.dataDir === 'string' && o.dataDir ? o.dataDir : '.squad-data'),
     limits,
     loginStaggerMs: num(o.loginStaggerMs, 4_000, 'loginStaggerMs'),
+    pathfinding: { astarBudgetMs },
   };
+}
+
+/**
+ * Apply the pathfinding settings. They are process-wide (one mineflayer-pathfinder module serves every bot), so this
+ * runs once, at start. AStar.setBudget comes from patches/: without it the install skipped patch-package, and the
+ * other library fixes are missing too, so it fails loudly instead of running unpatched.
+ */
+export function applyPathfinding(p: PathfindingConfig): void {
+  const astar = require('mineflayer-pathfinder/lib/astar') as { setBudget?: (ms: number) => void };
+  if (typeof astar.setBudget !== 'function') {
+    throw new ConfigError('mineflayer-pathfinder is not patched (no AStar.setBudget): run npm install in squad/, whose postinstall applies patches/');
+  }
+  astar.setBudget(p.astarBudgetMs);
 }
 
 export function loadConfig(path: string): SquadConfig {

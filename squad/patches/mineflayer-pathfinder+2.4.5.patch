@@ -1,0 +1,333 @@
+diff --git a/node_modules/mineflayer-pathfinder/index.js b/node_modules/mineflayer-pathfinder/index.js
+index b38bd30..b24b761 100644
+--- a/node_modules/mineflayer-pathfinder/index.js
++++ b/node_modules/mineflayer-pathfinder/index.js
+@@ -1,5 +1,3 @@
+-const { performance } = require('perf_hooks')
+-
+ const AStar = require('./lib/astar')
+ const Move = require('./lib/move')
+ const Movements = require('./lib/movements')
+@@ -26,7 +24,9 @@ function inject (bot) {
+   let digging = false
+   let placing = false
+   let placingBlock = null
+-  let lastNodeTime = performance.now()
++  // Physics ticks since the bot last reached a node. Counted in ticks, not wall time, so a busy event loop (fewer
++  // ticks per second) does not make a moving bot look stuck and throw its path away.
++  let ticksSinceLastNode = 0
+   let returningPos = null
+   let stopPathing = false
+   const physics = new Physics(bot)
+@@ -454,7 +454,7 @@ function inject (bot) {
+     }
+ 
+     if (path.length === 0) {
+-      lastNodeTime = performance.now()
++      ticksSinceLastNode = 0
+       if (stateGoal && stateMovements) {
+         if (stateGoal.isEnd(bot.entity.position.floored())) {
+           if (!dynamicGoal) {
+@@ -494,7 +494,7 @@ function inject (bot) {
+               resetPath('dig_error')
+             })
+             .then(function () {
+-              lastNodeTime = performance.now()
++              ticksSinceLastNode = 0
+               digging = false
+             })
+         }
+@@ -565,7 +565,7 @@ function inject (bot) {
+               .then(() => {
+                 lockPlaceBlock.release()
+                 placing = false
+-                lastNodeTime = performance.now()
++                ticksSinceLastNode = 0
+               })
+           })
+           .catch(_ignoreError => {})
+@@ -578,7 +578,7 @@ function inject (bot) {
+     let dz = nextPoint.z - p.z
+     if (Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && Math.abs(dy) < 1) {
+       // arrived at next point
+-      lastNodeTime = performance.now()
++      ticksSinceLastNode = 0
+       if (stopPathing) {
+         stop()
+         return
+@@ -629,8 +629,8 @@ function inject (bot) {
+     }
+ 
+     // check for futility
+-    if (performance.now() - lastNodeTime > 3500) {
+-      // should never take this long to go to the next node
++    if (++ticksSinceLastNode > 70) {
++      // should never take this long (3.5 s at 20 ticks/s) to go to the next node
+       resetPath('stuck')
+     }
+   }
+diff --git a/node_modules/mineflayer-pathfinder/lib/astar.js b/node_modules/mineflayer-pathfinder/lib/astar.js
+index e7a82cb..e08f93a 100644
+--- a/node_modules/mineflayer-pathfinder/lib/astar.js
++++ b/node_modules/mineflayer-pathfinder/lib/astar.js
+@@ -30,7 +30,30 @@ function reconstructPath (node) {
+   return path.reverse()
+ }
+ 
++// An optional process-wide budget (AStar.setBudget): all searches together compute at most budget.ms per
++// BUDGET_WINDOW_MS, so many bots searching at once cannot fill the event loop. 0 (the default) means no budget.
++const BUDGET_WINDOW_MS = 50
++const budget = {
++  ms: 0,
++  window: 0, // counts the windows, so that a search knows whether it was already counted in this one
++  windowStart: 0,
++  spent: 0,
++  searches: 0, // the searches that asked for time in this window
++  searchesLastWindow: 1
++}
++
+ class AStar {
++  /**
++   * Limit the A* time of all searches of the process together to `ms` per 50 ms window (0 turns the limit off).
++   * A search that finds the window spent returns its best partial path, as on any unfinished tick, and the time it
++   * waits does not count against its timeout. Each slice is also cut to a fair share: the budget divided by the
++   * number of searches seen in the last window.
++   * @param {number} ms
++   */
++  static setBudget (ms) {
++    budget.ms = ms > 0 ? ms : 0
++  }
++
+   constructor (start, movements, goal, timeout, tickTimeout = 40, searchRadius = -1) {
+     this.startTime = performance.now()
+ 
+@@ -50,6 +73,8 @@ class AStar {
+ 
+     this.maxCost = searchRadius < 0 ? -1 : startNode.h + searchRadius
+     this.visitedChunks = new Set()
++    this.budgetWindow = -1 // the last budget window this search asked for time in
++    this.waitingSince = null // when the budget last refused this search a slice
+   }
+ 
+   makeResult (status, node) {
+@@ -65,9 +90,40 @@ class AStar {
+   }
+ 
+   compute () {
++    if (budget.ms <= 0) return this.computeSlice(this.tickTimeout)
++    const now = performance.now()
++    if (now - budget.windowStart >= BUDGET_WINDOW_MS) {
++      budget.window++
++      budget.windowStart = now
++      budget.spent = 0
++      budget.searchesLastWindow = Math.max(1, budget.searches)
++      budget.searches = 0
++    }
++    if (this.budgetWindow !== budget.window) {
++      this.budgetWindow = budget.window
++      budget.searches++
++    }
++    // The time spent waiting for the budget does not count against the search's timeout.
++    if (this.waitingSince !== null) {
++      this.startTime += now - this.waitingSince
++      this.waitingSince = null
++    }
++    const left = budget.ms - budget.spent
++    if (left < 0.5) {
++      this.waitingSince = now
++      return this.makeResult('partial', this.bestNode)
++    }
++    try {
++      return this.computeSlice(Math.max(0.5, Math.min(this.tickTimeout, left, budget.ms / budget.searchesLastWindow)))
++    } finally {
++      budget.spent += performance.now() - now
++    }
++  }
++
++  computeSlice (tickTimeout) {
+     const computeStartTime = performance.now()
+     while (!this.openHeap.isEmpty()) {
+-      if (performance.now() - computeStartTime > this.tickTimeout) { // compute time per tick
++      if (performance.now() - computeStartTime > tickTimeout) { // compute time per tick
+         return this.makeResult('partial', this.bestNode)
+       }
+       if (performance.now() - this.startTime > this.timeout) { // total compute time
+diff --git a/node_modules/mineflayer-pathfinder/lib/movements.js b/node_modules/mineflayer-pathfinder/lib/movements.js
+index a7e3505..520b5f3 100644
+--- a/node_modules/mineflayer-pathfinder/lib/movements.js
++++ b/node_modules/mineflayer-pathfinder/lib/movements.js
+@@ -1,6 +1,7 @@
+ const { Vec3 } = require('vec3')
+ const nbt = require('prismarine-nbt')
+ const Move = require('./move')
++const { getClock } = require('./tick')
+ 
+ const cardinalDirections = [
+   { x: -1, z: 0 }, // West
+@@ -108,6 +109,9 @@ class Movements {
+     this.infiniteLiquidDropdownDistance = true
+ 
+     this.entityIntersections = {}
++
++    this.blocks = new Map()
++    this.blocksClock = -1
+   }
+ 
+   exclusionPlace (block) {
+@@ -216,8 +220,22 @@ class Movements {
+   }
+ 
+   getBlock (pos, dx, dy, dz) {
++    // A* looks the same positions up again and again from neighbouring nodes, and bot.blockAt builds a new Block each
++    // time: they are kept until the blocks may have changed (the next physics tick, a block update, a chunk (un)load).
++    const clock = pos ? getClock(this.bot) : null
++    let key
++    if (clock !== null) {
++      if (clock.blocks !== this.blocksClock) {
++        this.blocks.clear()
++        this.blocksClock = clock.blocks
++      }
++      key = `${pos.x + dx},${pos.y + dy},${pos.z + dz}`
++      const cached = this.blocks.get(key)
++      if (cached !== undefined) return cached
++    }
+     const b = pos ? this.bot.blockAt(new Vec3(pos.x + dx, pos.y + dy, pos.z + dz), false) : null
+     if (!b) {
++      // Not cached: an unloaded block's height is relative (dy).
+       return {
+         replaceable: false,
+         canFall: false,
+@@ -241,6 +259,7 @@ class Movements {
+     for (const shape of b.shapes) {
+       b.height = Math.max(b.height, pos.y + dy + shape[4])
+     }
++    if (key !== undefined) this.blocks.set(key, b)
+     return b
+   }
+ 
+diff --git a/node_modules/mineflayer-pathfinder/lib/physics.js b/node_modules/mineflayer-pathfinder/lib/physics.js
+index ef9e389..44b9bcc 100644
+--- a/node_modules/mineflayer-pathfinder/lib/physics.js
++++ b/node_modules/mineflayer-pathfinder/lib/physics.js
+@@ -1,9 +1,48 @@
+ const { PlayerState } = require('prismarine-physics')
++const { getClock } = require('./tick')
++
++// A moving bot re-decides sprint and jump every tick, each decision simulating up to 200 ticks ahead. For the same
++// next node the answer barely changes from one tick to the next, so it is reused for this many ticks.
++const DECISION_TICKS = 4
+ 
+ class Physics {
+   constructor (bot) {
+     this.bot = bot
+-    this.world = { getBlock: (pos) => { return bot.blockAt(pos, false) } }
++    this.world = { getBlock: (pos) => { return this.getBlock(pos) } }
++    this.blocks = new Map()
++    this.blocksClock = -1
++    this.decisions = new Map()
++  }
++
++  // The simulations read the same few blocks again and again, and bot.blockAt builds a new Block each time: they are
++  // kept until the blocks may have changed (the next physics tick, a block update, a chunk (un)load).
++  getBlock (pos) {
++    const clock = getClock(this.bot)
++    if (clock === null) return this.bot.blockAt(pos, false)
++    if (clock.blocks !== this.blocksClock) {
++      this.blocks.clear()
++      this.blocksClock = clock.blocks
++    }
++    const key = `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`
++    let block = this.blocks.get(key)
++    if (block === undefined) {
++      block = this.bot.blockAt(pos, false)
++      this.blocks.set(key, block)
++    }
++    return block
++  }
++
++  // The same decision for the same next node (the same path[0] object) and argument, within DECISION_TICKS ticks.
++  remember (name, path, arg, decide) {
++    const node = path[0]
++    const clock = getClock(this.bot)
++    if (node === undefined || clock === null) return decide()
++    const key = `${name},${arg}`
++    const last = this.decisions.get(key)
++    if (last !== undefined && last.node === node && clock.tick - last.tick < DECISION_TICKS) return last.result
++    const result = decide()
++    this.decisions.set(key, { node, tick: clock.tick, result })
++    return result
+   }
+ 
+   /**
+@@ -47,6 +86,10 @@ class Physics {
+   }
+ 
+   canStraightLine (path, sprint = false) {
++    return this.remember('canStraightLine', path, sprint, () => this.simulateStraightLine(path, sprint))
++  }
++
++  simulateStraightLine (path, sprint) {
+     const reached = this.getReached(path)
+     const state = this.simulateUntil(reached, this.getController(path[0], false, sprint), 200)
+     if (reached(state)) return true
+@@ -89,12 +132,20 @@ class Physics {
+   }
+ 
+   canSprintJump (path, jumpAfter = 0) {
++    return this.remember('canSprintJump', path, jumpAfter, () => this.simulateSprintJump(path, jumpAfter))
++  }
++
++  simulateSprintJump (path, jumpAfter) {
+     const reached = this.getReached(path)
+     const state = this.simulateUntil(reached, this.getController(path[0], true, true, jumpAfter), 20)
+     return reached(state)
+   }
+ 
+   canWalkJump (path, jumpAfter = 0) {
++    return this.remember('canWalkJump', path, jumpAfter, () => this.simulateWalkJump(path, jumpAfter))
++  }
++
++  simulateWalkJump (path, jumpAfter) {
+     const reached = this.getReached(path)
+     const state = this.simulateUntil(reached, this.getController(path[0], true, false, jumpAfter), 20)
+     return reached(state)
+diff --git a/node_modules/mineflayer-pathfinder/lib/tick.js b/node_modules/mineflayer-pathfinder/lib/tick.js
+new file mode 100644
+index 0000000..f13eaac
+--- /dev/null
++++ b/node_modules/mineflayer-pathfinder/lib/tick.js
+@@ -0,0 +1,34 @@
++// Short-lived caches of the look-ahead (physics.js) and of A* (movements.js) need to know when a bot's tick, or the
++// blocks around it, may have changed. Every Physics and Movements of a bot shares one clock, with one set of listeners
++// per bot: pvp, collectblock and user code each make their own Movements, so a listener per instance would pile up.
++const clocks = new WeakMap()
++
++/**
++ * The clock of a bot, or null when the bot cannot emit events (then nothing is cached).
++ * @param {import('mineflayer').Bot} bot
++ * @returns {{ tick: number, blocks: number } | null} `tick` counts physics ticks; `blocks` also moves on every block
++ * update and chunk (un)load, so a cache keyed on it never serves a block that changed.
++ */
++function getClock (bot) {
++  let clock = clocks.get(bot)
++  if (clock !== undefined) return clock
++  if (typeof bot.on !== 'function') {
++    clocks.set(bot, null)
++    return null
++  }
++  clock = { tick: 0, blocks: 0 }
++  clocks.set(bot, clock)
++  // Prepended, so that every physicsTick listener (the pathfinder's own, registered earlier) already sees the new tick.
++  const listen = typeof bot.prependListener === 'function' ? bot.prependListener.bind(bot) : bot.on.bind(bot)
++  listen('physicsTick', () => {
++    clock.tick++
++    clock.blocks++
++  })
++  const blocksChanged = () => { clock.blocks++ }
++  listen('blockUpdate', blocksChanged)
++  listen('chunkColumnLoad', blocksChanged)
++  listen('chunkColumnUnload', blocksChanged)
++  return clock
++}
++
++module.exports = { getClock }

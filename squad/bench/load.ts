@@ -13,7 +13,7 @@
 // those N), --stagger <ms> (default: the runtime's 4000), --center x,z (default: the nearest forest to spawn),
 // --no-pregen; experiments (bench-only, the runtime's defaults stay as they are): --tick-timeout, --think-timeout,
 // --search-radius, --plugins all|none|-autoEat,-hawkEye…, --view short|normal|tiny|<chunks>, --movements canDig=false,…,
-// --astar-budget <ms per 50 ms>, --think-on-compute, --lookahead-cap <ticks>, --lookahead-memo <ticks>,
+// --astar-budget <ms per 50 ms> (the runtime's pathfinding.astarBudgetMs), --think-on-compute, --lookahead-cap <ticks>, --lookahead-memo <ticks>,
 // --lookahead-blockcache, --stuck-ticks, --mcdata-memo, --cheap-varint, --astar-blockcache, --astar-blockcache-world.
 // The server is read from SERVER_PROPERTIES (default ../run/server.properties). The production server is refused.
 
@@ -38,7 +38,7 @@ import { logger } from '../src/logger';
 import type { Player } from '../src/roster';
 import { EMPTY_SNAPSHOT, type Snapshot } from '../src/types';
 import { Rcon } from '../live-tests/rcon';
-import { setAstarBlockCache, setAstarBudget, setLookahead, setThinkOnCompute } from './lib/instrument';
+import { setAstarBlockCache, setLookahead, setThinkOnCompute } from './lib/instrument';
 import { BotMeters, dist, ProcessProbe, r1 } from './lib/probe';
 import { keepUpLines, LogTail, pidOnPort, processCpu, readProps, tickQuery, type TickSample } from './lib/server';
 import { summaryLine, table, type Phase, type PhaseResult, type ServerPhase } from './lib/table';
@@ -70,6 +70,7 @@ const VARIANT = {
   view: (/^\d+$/.test(opt('view') ?? '') ? Number(opt('view')) : (opt('view') ?? 'short')) as 'short' | 'normal' | 'tiny' | number,
   /** Overrides of the runtime's Movements (hardening.defaultMovements), e.g. canDig=false,allow1by1towers=false. */
   movements: Object.fromEntries((opt('movements') ?? '').split(',').filter(Boolean).map((kv) => kv.split('=')).map(([k, v]) => [k, v === 'true' ? true : v === 'false' ? false : Number(v)])) as Record<string, unknown>,
+  /** The runtime's own A* budget (config pathfinding.astarBudgetMs, the patched AStar.setBudget), not a prototype. */
   astarBudget: Number(opt('astar-budget') ?? 0),
   thinkOnCompute: flag('think-on-compute'),
   lookaheadCap: Number(opt('lookahead-cap') ?? 0),
@@ -181,7 +182,6 @@ async function main(): Promise<void> {
   const maxN = Math.max(...NS);
   if (maxN > MAX_PLAYERS) throw new Error(`max-players=${MAX_PLAYERS} in ${PROPS_FILE}: raise it to at least ${maxN} for this run`);
   if (maxN > BOTS.length) throw new Error(`at most ${BOTS.length} bots`);
-  setAstarBudget(VARIANT.astarBudget);
   setThinkOnCompute(VARIANT.thinkOnCompute);
   setAstarBlockCache(VARIANT.astarBlockCache);
   setLookahead({ cap: VARIANT.lookaheadCap, memoTicks: VARIANT.lookaheadMemo, blockCache: VARIANT.lookaheadBlockCache });
@@ -196,7 +196,7 @@ async function main(): Promise<void> {
   }
 
   const cfg = parseConfig(
-    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 } },
+    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: { astarBudgetMs: VARIANT.astarBudget } },
     { PAULSBRAWLS_SQUAD_TOKEN: TOKEN },
   );
   const rt = await start(cfg, { connectBots: true, installGuards: true, pool: { createBot, setup } });

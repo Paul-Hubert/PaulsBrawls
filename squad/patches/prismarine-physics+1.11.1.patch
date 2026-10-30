@@ -1,0 +1,35 @@
+diff --git a/node_modules/prismarine-physics/index.js b/node_modules/prismarine-physics/index.js
+index d95ce7f..e12c802 100644
+--- a/node_modules/prismarine-physics/index.js
++++ b/node_modules/prismarine-physics/index.js
+@@ -3,6 +3,20 @@ const AABB = require('./lib/aabb')
+ const math = require('./lib/math')
+ const features = require('./lib/features')
+ const attribute = require('./lib/attribute')
++const loadMcData = require('minecraft-data')
++const nbt = require('prismarine-nbt')
++
++// A PlayerState is built on every physics tick of every bot and in every pathfinder look-ahead. minecraft-data
++// re-parses the version string on each call, so its result is kept per version.
++const mcDataByVersion = new Map()
++function getMcData (version) {
++  let mcData = mcDataByVersion.get(version)
++  if (mcData === undefined) {
++    mcData = loadMcData(version)
++    mcDataByVersion.set(version, mcData)
++  }
++  return mcData
++}
+ 
+ function makeSupportFeature (mcData) {
+   return feature => features.some(({ name, versions }) => name === feature && versions.includes(mcData.version.majorVersion))
+@@ -802,8 +816,7 @@ function getEnchantmentLevel (mcData, enchantmentName, enchantments) {
+ 
+ class PlayerState {
+   constructor (bot, control) {
+-    const mcData = require('minecraft-data')(bot.version)
+-    const nbt = require('prismarine-nbt')
++    const mcData = getMcData(bot.version)
+ 
+     // Input / Outputs
+     this.pos = bot.entity.position.clone()

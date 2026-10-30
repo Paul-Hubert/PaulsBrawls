@@ -1,0 +1,44 @@
+diff --git a/node_modules/minecraft-protocol/src/transforms/framing.js b/node_modules/minecraft-protocol/src/transforms/framing.js
+index 5dbadad..7ddd036 100644
+--- a/node_modules/minecraft-protocol/src/transforms/framing.js
++++ b/node_modules/minecraft-protocol/src/transforms/framing.js
+@@ -24,6 +24,17 @@ class Framer extends Transform {
+ 
+ const LEGACY_PING_PACKET_ID = 0xfe
+ 
++// A packet length is a varint of at most 5 bytes, and a TCP chunk often ends in the middle of one. readVarInt
++// would then throw a new PartialReadError (with its stack trace) once per chunk: check that the varint is whole first.
++// A prefix of 5 bytes or more is left to readVarInt, which reports it as before.
++function hasCompleteVarInt (buffer, offset) {
++  for (let i = offset; i < offset + 5; i++) {
++    if (i >= buffer.length) return false
++    if (!(buffer[i] & 0x80)) return true
++  }
++  return true
++}
++
+ class Splitter extends Transform {
+   constructor () {
+     super()
+@@ -47,9 +58,9 @@ class Splitter extends Transform {
+ 
+     let offset = 0
+     let value, size
+-    let stop = false
++    let stop = !hasCompleteVarInt(this.buffer, offset)
+     try {
+-      ({ value, size } = readVarInt(this.buffer, offset))
++      if (!stop) ({ value, size } = readVarInt(this.buffer, offset))
+     } catch (e) {
+       if (!(e.partialReadError)) {
+         throw e
+@@ -59,7 +70,8 @@ class Splitter extends Transform {
+       while (this.buffer.length >= offset + size + value) {
+         try {
+           this.push(this.buffer.slice(offset + size, offset + size + value))
+-          offset += size + value;
++          offset += size + value
++          if (!hasCompleteVarInt(this.buffer, offset)) break;
+           ({ value, size } = readVarInt(this.buffer, offset))
+         } catch (e) {
+           if (e.partialReadError) {

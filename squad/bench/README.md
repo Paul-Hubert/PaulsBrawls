@@ -67,7 +67,7 @@ npm run bench:load -- --ns 10,30 --profile 10,30 --label profiled
 | `--plugins none` / `--plugins -autoEat,-hawkEye` | load no plugin, or skip some (a no-op plugin in their place) |
 | `--view normal` | the bots' view distance (`short` = 8 chunks; R8 rules out `tiny`) |
 | `--movements canDig=false,allowSprinting=false` | overrides on the runtime's Movements object (it is restored after every order, so they hold) |
-| `--astar-budget 20` | prototype, a hard cap: all bots together get at most 20 ms of A* per 50 ms window; a search that finds the window spent waits (its waiting does not count against `thinkTimeout`) |
+| `--astar-budget 20` | the runtime's own A* budget (`pathfinding.astarBudgetMs`, the patched `AStar.setBudget`; it was a prototype here): all bots together get at most 20 ms of A* per 50 ms window; a search that finds the window spent waits (its waiting does not count against `thinkTimeout`) |
 | `--think-on-compute` | prototype: `thinkTimeout` counts compute time, not wall time |
 | `--lookahead-cap 20`, `--lookahead-memo 4`, `--lookahead-blockcache` | the pathfinder's look-ahead (`lib/physics.js`): a horizon cap; the same sprint/jump decision for the same next node for 4 ticks; its block reads cached for the tick |
 | `--astar-blockcache`, `--astar-blockcache-world` | A*'s neighbour lookups (`Movements.getBlock`) cached for the tick, or until the block changes (`blockUpdate`, chunk events) |
@@ -77,6 +77,12 @@ npm run bench:load -- --ns 10,30 --profile 10,30 --label profiled
 
 The source edits apply only inside the `bench:load` process that was given the flag, and they fail loudly if the
 dependency's code changed. `npm run bench:compare` lines the experiments up against the `control-*` runs.
+
+**Since the patches (docs/32 B, [patches/](../patches/)) the defaults include the library fixes**, so a plain run is
+the new control, and an "after" run needs no flag. `--physics-hoist` and `--stuck-ticks` now refuse to start (the
+code they edit has changed). `--mcdata-memo`, `--cheap-varint`, `--lookahead-*` and `--astar-blockcache(-world)` still
+load, but each stacks a second memo or cache on the patched one, so they measure nothing new. `--astar-budget` sets
+the runtime's config. `--workers N` (`pathfinding.workers`, the pathfinding worker pool) will come with docs/32 D.
 
 **Run it on AC power, with the PC unlocked and awake.** Locking a modern-standby laptop puts it to sleep, whatever
 `SetThreadExecutionState` asks. A standby freezes both the runtime and the server, and the phase it cuts is lost.

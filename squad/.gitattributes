@@ -1,0 +1,3 @@
+# patch-package applies these with LF line endings: keep them LF on every checkout (core.autocrlf would otherwise
+# turn them CRLF on Windows and the patches would no longer match the LF sources in node_modules).
+patches/*.patch text eol=lf

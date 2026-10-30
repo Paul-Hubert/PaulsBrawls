@@ -5,7 +5,7 @@
 
 import { join } from 'node:path';
 
-import { loadConfig, type SquadConfig } from './config';
+import { applyPathfinding, loadConfig, type SquadConfig } from './config';
 import { BotPool, type BotPoolOptions } from './bots/pool';
 import { Journal } from './journal/journal';
 import { LeaseManager } from './leases';
@@ -31,6 +31,7 @@ export async function start(
   cfg: SquadConfig,
   opts: { connectBots?: boolean; installGuards?: boolean; pool?: Pick<BotPoolOptions, 'createBot' | 'setup'> } = {},
 ): Promise<Started> {
+  applyPathfinding(cfg.pathfinding);
   const journal = new Journal(join(cfg.dataDir, 'squad.db'));
   const interrupted = journal.markInterrupted();
   const roster = new Roster(join(cfg.dataDir, 'roster.json'));

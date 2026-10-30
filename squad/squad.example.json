@@ -9,5 +9,6 @@
     "maxStandingMinutes": 120,
     "trialSeconds": 60,
     "maxTrialsPerTurn": 3
-  }
+  },
+  "pathfinding": { "astarBudgetMs": 0 }
 }

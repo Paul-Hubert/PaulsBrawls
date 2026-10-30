@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "postinstall": "patch-package --error-on-fail",
     "start": "tsx src/supervisor.ts squad.json",
     "start:direct": "tsx src/main.ts squad.json",
     "typecheck": "tsc --noEmit",
@@ -36,6 +37,7 @@
     "mineflayer-pathfinder": "^2.4.5",
     "mineflayer-pvp": "^1.3.2",
     "mineflayer-tool": "^1.2.0",
+    "patch-package": "8.0.1",
     "protodef": "^1.19.0",
     "typescript": "^5.7.2",
     "vec3": "^0.1.10",

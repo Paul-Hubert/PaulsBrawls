@@ -9,9 +9,15 @@
 // The pathfinder's look-ahead (lib/physics.js: canStraightLine, canSprintJump, canWalkJump, each simulating ticks
 // ahead with the bot's physics, every tick of a moving bot) is timed apart from the bots' own physics.
 //
+// Since docs/32 B, the library fixes these prototypes measured are patches of node_modules (squad/patches/, applied by
+// patch-package at install). What that means for each flag:
+//   • --astar-budget is no longer a prototype: bench/load.ts passes it to the runtime's config
+//     (pathfinding.astarBudgetMs → the patched AStar.setBudget). The wrapper below only times and counts the slices.
+//   • --physics-hoist and --stuck-ticks refuse to start: the code they edit is already changed by the patches.
+//   • --mcdata-memo, --cheap-varint, --lookahead-*, --astar-blockcache(-world) still load, but each now stacks on the
+//     patched code that does the same thing (a second memo or cache in front of the first), so they measure nothing new.
+//
 // Bench-only experiments live here, all off unless set:
-//   • setAstarBudget(ms): all bots together spend at most `ms` of A* per 50 ms window (a hard cap; each slice is also
-//     cut to a fair share, budget / searches seen in the last window). A prototype of "limit concurrent pathfinding".
 //   • setThinkOnCompute(true): thinkTimeout counts compute time instead of wall time, so a search is not failed
 //     ("Took to long to decide path") because the event loop or the budget kept it waiting.
 //   • setLookahead({ cap, memoTicks, blockCache }): the look-ahead simulates at most `cap` ticks (upstream: up to
@@ -70,7 +76,7 @@ if (PHYSICS_HOIST) {
       ["const mcData = require('minecraft-data')(bot.version)", 'const mcData = __mcDataFor(bot.version)'],
       ["const nbt = require('prismarine-nbt')", 'const nbt = __nbt'],
     ],
-    check: 'const nbt = __nbt',
+    check: 'const mcData = __mcDataFor(bot.version)',
   });
 }
 if (sourcePatches.size > 0) {
@@ -110,7 +116,7 @@ export interface Counters {
   astarMaxSlice: number;
   /** The most A* time spent by all bots inside one 50 ms window (ms) since the last reset. */
   astarMaxWindow: number;
-  /** Slices refused by the --astar-budget hard cap. */
+  /** Slices refused by the A* budget (pathfinding.astarBudgetMs, the patched AStar.setBudget). */
   astarStarved: number;
   /** --astar-blockcache: neighbour lookups served from the cache, and built. */
   astarCacheHits: number;
@@ -386,25 +392,17 @@ MovementsProto.getBlock = function (this: MovementsLike, pos: unknown, dx: unkno
 // -- mineflayer-pathfinder: A* slices ----------------------------------------------------------------------------
 
 interface AStarLike {
-  tickTimeout: number;
   startTime: number;
   __lastEnd?: number;
-  bestNode: unknown;
-  makeResult(status: string, node: unknown): unknown;
+  /** Set by the patched compute when the budget refused this search a slice (lib/astar.js, squad/patches/). */
+  waitingSince?: number | null;
 }
 const AStar = require('mineflayer-pathfinder/lib/astar') as { prototype: { compute: (this: AStarLike) => unknown } };
 const compute = AStar.prototype.compute;
 
-let budgetMs = 0;
 let thinkOnCompute = false;
 let windowStart = 0;
 let windowSpent = 0;
-const searchesThisWindow = new Set<object>();
-let searchesLastWindow = 1;
-
-export function setAstarBudget(ms: number): void {
-  budgetMs = ms;
-}
 
 export function setThinkOnCompute(on: boolean): void {
   thinkOnCompute = on;
@@ -416,29 +414,14 @@ AStar.prototype.compute = function (this: AStarLike) {
     if (windowSpent > counters.astarMaxWindow) counters.astarMaxWindow = windowSpent;
     windowStart = now;
     windowSpent = 0;
-    searchesLastWindow = Math.max(1, searchesThisWindow.size);
-    searchesThisWindow.clear();
   }
-  searchesThisWindow.add(this);
-  // thinkTimeout on compute time: the wall time between two slices of this search does not count.
-  if (thinkOnCompute && this.__lastEnd !== undefined) this.startTime += now - this.__lastEnd;
-  const saved = this.tickTimeout;
-  if (budgetMs > 0) {
-    // A hard cap: once every bot together spent the window's budget, a search waits for the next window (it gets
-    // its best partial path so far, as on any unfinished tick). The waiting does not count against thinkTimeout.
-    const left = budgetMs - windowSpent;
-    if (left < 0.5) {
-      this.startTime += this.__lastEnd !== undefined ? now - this.__lastEnd : 0;
-      this.__lastEnd = now;
-      counters.astarStarved++;
-      return this.makeResult('partial', this.bestNode);
-    }
-    this.tickTimeout = Math.max(0.5, Math.min(saved, left, budgetMs / searchesLastWindow));
-  }
+  // thinkTimeout on compute time: the wall time between two slices of this search does not count. After a slice the
+  // budget refused, the patched compute already forgives that wait itself: not twice.
+  if (thinkOnCompute && this.__lastEnd !== undefined && this.waitingSince == null) this.startTime += now - this.__lastEnd;
   try {
     return compute.call(this);
   } finally {
-    this.tickTimeout = saved;
+    if (this.waitingSince != null) counters.astarStarved++;
     const end = performance.now();
     const dt = end - now;
     this.__lastEnd = end;
