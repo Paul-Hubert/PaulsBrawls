@@ -6,3 +6,4 @@ export * from './palettes.mjs';
 export * from './components.mjs';
 export * from './build.mjs';
 export * from './walk.mjs';
+export * from './terrain.mjs';
