@@ -78,7 +78,9 @@ async function main(): Promise<void> {
     await rcon.command('difficulty easy');
   }
 
-  const cfg = parseConfig({ minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: 1500 }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN });
+  // LIVE_PATH_WORKERS=N runs the same scenarios with the pathfinding worker pool (docs/32 D).
+  const pathfinding = { workers: Number(process.env.LIVE_PATH_WORKERS ?? 0) };
+  const cfg = parseConfig({ minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: 1500, pathfinding }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN });
   const rt = await start(cfg, { connectBots: true, installGuards: true });
   const { pool, runner } = rt.service.deps;
   runner.on('notice', (n: Notice) => {
@@ -151,17 +153,21 @@ async function main(): Promise<void> {
       if (defend.memberNames().join() !== 'LiveArcher') throw new Error(`defend got ${defend.memberNames().join()}`);
       if (follow.memberNames().sort().join() !== 'LiveBrute,LiveMiner') throw new Error(`follow kept ${follow.memberNames().join()}`);
       await until(() => notices.some((n) => /Alice a réquisitionné LiveArcher pour « defend »/.test(n.text)), 5_000, 'the reclaim notice');
+      // Counted before the husk appears: the archer keeps its arrows from earlier runs (its player data persists), so
+      // "fewer than one stack" is not a shot.
+      const arrows = (): number => pool.bot('LiveArcher')!.inventory.items().filter((i) => i.name === 'arrow').reduce((s, i) => s + i.count, 0);
+      const arrowsBefore = arrows();
       // Next to the miner: a spot where a mob can stand (the canopy around spawn is leaves, §16).
       await rcon.command('execute at LiveMiner run summon husk ~2 ~ ~ {PersistenceRequired:1b,NoAI:1b,Health:4f,Tags:["squadlive"]}');
       await sleep(15_000);
       const left = (await rcon.command('kill @e[type=minecraft:husk,tag=squadlive]')).trim();
       const shot = defend.report.logs.join('\n');
-      const arrowsLeft = pool.bot('LiveArcher')!.inventory.items().filter((i) => i.name === 'arrow').reduce((s, i) => s + i.count, 0);
+      const arrowsLeft = arrows();
       await api('/api/orders/stop', { by: ALICE, target: `#${d.orderId}` });
       await until(() => follow.memberNames().includes('LiveArcher'), 10_000, 'the archer back in follow');
       await api('/api/orders/stop', { by: PAUL, target: 'all' });
-      if (arrowsLeft >= 64) throw new Error(`the archer never shot (arrows ${arrowsLeft}; husk: ${left}; log: ${shot.slice(0, 300)})`);
-      return `arrows left ${arrowsLeft}; after 15 s: "${left}"; archer returned to follow`;
+      if (arrowsLeft >= arrowsBefore) throw new Error(`the archer never shot (arrows ${arrowsBefore} → ${arrowsLeft}; husk: ${left}; log: ${shot.slice(0, 300)})`);
+      return `arrows ${arrowsBefore} → ${arrowsLeft}; after 15 s: "${left}"; archer returned to follow`;
     });
 
     await scenario('despawn: bots leave and the roster is empty', async () => {
