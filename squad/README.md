@@ -41,6 +41,20 @@ applies them too. To change a patch: edit the file in `node_modules`, then `npx 
 `squad.json`'s `pathfinding.astarBudgetMs` (default 20, 0 = off, at most 50) caps the A* time of all bots together per
 50 ms window: measured better than no cap at 10-30 moving bots (docs/31 §11).
 
+**Pathfinding workers (optional).** `squad.json`'s `pathfinding.workers` (default 0 = off, at most 16, capped at the
+cores minus one) runs the bots' A* searches on that many worker threads, over a shared mirror of the world
+([src/bots/pathworkers/](src/bots/pathworkers/)). The bots, their physics and the scripts stay on the main thread.
+Searches the workers cannot take (unknown goals, exclusion areas, a dead or silent worker) run on the main thread as
+before. Turn it on when the main thread is the limit (a slower PC, more bots): with 14 workers, 30 moving bots ran at a
+main-thread ELU of 0.2-0.34 instead of 0.44-0.62 (two sites, so rough), but the process grew to about 9 GB at 30 gathering bots
+(docs/31 §11.6).
+
+**Watching the load.** The runtime samples its event loop every 10 s and logs one warning a minute at most when the
+loop's p99 passes 250 ms or its ELU 0.9 (bots move in slow motion past that). `POST /api/metrics` returns the last
+10 s: `loop { p50, p99, max }`, `elu`, `cpuPct`, `rssMb`, `heapMb`, `skippedPackets`, and per bot `ticksPerSec`, path
+searches by outcome, path resets and deaf trips, plus `text`, the French line `/bots status` shows. One summary row
+per minute goes to the `vitals` table of `.squad-data/squad.db` (kept 7 days).
+
 ## In game
 
 | | |
@@ -53,6 +67,7 @@ applies them too. To change a patch: edit the file in `node_modules`, then `npx 
 | `/bots fix NAME [what is wrong]` | rewrite it from its last run report |
 | `/bots share NAME P…` / `unshare` / `delete` / `revert NAME V` | your commands are private until shared |
 | `/bots list` · `orders` · `commands` · `show NAME` · `tag BOT +t -t` · `ticket NAME` | |
+| `/bots status` | the runtime's load over the last 10 s: ELU, loop p99, the slowest bot's ticks/s |
 | admin: `despawn BOT` · `owners BOT add\|remove P…` · `list all` · `stop all` | |
 
 Stock commands everyone has: `come`, `follow`, `defend` (archers reclaimed, melee kept), `gather`, `deposit`,
@@ -68,6 +83,8 @@ what the agent reads and what `check_script` typechecks against). Examples: [src
 
 ```powershell
 npm run check       # lint + tsc + node:test (fakes only, no Minecraft)
+npm run bench:load  # the load benchmark (bench/README.md; never against production)
 npm run live-test   # real bots on the dev server (run/); ports and RCON password read from its server.properties
+$env:LIVE_PATH_WORKERS='4'; npm run live-test   # the same scenarios with 4 pathfinding workers
 $env:SERVER_PROPERTIES='../server/server.properties'; npm run live-test   # the production server (world left as is)
 ```

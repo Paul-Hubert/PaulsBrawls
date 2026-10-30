@@ -70,7 +70,7 @@
         "Serving over MCP (intended design)",
         "Related"
       ],
-      "bytes": 10725
+      "bytes": 10686
     },
     {
       "id": "verification-notes",
@@ -1996,7 +1996,7 @@
         "Gotchas & known issues",
         "Related"
       ],
-      "bytes": 29316
+      "bytes": 28954
     },
     {
       "id": "platform.entrypoints-and-wiring",
@@ -2165,7 +2165,7 @@
       "id": "squad.overview",
       "title": "Squad — player-owned Mineflayer bots ordered by LLM-written commands (as built)",
       "system": "squad",
-      "summary": "What runs today for /bots — the Node runtime in squad/ (processes, threads, bots, leases, orders, the command dialect, authoring over MCP, storage, HTTP API) and the mod's thin front in com.paul.brawl.squad — with the live results on the production server, the protocol hardening, and what is still unverified.",
+      "summary": "What runs today for /bots — the Node runtime in squad/ (processes, threads incl. the optional pathfinding workers, bots, leases, orders, the command dialect, authoring over MCP, storage, HTTP API, the patched dependencies, the lag monitor, /api/metrics and the vitals journal) and the mod's thin front in com.paul.brawl.squad (incl. /bots status) — with the live results on the production server, the protocol hardening, and what is still unverified.",
       "tags": [
         "squad",
         "bots",
@@ -2179,15 +2179,30 @@
         "claude-code",
         "kits",
         "8772",
-        "production"
+        "production",
+        "performance",
+        "patch-package",
+        "lag-monitor",
+        "metrics",
+        "vitals",
+        "pathfinding-workers",
+        "astar-budget"
       ],
       "sources": [
         "docs/29-squad-design.md",
+        "docs/31-squad-performance-review.md",
         "squad/src/main.ts",
         "squad/src/supervisor.ts",
         "squad/src/bots/pool.ts",
         "squad/src/bots/protocol.ts",
         "squad/src/bots/hardening.ts",
+        "squad/src/bots/pathworkers/client.ts",
+        "squad/src/bots/pathworkers/worker.mjs",
+        "squad/src/bots/pathworkers/serialize.ts",
+        "squad/src/config.ts",
+        "squad/src/vitals/lag-monitor.ts",
+        "squad/src/vitals/metrics.ts",
+        "squad/patches/",
         "squad/src/leases.ts",
         "squad/src/orders/runner.ts",
         "squad/src/orders/order.ts",
@@ -2205,10 +2220,12 @@
         "squad/agent/prompts/squad-author.md",
         "src/main/java/com/paul/brawl/squad/"
       ],
-      "verified_at": "2026-10-29 (working tree on branch rework, uncommitted)",
+      "verified_at": "2026-10-30 (branch rework at 32e086a)",
       "path": "docs/system/squad/overview.md",
       "headings": [
         "Processes and threads",
+        "Patched dependencies (`squad/patches/`, docs/32 B)",
+        "Observability (docs/32 C)",
         "The runtime (`squad/src/`)",
         "Protocol hardening (found live, docs/29 §16)",
         "The mod (`src/main/java/com/paul/brawl/squad/`)",
@@ -2216,7 +2233,7 @@
         "State on the production server (`server/`, as of 2026-10-29)",
         "Not verified yet"
       ],
-      "bytes": 10521
+      "bytes": 18569
     }
   ]
 }

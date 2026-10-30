@@ -4,10 +4,16 @@
 > [squad/bench/](../squad/bench/README.md). The brief is [docs/30](30-squad-performance-review-prompt.md).
 > - **Scope set by Paul:** the second baseline run, the profiles and every experiment use at most 10 bots. The first
 >   baseline went to 30 bots and was run once.
-> - **Nothing in `squad/src/` changed.** Every fix below was measured as a bench-only patch behind a flag (§9).
+> - **Nothing in `squad/src/` changed** during the review. Every fix below was measured as a bench-only patch behind a
+>   flag (§9).
+> - **Since implemented (2026-10-30, docs/32):** the fixes, the observability and an optional pathfinding worker pool
+>   landed in `squad/`, measured on a desktop up to 30 bots. See **§11**; §0–§10 are the review as it was.
 > - **As built:** [docs/system/squad/overview.md](system/squad/overview.md). **Design:** [docs/29](29-squad-design.md).
 
 ## 0. Summary
+
+> **What was built from this, and the numbers after it: §11.** On the desktop of §11, 30 bots walking or gathering run at
+> 20 ticks/s with the defaults now in the runtime (the patches + an A* budget of 20 ms per 50 ms window).
 
 - **Capacity today (this laptop, one runtime process):**
   - **About 5 bots moving at once** (walking, gathering) run smoothly.
@@ -660,6 +666,11 @@ The cheap varint fix (§5.2) recovers more of the packet cost, for far less work
 
 ## 9. Prototypes and how to remove them
 
+> **No longer true since docs/32 (§11):** the fixes are now in `squad/patches/` and `squad/src/`. On the patched code
+> `--physics-hoist` and `--stuck-ticks` refuse to start, `--astar-budget` sets the runtime's
+> `pathfinding.astarBudgetMs`, and `--workers N` sets `pathfinding.workers`. The current flags are in
+> [squad/bench/README.md](../squad/bench/README.md). The text below is the state at the end of the review.
+
 **The runtime's default behaviour is unchanged:** nothing under `squad/src/` was edited. Everything measured lives in
 `squad/bench/` and acts only inside a `bench:load` process, behind a flag:
 
@@ -689,6 +700,9 @@ these runs and stays: delete it for a fresh one.
 
 ## 10. Not measured
 
+> **Since (§11):** the fixes were measured at N = 10–30 and the worker pool was built and measured, on a desktop
+> without a Minecraft client. §11.10 lists what is still open.
+
 - **The production PC as it runs.** Paul plays on the same machine, so the Minecraft client competes for the same 2
   performance cores. All runs here had no client.
 - **The production "Can't keep up! 2–6 s behind" while bots joined** was reproduced only once: 2.4 s behind, when 5 bots
@@ -715,3 +729,200 @@ these runs and stays: delete it for a fresh one.
 - **Squad's HTTP API under load:** the SSE broadcast was measured in isolation (§2.4), not with a busy mod.
 - **The supervisor itself.** The bench runs the runtime without it. No load phase delayed the loop beyond 1.7 s, except
   the `gather` freeze (§2.6), which would trip its 10 s heartbeat.
+
+## 11. Implemented (docs/32, 2026-10-30)
+
+The fixes of §8, the observability and the pathfinding worker pool (§6.2) were built from the brief in
+[docs/32](32-squad-performance-fixes-prompt.md), on a second, faster machine, and measured there. **Its numbers are
+not comparable one-to-one with §1–§10's laptop numbers.** Every number below is measured unless marked "est.".
+
+### 11.1 What landed
+
+| Commit | Workstream | What |
+|---|---|---|
+| `6e3f245` | A | `follow` keeps its `GoalFollow` between calls (no reset once a second). The guard proxy caches its plugin method wrappers and `isClass` results; the lease is still checked on every call. Tests for the `gather` freeze of §2.6 (fixed in `ab027f8`) |
+| `6fa8df0` | B | `patch-package` patches (`squad/patches/`): `PlayerState`'s requires hoisted (prismarine-physics); the cheap partial varint (minecraft-protocol framing); in mineflayer-pathfinder one tick clock per bot, the look-ahead memo + block cache, the A* block cache, "stuck" after 70 physics ticks, and `AStar.setBudget(ms)`. Config `pathfinding.astarBudgetMs` |
+| `19b05a0` | C | A lag monitor (copied from Eden, owned in `squad/`), per-bot counters in the pool, `POST /api/metrics`, one vitals row per minute in a new journal table (kept 7 days), `/bots status` in the mod |
+| `8eca4bb` | D | The pathfinding worker pool behind `pathfinding.workers` (default 0 = off): A* runs in worker threads over a shared mirror of the world; the bots, physics, look-ahead and scripts stay on the main thread (O2 and O4 hold) |
+| `a0bf481` | test | The live test's shot check counts arrows just before the husk (an archer's arrows pile up between runs); `LIVE_PATH_WORKERS=N` runs the live test with the worker pool |
+| `d137955` | default | `pathfinding.astarBudgetMs` defaults to 20 (§11.5) |
+| `32e086a` | fix | The A* block cache let `getMoveJumpUp` raise a cached block (§11.9) |
+
+### 11.2 This machine
+
+| | |
+|---|---|
+| PC | Desktop, AMD Ryzen 9 9950X3D, 16 cores / 32 threads, 61.5 GB RAM, on AC. No sleep or standby during any run (System log events 506/507/42/107 checked) |
+| OS, Node, Java | Windows 11 Pro 10.0.26200; Node v24.15.0; JDK 21 |
+| Server | The dev server in `run/` (port 25599, RCON 25575). `max-players` raised to 32 for the runs and put back afterwards |
+| Also running | **No Minecraft client** (as in §1) |
+| Runs | The N ramp with the runtime's 4 s login stagger (the old-code control at (2000, 2000) used 1.5 s); 60 s phases `idle`, `follow`, `walk`, `gather` as in §1 |
+
+**Sites.** Gather cuts the forest it runs in (§1), so every comparison names its site:
+- **Same-site pairs:** the control ran first on a fresh forest, the experiment second on the same site. The second run's
+  gather sees a thinner forest, which favours the control.
+- **Cross-site comparisons** (each run on its own forest) are rough, and are marked as such.
+
+### 11.3 Squad's own overhead (`npm run bench:micro`, workstream A)
+
+| Guarded call | Before (ns per op) | After |
+|---|---|---|
+| `bot.blockAt` | 96.6 | 71.2 |
+| `bot.entity` | 37.7 | 34.1 |
+| `bot.pathfinder.isMoving()` | 567 | 96.4 (5.9×) |
+
+### 11.4 Capacity before and after the patches (cross-site, rough)
+
+The old code (a worktree at `18cfa5e`) at (−2000, 2000) against the patched code with **no A\* budget** (`19b05a0`,
+budget 0) at (5840, 6256). Cells: ELU · loop p50/p99 ms · slowest bot's ticks/s · legs or logs in the 60 s phase (all
+bots).
+
+| N | Phase | Old code | Patches, budget 0 |
+|---|---|---|---|
+| 10 | idle | ELU 0.045 | 0.013 |
+| 30 | idle | 0.09 | 0.095 |
+| 10 | follow | 0.16 | 0.086 |
+| 30 | follow | 0.376, look-ahead 7.7% | 0.254, look-ahead 1.6% |
+| 10 | walk | 0.736 · 7.1/216 · 20 · 38 legs | 0.334 · 5.8/119 · 19.6 · 21 legs |
+| 20 | walk | 0.906 · 12.8/296 · 19.9 · 90 legs | 0.74 · 7.8/206 · 19.6 · 52 legs |
+| 30 | walk | 0.963 · 15.7/518 · 13.8 · 100 legs | 0.778 · 7.6/260 · 19.6 · 61 legs |
+| 10 | gather | 0.998 · 171/355 · 17.9 · 54 logs | 0.846 · 9.4/241 · 20 · 35 logs |
+| 20 | gather | 0.981 · 21/484 · 13.2 · 111 logs | 1.0 · 512/757 · 8.2 · 6 logs |
+| 30 | gather | 1.0 · 764/955 · 5.3 · 20 logs | 1.0 · 631/1026 · 6.4 · 13 logs |
+
+- **The (5840, 6256) site is harsh terrain**, so its legs and logs are low. A same-site check of the old code there
+  (N = 1 and 5, follow and walk) gave the same low legs and the same no-path results, and the new code did better on it:
+  - follow, N = 5: ELU 0.151 → 0.062, look-ahead 2.9% → 0.5%;
+  - walk, N = 5: ELU 0.297 → 0.229, look-ahead 1.3% → 0.1%.
+- **This machine is not saturated by 10 bots of the old code** on an easier site: at (2000, 2000), 1.5 s stagger, walk
+  ELU 0.378, gather ELU 0.336 (19 logs), 20 ticks/s.
+- **Without a budget, gather at 20–30 bots still saturates the loop** (ELU 1.0, 6.4–8.2 ticks/s). The budget fixes that
+  (§11.5).
+
+### 11.5 The A\* budget (same site, (0, −4000))
+
+Budget 0 (the control, first) against budget 20 ms per 50 ms window (second, on the thinner forest). Logs and legs in
+the 60 s phase.
+
+| N | Phase | Budget 0 | Budget 20 |
+|---|---|---|---|
+| 10 | walk | ELU 0.253, p99 31 ms, 45 legs | 0.192, p99 27, 56 legs |
+| 10 | gather | 0.885, p99 243, 20 t/s, 80 logs, 11 timeouts | 0.426, p99 29, 20 t/s, 102 logs, 24 timeouts |
+| 20 | walk | 0.343, 105 legs | 0.306, 117 legs |
+| 20 | gather | 1.0, p50 493 / p99 597, 8.2 t/s, 40 logs | 0.486, p50 6.2 / p99 29, 20 t/s, 95 logs |
+| 30 | walk | 0.669, p99 65, 153 legs | 0.425, p99 29, 169 legs |
+| 30 | gather | 1.0, p50 751 / p99 1018, 5.7 t/s, 23 logs | 0.582, p50 6.6 / p99 34, 20 t/s, 137 logs |
+| 30 | follow | 0.178 | 0.206 |
+
+- **Better in every moving phase**, most in gather: at 30 bots 23 → 137 logs and the slowest bot 5.7 → 20 ticks/s, on a
+  forest the control had already cut.
+- **Not better everywhere:** search timeouts at N = 10 gather rose 11 → 24, and following at N = 30 cost a little more
+  (ELU 0.178 → 0.206).
+
+### 11.6 The worker pool
+
+**First pass, same site ((−4000, 0)), before the block-cache fix of §11.9.** Workers 0 with budget 0 (the control)
+against 14 workers. "CPU" is the whole process, in % of one core.
+
+| N | Phase | Workers 0, budget 0 | Workers 14 |
+|---|---|---|---|
+| 10 | walk | ELU 0.272, 39 legs | 0.059, 38 legs |
+| 10 | gather | 0.951, 18.1 t/s, 52 logs, noPath 0, timeouts 17 | 0.094, 20 t/s, 39 logs, noPath 95, timeouts 0, CPU 420% |
+| 20 | walk | 0.816, p99 246, 53 legs | 0.121, p99 13, 68 legs |
+| 20 | gather | 1.0, 11.8 t/s, 30 logs | 0.339, 20 t/s, 27 logs, noPath 179, CPU 1460% |
+| 30 | walk | 0.902, p99 302, 80 legs | 0.207, p99 14, 122 legs |
+| 30 | gather | 1.0, 6.9 t/s, 19 logs | 0.632, 19.6 t/s, 14 logs, noPath 96, CPU 1681% |
+
+**The extra "noPath" is not a worker error.**
+- The same requests, run uncapped on the main thread, gave identical answers: 25 of 25, with the same visited-node counts.
+- They are `GoalLookAtBlock` searches for logs nobody can reach (left floating after cutting). Each is exhaustive:
+  13 000–20 000 nodes within the 64-block radius.
+- The loaded main thread timed them out (`thinkTimeout`); the workers finish them. Both outcomes make `mineBlock` skip
+  the log.
+- **The CPU is wasted:** every bot, and every `mineBlock` call, searches the same unreachable logs again, because the
+  set of failed targets lives for one call.
+
+**Final, cross-site:** the defaults (budget 20, workers 0) at (64, 4064) against 14 workers + budget 20 at
+(−1840, −1872), each on its own fresh forest.
+
+| N | Phase | Defaults | Workers 14 |
+|---|---|---|---|
+| 10 | idle | ELU 0.034 | 0.027 |
+| 10 | follow | 0.231, p99 27 | 0.053, p99 12 |
+| 10 | walk | 0.293, p99 28, 20 t/s, 52 legs | 0.068, p99 13, 20 t/s, 49 legs |
+| 10 | gather | 0.409, p99 29, 20 t/s, 119 logs | 0.075, p99 14, 20 t/s, 70 logs, noPath 44, CPU 229% |
+| 20 | follow | 0.399 | 0.113 |
+| 20 | walk | 0.422, p99 28, 103 legs | 0.142, p99 15, 97 legs |
+| 20 | gather | 0.5, p99 33, 20 t/s, 121 logs | 0.29, p99 22, 20 t/s, 87 logs, noPath 97, CPU 1128% |
+| 30 | idle | 0.046 | 0.038 |
+| 30 | follow | 0.443, p99 28 | 0.215, p99 19 |
+| 30 | walk | 0.584, p99 29, 20 t/s, 143 legs | 0.199, p99 15, 20 t/s, 146 legs |
+| 30 | gather | 0.624, p99 37, 20 t/s, 173 logs, RSS 2.7 GB | 0.342, p99 20, 20 t/s, 85 logs, noPath 104, CPU 1210%, RSS 9.2 GB |
+
+- **Memory:** with workers, RSS went from 2.2 GB (N = 10 idle) to 7.9 GB (N = 20 gather) and 9.2 GB (N = 30 gather);
+  with the defaults, 0.8 → 2.7 GB. The worker heaps are not capped, and the mirror and each search's state grow with
+  exhaustive searches.
+- **Health:** 14 of 14 workers alive at the end; 5 497 searches offloaded, 4 791 answered, 0 fallbacks to the main
+  thread, 0 restarts.
+
+### 11.7 Capacity on this machine
+
+- **Old code:** walking saturates at about 20 bots (ELU 0.91; at 30, 0.96 and 13.8 ticks/s). Gathering saturates at
+  about 10 (ELU 1.0, 17.9 ticks/s; at 30, 5.3 ticks/s and 20 logs).
+- **Defaults now (patches + budget 20):** 30 bots walking at ELU 0.58, gathering at 0.62, every bot at 20 ticks/s, loop
+  p99 ≤ 37 ms.
+  - 30 is the most measured (max-players and the ramp).
+  - **Est.:** extrapolated from ELU, the main thread would reach about 0.9 around 45–50 moving bots.
+- **With 14 workers:** 30 moving bots at a main-thread ELU of 0.2–0.34. The limit then is memory (9 GB at 30
+  gathering) and the workers' CPU, not the event loop.
+
+### 11.8 The defaults, and why
+
+- **`pathfinding.astarBudgetMs` = 20 (on).** Measured better than no budget in every moving phase at 10–30 bots, on the
+  same site (§11.5). Without a cap, many searches together fill the loop, every bot moves in slow motion, and searches
+  time out more. A lone search still gets its 10 ms `tickTimeout`, so light loads are unchanged. `0` turns it off;
+  at most 50.
+- **`pathfinding.workers` = 0 (off).**
+  - With the budget on, the main thread is no longer saturated at 30 moving bots on this machine (§11.7).
+  - The workers' gather did less work in both comparisons. They finish exhaustive no-path searches that the main
+    thread would time out, at 11–12 cores of CPU (§11.6).
+  - Memory grows to about 9 GB at 30 gathering bots.
+  - **When to turn it on:** when the main thread is the limit: a slower PC (the laptop of §1), or more bots. It cuts
+    the main thread's ELU 2–4×. It passed the live test (§11.9). It is capped at the cores minus one.
+
+### 11.9 Live tests, a bug, and other findings
+
+**Live tests** (`npm run live-test`, dev server):
+- Defaults: 5/5, with budget 0 at the time and again with budget 20 as the default.
+- `LIVE_PATH_WORKERS=4`: 5/5. `LIVE_PATH_WORKERS=14` (final): 5/5.
+- Two failures on the test's side:
+  - the arrow check assumed a fresh inventory (fixed in `a0bf481`);
+  - the spawn site near (−348, −146) had been stripped of reachable logs by repeated runs (the old code fails there the
+    same way). 2-block oak stumps were placed over RCON on the dev world.
+
+**A bug in the A\* block cache (patch B), fixed in `32e086a`.**
+- `getMoveJumpUp` did `blockC.height += 1` on the block `Movements.getBlock` returned. With the cache, that block is
+  shared, so every re-expansion raised the column until the jump looked too high. A bot carrying scaffolding lost its
+  jump-up-and-place moves.
+- On the main thread the cache clears every tick, which mostly hid it; in a path worker it lasted the whole search.
+- Fix: a local height in `movements.js`, and each worker search starts with an empty block cache.
+
+**Other findings (not fixed):**
+- **mineflayer-collectblock's listener pile-up:** `cancelTask` adds a `once(bot, 'collectBlock_finished')` and an
+  `'error'` listener each time a stalled `mineBlock` is cancelled. On a site with many stalls they pass 10
+  (`MaxListenersExceededWarning`, seen at N = 10 gather on the harsh site). Upstream behaviour, not from these changes.
+- **Unreachable logs are searched again and again** (§11.6). Recommendation (not done): remember unreachable targets
+  per order for about 2 minutes.
+- **The bench replaces the pool's skipped-packet reporter** with its own, so `/api/metrics` `skippedPackets` stays 0
+  under the bench.
+
+### 11.10 Not measured or not done
+
+- **`/bots status` in game:** only its JUnit test (`SquadStatusFormatTest`) ran.
+- **The worker pool's stats in the vitals:** `PathWorkerPool.stats()` exists, but no `/api/metrics` or vitals field
+  shows it yet.
+- **The collectblock listener pile-up** and **the unreachable-target memory** (§11.9).
+- **More than 30 bots.** The capacity above 30 is an estimate.
+- **The laptop with the Minecraft client running** (§10): still the production case, still not measured. The laptop is
+  where the worker pool may matter.
+- **Repeats:** each comparison ran once; the spread is unknown.

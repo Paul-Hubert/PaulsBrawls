@@ -113,11 +113,18 @@ cd squad
 npm install
 cp squad.example.json squad.json   # gitignored: minecraft host/port, token (or PAULSBRAWLS_SQUAD_TOKEN, same as the mod's squad.properties)
 npm start                          # supervisor + runtime on 127.0.0.1:8772 (stop with Ctrl+C; killing npm can leave node running)
-npm run check                      # lint + tsc + node:test on fakes (61 tests)
-npm run live-test                  # real bots + RCON; SERVER_PROPERTIES=../server/server.properties for production
+npm run check                      # lint + tsc + node:test on fakes (97 tests)
+npm run live-test                  # real bots + RCON; SERVER_PROPERTIES=../server/server.properties for production; LIVE_PATH_WORKERS=N
 ```
 
-- The bots run in the runtime's single event loop: no lag monitor exists yet (docs/system/squad/overview.md).
+- The bots run in the runtime's single event loop. A lag monitor watches it (warns at loop p99 > 250 ms or ELU > 0.9);
+  `POST /api/metrics` and `/bots status` (perm 0) show the last 10 s, and the journal keeps one `vitals` row per minute
+  for 7 days. Capacity and the defaults: [docs/31 §11](docs/31-squad-performance-review.md).
+- **Patched dependencies:** `npm install` runs `patch-package --error-on-fail` on `squad/patches/` (prismarine-physics,
+  minecraft-protocol, mineflayer-pathfinder). A patch that no longer applies fails the install; the runtime refuses to
+  start on an unpatched pathfinder. Change a patch by editing `node_modules` and running `npx patch-package <pkg>`.
+- `squad.json` `pathfinding.astarBudgetMs` (default 20 ms of A* per 50 ms window for all bots, 0 = off) and
+  `pathfinding.workers` (default 0; pathfinding worker threads, capped at cores − 1, ~9 GB RSS at 30 gathering bots).
 - A server mod whose items mineflayer cannot decode used to leave bots silently deaf (Universal Shops); the
   protocol hardening in `squad/src/bots/protocol.ts` now drops such packets (docs/29 §16).
 

@@ -595,3 +595,21 @@ completely, so missed events cannot leave it wrong.
   left the bow … (no clear line of fire?)" (`tests/helpers.test.ts`).
 - **Stopping the runtime on Windows:** stopping `npm start` from outside can leave `tsx src/supervisor.ts` and its
   child running. Use Ctrl+C in its console, or stop the `node` processes.
+- **Performance (docs/31, implemented by docs/32, 2026-10-30).** Measured: the bots' A* filled the one event loop at
+  6–8 moving bots on the laptop. What the runtime does now ([docs/31 §11](31-squad-performance-review.md)):
+  - **Patched dependencies** (`squad/patches/`, `patch-package --error-on-fail` on install): prismarine-physics'
+    `PlayerState` requires, minecraft-protocol's varint framing, and in mineflayer-pathfinder a per-bot tick clock, the
+    look-ahead memo + block cache, an A* block cache and `AStar.setBudget`. `tests/patches.test.ts` fails without each.
+    The A* block cache once let `getMoveJumpUp` raise a shared cached block (`blockC.height += 1`); it uses a local
+    height now.
+  - **"Stuck" is counted in physics ticks** (70), not 3.5 s of wall time: a busy loop no longer makes bots throw their
+    paths away and re-plan.
+  - **An A\* budget, on by default:** all searches together get at most `pathfinding.astarBudgetMs` (20) ms per 50 ms
+    window. Without it, 20–30 gathering bots saturated the loop (5.7–8.2 ticks/s); with it, 20 ticks/s.
+  - **An optional pathfinding worker pool** (`pathfinding.workers`, default 0): only A* moves to worker threads; the
+    bots and scripts stay on the main thread, so O2 and O4 hold. Off by default: with the budget the main thread holds
+    30 moving bots on the desktop, and the workers cost about 9 GB at 30 gathering bots.
+  - **A lag monitor** (copied from Eden, owned here), `POST /api/metrics`, a `vitals` journal table (one row per minute,
+    7 days) and `/bots status`. It warns at loop p99 > 250 ms or ELU > 0.9, not Eden's 1 s: bots are in slow motion
+    well before.
+  - `follow` keeps its goal between calls, and the guard proxy caches its wrappers.
