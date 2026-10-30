@@ -167,7 +167,9 @@ let running = false;
 function startSearch(m) {
   const world = worldOf(m.dim);
   const { standIn, movements } = botState(m.bot);
-  if (standIn.world !== world) standIn.seenVersion = -1; // another dimension: the cached blocks are of the old one
+  // Every search starts with an empty block cache, as on the main thread (where it lasts one tick): the cached blocks
+  // carry flags (safe, physical…) derived from the previous search's Movements settings, possibly another dimension.
+  standIn.seenVersion = -1;
   standIn.world = world;
   standIn.game = { minY: worlds.get(m.dim)?.minY ?? -64, height: worlds.get(m.dim)?.height ?? 384 };
   standIn.entity = { effects: m.effects ?? {} };

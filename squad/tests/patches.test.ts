@@ -247,6 +247,19 @@ test('patch 3b, pathfinder Movements.getBlock: cached per absolute position for 
   assert.equal(plain.blockAtCalls, 2);
 });
 
+test('patch 3b2, pathfinder Movements: a jump-up with scaffolding never raises a cached block (the worker searches went noPath)', () => {
+  const Movements = require('mineflayer-pathfinder/lib/movements') as new (bot: unknown) => any;
+  const Move = require('mineflayer-pathfinder/lib/move') as new (x: number, y: number, z: number, remaining: number, cost: number) => any;
+  // The cache lives until the bot ticks: no tick here, as in a pathfinding worker where a search's slices share it.
+  const bot = stubBot();
+  bot.pathfinder = { bestHarvestTool: () => null };
+  const m = new Movements(bot);
+  const node = new Move(0, 64, 0, 5, 0);
+  const counts = [0, 1, 2].map(() => m.getNeighbors(node).length);
+  assert.deepEqual(counts, [counts[0], counts[0], counts[0]], 'expanding the same node again gives the same moves');
+  assert.equal(m.getBlock(node, 1, 0, 0).height, 64, 'the air next to the node keeps its height');
+});
+
 test('patch 3c, pathfinder tick clock: one physicsTick listener per bot, ahead of the listeners registered before it', () => {
   const Movements = require('mineflayer-pathfinder/lib/movements') as new (bot: unknown) => any;
   const Physics = require('mineflayer-pathfinder/lib/physics') as new (bot: unknown) => any;

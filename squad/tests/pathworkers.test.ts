@@ -186,6 +186,22 @@ test('the worker finds the same path as the main thread, Moves rebuilt for the e
   assert.equal(pool.stats().fallbacks.goal, undefined);
 });
 
+test('a bot carrying scaffolding: the same path as an uncached search on the main thread (blocks to place)', async () => {
+  const pool = newPool();
+  const { bot } = attached(pool);
+  // The reference reads every block afresh, as upstream: a bot without events has no block cache.
+  const plain = { registry, game: bot.game, entity: bot.entity, entities: {}, inventory: bot.inventory, blockAt: bot.blockAt, pathfinder: bot.pathfinder };
+  for (const goal of [new goals.GoalBlock(4, GROUND + 6, -6), new goals.GoalNear(-6, GROUND + 5, -6, 1)]) {
+    const p = (b: any): SearchParams => ({ ...params(b, goal, movementsFor(b, true)), start: new Move(0, GROUND + 1, 0, 64, 0) });
+    const local = mainThread(p(plain));
+    assert.equal(local.status, 'success', `${goal.constructor.name}: reachable by placing blocks`);
+    const r = await settle(bot.pathfinder.searchOffload(p(bot)));
+    assert.equal(r.status, 'success', goal.constructor.name);
+    assert.deepEqual(coords(r.path), coords(local.path), goal.constructor.name);
+    assert.ok(r.path.some((n: any) => n.toPlace.length > 0), 'the path places blocks');
+  }
+});
+
 test('block changes reach the mirror; a chunk is mirrored once and kept until its last bot unloads it', async () => {
   const pool = newPool();
   const cols = buildColumns();

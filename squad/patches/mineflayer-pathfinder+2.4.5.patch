@@ -192,7 +192,7 @@ index e7a82cb..e08f93a 100644
        }
        if (performance.now() - this.startTime > this.timeout) { // total compute time
 diff --git a/node_modules/mineflayer-pathfinder/lib/movements.js b/node_modules/mineflayer-pathfinder/lib/movements.js
-index a7e3505..520b5f3 100644
+index a7e3505..c98f8a9 100644
 --- a/node_modules/mineflayer-pathfinder/lib/movements.js
 +++ b/node_modules/mineflayer-pathfinder/lib/movements.js
 @@ -1,6 +1,7 @@
@@ -244,6 +244,30 @@ index a7e3505..520b5f3 100644
      return b
    }
  
+@@ -312,6 +331,9 @@ class Movements {
+     if (blockH.physical && (this.getNumEntitiesAt(blockH.position, 0, 1, 0) > 0)) return
+     if (blockB.physical && !blockH.physical && !blockC.physical && (this.getNumEntitiesAt(blockB.position, 0, 1, 0) > 0)) return // It is fine if an ent falls on B so long as we don't need to replace block C
+ 
++    // The height of C once a block is placed there. A local, not blockC.height += 1: getBlock may return a cached
++    // block, and raising it would make every later look at that column "too high to jump".
++    let heightC = blockC.height
+     if (!blockC.physical) {
+       if (node.remainingBlocks === 0) return // not enough blocks to place
+ 
+@@ -342,11 +364,11 @@ class Movements {
+       toPlace.push({ x: node.x + dir.x, y: node.y - 1, z: node.z + dir.z, dx: 0, dy: 1, dz: 0 })
+       cost += this.placeCost // additional cost for placing a block
+ 
+-      blockC.height += 1
++      heightC += 1
+     }
+ 
+     const block0 = this.getBlock(node, 0, -1, 0)
+-    if (blockC.height - block0.height > 1.2) return // Too high to jump
++    if (heightC - block0.height > 1.2) return // Too high to jump
+ 
+     cost += this.safeOrBreak(blockA, toBreak)
+     if (cost > 100) return
 diff --git a/node_modules/mineflayer-pathfinder/lib/physics.js b/node_modules/mineflayer-pathfinder/lib/physics.js
 index ef9e389..44b9bcc 100644
 --- a/node_modules/mineflayer-pathfinder/lib/physics.js
