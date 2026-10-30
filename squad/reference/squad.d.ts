@@ -249,7 +249,10 @@ declare global {
 
   /** Walk to within `range` (default 1) of a position, in hops of ≤ 40 blocks. Throws if stuck for 20 s. */
   function goTo(bot: SquadBot, pos: Pos, range?: number): Promise<{ arrived: true; position: Vec3Class }>;
-  /** Stay within `range` (default 3) of an entity, for untilMs (else until the order stops). A null entity just waits untilMs (default 1 s). */
+  /**
+   * Stay within `range` (default 3) of an entity, for untilMs (else until the order stops). A null entity just waits untilMs (default 1 s).
+   * Call it in a loop: the next call on the same entity and range keeps the path going; after the last call the goal is cleared ~0.3 s later.
+   */
   function follow(bot: SquadBot, entity: Entity | null | undefined, range?: number, opts?: { untilMs?: number }): Promise<{ following: boolean }>;
   /** Melee an entity (best sword/axe) until it dies, is gone, or timeoutMs (default 30 s). */
   function attack(bot: SquadBot, entity: Entity | null | undefined, opts?: { timeoutMs?: number }): Promise<{ killed: boolean }>;

@@ -18,7 +18,7 @@ import pathfinderPkg from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 
 import { closeStrayWindow, windowOperation, type WindowBot } from '../bots/hardening';
-import { orderOf } from '../orders/guard';
+import { orderOf, unwrap } from '../orders/guard';
 import { HelperError, isBotLeft, isStopped } from './errors';
 
 const { goals } = pathfinderPkg;
@@ -214,10 +214,22 @@ export async function goTo(bot: Bot, pos: PosLike, range = 1): Promise<{ arrived
   return { arrived: true, position: bot.entity.position.clone() };
 }
 
+/** How long `follow` keeps its goal after a call returns, waiting for the next call to take it over. */
+export const FOLLOW_KEEP_MS = 300;
+
+/** Per body (the real bot): the GoalFollow `follow` last set, and the timer that will clear it if nobody keeps it. */
+const followKept = new WeakMap<object, { goal: unknown; timer?: ReturnType<typeof setTimeout>; cancel?: () => void }>();
+
 /**
  * Stay within `range` of an entity (the commander: `ctx.commander.entity(bot)`). Returns after `untilMs` when
  * given, otherwise when the order stops, the entity is gone or the bot leaves. A null entity just waits `untilMs`
  * (default 1 s), so a loop around it can look again.
+ *
+ * Commands call it in a loop (`follow(bot, e, 3, { untilMs: 1000 })`). A new goal resets the path and releases the
+ * controls, so a follower used to stop and re-plan once a second (docs/31 §5.3). The goal is kept instead: a call
+ * finding the GoalFollow it set last on the same entity at the same range leaves it alone, and a call that returns
+ * clears the goal only FOLLOW_KEEP_MS later, if no call kept it and it is still that same goal object (so the timer
+ * never clears a goal another order or another helper set meanwhile).
  */
 export async function follow(bot: Bot, entity: Entity | null | undefined, range = 3, opts: { untilMs?: number } = {}): Promise<{ following: boolean }> {
   const o = order(bot);
@@ -225,7 +237,25 @@ export async function follow(bot: Bot, entity: Entity | null | undefined, range 
     await sleepMs(opts.untilMs ?? 1_000);
     return { following: false };
   }
-  bot.pathfinder.setGoal(new goals.GoalFollow(entity, range), true);
+  const real = unwrap(bot) as Bot;
+  const kept = followKept.get(real);
+  if (kept) {
+    // A call follows on: the previous call's deferred clear must not fire, whatever this call does with the goal.
+    if (kept.timer) clearTimeout(kept.timer);
+    kept.cancel?.();
+    kept.timer = undefined;
+    kept.cancel = undefined;
+  }
+  const current = real.pathfinder?.goal as { entity?: unknown; rangeSq?: number } | null | undefined;
+  let goal: unknown;
+  if (kept && current === kept.goal && current instanceof goals.GoalFollow && current.entity === entity && current.rangeSq === range * range) {
+    goal = current;
+    bot.pathfinder.isMoving(); // a guarded call: the lease is checked here as setGoal would have
+  } else {
+    goal = new goals.GoalFollow(entity, range);
+    bot.pathfinder.setGoal(goal as never, true);
+    followKept.set(real, { goal });
+  }
   try {
     const deadline = opts.untilMs !== undefined ? Date.now() + opts.untilMs : Infinity;
     while (Date.now() < deadline) {
@@ -235,15 +265,44 @@ export async function follow(bot: Bot, entity: Entity | null | undefined, range 
       bot.pathfinder.isMoving(); // a guarded call: throws BotLeftError once the bot is no longer this order's
     }
   } finally {
-    if (o?.alive !== false) {
-      try {
-        bot.pathfinder.setGoal(null);
-      } catch {
-        /* left */
-      }
-    }
+    // When the order ended, the abort sequence (R4/R5) has cleared the goal already.
+    if (o?.alive !== false) deferFollowClear(bot, real, goal, o);
   }
   return { following: true };
+}
+
+/**
+ * Clear `goal` FOLLOW_KEEP_MS from now unless a follow call keeps it first. The clear goes through the guarded bot,
+ * so it is lease-checked like any call of the order: once the bot left the order (or the order ended), the call
+ * throws, the error is dropped here (nobody awaits a timer), and the goal of whoever drives the body now is left
+ * alone. The timer is unref'd, and cancelled when the order ends.
+ */
+function deferFollowClear(bot: Bot, real: Bot, goal: unknown, o: OrderLike | undefined): void {
+  const kept = followKept.get(real);
+  if (!kept || kept.goal !== goal) return; // a later call (another order's, say) set its own goal
+  const fire = (): void => {
+    kept.cancel?.();
+    kept.timer = undefined;
+    kept.cancel = undefined;
+    if (followKept.get(real) !== kept || real.pathfinder?.goal !== goal) return;
+    followKept.delete(real);
+    try {
+      bot.pathfinder.setGoal(null);
+    } catch {
+      /* the bot left the order or the order ended: the goal is no longer ours to clear */
+    }
+  };
+  const timer = setTimeout(fire, FOLLOW_KEEP_MS);
+  timer.unref?.();
+  kept.timer = timer;
+  if (o) {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      if (kept.timer === timer) kept.timer = undefined;
+    };
+    o.signal.addEventListener('abort', onAbort, { once: true });
+    kept.cancel = () => o.signal.removeEventListener('abort', onAbort);
+  }
 }
 
 /** Explore in a direction (Voyager: a Vec3 of -1/0/1 per axis) until `callback()` returns something, or `maxTime` s. */

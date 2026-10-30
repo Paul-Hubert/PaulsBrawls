@@ -101,13 +101,24 @@ export function guardBot(real: Bot, ctl: GuardControl): Bot {
       return settle(fn.apply(owner, args.map(unwrap)));
     };
 
+  // A plugin call (`bot.pathfinder.isMoving()`) used to build a new wrapper on every access: the wrappers are kept
+  // per plugin object and property, and rebuilt only when the property now holds another function (a plugin or a
+  // script replaced it). The lease is still checked on every call, inside the wrapper.
+  const nsMethods = new WeakMap<object, Map<PropertyKey, { fn: unknown; g: unknown }>>();
   const guardNamespace = (ns: object): object =>
     new Proxy(ns, {
       get(target, prop) {
         if (prop === REAL) return target;
         const v = Reflect.get(target, prop, target);
-        if (typeof v === 'function' && !isClass(v)) return guardMethod(target, v as (...a: unknown[]) => unknown);
-        return v;
+        if (typeof v !== 'function' || isClass(v)) return v;
+        let methods = nsMethods.get(target);
+        if (!methods) nsMethods.set(target, (methods = new Map()));
+        let g = methods.get(prop);
+        if (!g || g.fn !== v) {
+          g = { fn: v, g: guardMethod(target, v as (...a: unknown[]) => unknown) };
+          methods.set(prop, g);
+        }
+        return g.g;
       },
       set(target, prop, value) {
         return Reflect.set(target, prop, unwrap(value), target);
@@ -188,6 +199,17 @@ export function guardBot(real: Bot, ctl: GuardControl): Bot {
   return proxy;
 }
 
+// Whether a function is a class: a class is handed back unwrapped, since a guarded wrapper could not be `new`ed.
+// Printing a function's source on every property read was most of a plugin call's cost; a function's source never
+// changes, so the answer is kept per function.
+const classes = new WeakMap<object, boolean>();
+
 function isClass(fn: unknown): boolean {
-  return typeof fn === 'function' && /^class[\s{]/.test(Function.prototype.toString.call(fn));
+  if (typeof fn !== 'function') return false;
+  let c = classes.get(fn);
+  if (c === undefined) {
+    c = /^class[\s{]/.test(Function.prototype.toString.call(fn));
+    classes.set(fn, c);
+  }
+  return c;
 }
