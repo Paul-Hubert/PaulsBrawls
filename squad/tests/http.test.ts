@@ -193,3 +193,32 @@ test('metrics: the token is needed; the loop, the process and every bot, with th
   assert.equal(a.deafTrips, 0);
   assert.match(m.text, /^\[Bots\] Charge du runtime \(\d+ s\) : ELU \d+,\d\d · boucle p99 \d+ ms \(max \d+\) · CPU \d+ % · RAM \d+ Mo · /);
 });
+
+test('bound items over HTTP: check, a trigger starts, a second restarts an order that does not listen, stop', async () => {
+  const check = await api('/api/orders/check', { by: PAUL, admin: false, command: 'follow', tokens: ['4'], filters: ['archer1'] });
+  assert.deepEqual(check.json, { ok: true, text: '[Bots] Ordre « follow » : Me suivre', command: 'follow', summary: 'Me suivre' });
+  const bad = await api('/api/orders/check', { by: PAUL, command: 'follow', tokens: ['99'] });
+  assert.deepEqual(bad.json, { ok: false, text: '[Bots] « range » : maximum 16. Usage : /bots order follow [range=3]' });
+  assert.equal((await api('/api/orders/check', { by: PAUL, tokens: [] })).status, 400, 'command is required');
+
+  // The snapshot is sanitized on the way in: an unknown key is dropped, the entity id becomes a number.
+  const snap = { position: { x: 1, y: 64, z: 2 }, trigger: { kind: 'use', item: 'shield', evil: 1 }, lookEntity: { id: '5', name: 'zombie', type: 'mob', position: { x: 3, y: 64, z: 2 } } };
+  const start = await api('/api/orders/trigger', { by: PAUL, admin: false, command: 'follow', tokens: [], filters: [], snap });
+  assert.equal(start.json.ok, true, String(start.json.text));
+  assert.equal(start.json.started, true);
+  assert.match(String(start.json.text), /« follow » lancé \(#\d+\) : Archer1\./);
+  const first = rt.service.deps.runner.get(String(start.json.orderId))!;
+  assert.deepEqual(first.snap.trigger, { kind: 'use', item: 'shield' });
+  assert.equal(first.snap.lookEntity?.id, 5);
+
+  const again = await api('/api/orders/trigger', { by: PAUL, command: 'follow', tokens: ['5'], snap: { ...snap, position: { x: 9, y: 64, z: 2 } } });
+  assert.equal(again.json.restarted, true, String(again.json.text));
+  assert.notEqual(again.json.orderId, start.json.orderId);
+  assert.equal(first.status, 'stopped');
+  assert.deepEqual(rt.service.deps.runner.get(String(again.json.orderId))!.args, { range: 5 });
+
+  const stop = await api('/api/orders/trigger', { by: PAUL, command: 'follow', tokens: [], stop: true, snap: {} });
+  assert.deepEqual(stop.json, { ok: true, text: '[Bots] « follow » arrêté.', orderId: again.json.orderId, stopped: true });
+  const none = await api('/api/orders/trigger', { by: PAUL, command: 'follow', tokens: [], stop: true, snap: {} });
+  assert.equal(none.json.text, '[Bots] Aucun ordre « follow » en cours.');
+});

@@ -8,11 +8,11 @@ import type { BotPool } from './bots/pool';
 import { Authoring, type AuthoringMode } from './authoring';
 import type { Journal } from './journal/journal';
 import type { LeaseManager } from './leases';
-import type { OrderRunner, OrderRequest, StartResult } from './orders/runner';
+import type { OrderRunner, OrderRequest, StartResult, TriggerRequest, TriggerResult } from './orders/runner';
 import type { Player, Roster } from './roster';
-import type { CommandStore } from './store/commands';
+import type { CommandStore, Resolved } from './store/commands';
 import { checkScript } from './script/check';
-import { usage } from './script/manifest';
+import { parseArgs, usage } from './script/manifest';
 import type { Notice, Snapshot } from './types';
 import { errorMessage } from './api/errors';
 import type { ClaimRegistry } from './orders/claims';
@@ -151,6 +151,43 @@ export class SquadService {
 
   order(req: OrderRequest): Promise<StartResult> {
     return this.deps.runner.start(req);
+  }
+
+  /** A bound item was used (§5.4): deliver to the player's running order of that command, else start it. */
+  trigger(req: TriggerRequest): Promise<TriggerResult> {
+    return this.deps.runner.trigger(req);
+  }
+
+  /**
+   * `/bots orders bind`: may this player order that command with these args and @filters? The same rules as
+   * `/bots order` (the command resolves for them, the args parse against its manifest, the filters name their bots),
+   * without owning a bot: a captain may bind items to hand out. `command` in the answer is what the item stores:
+   * the stock name for a stock command, else `author:name`, so a given item still means the binder's command.
+   */
+  async checkOrder(by: Player, command: string, tokens: string[], filters: string[]): Promise<Answer> {
+    const owned = this.deps.roster.botsOf(by.uuid);
+    for (const f of filters) {
+      if (!owned.some((b) => b.name.toLowerCase() === f.toLowerCase())) return no(`[Bots] ${f} n'est pas un de tes bots.`);
+    }
+    let r: Resolved;
+    try {
+      r = this.deps.store.resolve(by.uuid, command);
+    } catch (e) {
+      return no(`[Bots] ${errorMessage(e)}`);
+    }
+    const name = r.meta.name;
+    const c = await checkScript(r.source, { typecheck: false });
+    if (!c.manifest) {
+      const why = c.diagnostics.find((d) => d.severity === 'error')?.message ?? 'manifeste invalide';
+      return no(`[Bots] « ${name} » v${r.version} ne se charge pas : ${why.split('\n')[0]}`);
+    }
+    try {
+      parseArgs(c.manifest, tokens);
+    } catch (e) {
+      return no(`[Bots] ${errorMessage(e)}. Usage : ${usage(name, c.manifest)}`);
+    }
+    const canonical = r.stock ? name : `${r.meta.author.name}:${name}`;
+    return ok(`[Bots] Ordre « ${canonical} » : ${c.manifest.summary}`, { command: canonical, summary: c.manifest.summary });
   }
 
   async stop(by: Player, admin: boolean, target: string): Promise<Answer> {

@@ -241,8 +241,11 @@ export function formatReport(r: OrderReport): string {
   if (r.error) out.push(`error${r.error.line ? ` at line ${r.error.line}` : ''}: ${r.error.name}: ${r.error.message}`, ...(r.error.stack ? [`stack:\n${r.error.stack}`] : []));
   out.push(`args: ${JSON.stringify(r.args)}`);
   out.push(`bots: ${r.bots.map((b) => `${b.name} (${b.role}${b.from ? `, reclaimed from #${b.from}` : ''})`).join(', ') || 'none'}`);
-  const ev = r.events.filter((e) => e.kind !== 'granted');
+  const ev = r.events.filter((e) => e.kind !== 'granted' && e.kind !== 'trigger');
   if (ev.length) out.push(`membership: ${ev.map((e) => `${e.kind} ${e.bot}${e.reason ? ` (${e.reason})` : ''}`).join('; ')}`);
+  // Clicks of a bound item (docs/29 §5.4): up to 200 per order, so only the count and the last ten.
+  const tr = r.events.filter((e) => e.kind === 'trigger');
+  if (tr.length) out.push(`triggers (${tr.length}): ${tr.slice(-10).map((e) => `${e.outcome} ${e.trigger ?? 'order'}${e.entity ? ` → ${e.entity}` : e.pos ? ` → ${e.pos.join(',')}` : ''}`).join('; ')}`);
   if (r.failures.length) out.push(`failures (${r.failures.length}):`, ...r.failures.slice(0, 20).map((f) => `  ${f.bot} ${f.op}${f.item !== undefined ? ` ${JSON.stringify(f.item)}` : ''}: ${f.error}`));
   if (r.logs.length) out.push(`log (${r.logs.length} lines):`, ...r.logs.slice(-60).map((l) => '  ' + l));
   const vit = Object.keys(r.vitals.before);

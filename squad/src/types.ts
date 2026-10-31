@@ -10,7 +10,26 @@ export interface Vec3Like {
   z: number;
 }
 
-/** The commander as the mod saw them when they typed the command (main thread, exact). */
+/** An entity the commander looked at or an arrow hit. `id` is the network entity id, mineflayer's `bot.entities` key. */
+export interface EntityRef {
+  id?: number;
+  name: string;
+  type: string;
+  username?: string;
+  position: Vec3Like;
+}
+
+export const TRIGGER_KINDS = ['use', 'arrow-release', 'arrow-hit'] as const;
+export type TriggerKind = (typeof TRIGGER_KINDS)[number];
+
+/** What a bound item did (docs/29 §5.4): a right-click, an arrow leaving the bow, or that arrow's first hit. */
+export interface Trigger {
+  kind: TriggerKind;
+  item: string;
+  hit?: { position: Vec3Like; entity?: EntityRef };
+}
+
+/** The commander as the mod saw them when they typed the command or used a bound item (main thread, exact). */
 export interface Snapshot {
   position: Vec3Like;
   yaw: number;
@@ -18,7 +37,9 @@ export interface Snapshot {
   dimension: string;
   heldItem: string | null;
   lookBlock: (Vec3Like & { name: string }) | null;
-  lookEntity: { name: string; type: string; username?: string; position: Vec3Like } | null;
+  lookEntity: EntityRef | null;
+  /** Present when a bound item gave the order (absent for `/bots order`). */
+  trigger?: Trigger;
 }
 
 export const EMPTY_SNAPSHOT: Snapshot = {
@@ -50,12 +71,22 @@ export interface Vitals {
 
 export interface ReportEvent {
   at: number;
-  kind: 'granted' | 'left' | 'joined' | 'acquired' | 'released';
-  bot: string;
+  kind: 'granted' | 'left' | 'joined' | 'acquired' | 'released' | 'trigger';
+  /** The bot, for the membership kinds (every kind but 'trigger'). */
+  bot?: string;
   role?: string;
   reason?: string;
   by?: string;
+  /** kind 'trigger' (§5.4): which trigger, with which item, what it did to the order, and where it aimed. */
+  trigger?: TriggerKind;
+  item?: string;
+  outcome?: TriggerOutcome;
+  pos?: [number, number, number];
+  entity?: string;
 }
+
+/** What a bound item's trigger did: started the order, restarted it (it did not listen), reached it, or stopped it. */
+export type TriggerOutcome = 'started' | 'restarted' | 'delivered' | 'stopped';
 
 /** Everything §7.4 asks of a report: what `/bots fix` hands the author agent. */
 export interface OrderReport {

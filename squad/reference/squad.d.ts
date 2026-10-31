@@ -31,7 +31,8 @@
 //    • Long-running commands loop on `while (!squad.stopped) { …; await squad.sleep(ms) }` and declare
 //      duration: 'until-stopped'. A stopped order throws OrderStoppedError at its next await: let it propagate.
 //    • Never block: no busy loops without an await. Use Minecraft ids ('oak_log', 'iron_ingot', 'zombie').
-//    • Timers (setTimeout, setInterval, sleep), listeners added with bot.on and squad.on are removed at the end.
+//    • Timers (setTimeout, setInterval, sleep), listeners added with bot.on, squad.on and ctx.commander.on are
+//      removed at the end.
 
 import type { Bot as MineflayerBot } from 'mineflayer';
 import type { Entity } from 'prismarine-entity';
@@ -166,24 +167,65 @@ declare global {
   //  ctx — the order's context
   // ---------------------------------------------------------------------------------------------------------
 
+  /** An entity in the commander's snapshot. `id` is the network entity id, mineflayer's key: bot.entities[id]. */
+  interface SquadAtEntity {
+    id?: number;
+    name: string;
+    /** 'player' or 'mob'. */
+    type: string;
+    username?: string;
+    position: Vec3Class;
+  }
+
+  /** What a bound item did: a right-click ('use'), an arrow leaving the bound bow, or that arrow's first hit. */
+  interface SquadAtTrigger {
+    kind: 'use' | 'arrow-release' | 'arrow-hit';
+    /** The bound item's id: 'shield', 'bow', 'iron_sword'… */
+    item: string;
+    /** 'arrow-hit' only: where the arrow hit, and the entity when it hit one. */
+    hit?: { position: Vec3Class; entity?: SquadAtEntity };
+  }
+
+  /** Where the commander stood and looked (exact, from the server), at the order or at the last bound-item click. */
+  interface SquadCommanderAt {
+    position: Vec3Class;
+    /** Degrees, Minecraft's convention: 0 = south (+Z), 90 = west (−X). */
+    yaw: number;
+    pitch: number;
+    dimension: string;
+    heldItem: string | null;
+    /** The block they were looking at (≤ 64 blocks), or null. */
+    lookBlock: (Vec3Class & { name: string }) | null;
+    /** The entity they were looking at, or null. */
+    lookEntity: SquadAtEntity | null;
+    /** Present when a bound item gave the order or this click (absent for /bots order). */
+    trigger?: SquadAtTrigger;
+  }
+
   interface SquadCtx {
     commander: {
       name: string;
       uuid: string;
-      /** Where the commander stood and looked when they typed the order (exact, from the server). */
-      at: {
-        position: Vec3Class;
-        yaw: number;
-        pitch: number;
-        dimension: string;
-        heldItem: string | null;
-        /** The block they were looking at (≤ 64 blocks), or null. */
-        lookBlock: (Vec3Class & { name: string }) | null;
-        /** The entity they were looking at, or null. */
-        lookEntity: { name: string; type: string; username?: string; position: Vec3Class } | null;
-      };
+      /**
+       * Where the commander stood and looked when they gave the order. An order started by a bound item has `trigger`.
+       * Each later click of the bound item while the order runs REPLACES this object (read ctx.commander.at again
+       * after a trigger; an old reference keeps the old snapshot).
+       */
+      at: SquadCommanderAt;
       /** The commander as `bot` sees them now (null when out of range or offline). Use it to follow/come. */
       entity(bot: SquadBot): Entity | null;
+      /**
+       * Each later click of the bound item while the order runs (the new `at`). Calling on() or next() once makes the
+       * order LISTEN: a click then re-aims it instead of restarting it (a click on an order that never listens stops
+       * and restarts it with the new snapshot). A throwing listener fails the order. Listeners end with the order.
+       */
+      on(event: 'trigger', fn: (at: SquadCommanderAt) => unknown): void;
+      off(event: 'trigger', fn: (at: SquadCommanderAt) => unknown): void;
+      /**
+       * The next click, or the latest one that arrived since the last call (one slot, latest wins). Resolves null after
+       * timeoutMs (no timeout: waits until the order ends); rejects with OrderStoppedError when the order stops.
+       */
+      next(timeoutMs?: number): Promise<SquadCommanderAt | null>;
     };
     /**
      * Player names isFriend() accepts: the commander, the co-owners of the order's bots, and the squad bots sharing an

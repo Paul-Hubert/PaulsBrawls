@@ -92,6 +92,12 @@ One ES module: `export const manifest = { summary, params, roles, duration }` an
 `export default async function (squad, args, ctx)`. Full API: [reference/squad.d.ts](reference/squad.d.ts) (also
 what the agent reads and what `check_script` typechecks against). Examples: [src/stock/](src/stock/).
 
+**Orders given with a bound item** (`/bots orders bind`, docs/29 §5.4). Using the item starts the order, with
+`ctx.commander.at.trigger` (`use`, or a bow's `arrow-release` then `arrow-hit`). A later click restarts it, unless the
+script listens with `ctx.commander.on('trigger', at => …)` or `await ctx.commander.next(ms)`. A listening order is
+re-aimed instead: each click replaces `ctx.commander.at`, and nothing is stopped or reclaimed. The mod asks the runtime
+on `POST /api/orders/check` (bind) and `POST /api/orders/trigger` (each click; `stop: true` for sneak + right-click).
+
 ## Check
 
 ```powershell

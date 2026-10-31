@@ -1,6 +1,7 @@
 // The order runner (docs/29 §7): resolve a command, compile it (once per version), run its module with a fresh
 // order scope, parse the args against its manifest, grant bots (§6.2, reclaiming as the roles demand), run it
 // under supervision, and journal + announce the end. Trials (§8.3) are orders too, on the author's idle bots.
+// A bound item's click (§5.4) is a trigger: it reaches the player's running order of that command, or starts it.
 
 import { EventEmitter } from 'node:events';
 
@@ -51,6 +52,17 @@ export type StartResult =
   | { ok: true; orderId: string; text: string; bots: Array<{ name: string; role: string; from?: string }> }
   | { ok: false; text: string; click?: Notice['click'] };
 
+/** A click of a bound item (§5.4): the binding's order line, and the snapshot taken at the click (with `trigger`). */
+export interface TriggerRequest extends OrderRequest {
+  /** Sneak + right-click: stop the binding's order. */
+  stop?: boolean;
+}
+
+export type TriggerResult =
+  | (StartResult & { started?: true; restarted?: true })
+  | { ok: true; text: ''; orderId: string; delivered: true }
+  | { ok: true; text: string; orderId?: string; stopped: boolean };
+
 export interface TrialRequest {
   author: Player;
   name: string;
@@ -67,6 +79,8 @@ export interface TrialRequest {
 export class OrderRunner extends EventEmitter {
   private readonly orders = new Map<string, Order>();
   private readonly compiled = new Map<string, CommandFactory>();
+  /** Starts in flight per binding key (commander, author, command): a trigger arriving meanwhile waits for them. */
+  private readonly starting = new Map<string, Promise<StartResult>>();
   private nextId: number;
 
   constructor(private readonly deps: RunnerDeps) {
@@ -123,7 +137,14 @@ export class OrderRunner extends EventEmitter {
 
   // -- orders ----------------------------------------------------------------------------------------------------
 
-  async start(req: OrderRequest): Promise<StartResult> {
+  /** `/bots order` (and a trigger's start): tracked, so a click arriving while it starts waits for it. */
+  start(req: OrderRequest): Promise<StartResult> {
+    const b = this.bindingOf(req.commander, req.command);
+    const p = this.launch(req);
+    return 'error' in b ? p : this.track(b.key, p);
+  }
+
+  private async launch(req: OrderRequest): Promise<StartResult> {
     const owned = this.deps.roster.botsOf(req.commander.uuid);
     if (owned.length === 0) return { ok: false, text: "[Bots] Tu ne possèdes aucun bot (un admin en crée avec /bots spawn)." };
     for (const f of req.filters ?? []) {
@@ -171,6 +192,89 @@ export class OrderRunner extends EventEmitter {
       const click = this.fixClick(req.commander, ref);
       return { ok: false, text: `[Bots] « ${ref.name} » v${ref.version} ne démarre pas : ${firstLine(e)}`, ...(click ? { click } : {}) };
     }
+  }
+
+  /**
+   * A bound item's trigger (§5.4 item 6). The binding's order is the player's running order of that command (author
+   * + name), whoever started it (a click or `/bots order`); trials never count.
+   * - `stop`: stop it.
+   * - Running and listening (it called `ctx.commander.on('trigger')` or `next()`): deliver. Nothing is stopped or
+   *   reclaimed, and the answer has no text (no chat line per click).
+   * - Running, not listening: restart it with the new snapshot, args, filters and take.
+   * - Not running: start it like `/bots order`.
+   * A trigger arriving while a start of the binding is in flight (the arrow-hit after the arrow-release that starts
+   * the order) waits for it, then goes to the order it started even before that order listens.
+   */
+  async trigger(req: TriggerRequest): Promise<TriggerResult> {
+    const b = this.bindingOf(req.commander, req.command);
+    if ('error' in b) {
+      // The command no longer resolves for the player (unshared, deleted): the stop gesture still stops what runs.
+      const stale = req.stop ? this.mineRunning(req.commander, (o) => refMatches(o, req.command)) : [];
+      return stale.length ? this.stopByTrigger(stale, req) : { ok: false, text: b.error };
+    }
+    let fresh: string | undefined;
+    for (let p = this.starting.get(b.key); p; p = this.starting.get(b.key)) {
+      const r = await p;
+      fresh = r.ok ? r.orderId : undefined;
+    }
+    // From here to the tracked restart below nothing awaits, so two triggers can never both start the binding.
+    const mine = this.mineRunning(req.commander, (o) => o.command.author.uuid === b.author && o.command.name === b.name);
+    if (req.stop) {
+      return mine.length ? this.stopByTrigger(mine, req) : { ok: true, text: `[Bots] Aucun ordre « ${b.name} » en cours.`, stopped: false };
+    }
+    const current = mine[mine.length - 1];
+    if (current && (current.listening || current.id === fresh) && current.deliverTrigger(req.snap)) {
+      return { ok: true, text: '', orderId: current.id, delivered: true };
+    }
+    const restarted = mine.map((o) => o.id);
+    const r = await this.track(
+      b.key,
+      (async () => {
+        for (const o of mine) o.silentEnd = true; // the start's answer is the player's line
+        await Promise.all(mine.map((o) => o.stop('stopped', `restarted by ${req.commander.name}'s bound item`)));
+        return this.launch(req);
+      })(),
+    );
+    if (!r.ok) {
+      // The old order is gone and the new one refused: say both, since the old one ended without a line.
+      return restarted.length ? { ...r, text: `[Bots] « ${b.name} » (${restarted.map((id) => '#' + id).join(', ')}) arrêté.\n${r.text}` } : r;
+    }
+    this.orders.get(r.orderId)?.noteTrigger(req.snap, restarted.length ? 'restarted' : 'started');
+    return restarted.length ? { ...r, restarted: true } : { ...r, started: true };
+  }
+
+  private async stopByTrigger(victims: Order[], req: TriggerRequest): Promise<TriggerResult> {
+    for (const o of victims) {
+      o.noteTrigger(req.snap, 'stopped');
+      o.silentEnd = true; // the answer below is the player's line
+    }
+    await Promise.all(victims.map((o) => o.stop('stopped', `stopped by ${req.commander.name}'s bound item`)));
+    const last = victims[victims.length - 1] as Order;
+    return { ok: true, text: `[Bots] « ${last.command.name} » arrêté.`, orderId: last.id, stopped: true };
+  }
+
+  /** The player's running (not starting, not ended) non-trial orders passing `pick`, oldest first. */
+  private mineRunning(commander: Player, pick: (o: Order) => boolean): Order[] {
+    return this.running().filter((o) => o.running && !o.trial && o.commander.uuid === commander.uuid && pick(o));
+  }
+
+  /** The binding key of a command line for a player: who orders and which command (author + name), not the version. */
+  private bindingOf(commander: Player, command: string): { key: string; author: string; name: string } | { error: string } {
+    try {
+      const r = this.deps.store.resolve(commander.uuid, command);
+      return { key: `${commander.uuid}|${r.meta.author.uuid}/${r.meta.name}`, author: r.meta.author.uuid, name: r.meta.name };
+    } catch (e) {
+      return { error: `[Bots] ${errorMessage(e)}` };
+    }
+  }
+
+  private track(key: string, p: Promise<StartResult>): Promise<StartResult> {
+    this.starting.set(key, p);
+    const clear = (): void => {
+      if (this.starting.get(key) === p) this.starting.delete(key);
+    };
+    p.then(clear, clear);
+    return p;
   }
 
   /** §8.3: run a draft on the author's idle bots for at most `seconds`; resolves to its report. */
@@ -395,7 +499,7 @@ export class OrderRunner extends EventEmitter {
     if (!order.trial) this.deps.journal.save(order.report);
     setTimeout(() => this.orders.delete(order.id), 60_000).unref(); // keep it a minute for /bots orders and reclaim notices
     this.emit('state');
-    if (order.trial) return;
+    if (order.trial || order.silentEnd) return;
     const r = order.report;
     const name = order.command.name;
     let text: string;
@@ -426,6 +530,17 @@ function describeBots(bots: Array<{ name: string; role: string; from?: string }>
   return bots
     .map((b) => `${b.name}${showRole ? ` (${b.role})` : ''}${b.from ? ` réquisitionné de #${b.from}` : ''}`)
     .join(', ');
+}
+
+/** A canonical binding (`name`, `author:name`, `squad:name`) names this order's command, whatever the share rights. */
+function refMatches(o: Order, ref: string): boolean {
+  const r = ref.trim().toLowerCase();
+  const colon = r.indexOf(':');
+  const name = colon > 0 ? r.slice(colon + 1) : r;
+  if (o.command.name !== name) return false;
+  if (colon <= 0) return true;
+  const owner = r.slice(0, colon);
+  return owner === STOCK_AUTHOR.name ? o.command.author.uuid === STOCK_AUTHOR.uuid : o.command.author.name.toLowerCase() === owner;
 }
 
 function firstLine(e: unknown): string {

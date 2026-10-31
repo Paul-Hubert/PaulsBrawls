@@ -25,6 +25,8 @@ sources:
   - squad/src/orders/guard.ts
   - squad/src/api/squad.ts
   - squad/src/api/helpers.ts
+  - squad/src/api/scope.ts
+  - squad/src/service.ts
   - squad/src/script/compile.ts
   - squad/src/script/check.ts
   - squad/src/script/typecheck-worker.mjs
@@ -143,13 +145,63 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
 | Bots | `bots/pool.ts`, `plugins.ts`, `hardening.ts`, `protocol.ts` | Dynamic pool, logins 4 s apart, reconnect with backoff, version pinned to 1.21.1, `viewDistance: 'short'`. Plugins: pathfinder, pvp, armor-manager, tool, collectblock, hawkEye (one copy of the module per bot: it keeps its bot and target in module variables, `freshHawkEye`), auto-eat. Pathfinder bounded (searchRadius 64, thinkTimeout 5 s, `hardening.ts`), its library patched and its A* budgeted (above). Per-bot vitals counters. Protocol hardening, below |
 | Roster | `roster.ts` | Bots, owners, tags in `.squad-data/roster.json`; the runtime is its only writer |
 | Leases | `leases.ts` | A lease stack per bot (depth 4). `plan` :84 grants idle bots first, then busy ones for `take: 'reclaim'` roles, all or nothing. `apply` :106 runs the old order's cleanup before reuse. `release` :130 hands a bot back to the live order below |
-| Orders | `orders/runner.ts`, `order.ts`, `guard.ts`, `claims.ts` | `start` :121 resolves, compiles (once per version) and runs. Each script gets a **lease-guarded Proxy** of each bot (`guardBot` :81): calls check the lease, listeners and timers are tracked, chat is rate-limited, `quit` is refused. Every leave and every end runs the R4/R5 abort sequence. Claims are shared across orders |
-| Dialect | `api/squad.ts`, `api/helpers.ts`, `api/scope.ts`, `reference/squad.d.ts` | `squad.parallel`, `squad.tasks` (work queue, re-queues the work of a leaving bot), claims, acquire/release, `ctx.commander`, `ctx.run`. Voyager-named helpers (`mineBlock`, `craftItem`, `goTo`, `shoot`…) |
+| Orders | `orders/runner.ts`, `order.ts`, `guard.ts`, `claims.ts` | `start` :141 (tracked per binding, below) → `launch` :147 resolves, compiles (once per version) and runs. Each script gets a **lease-guarded Proxy** of each bot (`guardBot` :81): calls check the lease, listeners and timers are tracked, chat is rate-limited, `quit` is refused. Every leave and every end runs the R4/R5 abort sequence. Claims are shared across orders. `trigger` :208: a bound item's click delivers to, restarts, starts or stops the player's order of that command (below) |
+| Dialect | `api/squad.ts`, `api/helpers.ts`, `api/scope.ts`, `reference/squad.d.ts` | `squad.parallel`, `squad.tasks` (work queue, re-queues the work of a leaving bot), claims, acquire/release, `ctx.commander` (with `on('trigger')`, `off`, `next`), `ctx.run`. Voyager-named helpers (`mineBlock`, `craftItem`, `goTo`, `shoot`…) |
 | Scripts | `script/compile.ts`, `manifest.ts`, `check.ts` | ESM rewritten in place, keeping lines (`vm.Script` filename `squad:<author>/<name>@vN.mjs`); loop budget + fences; manifest and args (French errors for players); `check_script` = compile + dry module run + typecheck (`BLOCKING_CODES` :40) |
 | Authoring | `authoring.ts`, `http/mcp.ts`, `agent/` | `cmd-…` tickets (30 min; manual 2 h). Seven MCP tools (`get_api_reference`, `get_context`, `list_commands`, `read_command`, `check_script`, `trial_run` ≤ 60 s on idle bots, `submit_command`). Claude Code config in `agent/claude-code/`, opencode config in `agent/opencode.json` |
 | Storage | `store/commands.ts`, `journal/journal.ts` | `.squad-data/commands/<uuid>/<name>/meta.json` + `vN.mjs` (append-only, shares, revert); SQLite `squad.db` (WAL, `synchronous=NORMAL`), one row per order with its full report, and one `vitals` row per minute |
-| HTTP | `http/server.ts` | 19 `POST /api/...` routes (incl. `/api/metrics`), `GET /events` (SSE: `hello`, `notice`, `state`; notices buffered while no mod listens), `POST /mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN` |
+| HTTP | `http/server.ts` | 21 `POST /api/...` routes (incl. `/api/metrics`, `/api/orders/check`, `/api/orders/trigger`), `GET /events` (SSE: `hello`, `notice`, `state`; notices buffered while no mod listens), `POST /mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN` |
 | Stock | `src/stock/*.mjs` | `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`, `raid`. Usable by everyone, and the agent's examples. `defend` and `raid`: below |
+
+## Orders bound to items — the runtime (docs/29 §5.4, 2026-10-31)
+
+The mod keeps the binding on the item stack and sends each click; the runtime decides what a click does.
+
+- **`POST /api/orders/check`** `{ by, command, tokens, filters }` (`SquadService.checkOrder`, `service.ts` :167), for
+  `/bots orders bind`. The same rules as `/bots order`, without owning a bot (a captain may bind items to hand out):
+  - every `@filter` names one of the player's bots;
+  - the command resolves for the player (`store.resolve`);
+  - the manifest loads (`checkScript`, no typecheck), and the args parse against it.
+  It answers `{ ok, text: '[Bots] Ordre « X » : <summary>', command, summary }`. `command` is canonical, what the item
+  stores: the stock name, else `author:name`. A refusal is `{ ok: false, text }`, with the usage line on bad args.
+- **`POST /api/orders/trigger`** `{ by, command, tokens, filters, take?, stop?, snap }` (`OrderRunner.trigger`,
+  `orders/runner.ts` :208). The binding's order is keyed by (commander = `by`, the command's author uuid + name; not
+  the version). It is the player's running, non-trial order of that command, whether a click or `/bots order` started
+  it:
+  - `stop: true`: stopped, `[Bots] « X » arrêté.` (`[Bots] Aucun ordre « X » en cours.` when none runs). It also
+    stops an order whose command no longer resolves for the player (unshared, deleted), matched by its canonical name.
+  - **Running and listening** (`order.listening`, set by `ctx.commander.on('trigger')` or `next()`): delivered,
+    `{ ok: true, text: '', orderId, delivered: true }`. Nothing is stopped, granted or reclaimed (O4).
+  - **Running, not listening:** every running order of that binding is stopped, then one is started with the new
+    snapshot, tokens, filters and take: the start's answer plus `restarted: true`.
+  - **Not running:** `launch`, exactly as `/api/orders/start`, plus `started: true`.
+  - Several running orders of one binding (two `/bots order`): delivery goes to the newest; a stop or a restart takes
+    them all.
+  - A restart and a stop end the old order without its « X » arrêté. notice (`order.silentEnd`): the route's answer is
+    the player's line. When a restart's new start is refused, the answer names the stopped order too.
+- **Starts in flight.** `runner.starting` (:83) maps a binding key to its start's promise. Every start is registered,
+  `/bots order` included (`start` → `track`), and so is a trigger's stop-then-start. A trigger that finds one waits
+  for it and loops until none is left, then decides synchronously, so two clicks never start two orders. The order
+  that start produced gets the trigger even before it listens: a bow's arrow-hit reaches the order its arrow-release
+  started. If that start failed, the first waiting trigger starts the order and the others are delivered to it.
+- **The script side** (`api/scope.ts`, `commanderOf` :166). One commander object per order, in a `WeakMap`, shared by
+  its `ctx.run` subroutines, so a click reaches the whole order once.
+  - On delivery (`Order.deliverTrigger`, `order.ts` :449) `order.snap` is replaced; `report.snap` keeps the start one.
+  - `atOf` (:140) builds a new `ctx.commander.at` (positions as `Vec3`, `trigger.hit` too). Every listener gets it.
+  - Then every pending `next()` resolves with it, or, with none waiting, it fills the one slot (latest wins).
+  - Listeners are wrapped by `Order.wrapCallback`, so a throwing listener fails that order only. They are dropped at
+    order end.
+  - `next(timeoutMs?)` resolves `null` on timeout (no timeout when omitted or infinite). It rejects with the order's
+    `OrderStoppedError` when the order ends: it listens to `order.signal`, aborted after the status is set.
+- **The report.** Each trigger is one `ReportEvent` `{ kind: 'trigger', outcome: started|restarted|delivered|stopped,
+  trigger, item, pos?, entity? }` on the order it reached (`noteTrigger` :461), at most 200 (`MAX_TRIGGER_EVENTS`),
+  then dropped silently. Events are journaled with the report at its start and end, never one write per click (R44).
+- **Sanitizing** (`snapshot`, `http/server.ts` :282). The snapshot of every route is rebuilt field by field: numbers
+  coerced, strings checked, unknown keys dropped. An entity `id` is kept only when it is an integer. A trigger is kept
+  only with a kind of `use|arrow-release|arrow-hit`; a non-string `item` becomes `''`.
+- **Reference and prompt.** `squad.d.ts` types `SquadCommanderAt`, `SquadAtTrigger`, `SquadAtEntity` (with `id`) and
+  `on` / `off` / `next`. The `squad-author` prompt has one paragraph: re-aim a running order rather than let it
+  restart. Tests: `squad/tests/triggers.test.ts`, plus the HTTP round trip in `tests/http.test.ts`.
 
 ## `defend` and the damage rules (after a 20-bot fight, docs/29 §16)
 
@@ -236,13 +288,15 @@ Three layers now:
 
 ## Tests
 
-- **`squad/`:** `npm run check` = lint + tsc + 122 `node:test` tests on fakes (compile, leases, guard, orders and
+- **`squad/`:** `npm run check` = lint + tsc + 140 `node:test` tests on fakes (compile, leases, guard, orders and
   reclaim, check/typecheck of the stock commands, HTTP + the real MCP client, supervisor wedge, protocol hardening,
   helpers, agent config drift, `follow`, the `gather` freeze, one test per dependency patch, the vitals, the worker
   pool: same path as the main thread on a synthetic world, the mirror's refcounts, every fallback, a clean stop;
   `defend`: commander-relative threats, the leash, two guards per target, distinct slots, quick shots, a hawkEye
   copy per bot, the slot fallback; friends (`raid.test.ts`: the team only, kept up to date; a guard attacks another
-  owner's bot) and `raid` (the march formation, two guards per enemy, archers' fire, the hunt and the end); ladders on a synthetic world: each pathfinder patch, the workers' same paths).
+  owner's bot) and `raid` (the march formation, two guards per enemy, archers' fire, the hunt and the end); ladders on a synthetic world: each pathfinder patch, the workers' same paths;
+  bound items (`triggers.test.ts`: delivery without restart, the slot, restart, start, stop, starts in flight, the
+  report's cap, a throwing listener, `ctx.run`, the reference typecheck, the check route, the snapshot sanitizer)).
 - **Mod:** 30 JUnit tests in `src/test/java/com/paul/brawl/squad/` (incl. `SquadStatusFormatTest`, `SquadFriendsTest`,
   `SquadRaidPlanTest`).
 - **Live:** `npm run live-test`, using RCON against the dev server (`run/`) or production

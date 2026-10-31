@@ -12,7 +12,7 @@ import { BotLeftError, OrderStoppedError, errorMessage, isBotLeft, isStopped } f
 import type { LeaseHolder, LeaseManager, LeftReason, RoleRequest } from '../leases';
 import type { BotFacts, Manifest, RoleSpec } from '../script/manifest';
 import { matches } from '../script/manifest';
-import type { CommandRef, Notice, OrderReport, OrderStatus, Player, Snapshot, Vitals } from '../types';
+import type { CommandRef, Notice, OrderReport, OrderStatus, Player, Snapshot, TriggerOutcome, Vitals } from '../types';
 import type { ClaimRegistry } from './claims';
 import { guardBot, unwrap, type GuardControl } from './guard';
 
@@ -64,12 +64,22 @@ interface TrackedListener {
 
 const MAX_LOG_LINES = 300;
 const MAX_FAILURES = 60;
+/** Trigger events kept in a report (§5.4): a bow fires 4 a second at most, so 200 is a long fight, not a log. */
+export const MAX_TRIGGER_EVENTS = 200;
 
 export class Order implements LeaseHolder {
   readonly id: string;
   readonly command: CommandRef;
   readonly commander: Player;
-  readonly snap: Snapshot;
+  /**
+   * The commander snapshot now: the one the order started with, then each delivered trigger's (§5.4). Replaced,
+   * never mutated, so `report.snap` keeps the start one and a script holding an old `ctx.commander.at` keeps it.
+   */
+  snap: Snapshot;
+  /** The script called `ctx.commander.on('trigger')` or `next()`: a later click is delivered to it, not a restart. */
+  listening = false;
+  /** End without the chat line: a bound item's stop or restart already answered the player (runner.trigger). */
+  silentEnd = false;
   readonly trial: boolean;
   readonly friends: Set<string>;
   readonly filename: string;
@@ -97,6 +107,8 @@ export class Order implements LeaseHolder {
   private ending?: Promise<void>;
   private sayTokens = 5;
   private sayAt = Date.now();
+  private triggerSink?: (snap: Snapshot) => void;
+  private triggerCount = 0;
   readonly report: OrderReport;
 
   constructor(
@@ -423,6 +435,45 @@ export class Order implements LeaseHolder {
     return new Promise<void>((resolve) => this.endWaiters.push(resolve));
   }
 
+  // -- triggers (orders bound to items, §5.4) ------------------------------------------------------------------
+
+  /** The order's `ctx.commander` (api/scope.ts) takes each delivered snapshot: it converts it and wakes the script. */
+  setTriggerSink(sink: (snap: Snapshot) => void): void {
+    this.triggerSink = sink;
+  }
+
+  /**
+   * A later click of the bound item reaches the running order: the snapshot becomes `ctx.commander.at`, listeners
+   * and a waiting `next()` get it. Nothing is stopped or reclaimed (O4). False when the order no longer runs.
+   */
+  deliverTrigger(snap: Snapshot): boolean {
+    if (!this.running) return false;
+    this.snap = snap;
+    this.noteTrigger(snap, 'delivered');
+    this.triggerSink?.(snap);
+    return true;
+  }
+
+  /**
+   * One report event per trigger, at most MAX_TRIGGER_EVENTS. They are journaled with the report (at its start and
+   * end), never one write per click: the hot stream stays out of SQLite (R44).
+   */
+  noteTrigger(snap: Snapshot, outcome: TriggerOutcome): void {
+    if (this.triggerCount >= MAX_TRIGGER_EVENTS) return; // dropped silently, like failures past their cap
+    this.triggerCount++;
+    const t = snap.trigger;
+    const pos = t?.hit?.position ?? snap.lookBlock;
+    const ent = t?.hit ? t.hit.entity : snap.lookEntity;
+    this.report.events.push({
+      at: Date.now(),
+      kind: 'trigger',
+      outcome,
+      ...(t ? { trigger: t.kind, item: t.item } : {}),
+      ...(pos ? { pos: [Math.round(pos.x), Math.round(pos.y), Math.round(pos.z)] as [number, number, number] } : {}),
+      ...(ent ? { entity: ent.username ?? ent.name } : {}),
+    });
+  }
+
   // -- logs, notices ------------------------------------------------------------------------------------------
 
   log(line: string): void {
@@ -501,6 +552,7 @@ export class Order implements LeaseHolder {
     this.intervals.clear();
     for (const done of [...this.sleepers]) done(new OrderStoppedError(this.stopWhy));
     this.removeListenersOf(null);
+    this.triggerSink = undefined;
 
     const held = this.deps.leases.endOrder(this.id);
     const names = new Set([...held, ...this.members.keys()]);

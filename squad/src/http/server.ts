@@ -9,8 +9,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { timingSafeEqual } from 'node:crypto';
 
 import type { SquadService } from '../service';
-import type { Notice, Snapshot } from '../types';
-import { EMPTY_SNAPSHOT } from '../types';
+import type { EntityRef, Notice, Snapshot, Trigger, TriggerKind, Vec3Like } from '../types';
+import { EMPTY_SNAPSHOT, TRIGGER_KINDS } from '../types';
 import type { Player } from '../roster';
 import { errorMessage } from '../api/errors';
 import { logger } from '../logger';
@@ -150,6 +150,18 @@ export class SquadHttp {
           ...(b.take === 'free' || b.take === 'reclaim' ? { take: b.take } : {}),
           snap: snapshot(b.snap),
         });
+      case '/api/orders/check':
+        return s.checkOrder(who(), str(b.command), strings(b.tokens ?? []), strings(b.filters ?? []));
+      case '/api/orders/trigger':
+        return s.trigger({
+          commander: who(),
+          command: str(b.command),
+          tokens: strings(b.tokens ?? []),
+          filters: strings(b.filters ?? []),
+          ...(b.take === 'free' || b.take === 'reclaim' ? { take: b.take } : {}),
+          ...(b.stop === true ? { stop: true } : {}),
+          snap: snapshot(b.snap),
+        });
       case '/api/orders/stop':
         return s.stop(who(), admin, typeof b.target === 'string' ? b.target : '');
       case '/api/orders/list':
@@ -231,17 +243,54 @@ function players(v: unknown): Player[] {
   return v.map(player);
 }
 
-function snapshot(v: unknown): Snapshot {
-  if (!v || typeof v !== 'object') return EMPTY_SNAPSHOT;
-  const o = v as Partial<Snapshot>;
-  const p = o.position ?? EMPTY_SNAPSHOT.position;
+// The snapshot becomes `ctx.commander.at` in a script and is journaled with the report, so it is rebuilt field by
+// field: numbers coerced, strings checked, unknown keys dropped, a trigger only of a known kind.
+
+type Obj = Record<string, unknown>;
+
+const isObj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v);
+const num = (v: unknown): number => Number(v) || 0;
+
+function vec(v: unknown): Vec3Like {
+  const p = isObj(v) ? v : {};
+  return { x: num(p.x), y: num(p.y), z: num(p.z) };
+}
+
+function entity(v: unknown): EntityRef | undefined {
+  if (!isObj(v)) return undefined;
+  const id = Number(v.id);
   return {
-    position: { x: Number(p.x) || 0, y: Number(p.y) || 0, z: Number(p.z) || 0 },
-    yaw: Number(o.yaw) || 0,
-    pitch: Number(o.pitch) || 0,
-    dimension: typeof o.dimension === 'string' ? o.dimension : 'overworld',
-    heldItem: typeof o.heldItem === 'string' ? o.heldItem : null,
-    lookBlock: o.lookBlock && typeof o.lookBlock === 'object' ? o.lookBlock : null,
-    lookEntity: o.lookEntity && typeof o.lookEntity === 'object' ? o.lookEntity : null,
+    ...(v.id !== undefined && v.id !== null && Number.isInteger(id) ? { id } : {}),
+    name: typeof v.name === 'string' ? v.name : '',
+    type: typeof v.type === 'string' ? v.type : '',
+    ...(typeof v.username === 'string' ? { username: v.username } : {}),
+    position: vec(v.position),
+  };
+}
+
+function trigger(v: unknown): Trigger | undefined {
+  if (!isObj(v) || !(TRIGGER_KINDS as readonly unknown[]).includes(v.kind)) return undefined;
+  const hit = isObj(v.hit) ? v.hit : undefined;
+  const hitEntity = hit ? entity(hit.entity) : undefined;
+  return {
+    kind: v.kind as TriggerKind,
+    item: typeof v.item === 'string' ? v.item : '',
+    ...(hit ? { hit: { position: vec(hit.position), ...(hitEntity ? { entity: hitEntity } : {}) } } : {}),
+  };
+}
+
+export function snapshot(v: unknown): Snapshot {
+  if (!isObj(v)) return EMPTY_SNAPSHOT;
+  const lookBlock = isObj(v.lookBlock) ? { ...vec(v.lookBlock), name: typeof v.lookBlock.name === 'string' ? v.lookBlock.name : '' } : null;
+  const t = trigger(v.trigger);
+  return {
+    position: vec(v.position),
+    yaw: num(v.yaw),
+    pitch: num(v.pitch),
+    dimension: typeof v.dimension === 'string' ? v.dimension : 'overworld',
+    heldItem: typeof v.heldItem === 'string' ? v.heldItem : null,
+    lookBlock,
+    lookEntity: entity(v.lookEntity) ?? null,
+    ...(t ? { trigger: t } : {}),
   };
 }
