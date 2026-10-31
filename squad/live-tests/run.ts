@@ -11,16 +11,21 @@
 //
 // Scenarios: bots connect; `come` walks them to a point; `gather` mines logs (real collectblock); reclaim per role:
 // `follow` holds three bots, `defend` pulls only the archer away and it shoots a husk, then the archer returns to
-// `follow`; `/bots stop`; despawn. Evidence goes to live-tests/.runs/<ts>/ (journal, result.json).
+// `follow`; `/bots stop`; on the dev world, a ladder it builds: a bot follows the archer up it with `follow`, then with
+// `defend`; despawn. Evidence goes to live-tests/.runs/<ts>/ (journal, result.json).
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import pathfinderPkg from 'mineflayer-pathfinder';
+
 import { parseConfig } from '../src/config';
 import { start } from '../src/main';
 import type { Notice } from '../src/types';
 import { Rcon } from './rcon';
+
+const { goals } = pathfinderPkg;
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const PROPS_FILE = process.env.SERVER_PROPERTIES ? resolve(process.env.SERVER_PROPERTIES) : resolve(here, '..', '..', 'run', 'server.properties');
@@ -169,6 +174,59 @@ async function main(): Promise<void> {
       if (arrowsLeft >= arrowsBefore) throw new Error(`the archer never shot (arrows ${arrowsBefore} → ${arrowsLeft}; husk: ${left}; log: ${shot.slice(0, 300)})`);
       return `arrows ${arrowsBefore} → ${arrowsLeft}; after 15 s: "${left}"; archer returned to follow`;
     });
+
+    // A ladder the scenario builds itself, high above the dev world (never elsewhere): an 8-block pillar with a ladder on
+    // its south face and a platform on top. LiveArcher climbs it; LiveClimber, owned by a player named after the
+    // archer (so the archer is the commander the order follows), comes after it with `follow`, then with `defend`
+    // (its own slot around the commander, docs/29 §16).
+    const LEADER = { uuid: '44444444-4444-4444-4444-444444444444', name: 'LiveArcher' };
+    const L = { x: 1000, y: 100, z: 1000 };
+    const climbScenario = (command: 'follow' | 'defend', detail: string) =>
+      scenario(`ladder: a bot ${detail}`, async () => {
+        if (!SETUP_WORLD) return 'skipped (it builds on the dev world only)';
+        const top = { x: L.x, y: L.y + 9, z: L.z - 2 };
+        await rcon.command(`forceload add ${L.x - 16} ${L.z - 16} ${L.x + 16} ${L.z + 16}`);
+        await rcon.command(`fill ${L.x - 10} ${L.y} ${L.z - 10} ${L.x + 10} ${L.y} ${L.z + 12} stone`);
+        await rcon.command(`fill ${L.x - 10} ${L.y + 1} ${L.z - 10} ${L.x + 10} ${L.y + 12} ${L.z + 12} air`);
+        await rcon.command(`fill ${L.x - 1} ${L.y + 1} ${L.z - 1} ${L.x + 1} ${L.y + 8} ${L.z + 1} stone`);
+        await rcon.command(`fill ${L.x - 3} ${L.y + 8} ${L.z - 3} ${L.x + 3} ${L.y + 8} ${L.z + 1} stone`);
+        await rcon.command(`fill ${L.x} ${L.y + 1} ${L.z + 2} ${L.x} ${L.y + 8} ${L.z + 2} minecraft:ladder[facing=south]`);
+        if (pool.status('LiveClimber') !== 'online') {
+          const r = await api('/api/bots/spawn', { by: PAUL, admin: true, name: 'LiveClimber', owners: [LEADER] });
+          if (!r.ok) throw new Error(r.text);
+          await until(() => pool.status('LiveClimber') === 'online', 60_000, 'LiveClimber online');
+          await sleep(1500);
+        }
+        // Put back where it was afterwards: a bot logs in again where it left (its player data), and `gather` needs trees.
+        const home = pool.bot('LiveArcher')!.entity.position.clone();
+        await rcon.command(`tp LiveArcher ${L.x - 0.5} ${L.y + 1} ${L.z + 8.5}`);
+        await rcon.command(`tp LiveClimber ${L.x + 1.5} ${L.y + 1} ${L.z + 8.5}`);
+        await sleep(2000);
+        const archer = pool.bot('LiveArcher')!;
+        const r = await api('/api/orders/start', { by: LEADER, command, tokens: [], snap: snapAt(archer.entity.position) });
+        if (!r.ok) throw new Error(r.text);
+        try {
+          await sleep(2000);
+          await archer.pathfinder.goto(new goals.GoalBlock(top.x, top.y, top.z));
+          const climber = (): number => pool.bot('LiveClimber')?.entity?.position?.y ?? 0;
+          await until(() => climber() >= top.y - 0.01, 30_000, `LiveClimber up the ladder (at y ${climber().toFixed(2)})`);
+          // Up there it stays: a path that ended over the top of the ladder let it slide back down (§16).
+          await sleep(4000);
+          const p = pool.bot('LiveClimber')!.entity.position;
+          if (p.y < top.y - 0.01) throw new Error(`LiveClimber slid back down to y ${p.y.toFixed(2)}`);
+          const ladder = (await rcon.command(`execute if block ${L.x} ${L.y + 5} ${L.z + 2} minecraft:ladder`)).trim();
+          if (!/passed/.test(ladder)) throw new Error(`the ladder was broken: ${ladder}`);
+          return `LiveClimber at ${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}, ${p.distanceTo(archer.entity.position).toFixed(1)} from the archer; ladder intact`;
+        } finally {
+          await api('/api/orders/stop', { by: LEADER, target: 'all' });
+          await rcon.command(`tp LiveArcher ${home.x} ${home.y} ${home.z}`);
+          await rcon.command(`tp LiveClimber ${home.x} ${home.y} ${home.z}`);
+        }
+      });
+    await climbScenario('follow', 'follows up a ladder');
+    await climbScenario('defend', 'defending the commander follows them up a ladder');
+    if (pool.status('LiveClimber') === 'online') await api('/api/bots/despawn', { by: PAUL, admin: true, name: 'LiveClimber' });
+    if (SETUP_WORLD) await rcon.command(`forceload remove ${L.x - 16} ${L.z - 16} ${L.x + 16} ${L.z + 16}`);
 
     await scenario('despawn: bots leave and the roster is empty', async () => {
       for (const b of BOTS) {

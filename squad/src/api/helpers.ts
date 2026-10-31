@@ -18,7 +18,7 @@ import pathfinderPkg from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 
 import { closeStrayWindow, windowOperation, type WindowBot } from '../bots/hardening';
-import { GoalFollowOffset, type FollowOffset } from '../bots/follow-goal';
+import { GoalFollowOffset, slotStandable, type FollowOffset } from '../bots/follow-goal';
 import { orderOf, unwrap } from '../orders/guard';
 import { HelperError, isBotLeft, isStopped } from './errors';
 
@@ -227,7 +227,8 @@ const followKept = new WeakMap<object, { goal: unknown; timer?: ReturnType<typeo
  * (default 1 s), so a loop around it can look again.
  *
  * `offset` ({x, z}, blocks) follows a point beside the entity instead: a bot's own slot around the commander, so
- * many followers do not all stand in the same block.
+ * many followers do not all stand in the same block. While nobody could stand at that slot (the commander is on a
+ * ladder, or at the edge of a drop), the bot follows the entity itself, at `range`, until the slot is open again.
  *
  * Commands call it in a loop (`follow(bot, e, 3, { untilMs: 1000 })`). A new goal resets the path and releases the
  * controls, so a follower used to stop and re-plan once a second (docs/31 §5.3). The goal is kept instead: a call
@@ -256,15 +257,21 @@ export async function follow(
     kept.cancel = undefined;
   }
   const offset = opts.offset ? { x: Number(opts.offset.x) || 0, z: Number(opts.offset.z) || 0 } : null;
+  /** The offset to follow at now: none while the slot is in the air or in a wall. */
+  const slot = (): FollowOffset | null => (offset && slotStandable(real, entity, offset) ? offset : null);
+  let want = slot();
   const current = real.pathfinder?.goal as { entity?: unknown; rangeSq?: number } | null | undefined;
   let goal: unknown;
-  if (kept && current === kept.goal && current instanceof goals.GoalFollow && current.entity === entity && current.rangeSq === range * range && sameOffset(current, offset)) {
+  const setFollowGoal = (): void => {
+    goal = want ? new GoalFollowOffset(entity, range, want) : new goals.GoalFollow(entity, range);
+    bot.pathfinder.setGoal(goal as never, true);
+    followKept.set(real, { goal });
+  };
+  if (kept && current === kept.goal && current instanceof goals.GoalFollow && current.entity === entity && current.rangeSq === range * range && sameOffset(current, want)) {
     goal = current;
     bot.pathfinder.isMoving(); // a guarded call: the lease is checked here as setGoal would have
   } else {
-    goal = offset ? new GoalFollowOffset(entity, range, offset) : new goals.GoalFollow(entity, range);
-    bot.pathfinder.setGoal(goal as never, true);
-    followKept.set(real, { goal });
+    setFollowGoal();
   }
   try {
     const deadline = opts.untilMs !== undefined ? Date.now() + opts.untilMs : Infinity;
@@ -273,6 +280,11 @@ export async function follow(
       if (!(entity as { isValid?: boolean }).isValid) break;
       await sleepMs(Math.min(250, Math.max(0, deadline - Date.now())));
       bot.pathfinder.isMoving(); // a guarded call: throws BotLeftError once the bot is no longer this order's
+      if (offset && (o?.alive ?? true) && (want !== null) !== (slot() !== null)) {
+        // The slot opened or closed (the commander stepped off the ladder, or onto it): switch goals.
+        want = want ? null : offset;
+        setFollowGoal();
+      }
     }
   } finally {
     // When the order ended, the abort sequence (R4/R5) has cleared the goal already.

@@ -1,5 +1,5 @@
 diff --git a/node_modules/mineflayer-pathfinder/index.js b/node_modules/mineflayer-pathfinder/index.js
-index b38bd30..55d7d7a 100644
+index b38bd30..472554f 100644
 --- a/node_modules/mineflayer-pathfinder/index.js
 +++ b/node_modules/mineflayer-pathfinder/index.js
 @@ -1,5 +1,3 @@
@@ -49,16 +49,86 @@ index b38bd30..55d7d7a 100644
      let result = astarContext.compute()
      if (optimizePath) result.path = postProcessPath(result.path)
      yield { result, astarContext }
-@@ -454,7 +468,7 @@ function inject (bot) {
+@@ -165,7 +179,21 @@ function inject (bot) {
+ 
+   bot.on('physicsTick', monitorMovement)
+ 
+-  function postProcessPath (path) {
++  // A search that runs over several ticks hands back its own nodes with every partial path, and goes on expanding
++  // them. Moving those onto their blocks (and the executor shifting their toBreak and toPlace) changed the search under
++  // it: a node on a ladder rose one block per tick and the search ended in noPath. The path is made of copies.
++  function copyMove (node) {
++    return new Move(node.x, node.y, node.z, node.remainingBlocks, node.cost, [...node.toBreak], [...node.toPlace], node.parkour)
++  }
++
++  // Whether the bot is in a ladder (or vine) block, hanging on to it.
++  function onClimbable () {
++    const b = bot.blockAt(bot.entity.position.floored(), false)
++    return !!b && (b.type === ladderId || b.type === vineId)
++  }
++
++  function postProcessPath (searched) {
++    const path = searched.map(copyMove)
+     for (let i = 0; i < path.length; i++) {
+       const curPoint = path[i]
+       if (curPoint.toBreak.length > 0 || curPoint.toPlace.length > 0) break
+@@ -204,6 +232,26 @@ function inject (bot) {
+     return newPath
+   }
+ 
++  // Whether path[i] steps onto a ladder from another column, the bot not in that column yet. A ladder node is placed
++  // against the plate (and a block up), so from beside the ladder it looks nearer than the step in front of it, and
++  // pathFromPlayer skipped that step: the bot walked straight at the ladder from the side, into the plate's edge, until
++  // "stuck" (found live).
++  function stepsOntoLadder (path, i) {
++    if (i <= 0 || i >= path.length) return false
++    const node = path[i]
++    const x = Math.floor(node.x)
++    const z = Math.floor(node.z)
++    const prev = path[i - 1]
++    if (Math.floor(prev.x) === x && Math.floor(prev.z) === z) return false
++    const p = bot.entity.position
++    if (Math.floor(p.x) === x && Math.floor(p.z) === z) return false
++    const ladderAt = (y) => {
++      const b = bot.blockAt(new Vec3(x, y, z), false)
++      return !!b && (b.type === ladderId || b.type === vineId)
++    }
++    return ladderAt(Math.floor(node.y)) || ladderAt(Math.floor(node.y) - 1)
++  }
++
+   function pathFromPlayer (path) {
+     if (path.length === 0) return
+     let minI = 0
+@@ -211,6 +259,7 @@ function inject (bot) {
+     for (let i = 0; i < path.length; i++) {
+       const node = path[i]
+       if (node.toBreak.length !== 0 || node.toPlace.length !== 0) break
++      if (stepsOntoLadder(path, i)) break
+       const dist = bot.entity.position.distanceSquared(node)
+       if (dist < minDistance) {
+         minDistance = dist
+@@ -228,7 +277,7 @@ function inject (bot) {
+       const n2 = path[minI + 1]
+       const d2 = bot.entity.position.distanceSquared(n2)
+       const d12 = n1.distanceSquared(n2)
+-      minI += d12 > d2 || reached ? 1 : 0
++      minI += reached || (d12 > d2 && !stepsOntoLadder(path, minI + 1)) ? 1 : 0
+     }
+ 
+     path.splice(0, minI)
+@@ -454,16 +503,17 @@ function inject (bot) {
      }
  
      if (path.length === 0) {
 -      lastNodeTime = performance.now()
 +      ticksSinceLastNode = 0
        if (stateGoal && stateMovements) {
-         if (stateGoal.isEnd(bot.entity.position.floored())) {
+-        if (stateGoal.isEnd(bot.entity.position.floored())) {
++        // On a ladder the goal is not reached yet: stopped there, the bot slides down (see AStar.computeSlice).
++        if (stateGoal.isEnd(bot.entity.position.floored()) && !onClimbable()) {
            if (!dynamicGoal) {
-@@ -463,7 +477,7 @@ function inject (bot) {
+             bot.emit('goal_reached', stateGoal)
+             stateGoal = null
              fullStop()
            }
          } else if (!pathUpdated) {
@@ -67,7 +137,7 @@ index b38bd30..55d7d7a 100644
            bot.emit('path_update', results)
            path = results.path
            astartTimedout = results.status === 'partial'
-@@ -494,7 +508,7 @@ function inject (bot) {
+@@ -494,7 +544,7 @@ function inject (bot) {
                resetPath('dig_error')
              })
              .then(function () {
@@ -76,7 +146,7 @@ index b38bd30..55d7d7a 100644
                digging = false
              })
          }
-@@ -565,7 +579,7 @@ function inject (bot) {
+@@ -565,7 +615,7 @@ function inject (bot) {
                .then(() => {
                  lockPlaceBlock.release()
                  placing = false
@@ -85,7 +155,7 @@ index b38bd30..55d7d7a 100644
                })
            })
            .catch(_ignoreError => {})
-@@ -578,7 +592,7 @@ function inject (bot) {
+@@ -578,7 +628,7 @@ function inject (bot) {
      let dz = nextPoint.z - p.z
      if (Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && Math.abs(dy) < 1) {
        // arrived at next point
@@ -94,7 +164,7 @@ index b38bd30..55d7d7a 100644
        if (stopPathing) {
          stop()
          return
-@@ -629,8 +643,8 @@ function inject (bot) {
+@@ -629,8 +679,8 @@ function inject (bot) {
      }
  
      // check for futility
@@ -106,7 +176,7 @@ index b38bd30..55d7d7a 100644
      }
    }
 diff --git a/node_modules/mineflayer-pathfinder/lib/astar.js b/node_modules/mineflayer-pathfinder/lib/astar.js
-index e7a82cb..e08f93a 100644
+index e7a82cb..2781262 100644
 --- a/node_modules/mineflayer-pathfinder/lib/astar.js
 +++ b/node_modules/mineflayer-pathfinder/lib/astar.js
 @@ -30,7 +30,30 @@ function reconstructPath (node) {
@@ -149,7 +219,7 @@ index e7a82cb..e08f93a 100644
    }
  
    makeResult (status, node) {
-@@ -65,9 +90,40 @@ class AStar {
+@@ -65,16 +90,49 @@ class AStar {
    }
  
    compute () {
@@ -191,8 +261,18 @@ index e7a82cb..e08f93a 100644
          return this.makeResult('partial', this.bestNode)
        }
        if (performance.now() - this.startTime > this.timeout) { // total compute time
+         return this.makeResult('timeout', this.bestNode)
+       }
+       const node = this.openHeap.pop()
+-      if (this.goal.isEnd(node.data)) {
++      // A path does not end on a ladder: a bot stopped there lets go and slides down, and with its goal reached on the
++      // way, a bot following someone never planned again (found live).
++      if (this.goal.isEnd(node.data) && !this.movements.getBlock(node.data, 0, 0, 0).climbable) {
+         return this.makeResult('success', node)
+       }
+       // not done yet
 diff --git a/node_modules/mineflayer-pathfinder/lib/movements.js b/node_modules/mineflayer-pathfinder/lib/movements.js
-index a7e3505..c98f8a9 100644
+index a7e3505..76111e0 100644
 --- a/node_modules/mineflayer-pathfinder/lib/movements.js
 +++ b/node_modules/mineflayer-pathfinder/lib/movements.js
 @@ -1,6 +1,7 @@
@@ -203,7 +283,29 @@ index a7e3505..c98f8a9 100644
  
  const cardinalDirections = [
    { x: -1, z: 0 }, // West
-@@ -108,6 +109,9 @@ class Movements {
+@@ -8,6 +9,21 @@ const cardinalDirections = [
+   { x: 0, z: -1 }, // North
+   { x: 0, z: 1 } // South
+ ]
++
++// The way a ladder faces (`facing`): the side it is climbed from. Its plate is on the opposite side of its block.
++const ladderFacings = {
++  north: { x: 0, z: -1 },
++  south: { x: 0, z: 1 },
++  west: { x: -1, z: 0 },
++  east: { x: 1, z: 0 }
++}
++
++// The direction a climbable block faces, or null (not climbable, or no single facing: a vine).
++function climbFacing (block) {
++  if (!block.climbable || typeof block.getProperties !== 'function') return null
++  return ladderFacings[block.getProperties().facing] ?? null
++}
++
+ const diagonalDirections = [
+   { x: -1, z: -1 },
+   { x: -1, z: 1 },
+@@ -108,6 +124,9 @@ class Movements {
      this.infiniteLiquidDropdownDistance = true
  
      this.entityIntersections = {}
@@ -213,7 +315,7 @@ index a7e3505..c98f8a9 100644
    }
  
    exclusionPlace (block) {
-@@ -216,8 +220,22 @@ class Movements {
+@@ -216,8 +235,22 @@ class Movements {
    }
  
    getBlock (pos, dx, dy, dz) {
@@ -236,7 +338,7 @@ index a7e3505..c98f8a9 100644
        return {
          replaceable: false,
          canFall: false,
-@@ -241,6 +259,7 @@ class Movements {
+@@ -241,6 +274,7 @@ class Movements {
      for (const shape of b.shapes) {
        b.height = Math.max(b.height, pos.y + dy + shape[4])
      }
@@ -244,7 +346,21 @@ index a7e3505..c98f8a9 100644
      return b
    }
  
-@@ -312,6 +331,9 @@ class Movements {
+@@ -270,6 +304,13 @@ class Movements {
+       }
+     }
+ 
++    // A ladder hangs on the block behind it, and breaking that block drops the ladder. Bots that could not climb a ladder
++    // dug through the wall behind it, and nobody could climb it after.
++    for (const dir of cardinalDirections) {
++      const facing = climbFacing(this.getBlock(block.position, dir.x, 0, dir.z))
++      if (facing && facing.x === dir.x && facing.z === dir.z) return false
++    }
++
+     return block.type && !this.blocksCantBreak.has(block.type) && this.exclusionBreak(block) < 100
+   }
+ 
+@@ -312,6 +353,9 @@ class Movements {
      if (blockH.physical && (this.getNumEntitiesAt(blockH.position, 0, 1, 0) > 0)) return
      if (blockB.physical && !blockH.physical && !blockC.physical && (this.getNumEntitiesAt(blockB.position, 0, 1, 0) > 0)) return // It is fine if an ent falls on B so long as we don't need to replace block C
  
@@ -254,7 +370,7 @@ index a7e3505..c98f8a9 100644
      if (!blockC.physical) {
        if (node.remainingBlocks === 0) return // not enough blocks to place
  
-@@ -342,11 +364,11 @@ class Movements {
+@@ -342,11 +386,11 @@ class Movements {
        toPlace.push({ x: node.x + dir.x, y: node.y - 1, z: node.z + dir.z, dx: 0, dy: 1, dz: 0 })
        cost += this.placeCost // additional cost for placing a block
  
@@ -268,6 +384,44 @@ index a7e3505..c98f8a9 100644
  
      cost += this.safeOrBreak(blockA, toBreak)
      if (cost > 100) return
+@@ -523,11 +567,20 @@ class Movements {
+   getMoveUp (node, neighbors) {
+     const block1 = this.getBlock(node, 0, 0, 0)
+     if (block1.liquid) return
+-    if (this.getNumEntitiesAt(node, 0, 0, 0) > 0) return // an entity (besides the player) is blocking the building area
++    // Building a pillar places a block where the bot stands, which an entity there would block. Climbing a ladder
++    // places nothing: the player climbing ahead (the one being followed) or the bot ahead is only in the way for a
++    // moment, so it costs, as on any other move. Refusing it made a ladder anyone is on unclimbable, and the bots dug
++    // through the wall behind it instead, which drops the ladder.
++    if (!block1.climbable && this.getNumEntitiesAt(node, 0, 0, 0) > 0) return // an entity (besides the player) is blocking the building area
++    // Up off the top of a ladder is a block of air over the ladder, where a body hangs on and slides back down: a path
++    // that ended there left the bot sliding to the foot of the ladder with nothing more to do (found live). The way off
++    // the top is the jump-up from the last ladder block onto the block beside it.
++    if (block1.climbable && !this.getBlock(node, 0, 1, 0).climbable) return
+ 
+     const block2 = this.getBlock(node, 0, 2, 0)
+ 
+     let cost = 1 // move cost
++    if (block1.climbable) cost += this.getNumEntitiesAt(node, 0, 1, 0) * this.entityCost
+     const toBreak = []
+     const toPlace = []
+     cost += this.safeOrBreak(block2, toBreak)
+@@ -656,7 +709,14 @@ class Movements {
+     this.getMoveDown(node, neighbors)
+     this.getMoveUp(node, neighbors)
+ 
+-    return neighbors
++    // A ladder is a plate on one side of its block, so a body coming in from the side stops against the plate's edge,
++    // and the executor, aiming at the plate, pushed into that edge until "stuck", then again on the same path. A ladder's
++    // block is entered from its front only (or along the ladder, from above or below).
++    return neighbors.filter((move) => {
++      if (move.x === node.x && move.z === node.z) return true
++      const facing = climbFacing(this.getBlock(move, 0, 0, 0))
++      return !facing || (move.x - node.x === -facing.x && move.z - node.z === -facing.z)
++    })
+   }
+ }
+ 
 diff --git a/node_modules/mineflayer-pathfinder/lib/physics.js b/node_modules/mineflayer-pathfinder/lib/physics.js
 index ef9e389..44b9bcc 100644
 --- a/node_modules/mineflayer-pathfinder/lib/physics.js

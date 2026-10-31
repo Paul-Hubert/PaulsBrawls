@@ -1,7 +1,7 @@
 // The stock `defend` after a live fight of 20 bots against zombie waves: guards chased the zombie nearest to
 // THEMSELVES far from the player, all piled on the same creature, stood in the same block between threats, and
 // archers waited a fixed 1.5 s per shot. Plus the helpers it is built on (commander-relative search, the attack
-// leash, follow offsets, the shot that returns when the arrow leaves) and hawkEye's per-bot copy.
+// leash, follow offsets and their fallback while the slot is in the air (a commander on a ladder), the shot that returns when the arrow leaves) and hawkEye's per-bot copy.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +10,7 @@ import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
 
 import { attack, follow, FOLLOW_KEEP_MS, nearestEntity, nearestHostile, shoot } from '../src/api/helpers';
-import { GoalFollowOffset } from '../src/bots/follow-goal';
+import { GoalFollowOffset, slotStandable } from '../src/bots/follow-goal';
 import { freshHawkEye } from '../src/bots/plugins';
 import { serializeGoal } from '../src/bots/pathworkers/serialize';
 import type { Order } from '../src/orders/order';
@@ -99,6 +99,65 @@ test('follow: an offset follows a slot beside the entity, kept between calls wit
   assert.ok(!(b.pathfinder.goal instanceof GoalFollowOffset), 'no offset: a plain GoalFollow');
   // The pathfinding workers mirror it like a GoalFollow: a GoalNear on the slot.
   assert.deepEqual(serializeGoal(new GoalFollowOffset(e as never, 2, { x: 0, z: -6 }), null), { t: 'GoalNear', f: { x: 20, y: 64, z: 4, rangeSq: 4 } });
+  await tick(FOLLOW_KEEP_MS + 100);
+});
+
+/**
+ * A FakeBot over a small world: stone up to y = 63, a 3×3 tower (x 9..11, z 9..11) up to y = 71 with a ladder on its
+ * south face (x = 10, z = 12), `extra` solid blocks.
+ */
+function towerBot(name: string, extra: Array<[number, number, number]> = []): FakeBot {
+  const b = new FakeBot(name);
+  const solid = new Set(extra.map((p) => p.join(',')));
+  (b as unknown as { blockAt: (p: Vec3) => unknown }).blockAt = (p: Vec3) => {
+    const x = Math.floor(p.x);
+    const y = Math.floor(p.y);
+    const z = Math.floor(p.z);
+    if (x === 10 && z === 12 && y >= 64 && y <= 71) return { name: 'ladder', boundingBox: 'block' };
+    const stone = y <= 63 || (x >= 9 && x <= 11 && z >= 9 && z <= 11 && y <= 71) || solid.has(`${x},${y},${z}`);
+    return stone ? { name: 'stone', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' };
+  };
+  return b;
+}
+
+test('slotStandable: on the ground or a slope, on a ladder; not in the air nor in a wall; an unknown block does not count', () => {
+  const b = towerBot('Guard');
+  const at = (x: number, y: number, z: number) => ({ position: new Vec3(x + 0.5, y, z + 0.5) });
+  assert.equal(slotStandable(b, at(0, 64, 0), { x: 3, z: 0 }), true, 'flat ground');
+  assert.equal(slotStandable(b, at(0, 65, 0), { x: 3, z: 0 }), true, 'one block above the ground: a slope');
+  assert.equal(slotStandable(b, at(0, 67, 0), { x: 3, z: 0 }), false, 'three blocks up: in the air');
+  assert.equal(slotStandable(b, at(10, 67, 12), { x: 3, z: 0 }), false, 'the commander on the ladder: the slot is in the air');
+  assert.equal(slotStandable(b, at(10, 67, 15), { x: 0, z: -3 }), true, 'a slot on the ladder');
+  assert.equal(slotStandable(b, at(10, 66, 13), { x: 0, z: -3 }), false, 'a slot inside the tower');
+  assert.equal(slotStandable(b, at(10, 72, 10), { x: 1, z: 0 }), true, 'on top of the tower');
+  assert.equal(slotStandable(b, at(10, 72, 10), { x: 3, z: 0 }), false, 'beyond its edge');
+  assert.equal(slotStandable(new FakeBot('Fake'), at(0, 90, 0), { x: 3, z: 0 }), true, 'blocks the bot does not know');
+});
+
+test('follow: while nobody could stand at the slot (the commander on a ladder), the bot follows the commander itself', async () => {
+  const b = towerBot('Guard');
+  const e = { isValid: true, position: new Vec3(10.5, 67, 12.5) };
+  await follow(b as never, e as never, 1.5, { untilMs: 20, offset: { x: 3, z: 0 } });
+  let g = b.pathfinder.goal as { entity?: unknown; rangeSq?: number };
+  assert.ok(!(g instanceof GoalFollowOffset), 'a plain GoalFollow');
+  assert.equal(g.entity, e);
+  assert.equal(g.rangeSq, 2.25);
+  await follow(b as never, e as never, 1.5, { untilMs: 20, offset: { x: 3, z: 0 } });
+  assert.equal(b.pathfinder.goal, g, 'kept between calls like any follow goal');
+  // At the top the slot is on the tower again: the next call goes back to it.
+  e.position = new Vec3(9.5, 72, 9.5);
+  await follow(b as never, e as never, 1.5, { untilMs: 20, offset: { x: 2, z: 0 } });
+  g = b.pathfinder.goal as GoalFollowOffset;
+  assert.ok(g instanceof GoalFollowOffset);
+  assert.deepEqual([g.x, g.y, g.z], [11, 72, 9]);
+  // Within one long call too: the commander steps onto the ladder, then off it.
+  const long = follow(b as never, e as never, 1.5, { untilMs: 1_500, offset: { x: 2, z: 0 } });
+  await tick(100);
+  e.position = new Vec3(10.5, 68, 12.5);
+  await until(() => !(b.pathfinder.goal instanceof GoalFollowOffset), 1_000, 'the switch to the commander');
+  e.position = new Vec3(10.5, 64, 16.5);
+  await until(() => b.pathfinder.goal instanceof GoalFollowOffset, 1_000, 'the switch back to the slot');
+  await long;
   await tick(FOLLOW_KEEP_MS + 100);
 });
 
