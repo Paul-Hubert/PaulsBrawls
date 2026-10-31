@@ -19,21 +19,26 @@ import com.mojang.brigadier.suggestion.SuggestionProvider;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.CommandSource;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.text.MutableText;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 
 /**
  * {@code /bots} (docs/29 §9). Admins: spawn, despawn, owners, stop all, list all. Owners: create, fix, order, stop,
- * list, orders, tag, commands, show, share, unshare, delete, revert, ticket. Anyone: status (the runtime's load).
+ * list, orders, tag, commands, show, share, unshare, delete, revert, ticket. Anyone: status (the runtime's load), and
+ * orders bind / unbind / bound (an order bound to the held item, §5.4; the clicks are SquadTriggers).
  * Every call goes to the squad runtime asynchronously; its French answer is shown on the main thread.
  */
 public final class SquadCommand {
 
     private static final String DISABLED = "[Bots] Squad est désactivé (squad.properties : enabled=false).";
+    private static final String BIND_USAGE = "[Bots] Usage : /bots orders bind NOM [arguments] [@bot …] [--reclaim|--free], l'objet à lier en main.";
 
     private SquadCommand() {}
 
@@ -92,7 +97,14 @@ public final class SquadCommand {
                             b.addProperty("all", true);
                             return b;
                         }))))
-                .then(CommandManager.literal("orders").executes(c -> call(c, "/api/orders/list", b -> b)))
+                .then(CommandManager.literal("orders").executes(c -> call(c, "/api/orders/list", b -> b))
+                    // Bound items (docs/29 §5.4): anyone, a captain may bind items to hand out. Greedy like `order`.
+                    .then(CommandManager.literal("bind")
+                        .executes(c -> reply(c.getSource(), BIND_USAGE))
+                        .then(CommandManager.argument("line", StringArgumentType.greedyString()).suggests(ORDER_LINE)
+                            .executes(c -> bind(c, StringArgumentType.getString(c, "line")))))
+                    .then(CommandManager.literal("unbind").executes(SquadCommand::unbind))
+                    .then(CommandManager.literal("bound").executes(SquadCommand::bound)))
                 .then(CommandManager.literal("status").executes(SquadCommand::status))
                 .then(CommandManager.literal("tag")
                     .then(CommandManager.argument("bot", StringArgumentType.word()).suggests(MY_BOTS)
@@ -192,6 +204,7 @@ public final class SquadCommand {
             " /bots order NOM [arguments] [@bot …] [--reclaim|--free] — la lancer sur tes bots",
             " /bots stop [all | #id | NOM | @bot] — arrêter",
             " /bots fix NOM [ce qui ne va pas] — la corriger d'après son dernier rapport",
+            " /bots orders bind NOM [arguments] — lier l'objet en main : clic droit lance l'ordre, accroupi + clic droit l'arrête · orders unbind · orders bound",
             " /bots list · orders · commands · show NOM · tag BOT +étiquette -étiquette · status",
             " /bots share NOM JOUEUR… · unshare · delete NOM · revert NOM VERSION · ticket NOM",
         };
@@ -325,6 +338,88 @@ public final class SquadCommand {
             b.add("snap", CommanderSnap.of(p));
             return b;
         });
+    }
+
+    /**
+     * {@code /bots orders bind <order> [args…]}: the runtime checks the order as {@code /bots order} would, then, back
+     * on the server thread, the binding is written on the held stack, if it is still the one held when the command
+     * was typed (same hotbar slot, same item).
+     */
+    private static int bind(CommandContext<ServerCommandSource> c, String typed) {
+        ServerCommandSource src = c.getSource();
+        if (!Squad.enabled()) return reply(src, DISABLED);
+        ServerPlayerEntity p = src.getPlayer();
+        if (p == null) return reply(src, "[Bots] À lancer en jeu, par un joueur (l'objet en main est lié).");
+        Optional<SquadBinding.BindLine> line = SquadBinding.parse(typed);
+        if (line.isEmpty()) return reply(src, BIND_USAGE);
+        String order = line.get().order();
+        if (!SquadBinding.validOrder(order)) return reply(src, "[Bots] Nom de commande invalide : " + order + " (NOM ou auteur:NOM).");
+        ItemStack held = p.getMainHandStack();
+        if (held.isEmpty()) return reply(src, "[Bots] Prends en main l'objet à lier (un bouclier, une épée, un arc…).");
+        int slot = p.getInventory().selectedSlot;
+        Item item = held.getItem();
+        String rest = line.get().rest();
+        SquadArgs.OrderArgs a = SquadArgs.order(rest);
+        JsonObject body = base(src);
+        body.addProperty("command", order);
+        body.add("tokens", array(a.tokens()));
+        body.add("filters", array(a.filters()));
+        MinecraftServer srv = src.getServer();
+        Squad.client().post("/api/orders/check", body).thenAccept(r -> srv.execute(() -> {
+            if (!SquadAuthoring.ok(r)) {
+                show(src, r);
+                return;
+            }
+            ItemStack now = p.getMainHandStack();
+            if (p.isRemoved() || now.isEmpty() || p.getInventory().selectedSlot != slot || !now.isOf(item)) {
+                reply(src, "[Bots] Tu n'as plus le même objet en main : rien n'a été lié.");
+                return;
+            }
+            String canonical = r.has("command") && r.get("command").isJsonPrimitive() ? r.get("command").getAsString() : order;
+            SquadBinding.write(now, canonical, rest);
+            String how = SquadBinding.isLauncher(now) ? "tire une flèche" : "clic droit";
+            // "Ordre … lié" rather than "<item> lié": the item's name may be feminine (Épée, Arbalète, Flèche).
+            Text t = prefix().append(Text.literal("Ordre « " + canonical + " » lié à ton objet (")).append(now.getName())
+                .append(Text.literal(") : " + how + " pour lancer ou réorienter, accroupi + clic droit pour arrêter."));
+            src.sendFeedback(() -> t, false);
+        }));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /** {@code /bots orders unbind}: local, so it works with Squad off too (an item can always be cleaned). */
+    private static int unbind(CommandContext<ServerCommandSource> c) {
+        ServerCommandSource src = c.getSource();
+        ServerPlayerEntity p = src.getPlayer();
+        if (p == null) return reply(src, "[Bots] À lancer en jeu, par un joueur.");
+        ItemStack held = p.getMainHandStack();
+        Optional<SquadBinding> b = SquadBinding.clear(held);
+        if (b.isEmpty()) return reply(src, "[Bots] Cet objet n'est lié à aucun ordre.");
+        Text t = prefix().append(Text.literal("Ordre « " + b.get().order() + " » délié de ton objet (")).append(held.getName()).append(Text.literal(")."));
+        src.sendFeedback(() -> t, false);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /** {@code /bots orders bound}: the bound stacks of the main inventory and the off-hand, one line each. */
+    private static int bound(CommandContext<ServerCommandSource> c) {
+        ServerCommandSource src = c.getSource();
+        ServerPlayerEntity p = src.getPlayer();
+        if (p == null) return reply(src, "[Bots] À lancer en jeu, par un joueur.");
+        List<Text> lines = new ArrayList<>();
+        List<ItemStack> stacks = new ArrayList<>(p.getInventory().main);
+        stacks.addAll(p.getInventory().offHand);
+        for (ItemStack s : stacks) {
+            SquadBinding.read(s).ifPresent(b -> lines.add(Text.literal(" • ").append(s.getName())
+                .append(Text.literal(" : " + b.order() + (b.line().isBlank() ? "" : " " + b.line())))));
+        }
+        if (lines.isEmpty()) return reply(src, "[Bots] Aucun objet lié dans ton inventaire (/bots orders bind NOM, l'objet en main).");
+        reply(src, "[Bots] Objets liés :");
+        for (Text t : lines) src.sendFeedback(() -> t, false);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /** "[Bots] " styled as {@link Squad#render} styles it, for a line that carries an item's (translated) name. */
+    private static MutableText prefix() {
+        return Text.literal("[Bots]").formatted(Formatting.AQUA).append(Text.literal(" "));
     }
 
     private static int stop(CommandContext<ServerCommandSource> c, String target) {

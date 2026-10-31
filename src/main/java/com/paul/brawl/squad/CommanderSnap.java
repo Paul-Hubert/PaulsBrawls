@@ -3,6 +3,7 @@ package com.paul.brawl.squad;
 import com.google.gson.JsonObject;
 
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.projectile.ProjectileUtil;
 import net.minecraft.registry.Registries;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -17,7 +18,8 @@ import net.minecraft.world.RaycastContext;
 /**
  * Where the commander stands and looks when they give an order or ask for a command (docs/29 §7.1): the exact
  * position, rotation, dimension, held item, and what they look at within 64 blocks (the nearest block, and an
- * entity if one is in front of it). Taken on the main thread; it becomes {@code ctx.commander.at} in the script.
+ * entity if one is in front of it). Taken on the main thread; it becomes {@code ctx.commander.at} in the script. A
+ * bound item's click adds {@code trigger} to it (SquadTriggers).
  */
 public final class CommanderSnap {
 
@@ -53,23 +55,22 @@ public final class CommanderSnap {
         Box box = p.getBoundingBox().stretch(dir.multiply(blockDist)).expand(1.0);
         EntityHitResult hit = ProjectileUtil.raycast(p, eye, eye.add(dir.multiply(blockDist)), box,
             e -> !e.isSpectator() && e != p, blockDist * blockDist);
-        if (hit != null) {
-            Entity e = hit.getEntity();
-            JsonObject en = new JsonObject();
-            en.addProperty("name", Registries.ENTITY_TYPE.getId(e.getType()).getPath());
-            en.addProperty("type", e instanceof net.minecraft.entity.player.PlayerEntity ? "player" : "mob");
-            if (e instanceof net.minecraft.entity.player.PlayerEntity pl) en.addProperty("username", pl.getName().getString());
-            en.add("position", vec(e.getPos()));
-            o.add("lookEntity", en);
-        }
+        if (hit != null) o.add("lookEntity", entity(hit.getEntity()).toJson());
         return o;
     }
 
+    /**
+     * An entity as a script sees it (the snapshot's {@code lookEntity}, a bound bow's {@code hit.entity}), with its
+     * network id: the id is the same for every client, so a bot finds it in {@code bot.entities} (docs/29 §5.4).
+     */
+    static SquadTriggerJson.EntityRef entity(Entity e) {
+        Vec3d pos = e.getPos();
+        boolean player = e instanceof PlayerEntity;
+        return new SquadTriggerJson.EntityRef(e.getId(), Registries.ENTITY_TYPE.getId(e.getType()).getPath(), player,
+            player ? e.getName().getString() : null, pos.x, pos.y, pos.z);
+    }
+
     private static JsonObject vec(Vec3d v) {
-        JsonObject o = new JsonObject();
-        o.addProperty("x", v.x);
-        o.addProperty("y", v.y);
-        o.addProperty("z", v.z);
-        return o;
+        return SquadTriggerJson.vec(v.x, v.y, v.z);
     }
 }

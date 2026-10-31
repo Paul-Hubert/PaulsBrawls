@@ -341,14 +341,81 @@ Three layers now:
 
 | Class | Role |
 |---|---|
-| `SquadCommand` | `/bots …` (Brigadier), permissions, tab completion from the cache, async calls; `/bots status` (perm 0) |
+| `SquadCommand` | `/bots …` (Brigadier), permissions, tab completion from the cache, async calls; `/bots status` (perm 0); `/bots orders bind\|unbind\|bound` (perm 0, below) |
+| `SquadBinding` | An order bound to an item stack: `custom_data` `squad: {order, line, glint, lore}`, the lore line and the glint override it adds and removes, the bind line's parsing. The record, its NBT form and the lore edit are JUnit-tested (no bootstrap) |
+| `SquadTriggers` | The bound items' clicks on the server thread: `UseItemCallback` (always `PASS`), `ServerEntityEvents.ENTITY_LOAD` for a bound bow's arrow, and the hit from `mixin/PersistentProjectileEntityMixin`; the snapshot with `trigger`, the async `/api/orders/trigger` call, the answer |
+| `SquadTriggerLimiter`, `SquadArrows`, `SquadTriggerJson` | Minecraft-free, JUnit: the per-player bucket (4, refilled at 4/s), one release per shot, a repeated answer shown once per 2 s; the tracked arrows (first hit only, 10 s); the trigger's JSON and the entity shape it shares with `CommanderSnap` |
 | `SquadStatusFormat` | The `/bots status` line from `/api/metrics` (Minecraft-free, JUnit) |
 | `SquadFriends` | Friendly fire: which roster bot must not hurt whom (shared owner, or its own owner). Minecraft-free, JUnit; the hook is `Squad.registerFriendlyFire` |
 | `SquadRaid`, `SquadRaidPlan` | `/bots raid` (above); the plan (arguments, point, names, spread, timeout) is Minecraft-free, JUnit |
 | `Squad` | Lifecycle, the SSE loop and the cache, notices (kept for offline players), whitelist, join gate (a bot name from a non-loopback address is kicked), arrival teleport (to the admin, or to a given spot with a callback), `hasPlayed` (spawn refuses names with a `playerdata` file), `equip` |
 | `SquadKits` | Kits for archer, guard, miner and farmer (Minecraft-free); `equip` wears armor, holds weapons and puts the shield in the off-hand |
 | `SquadAuthoring` | One `squad-author` turn: reserve the slot, open, run the agent, close, announce « Commande X prête » |
-| `SquadClient`, `SquadArgs`, `SquadNotice`, `CommanderSnap`, `SquadConfig` | HTTP/1.1 client and SSE framing; argument tokenizing; lines with clicks; exact position and look target; `squad.properties` |
+| `SquadClient`, `SquadArgs`, `SquadNotice`, `CommanderSnap`, `SquadConfig` | HTTP/1.1 client and SSE framing; argument tokenizing; lines with clicks; exact position and look target (`lookEntity` with its network `id`); `squad.properties` |
+
+## Orders bound to items — the mod (docs/29 §5.4 items 1–5)
+
+The runtime side is above ("Orders bound to items — the runtime"). The mod keeps the binding on the stack, catches the
+clicks and sends each one; it decides nothing about what a click does.
+
+- **The binding** (`SquadBinding`) is `minecraft:custom_data` `{squad: {order, line, glint, lore}}`:
+  - `order`: the canonical name `/api/orders/check` answered (`command`: the stock name, else `author:name`);
+  - `line`: the rest of the bind line as typed, parsed by `SquadArgs.order` at each click;
+  - `glint`: true when the bind set `enchantment_glint_override` (only when the item had none, so an enchanted golden
+    apple's own glint is left alone);
+  - `lore`: the exact lore line the bind appended, « Ordre : NAME LINE » (gold, not italic, cut at 60 characters).
+  - A rebind clears the old binding first. `clear` removes the `squad` key (`NbtComponent.set` drops the whole
+    component once it is empty), the last lore line whose text is `lore` (setting `LoreComponent.DEFAULT` when no line
+    is left, so the stack carries no "lore removed" change), and the glint override only if `glint`.
+- **The commands** (perm 0, under `orders`; bare `/bots orders` still lists the running orders):
+  - `/bots orders bind <order> [args…]` (greedy; tab completion as `/bots order`): a player with a non-empty main hand.
+    The order token must be `NAME` or `author:NAME`. `POST /api/orders/check` `{ by, admin, command, tokens, filters }`;
+    on `ok`, back on the server thread, the binding is written if the player still holds the same item in the same
+    hotbar slot (else « Tu n'as plus le même objet en main : rien n'a été lié. »). Answer: « Ordre « X » lié à ton
+    objet (Bouclier) : clic droit pour lancer ou réorienter, accroupi + clic droit pour arrêter. » (a bow or crossbow:
+    « tire une flèche »). The sentence agrees with « Ordre », since an item's name may be feminine. A refusal shows the
+    runtime's text.
+  - `/bots orders unbind`: the held item (« Cet objet n'est lié à aucun ordre. » when it has none).
+  - `/bots orders bound`: the bound stacks of the main inventory and the off-hand, one line each (item, order, line).
+  - `unbind` and `bound` touch only the stack, so they work with Squad off.
+- **The triggers** (`SquadTriggers`, all on the server thread, none cancels vanilla). Nothing triggers for a stack
+  without a binding, on a client world, with Squad off, for a spectator, or for a roster bot (case-insensitive: bots
+  use items too, `raiseShield`).
+  - `UseItemCallback`, always `PASS` (the shield still blocks, the bow still draws). It fires in
+    `ServerPlayerInteractionManager.interactItem`, which the client sends for a right-click in the air, on a block or
+    entity that did not take the interaction, once per hand. Sneaking: a stop trigger (`stop: true`, kind `use`) for
+    any bound item, a bow too. A bow or crossbow (`RangedWeaponItem`) not sneaking: nothing (its arrow is the trigger).
+    Anything else: `use`.
+  - `ServerEntityEvents.ENTITY_LOAD` (fired at the tail of `ServerEntityHandler.startTracking`, so inside
+    `world.spawnEntity` of `RangedWeaponItem.shootAll`, after the velocity is set): a `PersistentProjectileEntity`
+    whose owner is a player (not sneaking), whose `getWeaponStack()` is a bound bow or crossbow, and which is within 2
+    blocks of the owner's eyes (an arrow loaded with its chunk is not a shot). `getWeaponStack()` (intermediary
+    `class_1665.method_59958`) returns the `weapon` field: a copy of the bow or crossbow stack made in the arrow's
+    constructor when shot on a server (`ArrowItem.createArrow(world, arrow, shooter, weapon)`), null for a dispenser's
+    arrow. One release per player per server tick, so a multishot crossbow's three arrows are one trigger. An
+    `arrow-release` trigger, and the arrow is tracked (`SquadArrows`: by its UUID, 10 s, first hit only) unless the
+    limiter dropped the release.
+  - The mixin `PersistentProjectileEntityMixin` injects at HEAD of `onEntityHit(EntityHitResult)` and
+    `onBlockHit(BlockHitResult)`, both declared by `PersistentProjectileEntity` (yarn 1.21.1+build.3; intermediary
+    `class_1665.method_7454(Lclass_3966;)V` and `method_24920(Lclass_3965;)V`, checked in the named and the
+    intermediary jars, and in the generated refmap). `SquadTriggers.onArrowHit` returns at once for a client arrow or an
+    untracked one, and never throws into vanilla. A tracked arrow's first hit, with its shooter online: an `arrow-hit`
+    trigger, `hit.position` = the exact point on the block (`BlockHitResult.getPos()`) or the entity's position, and
+    `hit.entity` for an entity.
+- **The snapshot** is `CommanderSnap.of(player)` at the click (at the hit for `arrow-hit`) plus `trigger: { kind,
+  item, hit? }`, `item` being the item id's path (`shield`, `bow`). An entity, in `hit.entity` and `lookEntity`, is
+  `{ id, name, type: 'player'|'mob', username?, position }`, `id` the network entity id (`CommanderSnap.entity`, the
+  JSON in `SquadTriggerJson`).
+- **The call:** async `POST /api/orders/trigger` with `by`, `admin` (perm ≥ 2), `command` = the binding's order,
+  `tokens`/`filters`/`take` from `SquadArgs.order(line)`, `stop` for the stop gesture, `snap`. A non-blank answer is
+  rendered like any `/bots` answer (`Squad.render`, with its click); a delivered click answers `''`, so nothing is
+  shown. The same answer to the same player is shown once per 2 s, because a held right-click repeats every 4 ticks
+  and a refused start would answer each one.
+- **The limiter** (`SquadTriggerLimiter`, server thread only): per player a bucket of 4 refilled at 4/s; a trigger
+  without a token (a stop or an arrow hit too) is dropped silently. A player is forgotten on disconnect, and past 512
+  entries the idle ones are dropped.
+- Registered from `ServerEntryPoint` (`SquadTriggers.register()`, after `SquadCommand.register()`); the mixin is in
+  `paulsbrawls.mixins.json` (`defaultRequire: 1`: a wrong target fails at startup).
 
 ## Tests
 
@@ -368,8 +435,12 @@ Three layers now:
   fighting at its slot; `epee`'s target with two guards on it and the anchor rings; the archer line `back` blocks short,
   front threats first, two ranks; `tir`'s volley count and spread, release then hit, the 4 s wait, a friend refused, and
   archers taken from a line returning to their own slots)).
-- **Mod:** 30 JUnit tests in `src/test/java/com/paul/brawl/squad/` (incl. `SquadStatusFormatTest`, `SquadFriendsTest`,
-  `SquadRaidPlanTest`).
+- **Mod:** 54 JUnit tests in `src/test/java/com/paul/brawl/squad/` (incl. `SquadStatusFormatTest`, `SquadFriendsTest`,
+  `SquadRaidPlanTest`; for bound items `SquadBindingTest`: the bind line, order names, the lore line and its removal,
+  the custom-data round trip on a real `NbtCompound`; `SquadTriggerLimiterTest`: the burst, the refill, per-player
+  buckets, the bound map, one release per shot, the repeated answer; `SquadArrowsTest`; `SquadTriggerJsonTest`: the
+  trigger, hit and entity JSON and the request body). The stack edits themselves (`ItemStack` needs a bootstrap), the
+  hooks and the mixin are checked only in game.
 - **Live:** `npm run live-test`, using RCON against the dev server (`run/`) or production
   (`SERVER_PROPERTIES=../server/server.properties`). `LIVE_PATH_WORKERS=N` runs it with N pathfinding workers.
   On the dev world only, it builds a ladder high over the world and checks that a bot follows a climbing bot up it with
@@ -408,8 +479,12 @@ Three layers now:
   particular not verified live: the off-hand `use_item` raising a real shield (and staying up through mob noise),
   `raiseShield`'s equip into slot 45, hawkEye's `{ position, isValid: true }` targets and how often its block check
   refuses a point on the ground, the ballistic fallback's accuracy with the arrow's random divergence, and `groundAt`
-  with real blocks (slabs, snow layers, water). `CommanderSnap` sent no entity `id` when this was written: until it
-  does, `entityOf` finds a looked-at mob by name and position.
+  with real blocks (slabs, snow layers, water). `CommanderSnap` now sends the entity `id` (`lookEntity`, `hit.entity`),
+  so `entityOf` finds a looked-at mob by id; that path has not met a real server either.
+- **The mod side of bound items** (2026-10-31): only its JUnit tests ran, and `remapJar` (the mixin and its refmap in
+  the jar). Never run on a server: the mixin applying at startup, `/bots orders bind|unbind|bound`, the lore and glint
+  on a real stack (and their sync to the client), the use, release and hit triggers, multishot, a held right-click
+  against the limiter.
 - **`raid` and `/bots raid`** (2026-10-31) ran only on fakes and JUnit: never on a server (the surface, the
   arrival teleport and kit, the start as `Envahisseur`, a real 20-vs-20 fight, 40 bots on one runtime). A raider that
   dies respawns idle (it leaves its order, docs/29 §4) and does not rejoin the raid; one that arrives after the

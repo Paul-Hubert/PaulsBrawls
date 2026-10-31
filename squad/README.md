@@ -72,6 +72,8 @@ per minute goes to the `vitals` table of `.squad-data/squad.db` (kept 7 days).
 | `/bots fix NAME [what is wrong]` | rewrite it from its last run report |
 | `/bots share NAME P…` / `unshare` / `delete` / `revert NAME V` | your commands are private until shared |
 | `/bots list` · `orders` · `commands` · `show NAME` · `tag BOT +t -t` · `ticket NAME` | |
+| `/bots orders bind NAME [args] [@bot …] [--reclaim\|--free]` (anyone) | binds the item in your main hand to that order, checked like `/bots order`; the item gets a glint and a lore line « Ordre : NAME args ». Then **right-click** it to start the order on your bots, or, while it runs, re-aim it where you look (an order that does not listen for clicks restarts); **sneak + right-click** stops it. A bound **bow or crossbow** gives the order with each arrow you shoot (when it leaves, then where it lands), not with the right-click. At most 4 clicks a second count. Given to another player, the item orders *their* bots, if the command is one they may use |
+| `/bots orders unbind` · `/bots orders bound` | remove the held item's binding (its lore line and glint go too); list the bound items in your inventory |
 | `/bots status` | the runtime's load over the last 10 s: ELU, loop p99, the slowest bot's ticks/s |
 | admin: `despawn BOT` · `owners BOT add\|remove P…` · `list all` · `stop all` | |
 
@@ -81,8 +83,9 @@ the commander, at most two guards per creature, each bot on its own spot around 
 any enemy within `radius` of the leader on the way, then hunts the `target` player and their bots; it ends after
 `quiet` seconds, default 60, without an enemy player).
 
-Four stock commands are made for bound items (`/bots orders bind NAME`, docs/29 §5.4); each click re-aims the running
-order where you look, without restarting it:
+Four stock commands are made for bound items (`/bots orders bind NAME`, docs/29 §5.4; e.g. a shield in hand,
+`/bots orders bind mur-de-boucliers spacing=2`); each click re-aims the running order where you look, without
+restarting it:
 - `mur-de-boucliers` (a shield): the guards with a shield line up across your view at the block you look at (or 5
   blocks ahead), face along it and raise their shields once there; they fight what comes within `reach` (4) of their
   slot, then go back. Params `distance` 24, `spacing` 1, `reach` 4.

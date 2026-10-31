@@ -784,6 +784,23 @@ completely, so missed events cannot leave it wrong.
      shield wall borrowed them, and a `defend` whose bots were all borrowed ended. Over `squad.bots` or a
      `squad.roles.x` array it now also runs `fn` for a bot that joins that array, and waits while a reclaimed bot can
      still come back (`tests/orders.test.ts`).
+- **Orders bound to items: the mod (2026-10-31, §5.4 items 1–5).** As designed, with these differences. Details:
+  docs/system/squad/overview.md ("Orders bound to items — the mod"). Tests: `SquadBindingTest`,
+  `SquadTriggerLimiterTest`, `SquadArrowsTest`, `SquadTriggerJsonTest`. Not yet run on a server.
+  1. *The binding also stores `lore`* (`{squad: {order, line, glint, lore}}`), the exact line the bind appended, and
+     that line names the line too (« Ordre : mur-de-boucliers spacing=2 », cut at 60 characters). `unbind` removes the
+     last lore line with that text, so a player's own lore is never touched.
+  2. *One release per shot.* A multishot crossbow spawns three arrows in one tick; only the first is a trigger and is
+     tracked. A release the limiter drops is not tracked either, so its hit is not sent.
+  3. *A repeated answer is shown once per 2 s.* A held right-click repeats every 4 ticks, so a refused start (or a
+     restart) would print the same line 4 times a second.
+  4. *Bows are `RangedWeaponItem`s* (bow, crossbow). A crossbow loaded with a firework shoots no arrow, so it gives
+     only the stop gesture. Spectators trigger nothing. An arrow is forgotten 10 s after its release, so a longer
+     flight has no `arrow-hit`.
+  5. *The bind refuses an item swapped during the check* (another hotbar slot or another item), and `unbind` and
+     `bound` work with Squad off: they touch only the stack.
+  6. *The bind's answer agrees with « Ordre »* (« Ordre « X » lié à ton objet (Épée en fer) : … »), since an item's
+     name may be feminine.
 - **Stopping the runtime on Windows:** stopping `npm start` from outside can leave `tsx src/supervisor.ts` and its
   child running. Use Ctrl+C in its console, or stop the `node` processes.
 - **Performance (docs/31, implemented by docs/32, 2026-10-30).** Measured: the bots' A* filled the one event loop at
