@@ -67,6 +67,15 @@ public final class SquadCommand {
                     .then(CommandManager.literal("stop").executes(c -> SquadRaid.stop(c.getSource())))
                     .then(CommandManager.argument("args", StringArgumentType.greedyString())
                         .executes(c -> SquadRaid.call(c.getSource(), StringArgumentType.getString(c, "args")))))
+                .then(CommandManager.literal("squad").requires(s -> s.hasPermissionLevel(2))
+                    .then(CommandManager.literal("spawn")
+                        .executes(c -> reply(c.getSource(), "[Bots] Usage : " + SquadSpawnPlan.SPAWN_USAGE))
+                        .then(CommandManager.argument("args", StringArgumentType.greedyString()).suggests(SQUAD_LINE)
+                            .executes(c -> SquadSpawn.spawn(c.getSource(), StringArgumentType.getString(c, "args")))))
+                    .then(CommandManager.literal("despawn")
+                        .executes(c -> SquadSpawn.despawn(c.getSource(), ""))
+                        .then(CommandManager.argument("args", StringArgumentType.greedyString()).suggests(SQUAD_LINE)
+                            .executes(c -> SquadSpawn.despawn(c.getSource(), StringArgumentType.getString(c, "args"))))))
                 .then(CommandManager.literal("equip").requires(s -> s.hasPermissionLevel(2))
                     .then(CommandManager.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
                         .then(CommandManager.argument("kit", StringArgumentType.word()).suggests(KITS)
@@ -154,6 +163,15 @@ public final class SquadCommand {
     // -- suggestions ------------------------------------------------------------------------------------------------
 
     private static final SuggestionProvider<ServerCommandSource> KITS = (c, b) -> CommandSource.suggestMatching(SquadKits.NAMES, b);
+    /** {@code /bots squad spawn|despawn …}: a kit first, then @s and online players (the owners). */
+    private static final SuggestionProvider<ServerCommandSource> SQUAD_LINE = (c, b) -> {
+        String rem = b.getRemaining();
+        int cut = rem.lastIndexOf(' ') + 1;
+        if (cut == 0) return CommandSource.suggestMatching(SquadKits.NAMES, b);
+        List<String> opts = new ArrayList<>(List.of("@s"));
+        opts.addAll(List.of(c.getSource().getServer().getPlayerNames()));
+        return CommandSource.suggestMatching(opts, b.createOffset(b.getStart() + cut));
+    };
     private static final SuggestionProvider<ServerCommandSource> ALL_BOTS = (c, b) -> CommandSource.suggestMatching(Squad.botNames(), b);
     private static final SuggestionProvider<ServerCommandSource> MY_BOTS = (c, b) -> {
         ServerPlayerEntity p = c.getSource().getPlayer();
@@ -211,7 +229,7 @@ public final class SquadCommand {
         };
         for (String l : lines) src.sendFeedback(() -> Text.literal(l), false);
         if (src.hasPermissionLevel(2)) {
-            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · equip BOT archer|guard|miner|farmer (il devient aussi à toi) · raid [distance] [archers] [gardes] | clear | stop · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
+            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · squad spawn KIT [nombre] [propriétaire=@s] [autres…] · squad despawn [KIT] [propriétaire=@s] · equip BOT archer|guard|miner|farmer (il devient aussi à toi) · raid [distance] [archers] [gardes] | clear | stop · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
         }
         return Command.SINGLE_SUCCESS;
     }

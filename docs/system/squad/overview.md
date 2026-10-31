@@ -385,6 +385,7 @@ Three layers now:
 | `SquadStatusFormat` | The `/bots status` line from `/api/metrics` (Minecraft-free, JUnit) |
 | `SquadFriends` | Friendly fire: which roster bot must not hurt whom (shared owner, or its own owner). Minecraft-free, JUnit; the hook is `Squad.registerFriendlyFire` |
 | `SquadRaid`, `SquadRaidPlan` | `/bots raid` (above); the plan (arguments, point, names, spread, timeout) is Minecraft-free, JUnit |
+| `SquadSpawn`, `SquadSpawnPlan` | `/bots squad spawn KIT [n] [owner] [others…]` / `squad despawn [KIT] [owner]` (admin): `n` bots named after the kit, on a ring around the owner at the owner's height (`standNear`: a floor within 6 blocks, never the roof), kit and tag on arrival like `raid`; despawn by owner and kit tag. The plan (arguments, names, ring) is Minecraft-free, JUnit |
 | `Squad` | Lifecycle, the SSE loop and the cache, notices (kept for offline players), whitelist, join gate (a bot name from a non-loopback address is kicked), arrival teleport (to the admin, or to a given spot with a callback), `hasPlayed` (spawn refuses names with a `playerdata` file), `equip` |
 | `SquadKits` | Kits for archer, guard, miner and farmer (Minecraft-free); `equip` wears armor, holds weapons and puts the shield in the off-hand |
 | `SquadAuthoring` | One `squad-author` turn: reserve the slot, open, run the agent, close, announce « Commande X prête » |

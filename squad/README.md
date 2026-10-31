@@ -76,6 +76,7 @@ per minute goes to the `vitals` table of `.squad-data/squad.db` (kept 7 days).
 | `/bots orders unbind` · `/bots orders bound` | remove the held item's binding (its lore line and glint go too); list the bound items in your inventory |
 | `/bots status` | the runtime's load over the last 10 s: ELU, loop p99, the slowest bot's ticks/s |
 | admin: `despawn BOT` · `despawn all` (every bot) · `owners BOT add\|remove P…` · `list all` · `stop all` | |
+| `/bots squad spawn archer\|guard\|miner\|farmer [n=5] [owner=@s] [others…]` (admin) | a ready squad: `n` bots of that kit around the owner, equipped on arrival, owned by the owner and the others. `/bots squad despawn [kit] [owner=@s]` removes the owner's bots of that kit (all of them without a kit). Both work from a datapack function (`@s` = the player running it) |
 
 Stock commands everyone has: `come`, `follow`, `defend` (archers reclaimed, melee kept; threats within `radius` of
 the commander, at most two guards per creature, each bot on its own spot around the commander), `gather`, `deposit`,
