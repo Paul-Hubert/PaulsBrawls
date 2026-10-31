@@ -41,7 +41,7 @@ export interface OrderInit {
   trial: boolean;
   /** Wall clock, ms. */
   limitMs: number;
-  /** Names that `isFriend` accepts: the commander, every co-owner, every roster bot. */
+  /** Names that `isFriend` accepts (filled by the runner's refreshFriends): the commander, the co-owners of its bots, the roster bots sharing an owner with them. */
   friends: Set<string>;
   /** The script file name in stack traces (unhandled rejections are attributed by it). */
   filename: string;

@@ -72,6 +72,11 @@ export class OrderRunner extends EventEmitter {
   constructor(private readonly deps: RunnerDeps) {
     super();
     this.nextId = deps.journal.nextId();
+    // Friends follow the roster: a bot spawned, despawned or re-owned mid-order (every such change emits 'state')
+    // must not keep the side it had when the order started.
+    this.on('state', () => {
+      for (const o of this.running()) this.refreshFriends(o);
+    });
   }
 
   // -- queries ---------------------------------------------------------------------------------------------------
@@ -154,9 +159,8 @@ export class OrderRunner extends EventEmitter {
       }
       this.deps.leases.register(order);
       await this.deps.leases.apply(order.id, plan.grants);
-      order.friends.add(req.commander.name);
-      for (const g of plan.grants) for (const o of this.deps.roster.get(g.bot)?.owners ?? []) order.friends.add(o.name);
       order.begin(plan.grants, manifest);
+      this.refreshFriends(order);
       this.deps.journal.save(order.report);
       this.emit('state');
       this.execute(order, fn, args);
@@ -189,9 +193,8 @@ export class OrderRunner extends EventEmitter {
       }
       this.deps.leases.register(order);
       await this.deps.leases.apply(order.id, plan.grants);
-      order.friends.add(req.author.name);
-      for (const g of plan.grants) for (const o of this.deps.roster.get(g.bot)?.owners ?? []) order.friends.add(o.name);
       order.begin(plan.grants, manifest);
+      this.refreshFriends(order);
       this.emit('state');
       this.execute(order, fn, args);
       await order.waitEnded();
@@ -281,6 +284,26 @@ export class OrderRunner extends EventEmitter {
 
   // -- internals -------------------------------------------------------------------------------------------------
 
+  /**
+   * Who an order's scripts must never target (`isFriend`): its commander, the co-owners of its bots, and every
+   * roster bot sharing an owner with them. The same team as the server's friendly-fire rule (SquadFriends: a bot
+   * never hurts a bot sharing an owner with it, nor its own owners). It used to be every roster bot, and then two
+   * players' armies could never fight. Rebuilt in place, because the scope's isFriend and ctx.friends hold this Set.
+   */
+  refreshFriends(order: Order): void {
+    const team = new Set<string>([order.commander.uuid]);
+    const names = new Set<string>([order.commander.name]);
+    for (const n of order.memberNames()) {
+      for (const o of this.deps.roster.get(n)?.owners ?? []) {
+        team.add(o.uuid);
+        names.add(o.name);
+      }
+    }
+    for (const b of this.deps.roster.all()) if (b.owners.some((o) => team.has(o.uuid))) names.add(b.name);
+    order.friends.clear();
+    for (const n of names) order.friends.add(n);
+  }
+
   private newOrder(ref: CommandRef, commander: Player, snap: Snapshot, trial: boolean): Order {
     const id = String(this.nextId++);
     const filename = trial
@@ -296,8 +319,7 @@ export class OrderRunner extends EventEmitter {
       notify: (n) => this.emit('notice', n),
       ended: (o) => this.onEnded(o),
     };
-    const friends = new Set<string>(this.deps.roster.all().map((b) => b.name));
-    const order = new Order({ id, command: ref, commander, snap, args: {}, trial, limitMs: 60_000, friends, filename }, deps);
+    const order = new Order({ id, command: ref, commander, snap, args: {}, trial, limitMs: 60_000, friends: new Set<string>(), filename }, deps);
     this.orders.set(id, order);
     return order;
   }

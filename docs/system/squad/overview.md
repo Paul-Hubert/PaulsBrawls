@@ -108,6 +108,13 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
   `getBlock` cached until the block may have changed, never the unloaded placeholder; `getMoveJumpUp` uses a local
   height, the fix of `32e086a`); `index.js` ("stuck" after 70 physics ticks instead of 3.5 s; the `searchOffload`
   hook); `lib/astar.js` (`AStar.setBudget(ms)`).
+- **mineflayer-pathfinder, ladders** (docs/29 §16, 2026-10-31; upstream faults, `tests/ladders.test.ts`): someone on a
+  ladder only adds to the cost of climbing it (`getMoveUp` refused it); the block a ladder hangs on is never dug
+  (`safeToBreak`); a ladder block is entered from its front only (`getNeighbors`), and a partial path is never trimmed past the step in
+  front of a ladder (`pathFromPlayer`, `stepsOntoLadder`); a path never ends on a ladder nor
+  rises over its top (`AStar.computeSlice`, `getMoveUp`), and the executor does not count a goal as reached while the
+  bot hangs on one (`index.js` `onClimbable`); `postProcessPath` works on copies of the nodes, so a search spread over
+  ticks is not changed under it (`copyMove`). The workers run the same `lib/`, so they find the same paths.
 
 ## Observability (docs/32 C)
 
@@ -142,7 +149,7 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
 | Authoring | `authoring.ts`, `http/mcp.ts`, `agent/` | `cmd-…` tickets (30 min; manual 2 h). Seven MCP tools (`get_api_reference`, `get_context`, `list_commands`, `read_command`, `check_script`, `trial_run` ≤ 60 s on idle bots, `submit_command`). Claude Code config in `agent/claude-code/`, opencode config in `agent/opencode.json` |
 | Storage | `store/commands.ts`, `journal/journal.ts` | `.squad-data/commands/<uuid>/<name>/meta.json` + `vN.mjs` (append-only, shares, revert); SQLite `squad.db` (WAL, `synchronous=NORMAL`), one row per order with its full report, and one `vitals` row per minute |
 | HTTP | `http/server.ts` | 19 `POST /api/...` routes (incl. `/api/metrics`), `GET /events` (SSE: `hello`, `notice`, `state`; notices buffered while no mod listens), `POST /mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN` |
-| Stock | `src/stock/*.mjs` | `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`. Usable by everyone, and the agent's examples. `defend`: below |
+| Stock | `src/stock/*.mjs` | `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`, `raid`. Usable by everyone, and the agent's examples. `defend` and `raid`: below |
 
 ## `defend` and the damage rules (after a 20-bot fight, docs/29 §16)
 
@@ -152,6 +159,11 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
   owns it. The decision is the Minecraft-free `SquadFriends`, rebuilt from the cached state (`bots[].owners`) on each
   `refreshState`, so a hit costs two map lookups. Everything else is unchanged: bots hurt mobs, other players and
   other owners' bots (PvP on, O5).
+- **Friends (the scripts).** `isFriend` / `ctx.friends` are the same team: the commander, the co-owners of the
+  order's bots, and every roster bot sharing an owner with them (`OrderRunner.refreshFriends`, `orders/runner.ts`).
+  The set is rebuilt in place on every `state` event (a spawn, despawn, owner change, lease change), so a bot spawned
+  mid-order joins its side. Until 2026-10-31 every roster bot was a friend of every order, so two players' armies
+  never fought; another owner's bots are enemies now (`tests/raid.test.ts`).
 - **Threats are relative to the commander.** Only threats within `radius` (default 16) of the commander as the bot
   sees them (`nearestHostile`/`nearestEntity` with `from`), nearest to the commander first, hostiles before
   non-friend players. A bot that cannot see the commander defends itself (distances from the bot).
@@ -163,7 +175,41 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
   aside.
 - **Slots.** Between threats each bot follows its own point around the commander (`follow` with `offset`, a
   `GoalFollowOffset`, `bots/follow-goal.ts`): guards on a ring of 3, archers of 6, an angle by the bot's index in its
-  role. Idle bots look for threats every 200 ms (`follow` keeps its goal between calls).
+  role. Idle bots look for threats every 200 ms (`follow` keeps its goal between calls). While nobody could stand at
+  the slot (the commander on a ladder, at the edge of a tower: `slotStandable`, no floor within a block of the
+  commander's height), the bot follows the commander itself at the same range, and goes back to the slot once it is
+  open again (docs/29 §16).
+
+## `raid` and `/bots raid` (an enemy army, 2026-10-31)
+
+- **The stock `raid`** (`src/stock/raid.mjs`; params `x y z` the point, default the block the commander looks at;
+  `target` a player; `radius` 24; `quiet` 60 s; roles `archers` (bow) and `melee`, both `reclaim`; until stopped).
+  The leader (the first melee bot, else the first archer; the live role lists replace a dead one) walks toward the
+  point in 12-block steps (`GoalNearXZ`), waits while more than half the others are over 14 blocks away, and steps
+  aside after 8 s without moving. The others hold slots behind it, facing the march rounded to one of 8 directions
+  (so slots do not change with each small turn): melee in rows of 5, 2 blocks apart, just behind the leader;
+  archers 4 blocks behind the melee. A bot out of sight of the leader walks to the leader's position (`goTo`).
+- **Fights:** any enemy within `radius` of the leader: a non-friend player who is not a spectator (the other army's
+  bots included) or a hostile mob, whichever is nearer. Guards at most 2 per enemy, untaken first, leashed to the
+  leader (the leader to where its fight began); archers prefer an enemy no other archer shoots, and step aside after
+  "no clear line of fire", as in `defend`.
+- **The hunt:** whenever a bot sees `target`, the point moves to them. At the point, the leader looks for the enemy
+  player nearest the target's last known position (their bots stand around them) within 64 blocks and marches on.
+  With no enemy player for `quiet` seconds at the point, the order ends (« Raid terminé … »).
+- **`/bots raid [distance] [archers] [guards]`** (admin, run by a player; defaults 200, 10, 10; `SquadRaid`, the
+  Minecraft-free part in `SquadRaidPlan`): the point is the caller's position plus their horizontal look direction
+  × distance; the chunk is loaded (`getChunk`) and `MOTION_BLOCKING_NO_LEAVES` gives the ground. Raiders
+  `EnnGarde01…` and `EnnArcher01…` (skipping names in the roster, online, reserved, or with a `playerdata` file) are
+  owned by the virtual player `Envahisseur` (offline UUID), never by the caller: owned by the caller they would be
+  its own team. Each goes through `/api/bots/spawn` and the whitelist like `/bots spawn`, one after the other (the
+  first refusal, e.g. `limits.maxBots`, stops the spawning). On its first join it is teleported to its place (rows
+  of 5 around the point, guards nearer the caller, facing them: `Squad.expectArrival` with a target position and a
+  callback) and gets its kit and role tag (`Squad.equip`, `/api/bots/tag`). 3 s after the last arrival, or after
+  4 s × count + 30 s, the mod starts `raid` through `/api/orders/start` as `Envahisseur` (`admin: true`; the
+  runtime takes `by` as the commander, so no new route), with the commander snapshot at the spawn point, `x y z` =
+  the caller's position at the call and `target` = the caller. `/bots raid stop` stops `Envahisseur`'s orders;
+  `/bots raid clear` despawns every bot `Envahisseur` owns (and cancels a raid still assembling).
+- **Limits:** 20 defenders + 20 raiders need `limits.maxBots` ≥ 40 in `squad.json` (default 30).
 
 ## Protocol hardening (found live, docs/29 §16)
 
@@ -182,22 +228,27 @@ Three layers now:
 | `SquadCommand` | `/bots …` (Brigadier), permissions, tab completion from the cache, async calls; `/bots status` (perm 0) |
 | `SquadStatusFormat` | The `/bots status` line from `/api/metrics` (Minecraft-free, JUnit) |
 | `SquadFriends` | Friendly fire: which roster bot must not hurt whom (shared owner, or its own owner). Minecraft-free, JUnit; the hook is `Squad.registerFriendlyFire` |
-| `Squad` | Lifecycle, the SSE loop and the cache, notices (kept for offline players), whitelist, join gate (a bot name from a non-loopback address is kicked), arrival teleport, `hasPlayed` (spawn refuses names with a `playerdata` file), `equip` |
+| `SquadRaid`, `SquadRaidPlan` | `/bots raid` (above); the plan (arguments, point, names, spread, timeout) is Minecraft-free, JUnit |
+| `Squad` | Lifecycle, the SSE loop and the cache, notices (kept for offline players), whitelist, join gate (a bot name from a non-loopback address is kicked), arrival teleport (to the admin, or to a given spot with a callback), `hasPlayed` (spawn refuses names with a `playerdata` file), `equip` |
 | `SquadKits` | Kits for archer, guard, miner and farmer (Minecraft-free); `equip` wears armor, holds weapons and puts the shield in the off-hand |
 | `SquadAuthoring` | One `squad-author` turn: reserve the slot, open, run the agent, close, announce « Commande X prête » |
 | `SquadClient`, `SquadArgs`, `SquadNotice`, `CommanderSnap`, `SquadConfig` | HTTP/1.1 client and SSE framing; argument tokenizing; lines with clicks; exact position and look target; `squad.properties` |
 
 ## Tests
 
-- **`squad/`:** `npm run check` = lint + tsc + 107 `node:test` tests on fakes (compile, leases, guard, orders and
+- **`squad/`:** `npm run check` = lint + tsc + 122 `node:test` tests on fakes (compile, leases, guard, orders and
   reclaim, check/typecheck of the stock commands, HTTP + the real MCP client, supervisor wedge, protocol hardening,
   helpers, agent config drift, `follow`, the `gather` freeze, one test per dependency patch, the vitals, the worker
   pool: same path as the main thread on a synthetic world, the mirror's refcounts, every fallback, a clean stop;
   `defend`: commander-relative threats, the leash, two guards per target, distinct slots, quick shots, a hawkEye
-  copy per bot).
-- **Mod:** 23 JUnit tests in `src/test/java/com/paul/brawl/squad/` (incl. `SquadStatusFormatTest`, `SquadFriendsTest`).
+  copy per bot, the slot fallback; friends (`raid.test.ts`: the team only, kept up to date; a guard attacks another
+  owner's bot) and `raid` (the march formation, two guards per enemy, archers' fire, the hunt and the end); ladders on a synthetic world: each pathfinder patch, the workers' same paths).
+- **Mod:** 30 JUnit tests in `src/test/java/com/paul/brawl/squad/` (incl. `SquadStatusFormatTest`, `SquadFriendsTest`,
+  `SquadRaidPlanTest`).
 - **Live:** `npm run live-test`, using RCON against the dev server (`run/`) or production
   (`SERVER_PROPERTIES=../server/server.properties`). `LIVE_PATH_WORKERS=N` runs it with N pathfinding workers.
+  On the dev world only, it builds a ladder high over the world and checks that a bot follows a climbing bot up it with
+  `follow`, then with `defend`.
 - **Load:** `npm run bench:load` and the other `bench:*` tools ([squad/bench/README.md](../../../squad/bench/README.md)).
 
 ## State on the production server (`server/`, as of 2026-10-29)
@@ -228,6 +279,10 @@ Three layers now:
   - **Squad's own code** (the guard proxy, journal, loop budget) is under 0.5% of the busy time.
 - **The reworked `defend` and the friendly-fire hook** (2026-10-31) ran only on fakes and JUnit, not yet in a fight
   on a server; nor has the per-bot hawkEye copy.
+- **`raid` and `/bots raid`** (2026-10-31) ran only on fakes and JUnit: never on a server (the surface, the
+  arrival teleport and kit, the start as `Envahisseur`, a real 20-vs-20 fight, 40 bots on one runtime). A raider that
+  dies respawns idle (it leaves its order, docs/29 §4) and does not rejoin the raid; one that arrives after the
+  timeout is equipped but stays idle.
 - **`/bots status` in game:** only its JUnit test ran. **The worker pool's stats** are not in `/api/metrics` or the
   vitals.
 - **The worker pool on production:** only the dev server and the bench ran it (live test 5/5 with 4 and 14 workers).

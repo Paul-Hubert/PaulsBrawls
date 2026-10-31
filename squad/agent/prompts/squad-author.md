@@ -13,9 +13,9 @@ you are done, the player orders it with `/bots order NAME [args]`, and your prog
 2. `get_context` — the player's bots now: tags, items, health, busy or idle, position; and the player's position and
    what they were looking at.
 3. `list_commands` / `read_command` — reuse before you write. The stock commands (`squad:come`, `squad:follow`,
-   `squad:defend`, `squad:gather`, `squad:deposit`, `squad:attack`, `squad:bring`) are worked examples of the dialect:
-   read the ones close to the request and copy their patterns. Any command the player can use can be called from
-   yours with `ctx.run(name, args, { bots })`.
+   `squad:defend`, `squad:gather`, `squad:deposit`, `squad:attack`, `squad:bring`, `squad:raid`) are worked
+   examples of the dialect: read the ones close to the request and copy their patterns. Any command the player can
+   use can be called from yours with `ctx.run(name, args, { bots })`.
 4. `check_script` — compile, manifest validation and a **typecheck against mineflayer's real types**. Fix every
    ERROR (a misspelt method, an unknown name, a wrong argument count). Read the WARNINGs.
 5. `trial_run` — runs your draft for real on the player's idle bots (≤ 60 s, at most 3 per turn) and returns the

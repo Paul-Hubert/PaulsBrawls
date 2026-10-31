@@ -32,6 +32,10 @@ The mod reads `squad.properties` in the server's working directory (generated at
 
 The server must be in offline mode (bots have no Microsoft accounts). `/bots spawn` whitelists the bot.
 
+**How many bots.** `squad.json`'s `limits.maxBots` (default 30, as in `squad.example.json`) caps the roster, every
+owner together. Twenty defenders against a 20-bot `/bots raid` need 40: set `"limits": { "maxBots": 40 }` (or more)
+in `squad.json` and restart the runtime. Up to 30 moving bots were measured (docs/31 §11), not more.
+
 **Patched dependencies.** `npm install` runs `patch-package` (postinstall), which applies [patches/](patches/) to
 `node_modules`: the library hot spots of [docs/31](../docs/31-squad-performance-review.md) §3.3 (prismarine-physics'
 `PlayerState` requires, minecraft-protocol's packet framing, mineflayer-pathfinder's look-ahead, A* block lookups and
@@ -60,6 +64,7 @@ per minute goes to the `vitals` table of `.squad-data/squad.db` (kept 7 days).
 | | |
 |---|---|
 | `/bots spawn BOT P1 [P2 …]` (admin) | a bot owned by those players; it appears next to the admin |
+| `/bots raid [distance] [archers] [guards]` (admin, in game) | an enemy army (defaults: 200 blocks, 10 archers, 10 guards) owned by the virtual player `Envahisseur` appears on the ground that far ahead of you, equipped, and runs `raid` against you and your bots. `/bots raid stop` stops it, `/bots raid clear` despawns every raider. Mind `limits.maxBots` (above) |
 | `/bots equip BOT archer\|guard\|miner\|farmer` (admin) | the role's kit, worn and held (archer: chainmail, bow, arrows; guard: iron armor, iron sword, shield; miner: iron tools, torches; farmer: hoe, seeds, bone meal, water), and the role as the bot's tag |
 | `/bots create NAME <what it should do>` | the agent writes it; you are told « Commande NAME prête » with `/bots order NAME` clickable |
 | `/bots order NAME [args] [@bot …] [--reclaim\|--free]` | run it on your bots |
@@ -72,10 +77,14 @@ per minute goes to the `vitals` table of `.squad-data/squad.db` (kept 7 days).
 
 Stock commands everyone has: `come`, `follow`, `defend` (archers reclaimed, melee kept; threats within `radius` of
 the commander, at most two guards per creature, each bot on its own spot around the commander), `gather`, `deposit`,
-`attack`, `bring`.
+`attack`, `bring`, `raid` (an army marches on a point in formation behind a leader, melee ahead of the archers, fights
+any enemy within `radius` of the leader on the way, then hunts the `target` player and their bots; it ends after
+`quiet` seconds, default 60, without an enemy player).
 
 Bots never hurt their own team: the mod cancels a bot's damage to a bot sharing an owner with it, or to one of its
-owners. Everyone else (mobs, other players, other owners' bots) can be hit; PvP is on.
+owners. Everyone else (mobs, other players, other owners' bots) can be hit; PvP is on. A script's friends (`isFriend`)
+are the same team: the commander, the co-owners of the order's bots, and the bots sharing an owner with them. Another
+player's bots are enemies, so two armies fight.
 
 ## A command
 

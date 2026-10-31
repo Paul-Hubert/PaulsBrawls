@@ -207,7 +207,7 @@ export const manifest = {
 |---|---|
 | `ctx.commander` | `{ name, uuid, at: { position, yaw, pitch, lookBlock, lookEntity, heldItem, dimension } }`, a snapshot taken by the mod at order time |
 | `ctx.commander.entity(bot)` | The commander as that bot sees them now, or `null` when out of range. This is what `follow` and `come` use |
-| `ctx.friends` / `isFriend(entity)` | The commander, every co-owner of the squad's bots, and all roster bots. Scripts never target them. The server enforces only one thing (§16, 2026-10-31): a bot's damage to a bot sharing an owner with it, or to one of its owners, is cancelled; PvP is otherwise on (O5) |
+| `ctx.friends` / `isFriend(entity)` | The commander, the co-owners of the order's bots, and the roster bots sharing an owner with them (§16, 2026-10-31: it was every roster bot, so two players' armies could never fight; now another owner's bots are enemies, the same team as the server's rule below). Kept up to date as the roster changes. Scripts never target them. The server enforces only one thing (§16, 2026-10-31): a bot's damage to a bot sharing an owner with it, or to one of its owners, is cancelled; PvP is otherwise on (O5) |
 | `ctx.args`, `ctx.log(...)`, `ctx.say(text)` | Parsed args; a log line in the report; a French chat line to the commander |
 | `ctx.run(name, args, { bots })` | Run another command the commander may use, as a subroutine on a subset of bots. Depth cap 8, cycle check |
 | `ctx.trial` | True during an authoring trial run (§8.3). Scripts rarely need it |
@@ -447,6 +447,7 @@ density invariant that made Eden's revisions work. The result is version N+1, an
 | `/bots despawn BOT` | admin | Stop, disconnect, forget |
 | `/bots equip BOT archer\|guard\|miner\|farmer` | admin | Give the role's kit server-side (`SquadKits`): armor worn, weapon in hand, shield in the off-hand; replaced items go to the inventory. Tags the bot with the role (removing the other kit tags) |
 | `/bots owners BOT add\|remove P …` | admin | Change owners |
+| `/bots raid [distance] [archers] [guards]` / `raid stop` / `raid clear` | admin, in game | An enemy army (200 blocks ahead, 10 archers + 10 guards by default) owned by the virtual player `Envahisseur`: spawned, put on the ground there and equipped on arrival, then ordered `raid` against the caller and their bots. `stop` stops it, `clear` despawns every raider (§16) |
 | `/bots stop all` | admin | Stop every order |
 | `/bots create NAME <request>` | owner of ≥ 1 bot | Write a command (§8.1) |
 | `/bots fix NAME [feedback]` | author | Revise from the last report (§8.2) |
@@ -566,7 +567,7 @@ completely, so missed events cannot leave it wrong.
 - **The typecheck runs in a worker thread** (`src/script/typecheck-worker.mjs`). The first check parses every library
   file (~5 s of synchronous compiler work), which on the main thread would freeze every bot. Later checks take
   0.1–0.3 s; the runtime warms it at boot.
-- **Typecheck noise (§15):** the seven stock commands typecheck with zero errors and zero warnings
+- **Typecheck noise (§15):** the eight stock commands typecheck with zero errors and zero warnings
   (`tests/check.test.ts`). Only unknown names or properties, wrong argument counts and syntax block a submission.
 - **`squad.tasks` re-queues on a bot leaving and waits up to 30 s** for a bot to join when every bot is gone. It
   only starts workers while items are queued: an early version restarted idle workers forever, a microtask loop that
@@ -575,7 +576,7 @@ completely, so missed events cannot leave it wrong.
   the user cache. In offline mode the user cache makes up a profile for any name it is asked about, so the first
   version refused every name (found on the production server, 2026-10-27). The real risk is a bot loading a real
   player's save, and the playerdata file is what shows it.
-- **Stock commands:** `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring` (`squad/src/stock/`).
+- **Stock commands:** `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`, `raid` (`squad/src/stock/`).
 - **A server mod's items can make a bot deaf (found on production, 2026-10-27).** The first live run on `server/`
   had empty inventories, gives that never arrived, and logs "mined" but never collected. Probes
   (`live-tests/probe-protocol.ts`, `probe-packet.ts`) showed why: mineflayer could not decode the login
@@ -613,6 +614,48 @@ completely, so missed events cannot leave it wrong.
   5. *Guards chased far away.* Threats count only within `radius` of the commander, nearest to the commander first;
      `attack`'s `leash` breaks off when the target leaves that circle or the guard is more than radius + 4 away.
   Tests: `squad/tests/defend.test.ts`.
+- **Two armies (2026-10-31, `/bots raid`).** Friends were every roster bot (§5.2), so one player's army could never
+  fight another's. Friends are now the order's team only: the commander, the co-owners of its bots, and the roster
+  bots sharing an owner with them, the same team as `SquadFriends`, rebuilt on every roster or lease change
+  (`OrderRunner.refreshFriends`). A stock `raid` marches an army in formation on a point and fights what it meets;
+  `/bots raid` (admin) spawns an enemy army owned by a virtual player, `Envahisseur` (never the caller, or it would
+  be the caller's own team), sets it on the ground ahead of the caller, equips it on arrival and orders it `raid`
+  as that owner (`/api/orders/start` takes `by` as the commander; no new route). O6 holds: only an admin spawns
+  them. 40 bots need `limits.maxBots` raised (default 30). Details: docs/system/squad/overview.md. Tests:
+  `squad/tests/raid.test.ts`, `SquadRaidPlanTest`. Not yet run on a server.
+- **Bots could not follow anyone up a ladder (2026-10-31, `follow` and `defend` on production).** Reproduced on the dev
+  server with a ladder built over RCON (on a pillar, through a hole in a floor, in a 1×1 shaft, down into a pit): a
+  bot alone climbed it (`goTo`), but bots following a player who climbed did not. Four faults in
+  mineflayer-pathfinder, all upstream (the same with our patches reversed), and one in `defend`. All are fixed in
+  `patches/mineflayer-pathfinder+2.4.5.patch`, except the last, which is fixed in `follow`:
+  1. *A ladder someone is on could not be climbed.* `getMoveUp` refuses to rise out of a block an entity stands in,
+     a rule meant for building a pillar. The player climbing ahead, or the bot ahead, made the ladder unclimbable.
+     The search found no path, or tunnelled through the wall behind the ladder, which dropped the ladder (`canDig` is
+     on). On a ladder an entity now only adds to the cost. The block a ladder hangs on is never dug.
+  2. *A path that ended on the ladder.* With the goal in reach from a ladder block (a `GoalFollow` of range 3 below
+     the player), or from the air over its top, the bot stopped there, let go and slid to the foot. Its goal was
+     reached on the way and the player stood still, so it never planned again. A* no longer ends a path on a ladder
+     or rises over its top (it steps off the last ladder block). The executor does not count the goal as reached
+     while the bot hangs on a ladder.
+  3. *A ladder entered from the side.* Its plate's edge stops the body. The executor aims at the plate, so the bot
+     pushed into the edge until "stuck", then got the same path again. A ladder block is now entered from its
+     front only. A bot that slid off beside the ladder still was sent straight at it: a ladder node is placed against
+     the plate, a block up, so from beside the ladder it looked nearer than the step in front of it, and
+     `pathFromPlayer` (which trims a partial path to where the bot is) skipped that step. It no longer skips onto a
+     ladder from another column. With the workers on, every update is trimmed so, which is where this showed (1 run
+     in 8).
+  4. *A search over several ticks moved its own nodes.* `postProcessPath` placed the nodes of each partial path onto
+     their blocks in place, and the executor shifted their `toBreak`, while A* went on expanding them. A ladder node
+     rose one block per tick, and the search could end in noPath. The path is now made of copies, as the worker
+     pool's already were. Our 10 ms `tickTimeout` and the A* budget made partial searches common, which is why this
+     showed up here.
+  5. *A `defend` slot in the air.* A slot is the commander's position plus an offset, so while the commander is on a
+     ladder, or at the edge of a tower, the slot is in mid-air: every search for it ran to its limit, and the bot
+     went wherever the search stopped. While nobody could stand at the slot (`slotStandable`, `bots/follow-goal.ts`),
+     `follow` follows the commander itself at the same range, and goes back to the slot once it is open again.
+  Tests: `squad/tests/ladders.test.ts` (a synthetic world with a ladder: each patch, and the workers giving the same
+  paths) and `defend.test.ts` (the slot fallback). Live: two `run.ts` scenarios build a ladder on the dev world, and a
+  bot follows a climbing bot up it with `follow`, then with `defend`.
 - **Stopping the runtime on Windows:** stopping `npm start` from outside can leave `tsx src/supervisor.ts` and its
   child running. Use Ctrl+C in its console, or stop the `node` processes.
 - **Performance (docs/31, implemented by docs/32, 2026-10-30).** Measured: the bots' A* filled the one event loop at

@@ -185,7 +185,10 @@ declare global {
       /** The commander as `bot` sees them now (null when out of range or offline). Use it to follow/come. */
       entity(bot: SquadBot): Entity | null;
     };
-    /** Player names isFriend() accepts: the commander, the co-owners of the order's bots, every squad bot. */
+    /**
+     * Player names isFriend() accepts: the commander, the co-owners of the order's bots, and the squad bots sharing an
+     * owner with them (your own team). Other players' bots are NOT friends: another army is an enemy like any player.
+     */
     readonly friends: ReadonlySet<string>;
     readonly args: Record<string, any>;
     /** True during an authoring trial run (60 s max on idle bots). */
@@ -295,8 +298,9 @@ declare global {
   /** Nearest hostile mob within maxDistance (default 16), or null. `from` as in nearestEntity; `filter` narrows further (e.g. not already taken). */
   function nearestHostile(bot: SquadBot, maxDistance?: number, opts?: { from?: Pos | null; filter?: (e: Entity) => boolean }): Entity | null;
   /**
-   * A player in ctx.friends (the commander, co-owners, squad bots). Never target one. PvP is on; the server only
-   * cancels a bot's hits on its own owners and on bots sharing an owner with it, so anyone else is yours to spare.
+   * A player in ctx.friends (the commander, co-owners, the bots of your team). Never target one. Bots of other owners
+   * are not friends. PvP is on; the server only cancels a bot's hits on its own owners and on bots sharing an owner
+   * with it, so anyone else can be hurt: spare whom you mean to spare.
    */
   function isFriend(entity: Entity | null | undefined): boolean;
   /** A claim key for a block position. */

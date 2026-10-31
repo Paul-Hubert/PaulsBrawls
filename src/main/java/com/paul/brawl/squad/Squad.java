@@ -67,10 +67,11 @@ public final class Squad {
 
     /** Lines for players who were offline (an order ending while they were away). */
     private static final Map<UUID, List<SquadNotice>> pending = new ConcurrentHashMap<>();
-    /** Bots spawned by an admin, teleported to them on their first join (lower-case name → where). */
+    /** Bots spawned by an admin, teleported on their first join (lower-case name → where, and what to do then). */
     private static final Map<String, Spot> arrivals = new ConcurrentHashMap<>();
 
-    private record Spot(ServerWorld world, double x, double y, double z, float yaw, float pitch) {}
+    /** Where a new bot goes on its first join; `then` (may be null) runs on the next tick, once it stands there. */
+    private record Spot(ServerWorld world, double x, double y, double z, float yaw, float pitch, Consumer<ServerPlayerEntity> then) {}
 
     private Squad() {}
 
@@ -296,7 +297,20 @@ public final class Squad {
 
     /** Remember where to put a bot an admin just spawned (their position). */
     static void expectArrival(String bot, ServerPlayerEntity admin) {
-        arrivals.put(bot.toLowerCase(Locale.ROOT), new Spot(admin.getServerWorld(), admin.getX(), admin.getY(), admin.getZ(), admin.getYaw(), 0));
+        expectArrival(bot, admin.getServerWorld(), admin.getX(), admin.getY(), admin.getZ(), admin.getYaw(), null);
+    }
+
+    /**
+     * Remember where to put a new bot on its first join, and what to do with it once there (`/bots raid`: its kit
+     * and the start of the raid). `then` runs on the server thread, the tick after the teleport.
+     */
+    static void expectArrival(String bot, ServerWorld world, double x, double y, double z, float yaw, Consumer<ServerPlayerEntity> then) {
+        arrivals.put(bot.toLowerCase(Locale.ROOT), new Spot(world, x, y, z, yaw, 0, then));
+    }
+
+    /** Forget the arrivals not yet seen (`/bots raid clear` before every raider came). */
+    static void forgetArrivals(java.util.Collection<String> bots) {
+        for (String b : bots) arrivals.remove(b.toLowerCase(Locale.ROOT));
     }
 
     static void whitelist(MinecraftServer srv, String bot, boolean add) {
@@ -333,7 +347,11 @@ public final class Squad {
             return;
         }
         Spot spot = arrivals.remove(name.toLowerCase(Locale.ROOT));
-        if (spot != null) player.teleport(spot.world(), spot.x(), spot.y(), spot.z(), spot.yaw(), spot.pitch());
+        if (spot != null) {
+            player.teleport(spot.world(), spot.x(), spot.y(), spot.z(), spot.yaw(), spot.pitch());
+            MinecraftServer srv = server;
+            if (spot.then() != null && srv != null) srv.execute(() -> spot.then().accept(player));
+        }
         List<SquadNotice> missed = pending.remove(player.getUuid());
         if (missed != null) for (SquadNotice n : missed) for (Text t : render(n)) player.sendMessage(t, false);
     }

@@ -55,6 +55,12 @@ public final class SquadCommand {
                             .executes(c -> owners(c, true))))
                         .then(CommandManager.literal("remove").then(CommandManager.argument("players", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
                             .executes(c -> owners(c, false))))))
+                .then(CommandManager.literal("raid").requires(s -> s.hasPermissionLevel(2))
+                    .executes(c -> SquadRaid.call(c.getSource(), ""))
+                    .then(CommandManager.literal("clear").executes(c -> SquadRaid.clear(c.getSource())))
+                    .then(CommandManager.literal("stop").executes(c -> SquadRaid.stop(c.getSource())))
+                    .then(CommandManager.argument("args", StringArgumentType.greedyString())
+                        .executes(c -> SquadRaid.call(c.getSource(), StringArgumentType.getString(c, "args")))))
                 .then(CommandManager.literal("equip").requires(s -> s.hasPermissionLevel(2))
                     .then(CommandManager.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
                         .then(CommandManager.argument("kit", StringArgumentType.word()).suggests(KITS)
@@ -191,7 +197,7 @@ public final class SquadCommand {
         };
         for (String l : lines) src.sendFeedback(() -> Text.literal(l), false);
         if (src.hasPermissionLevel(2)) {
-            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · equip BOT archer|guard|miner|farmer · despawn BOT · owners BOT add|remove JOUEUR… · list all · stop all"), false);
+            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · equip BOT archer|guard|miner|farmer · raid [distance] [archers] [gardes] | clear | stop · despawn BOT · owners BOT add|remove JOUEUR… · list all · stop all"), false);
         }
         return Command.SINGLE_SUCCESS;
     }
@@ -243,7 +249,7 @@ public final class SquadCommand {
         return Command.SINGLE_SUCCESS;
     }
 
-    private static boolean reservedName(String bot) {
+    static boolean reservedName(String bot) {
         String n = bot.toLowerCase(Locale.ROOT);
         return n.equals(com.paul.brawl.BridgeConfig.INSTANCE.botUsername.toLowerCase(Locale.ROOT))
             || n.equals(com.paul.brawl.VillageConfig.INSTANCE.edenAvatarName.toLowerCase(Locale.ROOT))
@@ -253,19 +259,29 @@ public final class SquadCommand {
     private static int despawn(CommandContext<ServerCommandSource> c, String bot) {
         if (!Squad.enabled()) return reply(c.getSource(), DISABLED);
         ServerCommandSource src = c.getSource();
+        despawnBot(src, bot).thenAccept(r -> src.getServer().execute(() -> show(src, r)));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /** Despawn one bot (the runtime first), then on the server thread: unwhitelist and disconnect it. */
+    static CompletableFuture<JsonObject> despawnBot(ServerCommandSource src, String bot) {
         MinecraftServer srv = src.getServer();
         JsonObject body = base(src);
         body.addProperty("name", bot);
+        CompletableFuture<JsonObject> done = new CompletableFuture<>();
         Squad.client().post("/api/bots/despawn", body).thenAccept(r -> srv.execute(() -> {
-            if (SquadAuthoring.ok(r) && r.has("bot")) {
-                String name = r.getAsJsonObject("bot").get("name").getAsString();
-                Squad.whitelist(srv, name, false);
-                ServerPlayerEntity p = srv.getPlayerManager().getPlayer(name);
-                if (p != null) p.networkHandler.disconnect(Text.literal("Bot retiré."));
+            try {
+                if (SquadAuthoring.ok(r) && r.has("bot")) {
+                    String name = r.getAsJsonObject("bot").get("name").getAsString();
+                    Squad.whitelist(srv, name, false);
+                    ServerPlayerEntity p = srv.getPlayerManager().getPlayer(name);
+                    if (p != null) p.networkHandler.disconnect(Text.literal("Bot retiré."));
+                }
+            } finally {
+                done.complete(r);
             }
-            show(src, r);
         }));
-        return Command.SINGLE_SUCCESS;
+        return done;
     }
 
     private static int owners(CommandContext<ServerCommandSource> c, boolean add) {
@@ -390,7 +406,7 @@ public final class SquadCommand {
     }
 
     /** {@code by} (the player, or the console as an admin) and {@code admin}. */
-    private static JsonObject base(ServerCommandSource src) {
+    static JsonObject base(ServerCommandSource src) {
         JsonObject b = new JsonObject();
         ServerPlayerEntity p = src.getPlayer();
         JsonObject by = new JsonObject();
@@ -401,18 +417,18 @@ public final class SquadCommand {
         return b;
     }
 
-    private static void show(ServerCommandSource src, JsonObject r) {
+    static void show(ServerCommandSource src, JsonObject r) {
         SquadNotice n = SquadNotice.fromJson(r);
         if (n.text().isBlank()) return;
         for (Text t : Squad.render(n)) src.sendFeedback(() -> t, false);
     }
 
-    private static int reply(ServerCommandSource src, String text) {
+    static int reply(ServerCommandSource src, String text) {
         for (Text t : Squad.render(SquadNotice.of(text))) src.sendFeedback(() -> t, false);
         return 0;
     }
 
-    private static JsonArray array(List<String> items) {
+    static JsonArray array(List<String> items) {
         JsonArray a = new JsonArray();
         for (String s : items) a.add(s);
         return a;
