@@ -205,7 +205,8 @@ export const manifest = {
 
 | Member | What |
 |---|---|
-| `ctx.commander` | `{ name, uuid, at: { position, yaw, pitch, lookBlock, lookEntity, heldItem, dimension } }`, a snapshot taken by the mod at order time |
+| `ctx.commander` | `{ name, uuid, at: { position, yaw, pitch, lookBlock, lookEntity, heldItem, dimension, trigger? } }`, a snapshot taken by the mod at order time; `trigger` when a bound item started it (§5.4) |
+| `ctx.commander.on('trigger', at => …)` / `ctx.commander.next(timeoutMs)` | Later clicks of the bound item while the order runs: each replaces `ctx.commander.at` (§5.4) |
 | `ctx.commander.entity(bot)` | The commander as that bot sees them now, or `null` when out of range. This is what `follow` and `come` use |
 | `ctx.friends` / `isFriend(entity)` | The commander, the co-owners of the order's bots, and the roster bots sharing an owner with them (§16, 2026-10-31: it was every roster bot, so two players' armies could never fight; now another owner's bots are enemies, the same team as the server's rule below). Kept up to date as the roster changes. Scripts never target them. The server enforces only one thing (§16, 2026-10-31): a bot's damage to a bot sharing an owner with it, or to one of its owners, is cancelled; PvP is otherwise on (O5) |
 | `ctx.args`, `ctx.log(...)`, `ctx.say(text)` | Parsed args; a log line in the report; a French chat line to the commander |
@@ -282,6 +283,99 @@ export default async function (squad, { count }, ctx) {
   return `${got} bûches coupées par ${squad.bots.length} bots.`;
 }
 ```
+
+### 5.4 Orders bound to items (docs/33, 2026-10-31)
+
+Holding an item, `/bots orders bind <order> [args…]` makes that item an order giver: using it starts the order, or
+re-aims it while it runs, with the player's position and view at the click and what the click hit. Decisions:
+
+1. **The binding lives on the item stack**, as `minecraft:custom_data` `{squad: {order, line, glint}}`, with one lore
+   line (« Ordre : mur-de-boucliers ») and an enchantment glint, so the player sees it.
+   - `order` is canonical: a stock command's name, otherwise `author:name`. Given away, the item still means the
+     binder's command, and the store's sharing rules (O3) decide whether its new holder may run it.
+   - `line` is the rest of the bind line, kept as typed: args, `@bot` filters, `--reclaim`/`--free`, the
+     `/bots order` syntax (`SquadArgs.order`).
+   - `glint` records that the bind added the glint override, so `unbind` removes only what `bind` added.
+   - **Why on the stack:** the binding travels with the item, two shields can carry two orders, and the binding
+     survives a runtime restart. The runtime stays the single writer of squad state; a binding is part of the
+     player's item, not of squad state.
+   - **Rejected: per player and item type in the runtime.** Every shield of the player would give the same order, and
+     nothing would show it. It would also need a new store and routes, and an archer's bow could not be told from a
+     bound bow.
+2. **Commands** (anyone):
+   - `/bots orders bind <order> [args…]` binds the held item. The runtime checks the order like `/bots order` (the
+     command resolves for the player, the args parse against its manifest) on `POST /api/orders/check`.
+   - `/bots orders unbind` removes the held item's binding.
+   - `/bots orders bound` lists the bound items in the player's inventory.
+   - Bare `/bots orders` still lists the running orders.
+3. **Who it orders: the player using the item, and their own bots.** A bound item given to another player orders
+   *their* bots, provided the command is one they may order (stock, theirs or shared with them). That is wanted: a
+   captain can hand out bound items, and O3 holds. A roster bot never triggers anything: bots use items too, for
+   example `raiseShield`.
+4. **The triggers, per item:**
+
+   | Item | Trigger | Server hook |
+   |---|---|---|
+   | Bow, crossbow | `arrow-release` when the arrow it shoots enters the world, then `arrow-hit` at that arrow's first hit (entity or block). Drawing it is not a trigger | `ServerEntityEvents.ENTITY_LOAD` (an arrow whose owner is the player, within 2 blocks of their eyes, whose `getWeaponStack()` carries the binding); a mixin on `PersistentProjectileEntity.onEntityHit` / `onBlockHit`, only for arrows tracked at release |
+   | Anything else | `use`: the right-click, in the air, on a block or on an entity (when that entity does not take the interaction) | `UseItemCallback`, which always returns `PASS`: the shield still blocks, the bow still draws |
+
+   - **Left-click (swing) is not a trigger.** It is the player's own attack, a click in the air reaches the server
+     only as an arm-swing packet (a mixin with no Fabric event), and an attack reaches 3 blocks where a right-click
+     aims at 64 (the `CommanderSnap` raycast).
+   - **Stop gesture: sneak + right-click** with any bound item stops that binding's order. A bound bow drawn while
+     sneaking stops it too, and an arrow shot while sneaking is not a trigger.
+   - **Rate limit:** 4 triggers a second per player (a bucket of 4, refilled at 4/s). Arrow hits count. The excess is
+     dropped silently.
+5. **What the script receives.** The snapshot is taken on the main thread at the click (at the hit for
+   `arrow-hit`), as for `/bots order`, plus
+   `trigger: { kind: 'use' | 'arrow-release' | 'arrow-hit', item, hit?: { position, entity? } }`.
+   - An `entity` (in `hit` and in `lookEntity`) carries `id`, the network entity id, which is mineflayer's key:
+     `bot.entities[id]`. The helper `entityOf(bot, ref)` resolves one.
+   - An order started with `/bots order` has no `trigger`.
+6. **A second click.** A binding has one running order per player: the running order of that command
+   (author + name) whose commander is the player, whether a click or `/bots order` started it.
+   - **Running and listening** (it has called `ctx.commander.on('trigger', …)` or `ctx.commander.next()`): the
+     trigger is delivered to it. `ctx.commander.at` becomes the new snapshot, the listeners get it, and a `next()`
+     resolves with it, or the latest is kept for the next `next()`. Nothing is stopped or reclaimed, so a shield wall
+     re-forms where the player now looks within a few hundred milliseconds.
+   - **Running, not listening:** it is restarted (stopped, then started with the new snapshot).
+   - **Not running:** the trigger starts it, exactly like `/bots order` with the binding's line.
+   - **A trigger that arrives while the start is in flight** (a bow's `arrow-hit` after its `arrow-release`) waits
+     for it, then is delivered.
+   - **The route** is `POST /api/orders/trigger`. A delivered trigger answers `text: ''` (no chat line per click); a
+     start, a restart, a stop or a refusal answers as `/bots order` does.
+   - **The journal:** each trigger is one event in the order's report (`kind: 'trigger'`, at most 200), journaled
+     with it, never the hot stream (R44).
+7. **Helpers for formations** (globals, §5.2):
+   - **yaw convention:** every helper takes yaw in the commander's convention, Minecraft's degrees (0 = south/+Z,
+     90 = west/−X), as `ctx.commander.at.yaw`.
+   - `lookDir(yaw, pitch?)`: the unit view vector.
+   - `lineSlots(center, yaw, count, { spacing, ranks, depth })`: positions on a line through `center` perpendicular
+     to the view, with further ranks `depth` blocks behind.
+   - `groundAt(bot, pos)`: the nearest standable feet position in that column.
+   - `faceYaw(bot, yaw)`.
+   - `raiseShield(bot, on)`: the shield in the off-hand, held up with `activateItem(true)` or lowered. Blocking
+     slows walking, so raise it after arriving.
+   - `shoot(bot, target)` takes a position as well as an entity, for a volley on the ground. hawkEye aims at a
+     `{ position, isValid: true }`; when it cannot, the angle is computed from the arrow's ballistics (3 blocks per
+     tick at full draw, gravity 0.05, drag 0.99).
+8. **The first stock commands** (all `until-stopped` except `tir`; their roles `take: 'reclaim'`, because a click is
+   an explicit order and reclaimed bots return to their previous order afterwards, O4):
+   - **`mur-de-boucliers`** (shield): the guards (`hasItem: 'shield'`) line up perpendicular to the view at the
+     block looked at, or a few blocks in front of the player when it is too far or not standable. They face along
+     the view and raise their shields once in place. Hostiles or enemies that reach the line are fought, leashed to
+     the slot; the guard then returns to its slot.
+   - **`epee`** (sword):
+     - Looking at a non-friend entity: everyone attacks it, archers shooting and at most 2 guards on it. The other
+       guards fight what is near it. Once it is dead or gone, the bots defend the commander.
+     - Looking at the ground: the bots hold that spot, like `defend` anchored on a position instead of the commander.
+   - **`ligne-archers`** (arrow, use): the archers form a line perpendicular to the view, a few blocks short of the
+     point (on the player's side), and shoot threats within range from their slots.
+   - **`tir`** (fired from the bound bow; `bounded`): the archers shoot at the arrow's target, from where they stand.
+     - At an entity: until it is dead or a few seconds pass.
+     - At the ground: a volley of N arrows each, spread around the point.
+     - Then the order ends. Archers it reclaimed from `ligne-archers` go back to their slots there, so the formation
+       is kept.
 
 ## 6. Leases, roles and reclaiming
 
@@ -455,6 +549,7 @@ density invariant that made Eden's revisions work. The result is version N+1, an
 | `/bots stop [#id \| NAME \| @bot]` | owner | Stop your orders: all, one, all of a command, or free one bot |
 | `/bots list` | owner | Your bots: online, tags, current order and the order's commander |
 | `/bots orders` | owner | Running orders touching your bots |
+| `/bots orders bind <order> [args…]` / `orders unbind` / `orders bound` | anyone | Bind the held item to an order (checked like `/bots order`), unbind it, list your bound items. Right-click a bound item to start or re-aim its order on your bots, sneak + right-click to stop it; a bound bow triggers with the arrows it shoots (§5.4) |
 | `/bots tag BOT +t -t …` | owner | Edit tags |
 | `/bots commands` / `/bots show NAME` | any | Commands you can use; one command's summary, params, roles, version, author |
 | `/bots share NAME P1 [P2 …]` / `/bots unshare NAME P…` | author | Grant or revoke ordering rights. A shared command always runs its current version |
@@ -475,6 +570,8 @@ because the h2c upgrade is the `AgentClient` lesson. Calls are async and never r
 | `/api/health`, `/api/state` | Liveness; roster + owners + tags + bot status + every command and its shares + stock names + running orders (the mod's cache) |
 | `/api/bots/spawn`, `/despawn`, `/owners`, `/tag`, `/list` | The roster |
 | `/api/orders/start`, `/stop`, `/list` | Orders (`stop` target: '' = mine, `all`, `#id`, `NAME`, `@bot`) |
+| `/api/orders/check` | `{ command, tokens, filters }` → `{ ok, text, command: canonical, summary }`: may this player order it with these args (`/bots orders bind`) |
+| `/api/orders/trigger` | `{ command, tokens, filters, take?, stop?, snap }` (the snap with `trigger`): deliver to the player's running order of that command, else start it (restart one that does not listen); `stop: true` stops it (§5.4) |
 | `/api/authoring/open`, `/close`, `/revoke` | Authoring turns and manual tickets |
 | `/api/commands/list`, `/show`, `/share` (`remove: true` = unshare), `/delete`, `/revert` | The command store |
 | `GET /events` (SSE) | `hello`, `notice` (`{to: [uuid…], text, click?}`: a French line, kept for offline players by the mod) and `state` (refetch `/api/state`). Notices emitted while no mod is connected are buffered (200) |
