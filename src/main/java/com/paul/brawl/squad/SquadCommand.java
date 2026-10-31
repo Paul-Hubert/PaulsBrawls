@@ -52,6 +52,7 @@ public final class SquadCommand {
                         .then(CommandManager.argument("owners", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
                             .executes(c -> spawn(c, StringArgumentType.getString(c, "bot"), StringArgumentType.getString(c, "owners"))))))
                 .then(CommandManager.literal("despawn").requires(s -> s.hasPermissionLevel(2))
+                    .then(CommandManager.literal("all").executes(c -> despawnAll(c.getSource())))
                     .then(CommandManager.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
                         .executes(c -> despawn(c, StringArgumentType.getString(c, "bot")))))
                 .then(CommandManager.literal("owners").requires(s -> s.hasPermissionLevel(2))
@@ -210,7 +211,7 @@ public final class SquadCommand {
         };
         for (String l : lines) src.sendFeedback(() -> Text.literal(l), false);
         if (src.hasPermissionLevel(2)) {
-            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · equip BOT archer|guard|miner|farmer · raid [distance] [archers] [gardes] | clear | stop · despawn BOT · owners BOT add|remove JOUEUR… · list all · stop all"), false);
+            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · equip BOT archer|guard|miner|farmer · raid [distance] [archers] [gardes] | clear | stop · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
         }
         return Command.SINGLE_SUCCESS;
     }
@@ -224,6 +225,8 @@ public final class SquadCommand {
             return reply(src, "[Bots] " + bot + " est le nom d'un joueur qui a déjà joué ici (le bot hériterait de son inventaire) : choisis-en un autre.");
         }
         if (reservedName(bot)) return reply(src, "[Bots] " + bot + " est réservé (avatar de Dieu ou villageois).");
+        // "all" is the keyword of /bots despawn all: a bot of that name could not be despawned alone.
+        if (bot.equalsIgnoreCase("all")) return reply(src, "[Bots] « all » est réservé (/bots despawn all) : choisis un autre nom.");
         JsonArray owners = new JsonArray();
         for (String name : SquadArgs.names(ownersText)) {
             Optional<GameProfile> p = Squad.profile(srv, name);
@@ -273,6 +276,26 @@ public final class SquadCommand {
         if (!Squad.enabled()) return reply(c.getSource(), DISABLED);
         ServerCommandSource src = c.getSource();
         despawnBot(src, bot).thenAccept(r -> src.getServer().execute(() -> show(src, r)));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /**
+     * {@code /bots despawn all} (admin): every roster bot, each through {@link #despawnBot} (stopped, disconnected,
+     * unwhitelisted, forgotten), and a raid still assembling is cancelled so it spawns no more. One line at the end.
+     */
+    private static int despawnAll(ServerCommandSource src) {
+        if (!Squad.enabled()) return reply(src, DISABLED);
+        SquadRaid.cancelAssembling();
+        List<String> bots = Squad.botNames();
+        if (bots.isEmpty()) return reply(src, "[Bots] Aucun bot à retirer.");
+        java.util.concurrent.atomic.AtomicInteger gone = new java.util.concurrent.atomic.AtomicInteger();
+        CompletableFuture<?>[] all = bots.stream()
+            .map(n -> despawnBot(src, n).thenAccept(r -> {
+                if (SquadAuthoring.ok(r)) gone.incrementAndGet();
+            }))
+            .toArray(CompletableFuture[]::new);
+        CompletableFuture.allOf(all).thenRun(() -> src.getServer().execute(() ->
+            reply(src, "[Bots] " + gone.get() + " bot(s) retiré(s)" + (gone.get() < bots.size() ? " sur " + bots.size() : "") + ".")));
         return Command.SINGLE_SUCCESS;
     }
 

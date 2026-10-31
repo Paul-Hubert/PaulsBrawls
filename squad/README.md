@@ -75,7 +75,7 @@ per minute goes to the `vitals` table of `.squad-data/squad.db` (kept 7 days).
 | `/bots orders bind NAME [args] [@bot …] [--reclaim\|--free]` (anyone) | binds the item in your main hand to that order, checked like `/bots order`; the item gets a glint and a lore line « Ordre : NAME args ». Then **right-click** it to start the order on your bots, or, while it runs, re-aim it where you look (an order that does not listen for clicks restarts); **sneak + right-click** stops it. A bound **bow or crossbow** gives the order with each arrow you shoot (when it leaves, then where it lands), not with the right-click. At most 4 clicks a second count. Given to another player, the item orders *their* bots, if the command is one they may use |
 | `/bots orders unbind` · `/bots orders bound` | remove the held item's binding (its lore line and glint go too); list the bound items in your inventory |
 | `/bots status` | the runtime's load over the last 10 s: ELU, loop p99, the slowest bot's ticks/s |
-| admin: `despawn BOT` · `owners BOT add\|remove P…` · `list all` · `stop all` | |
+| admin: `despawn BOT` · `despawn all` (every bot) · `owners BOT add\|remove P…` · `list all` · `stop all` | |
 
 Stock commands everyone has: `come`, `follow`, `defend` (archers reclaimed, melee kept; threats within `radius` of
 the commander, at most two guards per creature, each bot on its own spot around the commander), `gather`, `deposit`,

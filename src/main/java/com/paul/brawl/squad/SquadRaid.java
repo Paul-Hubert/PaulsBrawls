@@ -231,15 +231,20 @@ final class SquadRaid {
         return Command.SINGLE_SUCCESS;
     }
 
-    static int clear(ServerCommandSource src) {
-        if (!Squad.enabled()) return SquadCommand.reply(src, "[Bots] Squad est désactivé (squad.properties : enabled=false).");
-        Optional<GameProfile> owner = Squad.profile(src.getServer(), SquadRaidPlan.OWNER);
-        List<String> raiders = owner.isEmpty() ? List.of() : Squad.botsOf(owner.get().getId());
+    /** A raid still assembling spawns no more raiders and never starts (`raid clear`, `/bots despawn all`). */
+    static void cancelAssembling() {
         if (pending != null) {
             pending.launched = true;
             Squad.forgetArrivals(pending.spawned);
         }
         pending = null;
+    }
+
+    static int clear(ServerCommandSource src) {
+        if (!Squad.enabled()) return SquadCommand.reply(src, "[Bots] Squad est désactivé (squad.properties : enabled=false).");
+        Optional<GameProfile> owner = Squad.profile(src.getServer(), SquadRaidPlan.OWNER);
+        List<String> raiders = owner.isEmpty() ? List.of() : Squad.botsOf(owner.get().getId());
+        cancelAssembling();
         if (raiders.isEmpty()) return SquadCommand.reply(src, "[Bots] Aucun envahisseur à retirer.");
         AtomicInteger gone = new AtomicInteger();
         CompletableFuture<?>[] all = raiders.stream()

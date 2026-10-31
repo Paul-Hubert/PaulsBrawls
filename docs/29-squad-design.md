@@ -560,7 +560,7 @@ density invariant that made Eden's revisions work. The result is version N+1, an
 | Command | Who | What |
 |---|---|---|
 | `/bots spawn BOT P1 [P2 …]` | admin | Create and connect a bot owned by P1…Pn |
-| `/bots despawn BOT` | admin | Stop, disconnect, forget |
+| `/bots despawn BOT` / `despawn all` | admin | Stop, disconnect, forget; `all`: every roster bot, and a raid still assembling is cancelled (so `all` is refused as a bot name) |
 | `/bots equip BOT archer\|guard\|miner\|farmer` | admin | Give the role's kit server-side (`SquadKits`): armor worn, weapon in hand, shield in the off-hand; replaced items go to the inventory. Tags the bot with the role (removing the other kit tags) |
 | `/bots owners BOT add\|remove P …` | admin | Change owners |
 | `/bots raid [distance] [archers] [guards]` / `raid stop` / `raid clear` | admin, in game | An enemy army (200 blocks ahead, 10 archers + 10 guards by default) owned by the virtual player `Envahisseur`: spawned, put on the ground there and equipped on arrival, then ordered `raid` against the caller and their bots. `stop` stops it, `clear` despawns every raider (§16) |
