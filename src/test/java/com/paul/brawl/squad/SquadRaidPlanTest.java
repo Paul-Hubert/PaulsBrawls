@@ -13,6 +13,19 @@ import org.junit.jupiter.api.Test;
 class SquadRaidPlanTest {
 
     @Test
+    void armyArgumentsArePositionalAndOptional() {
+        assertEquals(new SquadRaidPlan.ArmyArgs(5, 5), SquadRaidPlan.parseArmy(""));
+        assertEquals(new SquadRaidPlan.ArmyArgs(5, 5), SquadRaidPlan.parseArmy(null));
+        assertEquals(new SquadRaidPlan.ArmyArgs(8, 5), SquadRaidPlan.parseArmy("8"));
+        assertEquals(new SquadRaidPlan.ArmyArgs(2, 0), SquadRaidPlan.parseArmy(" 2 0 "));
+        assertEquals(7, SquadRaidPlan.parseArmy("3 4").total());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> SquadRaidPlan.parseArmy("0 0"));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> SquadRaidPlan.parseArmy("1 2 3"));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> SquadRaidPlan.parseArmy("31"));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> SquadRaidPlan.parseArmy("beaucoup"));
+    }
+
+    @Test
     void argumentsArePositionalAndOptional() {
         assertEquals(new SquadRaidPlan.Args(200, 10, 10), SquadRaidPlan.parse(""));
         assertEquals(new SquadRaidPlan.Args(200, 10, 10), SquadRaidPlan.parse(null));

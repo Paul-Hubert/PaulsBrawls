@@ -70,7 +70,7 @@ final class SquadRaid {
         }
     }
 
-    private record XYZ(double x, double y, double z) {}
+    record XYZ(double x, double y, double z) {}
 
     private record Raider(String name, SquadKits.Kit kit, XYZ at) {}
 
@@ -285,7 +285,7 @@ final class SquadRaid {
      * The ground at (x, z): the chunk is loaded (generated if need be) first, then the heightmap gives the first free
      * block above the surface, leaves left out (a bot on a canopy cannot pathfind down, docs/29 §16).
      */
-    private static XYZ surface(ServerWorld world, double x, double z) {
+    static XYZ surface(ServerWorld world, double x, double z) {
         int bx = (int) Math.floor(x);
         int bz = (int) Math.floor(z);
         world.getChunk(bx >> 4, bz >> 4);
@@ -294,7 +294,7 @@ final class SquadRaid {
     }
 
     /** A formation offset (x across, z toward the front) turned to face `yaw`. */
-    private static SquadRaidPlan.XZ rotate(SquadRaidPlan.XZ d, float yaw) {
+    static SquadRaidPlan.XZ rotate(SquadRaidPlan.XZ d, float yaw) {
         double r = Math.toRadians(yaw);
         // Facing direction f = (-sin, cos); its right-hand side s = (-cos, -sin).
         double fx = -Math.sin(r), fz = Math.cos(r);

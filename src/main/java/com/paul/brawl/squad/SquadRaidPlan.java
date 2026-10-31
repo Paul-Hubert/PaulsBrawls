@@ -113,6 +113,34 @@ public final class SquadRaidPlan {
         return LOGIN_STAGGER_MS * count + START_SLACK_MS;
     }
 
+    // -- /bots armee: the same formation, for an army owned by the caller ---------------------------------------------
+
+    public static final String ARMY_ARCHER_PREFIX = "Archer";
+    public static final String ARMY_GUARD_PREFIX = "Garde";
+    public static final int DEFAULT_ARMY_ARCHERS = 5;
+    public static final int DEFAULT_ARMY_GUARDS = 5;
+    /** The army's formation is centred this many blocks ahead of the caller. */
+    public static final int ARMY_AHEAD = 5;
+
+    public record ArmyArgs(int archers, int guards) {
+        public int total() {
+            return archers + guards;
+        }
+    }
+
+    /**
+     * {@code [archers] [guards]}, positional, both optional (5, 5). Throws IllegalArgumentException with the French
+     * line for the admin.
+     */
+    public static ArmyArgs parseArmy(String text) {
+        List<String> parts = SquadArgs.tokenize(text == null ? "" : text.trim());
+        if (parts.size() > 2) throw new IllegalArgumentException("trop d'arguments (usage : /bots armee [archers] [gardes])");
+        int archers = parts.size() > 0 ? number(parts.get(0), "archers", 0, MAX_PER_ROLE) : DEFAULT_ARMY_ARCHERS;
+        int guards = parts.size() > 1 ? number(parts.get(1), "gardes", 0, MAX_PER_ROLE) : DEFAULT_ARMY_GUARDS;
+        if (archers + guards == 0) throw new IllegalArgumentException("il faut au moins un bot");
+        return new ArmyArgs(archers, guards);
+    }
+
     /** The raid order's arguments: the caller's position when they called it, and the caller as the target. */
     public static List<String> orderTokens(double x, double y, double z, String target) {
         List<String> out = new ArrayList<>();

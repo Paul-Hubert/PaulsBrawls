@@ -67,6 +67,10 @@ public final class SquadCommand {
                     .then(CommandManager.literal("stop").executes(c -> SquadRaid.stop(c.getSource())))
                     .then(CommandManager.argument("args", StringArgumentType.greedyString())
                         .executes(c -> SquadRaid.call(c.getSource(), StringArgumentType.getString(c, "args")))))
+                .then(CommandManager.literal("armee").requires(s -> s.hasPermissionLevel(2))
+                    .executes(c -> SquadArmy.call(c.getSource(), ""))
+                    .then(CommandManager.argument("args", StringArgumentType.greedyString())
+                        .executes(c -> SquadArmy.call(c.getSource(), StringArgumentType.getString(c, "args")))))
                 .then(CommandManager.literal("equip").requires(s -> s.hasPermissionLevel(2))
                     .then(CommandManager.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
                         .then(CommandManager.argument("kit", StringArgumentType.word()).suggests(KITS)
@@ -211,7 +215,7 @@ public final class SquadCommand {
         };
         for (String l : lines) src.sendFeedback(() -> Text.literal(l), false);
         if (src.hasPermissionLevel(2)) {
-            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · equip BOT archer|guard|miner|farmer · raid [distance] [archers] [gardes] | clear | stop · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
+            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · equip BOT archer|guard|miner|farmer (il devient aussi à toi) · armee [archers] [gardes] · raid [distance] [archers] [gardes] | clear | stop · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
         }
         return Command.SINGLE_SUCCESS;
     }
@@ -247,7 +251,11 @@ public final class SquadCommand {
         return Command.SINGLE_SUCCESS;
     }
 
-    /** {@code /bots equip BOT KIT} (admin): the kit's items server-side, then the kit's tag on the runtime's roster. */
+    /**
+     * {@code /bots equip BOT KIT} (admin): the kit's items server-side, then the kit's tag on the runtime's roster. The
+     * caller, when a player, also becomes one of the bot's owners (its other owners keep it), so the bot they just
+     * armed is theirs to order.
+     */
     private static int equip(CommandContext<ServerCommandSource> c, String bot, String kitName) {
         if (!Squad.enabled()) return reply(c.getSource(), DISABLED);
         ServerCommandSource src = c.getSource();
@@ -262,6 +270,15 @@ public final class SquadCommand {
         Squad.client().post("/api/bots/tag", body).thenAccept(r -> {
             if (!SquadAuthoring.ok(r)) src.getServer().execute(() -> show(src, r));
         });
+        ServerPlayerEntity caller = src.getPlayer();
+        if (caller != null && !Squad.botsOf(caller.getUuid()).contains(name.get())) {
+            JsonObject own = base(src);
+            own.addProperty("name", name.get());
+            JsonArray add = new JsonArray();
+            add.add(Squad.player(caller.getGameProfile()));
+            own.add("add", add);
+            Squad.client().post("/api/bots/owners", own).thenAccept(r -> src.getServer().execute(() -> show(src, r)));
+        }
         return Command.SINGLE_SUCCESS;
     }
 
