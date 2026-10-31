@@ -194,7 +194,7 @@ export const manifest = {
 |---|---|
 | `squad.bots` | Live array of the order's guarded bots (§6.4). Bots that join or leave update it |
 | `squad.roles.<role>` | Live array per role |
-| `squad.parallel(bots, async bot => …)` | Runs on each bot at once; resolves to `[{ bot, ok, value, error }]`. One bot failing or leaving never rejects the whole call |
+| `squad.parallel(bots, async bot => …)` | Runs on each bot at once; resolves to `[{ bot, ok, value, error }]`. One bot failing or leaving never rejects the whole call. Over `squad.bots` or a `squad.roles.x` array, a bot given back by a reclaim runs `fn` again, and the call waits while one can still come back (§16) |
 | `squad.tasks(items, async (bot, item) => …, { bots, retries = 1 })` | Work queue. Each free bot takes the next item; an item whose bot leaves goes back in the queue; **bots that join the order mid-run start pulling too**. Resolves to per-item results |
 | `squad.claim(key, { ttlSeconds })` / `squad.unclaim(key)` | Reservation shared **across orders** (true if won). `blockKey(pos)` makes a key |
 | `squad.acquire(roleSpec)` / `squad.release(bot)` | Ask for more bots mid-run with the same rules as the manifest, or let one go |
@@ -225,9 +225,12 @@ Extra read-only fields: `bot.tags`, `bot.role`.
 - Added here: `goTo(bot, pos, range)` (hops of ≤ 40 blocks, R6), `follow(bot, entity, range, { untilMs, offset })` (until
   `untilMs`, the order stops or the bot leaves; a `null` entity just waits; `offset` follows a slot beside the entity),
   `attack(bot, entity, { timeoutMs, leash, until })` (a leash breaks off a fight that drifts from a point),
-  `shoot(bot, entity)`, `equip(bot, name, dest)`, `eat(bot)`, `pickupDrops(bot, radius)`,
-  `findBlock(bot, name, maxDistance)`, `nearestEntity(bot, filter, maxDistance, { from })`,
+  `shoot(bot, target)` (an entity, or a position for a volley), `equip(bot, name, dest)`, `eat(bot)`,
+  `pickupDrops(bot, radius)`, `findBlock(bot, name, maxDistance)`, `nearestEntity(bot, filter, maxDistance, { from })`,
   `nearestHostile(bot, maxDistance, { from, filter })` (distances from `from`, e.g. the commander).
+- For formations (§5.4 item 7; yaw always in the commander's convention, Minecraft degrees, 0 = south): `lookDir(yaw,
+  pitch)`, `lineSlots(center, yaw, count, { spacing, ranks, depth })`, `groundAt(bot, pos, { up, down })`,
+  `faceYaw(bot, yaw, pitch)`, `raiseShield(bot, on)`, `entityOf(bot, ref)`.
 
 **Cooperation by default.** Inside an order, `mineBlock`, `collectBlocks` and `placeItem` claim their target block
 and skip blocks other bots have claimed. Two bots told `mineBlock(bot, 'oak_log', 5)` at the same time chop
@@ -673,7 +676,8 @@ completely, so missed events cannot leave it wrong.
   the user cache. In offline mode the user cache makes up a profile for any name it is asked about, so the first
   version refused every name (found on the production server, 2026-10-27). The real risk is a bot loading a real
   player's save, and the playerdata file is what shows it.
-- **Stock commands:** `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`, `raid` (`squad/src/stock/`).
+- **Stock commands:** `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`, `raid`, and for bound items
+  `mur-de-boucliers`, `epee`, `ligne-archers`, `tir` (`squad/src/stock/`).
 - **A server mod's items can make a bot deaf (found on production, 2026-10-27).** The first live run on `server/`
   had empty inventories, gives that never arrived, and logs "mined" but never collected. Probes
   (`live-tests/probe-protocol.ts`, `probe-packet.ts`) showed why: mineflayer could not decode the login
@@ -753,6 +757,33 @@ completely, so missed events cannot leave it wrong.
   Tests: `squad/tests/ladders.test.ts` (a synthetic world with a ladder: each patch, and the workers giving the same
   paths) and `defend.test.ts` (the slot fallback). Live: two `run.ts` scenarios build a ladder on the dev world, and a
   bot follows a climbing bot up it with `follow`, then with `defend`.
+- **Orders bound to items: the formation helpers and the four stock commands (2026-10-31, §5.4 items 7–8).** As
+  designed, with these additions. Details: docs/system/squad/overview.md. Tests: `squad/tests/helpers.test.ts`,
+  `item-orders.test.ts`. Not yet run on a server.
+  1. *`entityOf` searches by name only for a ref without an id.* The id is the same for every client, so a ref whose id
+     a bot lacks is dead or out of its sight; the zombie next to where it stood is another one (in a test, a killed
+     target was replaced by its neighbour and `epee` never ended its attack).
+  2. *A line keeps a bot's slot while the bot is away.* `tir` reclaims every archer of a `ligne-archers`; re-forming on
+     each leave and join would have handed the slots out again by where the archers stood, so one knocked out of place
+     took another's slot. Now only a click, or a bot without a slot joining, re-forms. The four commands also start a
+     loop for a bot that comes back (`squad.on('joined')`), with `squad.parallel(bot, …)` per bot.
+  3. *`raiseShield` cannot trust `usingHeldItem`.* Mineflayer clears it on any `entity_status` packet (any entity's),
+     and keeps it when an axe disables an off-hand shield (its cooldown check looks at the main-hand item). The helper
+     keeps its own record per body, sends the use again when the flag is false (the server ignores a use while one is
+     held), at most every 5 s while it is true, and never while auto-eat eats (auto-eat lowers the shield to eat).
+  4. *`shoot`'s hand-aimed release waits 60 ms after the look.* `bot.look(…, true)` only sets the yaw and pitch; the
+     look packet goes out with the next physics tick, so a release right after it (the entity path, after hawkEye gave
+     up) flew at the old aim. For a position, hawkEye is asked first (`getMasterGrade`): its block check raycasts each
+     step of the arc, so a point on the ground can count as blocked, and then the ballistic aim is used at once.
+  5. *`tir`:* an entity no archer sees ends the order (« Cible hors de vue des archers. »); a target that disappears is
+     « abattue » when it was last within 24 blocks of an archer, else « perdue de vue » (`epee`: 20 blocks of a bot).
+     Out of a bound bow's view, the point is 5 blocks ahead for `mur-de-boucliers` and 10 for `ligne-archers` (whose
+     line stands `back` = 4 blocks short of it).
+  6. *`squad.parallel` over a live array follows returning bots.* It ran `fn` only for the bots in the list when it was
+     called, so a bot given back by a reclaim rejoined `squad.bots` with no loop: `defend`'s guards stood idle after a
+     shield wall borrowed them, and a `defend` whose bots were all borrowed ended. Over `squad.bots` or a
+     `squad.roles.x` array it now also runs `fn` for a bot that joins that array, and waits while a reclaimed bot can
+     still come back (`tests/orders.test.ts`).
 - **Stopping the runtime on Windows:** stopping `npm start` from outside can leave `tsx src/supervisor.ts` and its
   child running. Use Ctrl+C in its console, or stop the `node` processes.
 - **Performance (docs/31, implemented by docs/32, 2026-10-30).** Measured: the bots' A* filled the one event loop at

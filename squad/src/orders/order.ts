@@ -168,6 +168,15 @@ export class Order implements LeaseHolder {
     return this.members.has(name);
   }
 
+  /** Bots reclaimed from this order and still stacked under another one: they come back when it lets go (§6.3). */
+  suspended(): string[] {
+    const out: string[] = [];
+    for (const [name, reason] of this.leftReasons) {
+      if (reason === 'reclaimed' && !this.members.has(name) && this.deps.leases.stack(name).some((e) => e.orderId === this.id)) out.push(name);
+    }
+    return out;
+  }
+
   /** The member behind a guarded (or raw) bot. */
   nameOf(bot: unknown): string | undefined {
     const real = unwrap(bot) as Bot | undefined;

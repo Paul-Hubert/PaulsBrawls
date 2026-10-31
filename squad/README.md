@@ -81,6 +81,21 @@ the commander, at most two guards per creature, each bot on its own spot around 
 any enemy within `radius` of the leader on the way, then hunts the `target` player and their bots; it ends after
 `quiet` seconds, default 60, without an enemy player).
 
+Four stock commands are made for bound items (`/bots orders bind NAME`, docs/29 §5.4); each click re-aims the running
+order where you look, without restarting it:
+- `mur-de-boucliers` (a shield): the guards with a shield line up across your view at the block you look at (or 5
+  blocks ahead), face along it and raise their shields once there; they fight what comes within `reach` (4) of their
+  slot, then go back. Params `distance` 24, `spacing` 1, `reach` 4.
+- `epee` (a sword): looking at a creature or an enemy, the archers shoot it and two guards fight it (the others fight
+  what is near it) until it is dead or `seconds` (60) pass; looking at the ground, the bots hold that spot (rings of 3
+  and 6 around it); looking at the sky or a friend, they defend you. Params `radius` 16, `seconds` 60.
+- `ligne-archers` (an arrow, right-click): the archers line up across your view, `back` (4) blocks short of the point,
+  in two ranks past 8, and shoot what comes within `range` (24) of the line, from their slots. Params `distance` 24,
+  `spacing` 2, `back` 4, `range` 24.
+- `tir` (a bow): the archers shoot where your arrow went, from where they stand: the creature it hit until it is dead or
+  `seconds` (8) pass, or a volley of `volley` (3) arrows each spread over `spread` (3) blocks around where it landed.
+  It ends after that; archers it took from a `ligne-archers` go back to their slots there.
+
 Bots never hurt their own team: the mod cancels a bot's damage to a bot sharing an owner with it, or to one of its
 owners. Everyone else (mobs, other players, other owners' bots) can be hit; PvP is on. A script's friends (`isFriend`)
 are the same team: the commander, the co-owners of the order's bots, and the bots sharing an owner with them. Another

@@ -1,8 +1,9 @@
 // The helpers: scope globals every command can call (docs/29 §5.2). Voyager's primitives under Voyager's names
 // and signatures (mineBlock, craftItem, smeltItem, placeItem, killMob, exploreUntil, getItemFromChest,
-// depositItemIntoChest, checkItemInsideChest), plus movement, combat and lookup helpers. The hard-won fixes come
-// from Eden's stock skills (copied): hops of ≤ 40 blocks (R7), window safety (R1–R3), numeric ids for recipesFor
-// (gap C), drops picked up by walking onto them (gap E).
+// depositItemIntoChest, checkItemInsideChest), plus movement, combat and lookup helpers, and the formation helpers
+// of orders bound to items (lookDir, lineSlots, groundAt, faceYaw, raiseShield, entityOf; docs/29 §5.4). The
+// hard-won fixes come from Eden's stock skills (copied): hops of ≤ 40 blocks (R7), window safety (R1–R3), numeric
+// ids for recipesFor (gap C), drops picked up by walking onto them (gap E).
 //
 // Every helper:
 //   • takes a (guarded) bot first; when it belongs to an order, block targets are claimed across orders, so two bots
@@ -831,15 +832,33 @@ export async function killMob(bot: Bot, mobName: string, timeout = 300): Promise
 export const SHOT_WAIT_MS = { bow: 1_450, crossbow: 1_900 } as const;
 /** How often `shoot` looks at the arrow count while it waits. */
 export const SHOT_POLL_MS = 50;
+/**
+ * `bot.look(…, true)` only sets the bot's yaw/pitch: the look packet goes out with the next physics tick (50 ms). A
+ * release sent at once flew at the old aim, so a hand-aimed release waits this long after the look.
+ */
+export const LOOK_SETTLE_MS = 60;
+
+/** A live entity (prismarine-entity always has `isValid`), as opposed to a position, a block or a snapshot ref. */
+function isLiveEntity(t: unknown): t is Entity {
+  return !!t && typeof t === 'object' && !Array.isArray(t) && 'isValid' in t && !!(t as { position?: unknown }).position;
+}
 
 /**
- * Shoot once at an entity with a bow (or crossbow): aims with hawkEye (gravity and target motion), equips the
- * weapon, needs arrows. Resolves as soon as an arrow has left (the arrow count drops: ~1.25 s for a bow), so an
- * archer can pick its next target at once.
+ * Shoot once with a bow (or crossbow) at an entity, or at a position (a volley on the ground): aims with hawkEye
+ * (gravity, and an entity's motion), equips the weapon, needs arrows. Resolves as soon as an arrow has left (the
+ * arrow count drops: ~1.25 s for a bow), so an archer can pick its next target at once.
+ *
+ * A position goes to hawkEye as `{ position, isValid: true }` (a target without `type` is a point to it). hawkEye's
+ * block check raycasts every step of its arc, so a point on the ground can count as blocked: when it has no
+ * trajectory for a position (`getMasterGrade`), the bow's pitch comes from the arrow's ballistics (bowAim) and the
+ * shot is made by hand. A snapshot ref (`at.lookEntity`) is a position here: pass `entityOf(bot, ref)` for the live one.
  */
-export async function shoot(bot: Bot, entity: Entity | null | undefined, opts: { weapon?: 'bow' | 'crossbow' } = {}): Promise<{ shot: true }> {
+export async function shoot(bot: Bot, target: Entity | PosLike | null | undefined, opts: { weapon?: 'bow' | 'crossbow' } = {}): Promise<{ shot: true }> {
   const label = `shoot(${who(bot)})`;
-  if (!entity) throw new HelperError(`${label}: no target (null)`);
+  if (!target) throw new HelperError(`${label}: no target (null)`);
+  const entity = isLiveEntity(target) ? target : null;
+  const point = entity ? null : toVec3(target as PosLike, `${label} target`);
+  const what = entity ? `${entity.name ?? entity.username ?? 'entity'} ${fmt(entity.position)}` : fmt(point);
   const weapon = opts.weapon ?? 'bow';
   const item = bot.inventory.items().find((i) => i.name === weapon);
   if (!item) throw new HelperError(`${label}: no ${weapon} in the inventory`);
@@ -853,22 +872,42 @@ export async function shoot(bot: Bot, entity: Entity | null | undefined, opts: {
     while (!gone() && Date.now() < deadline) await sleepMs(Math.min(SHOT_POLL_MS, Math.max(1, deadline - Date.now())));
     return gone();
   };
-  const hawk = (bot as unknown as { hawkEye?: { oneShot?: (t: Entity, w: string) => void; stop?: () => void } }).hawkEye;
+  type HawkTarget = Entity | { position: Vec3; isValid: true };
+  const hawk = (bot as unknown as {
+    hawkEye?: { oneShot?: (t: HawkTarget, w: string) => void; stop?: () => void; getMasterGrade?: (t: HawkTarget, speed: Vec3, w: string) => unknown };
+  }).hawkEye;
+  const hawkTarget: HawkTarget = entity ?? { position: point as Vec3, isValid: true };
+  /** Whether hawkEye has a trajectory: always tried for an entity (it moves); asked first for a position. */
+  const hawkCanAim = (): boolean => {
+    if (entity || !hawk?.getMasterGrade) return true;
+    try {
+      return !!hawk.getMasterGrade(hawkTarget, new Vec3(0, 0, 0), weapon);
+    } catch (e) {
+      passControl(e);
+      return false;
+    }
+  };
   const aim = async (): Promise<void> => {
-    // A manual aim: a little above the target, for the drop over the distance.
-    const d = bot.entity.position.distanceTo(entity.position);
-    await bot.lookAt(entity.position.offset(0, (entity.height ?? 1.8) * 0.8 + d * 0.02, 0), true);
+    if (entity) {
+      // A manual aim: a little above the target, for the drop over the distance.
+      const d = bot.entity.position.distanceTo(entity.position);
+      await bot.lookAt(entity.position.offset(0, (entity.height ?? 1.8) * 0.8 + d * 0.02, 0), true);
+      return;
+    }
+    const a = bowAim(bot.entity.position, point as Vec3);
+    await bot.look(mineflayerYaw(a.yaw), mineflayerPitch(a.pitch), true);
   };
   try {
     if (bot.heldItem?.name !== weapon) await bot.equip(item, 'hand');
     // hawkEye aims for gravity and the target's motion, but when it finds no clear trajectory it silently fires
     // nothing and keeps the bow drawn (found live: an archer "shot" for a minute through leaves without using an
     // arrow, docs/29 §16).
-    if (hawk?.oneShot) {
-      hawk.oneShot(entity, weapon);
+    if (hawk?.oneShot && hawkCanAim()) {
+      hawk.oneShot(hawkTarget, weapon);
       if (await waitArrow(SHOT_WAIT_MS[weapon])) return { shot: true };
       // Still drawn with no trajectory: aim by hand, then stop it (stopping releases the drawn bow, at our aim).
       await aim();
+      await sleepMs(LOOK_SETTLE_MS);
       hawk.stop?.();
       if (await waitArrow(300)) return { shot: true };
     }
@@ -880,14 +919,306 @@ export async function shoot(bot: Bot, entity: Entity | null | undefined, opts: {
     await waitArrow(500);
   } catch (e) {
     passControl(e);
-    throw new HelperError(`${label}: ${(e as Error).message} at ${entity.name ?? entity.username ?? 'entity'} ${fmt(entity.position)}`);
+    throw new HelperError(`${label}: ${(e as Error).message} at ${what}`);
   }
   if (!gone()) {
-    throw new HelperError(
-      `${label}: no arrow left the bow at ${entity.name ?? entity.username ?? 'entity'} ${fmt(entity.position)} from ${fmt(bot.entity.position)} (no clear line of fire? move closer or into the open)`,
-    );
+    throw new HelperError(`${label}: no arrow left the bow at ${what} from ${fmt(bot.entity.position)} (no clear line of fire? move closer or into the open)`);
   }
   return { shot: true };
+}
+
+// -- formations and aiming (orders bound to items, docs/29 §5.4) ------------------------------------------------
+//
+// YAW CONVENTION. Every helper here takes yaw as the commander's snapshot gives it (`ctx.commander.at.yaw`):
+// Minecraft's degrees, 0 = south (+Z), 90 = west (−X), 180 = north (−Z), −90 = east (+X); pitch in Minecraft's
+// degrees, negative = up. Mineflayer's own `bot.entity.yaw`/`pitch` are radians from another origin: faceYaw
+// converts with mineflayer's formulas (lib/conversions.js, fromNotchianYaw/fromNotchianPitch).
+
+const RAD = Math.PI / 180;
+
+/** Float dust off (6e-17 → 0, 1.4999999999 → 1.5) and −0 → 0, so a slot on an axis is exactly on it. */
+const snap = (n: number): number => Math.round(n * 1e9) / 1e9 + 0;
+
+function degrees(v: unknown, what: string): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) throw new HelperError(`${what}: expected degrees (Minecraft's: 0 = south, 90 = west, as ctx.commander.at.yaw), got ${safeJson(v)}`);
+  return n;
+}
+
+const euclideanMod = (a: number, b: number): number => ((a % b) + b) % b;
+
+/** Mineflayer's yaw (radians) for a Minecraft yaw in degrees: mineflayer's fromNotchianYaw. */
+export function mineflayerYaw(yaw: number): number {
+  return euclideanMod(Math.PI - yaw * RAD, 2 * Math.PI);
+}
+
+/** Mineflayer's pitch (radians, positive = up) for a Minecraft pitch in degrees: mineflayer's fromNotchianPitch. */
+export function mineflayerPitch(pitch: number): number {
+  return euclideanMod(-pitch * RAD + Math.PI, 2 * Math.PI) - Math.PI;
+}
+
+/** The unit view vector of a yaw and pitch (the commander's convention): lookDir(0) = (0, 0, 1), lookDir(90) = (−1, 0, 0). */
+export function lookDir(yaw: number, pitch = 0): Vec3 {
+  const y = degrees(yaw, 'lookDir yaw') * RAD;
+  const p = degrees(pitch, 'lookDir pitch') * RAD;
+  return new Vec3(snap(-Math.sin(y) * Math.cos(p)), snap(-Math.sin(p)), snap(Math.cos(y) * Math.cos(p)));
+}
+
+/**
+ * `count` positions on a line through `center`, perpendicular to the view `yaw`, `spacing` apart, ordered left to
+ * right as the commander sees them (their right hand is −X when they face south). With `ranks` > 1 the slots are
+ * filled rank by rank, Math.ceil(count / ranks) per rank, each rank centred, rank r `depth * r` blocks behind the
+ * first (toward the commander). Pure: a slot keeps center's y; groundAt puts it on the ground.
+ */
+export function lineSlots(center: PosLike, yaw: number, count: number, opts: { spacing?: number; ranks?: number; depth?: number } = {}): Vec3[] {
+  const c = toVec3(center, 'lineSlots center');
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  const spacing = Number(opts.spacing ?? 1.5);
+  const depth = Number(opts.depth ?? 2);
+  const ranks = Math.max(1, Math.floor(Number(opts.ranks ?? 1) || 1));
+  if (!Number.isFinite(spacing) || !Number.isFinite(depth)) throw new HelperError(`lineSlots: spacing and depth must be numbers, got ${safeJson(opts)}`);
+  const fwd = lookDir(yaw);
+  const right = lookDir(degrees(yaw, 'lineSlots yaw') + 90);
+  const per = Math.ceil(n / ranks);
+  const out: Vec3[] = [];
+  for (let r = 0; out.length < n; r++) {
+    const inRank = Math.min(per, n - out.length);
+    for (let i = 0; i < inRank; i++) {
+      const side = (i - (inRank - 1) / 2) * spacing;
+      out.push(new Vec3(snap(c.x + right.x * side - fwd.x * depth * r), c.y, snap(c.z + right.z * side - fwd.z * depth * r)));
+    }
+  }
+  return out;
+}
+
+/** Blocks nobody should stand in although nothing stops the body there. */
+const HARMFUL = new Set(['lava', 'fire', 'soul_fire', 'sweet_berry_bush', 'powder_snow', 'cobweb', 'wither_rose']);
+
+/**
+ * The feet position (the block's centre, x + 0.5 and z + 0.5) nearest `pos.y` in pos's column where the feet and
+ * head blocks are open and the block under them is solid, searched `up` blocks above and `down` below; null when
+ * there is none or the chunk is not loaded. A formation slot goes through it, so nobody is sent into a wall or the air.
+ */
+export function groundAt(bot: Bot, pos: PosLike, opts: { up?: number; down?: number } = {}): Vec3 | null {
+  const p = toVec3(pos, 'groundAt');
+  const x = Math.floor(p.x);
+  const z = Math.floor(p.z);
+  const y0 = Math.floor(p.y);
+  const up = Math.max(0, Math.floor(opts.up ?? 3));
+  const down = Math.max(0, Math.floor(opts.down ?? 4));
+  const cache = new Map<number, { name: string; boundingBox: string } | null>();
+  const at = (y: number): { name: string; boundingBox: string } | null => {
+    if (!cache.has(y)) cache.set(y, (bot.blockAt(new Vec3(x, y, z)) as { name: string; boundingBox: string } | null) ?? null);
+    return cache.get(y) ?? null;
+  };
+  if (at(y0) === null) return null; // not loaded (or outside the world)
+  const open = (b: { name: string; boundingBox: string }): boolean => b.boundingBox === 'empty' && !HARMFUL.has(b.name);
+  // Nearest pos.y first; between two equally near, the lower one (the ground under a canopy, not the leaves).
+  const ys: number[] = [];
+  for (let y = y0 - down; y <= y0 + up; y++) ys.push(y);
+  ys.sort((a, b) => Math.abs(a - p.y) - Math.abs(b - p.y) || a - b);
+  for (const y of ys) {
+    const below = at(y - 1);
+    const feet = at(y);
+    const head = at(y + 1);
+    if (below && feet && head && open(feet) && open(head) && below.boundingBox === 'block' && !HARMFUL.has(below.name)) return new Vec3(x + 0.5, y, z + 0.5);
+  }
+  return null;
+}
+
+/** Turn the bot to a yaw and pitch in the commander's convention (faceYaw(bot, ctx.commander.at.yaw): where they looked). */
+export async function faceYaw(bot: Bot, yaw: number, pitch = 0): Promise<{ yaw: number; pitch: number }> {
+  const y = degrees(yaw, `faceYaw(${who(bot)}) yaw`);
+  const p = degrees(pitch, `faceYaw(${who(bot)}) pitch`);
+  try {
+    await bot.look(mineflayerYaw(y), mineflayerPitch(p), true);
+  } catch (e) {
+    passControl(e);
+    throw new HelperError(`faceYaw(${who(bot)}): ${(e as Error).message}`);
+  }
+  return { yaw: y, pitch: p };
+}
+
+/** The off-hand slot of the player's inventory window (mineflayer's armorSlots['off-hand']). */
+export const OFF_HAND_SLOT = 45;
+/**
+ * While raised, raiseShield sends the use again at most this often. Mineflayer's `usingHeldItem` is a hint only:
+ * any entity_status packet (any entity's) resets it to false, so it re-sends needlessly near mobs (harmless: the
+ * server ignores a use while one is held); and it stays true when the server dropped the block of an off-hand
+ * shield (an axe's cooldown packet only clears it for the main-hand item), which this refresh recovers from.
+ */
+export const SHIELD_REASSERT_MS = 5_000;
+/** Per body: when raiseShield last sent the off-hand use. */
+const shieldUp = new WeakMap<object, number>();
+
+/**
+ * Raise (`on`, the default) or lower the shield. Raising puts a shield in the off-hand when it is elsewhere in the
+ * inventory, then holds use with `bot.activateItem(true)` (the off-hand `use_item` packet); calling it again while
+ * raised sends nothing. Lowering is `bot.deactivateItem()`. Blocking slows walking: raise it after arriving. While
+ * auto-eat eats (it lowers the shield to eat), neither is sent; call it again to raise the shield after the meal.
+ * Leaving an order lowers it (the abort sequence's deactivateItem).
+ */
+export async function raiseShield(bot: Bot, on = true): Promise<{ raised: boolean }> {
+  const label = `raiseShield(${who(bot)})`;
+  const real = unwrap(bot) as object;
+  try {
+    const eating = !!(bot as unknown as { autoEat?: { isEating?: boolean } }).autoEat?.isEating;
+    if (!on) {
+      const raised = shieldUp.has(real) || !!bot.usingHeldItem;
+      shieldUp.delete(real);
+      if (raised && !eating) bot.deactivateItem();
+      return { raised: false };
+    }
+    const offHand = bot.inventory.slots[OFF_HAND_SLOT];
+    if (offHand?.name !== 'shield') {
+      const shield = bot.inventory.items().find((i) => i.name === 'shield');
+      if (!shield) {
+        throw new HelperError(`${label}: no shield in the off-hand or the inventory (off-hand: ${offHand?.name ?? 'empty'}, hand: ${bot.heldItem?.name ?? 'empty'})`);
+      }
+      await bot.equip(shield, 'off-hand');
+      shieldUp.delete(real);
+    }
+    if (eating) return { raised: false };
+    const sent = shieldUp.get(real);
+    if (bot.usingHeldItem && sent !== undefined && Date.now() - sent < SHIELD_REASSERT_MS) return { raised: true };
+    bot.activateItem(true);
+    shieldUp.set(real, Date.now());
+    return { raised: true };
+  } catch (e) {
+    passControl(e);
+    if (e instanceof HelperError) throw e;
+    throw new HelperError(`${label}: ${(e as Error).message}`);
+  }
+}
+
+/** An entity as a snapshot names it: `ctx.commander.at.lookEntity`, `at.trigger.hit.entity`. */
+export interface EntityRefLike {
+  id?: number;
+  name?: string;
+  type?: string;
+  username?: string;
+  position?: PosLike;
+}
+
+/**
+ * The live entity of a snapshot ref as this bot sees it now, or null: by `id` (the network entity id, the key of
+ * `bot.entities`), else a player by `username`, else the nearest entity of that `name` within 4 blocks of the ref's
+ * position. The name search is only for a ref without an id (a mod that sends none): the id is the same for every
+ * client, so a ref whose id this bot lacks is dead or out of its sight, and another zombie next to where it stood is
+ * not it (a target "killed" that way was replaced by its neighbour, and the fight never ended).
+ */
+export function entityOf(bot: Bot, ref: EntityRefLike | null | undefined): Entity | null {
+  if (!ref || typeof ref !== 'object') return null;
+  const live = (e: Entity | null | undefined): e is Entity => !!e && e.isValid !== false && !!e.position;
+  if (typeof ref.id === 'number') {
+    const e = bot.entities[ref.id];
+    if (live(e)) return e;
+    if (!ref.username) return null;
+  }
+  if (ref.username) {
+    const e = bot.players[ref.username]?.entity;
+    return live(e) ? e : null;
+  }
+  if (!ref.name || !ref.position) return null;
+  const name = bareName(ref.name);
+  return nearestEntity(bot, (e) => e.name === name, 4, { from: toVec3(ref.position, 'entityOf ref.position') });
+}
+
+/** An arrow's flight (Minecraft 1.21 PersistentProjectileEntity): per tick, move by v, then v × 0.99, then v.y − 0.05. */
+export const ARROW = {
+  /** Blocks per tick at full draw (a bow held ≥ 1 s; speed = pull × 3). */
+  speed: 3,
+  gravity: 0.05,
+  drag: 0.99,
+  /** It leaves at the shooter's eyes minus 0.1: 1.62 − 0.1 for a standing player. */
+  eye: 1.52,
+} as const;
+
+/** The arrow's height (relative to where it left) when it has gone `d` blocks horizontally, or null if it never does. */
+function arrowHeightAt(elevationDeg: number, d: number, speed: number): { y: number; ticks: number } | null {
+  let vh = speed * Math.cos(elevationDeg * RAD);
+  let vy = speed * Math.sin(elevationDeg * RAD);
+  let h = 0;
+  let y = 0;
+  for (let t = 1; t <= 300; t++) {
+    if (h + vh >= d) {
+      const f = vh > 0 ? (d - h) / vh : 0;
+      return { y: y + vy * f, ticks: t - 1 + f };
+    }
+    h += vh;
+    y += vy;
+    vh *= ARROW.drag;
+    vy = vy * ARROW.drag - ARROW.gravity;
+    if (y < -512) return null;
+  }
+  return null;
+}
+
+/**
+ * The bow's aim to hit `to` from a bot standing at `from` (feet), in the commander's convention: yaw and pitch in
+ * Minecraft degrees (pitch negative = up). The low arc: the smallest elevation whose flight passes through the point
+ * (simulated tick by tick, ARROW); out of range, the elevation that gets nearest. `error` is how far above (+) or
+ * below the point the arrow passes, `ticks` its flight time.
+ */
+export function bowAim(from: PosLike, to: PosLike, speed: number = ARROW.speed): { yaw: number; pitch: number; error: number; ticks: number } {
+  const f = toVec3(from, 'bowAim from');
+  const t = toVec3(to, 'bowAim to');
+  const dx = t.x - f.x;
+  const dz = t.z - f.z;
+  const d = Math.hypot(dx, dz);
+  const dy = t.y - (f.y + ARROW.eye);
+  const yaw = d > 1e-9 ? Math.atan2(-dx, dz) / RAD : 0;
+  if (d < 0.5) return { yaw, pitch: dy < 0 ? 90 : -90, error: 0, ticks: Math.abs(dy) / speed };
+  const miss = (e: number): number => {
+    const r = arrowHeightAt(e, d, speed);
+    return r ? r.y - dy : -Infinity;
+  };
+  const result = (e: number) => {
+    const r = arrowHeightAt(e, d, speed);
+    return { yaw, pitch: snap(-e), error: r ? r.y - dy : -Infinity, ticks: r ? r.ticks : Infinity };
+  };
+  // The miss rises with the elevation up to the longest-range angle, then falls: the low arc is its first root.
+  let lo = -89;
+  if (miss(lo) >= 0) return result(lo);
+  for (let e = -88; e <= 89; e++) {
+    if (miss(e) >= 0) {
+      let hi = e;
+      for (let i = 0; i < 40; i++) {
+        const mid = (lo + hi) / 2;
+        if (miss(mid) >= 0) hi = mid;
+        else lo = mid;
+      }
+      return result(hi);
+    }
+    lo = e;
+  }
+  // Out of range: the elevation that carries farthest at the point's height, falling short by `error` (negative).
+  let best = 0;
+  let bestReach = -Infinity;
+  for (let e = -89; e <= 89; e++) {
+    const r = arrowReach(e, dy, speed);
+    if (r > bestReach) {
+      best = e;
+      bestReach = r;
+    }
+  }
+  return { yaw, pitch: snap(-best), error: bestReach - d, ticks: Infinity };
+}
+
+/** How far (horizontally) the arrow gets before it comes down through the height `dy` (relative to where it left). */
+function arrowReach(elevationDeg: number, dy: number, speed: number): number {
+  let vh = speed * Math.cos(elevationDeg * RAD);
+  let vy = speed * Math.sin(elevationDeg * RAD);
+  let h = 0;
+  let y = 0;
+  for (let t = 1; t <= 300; t++) {
+    if (vy < 0 && y + vy < dy) return h + (y > dy ? (vh * (y - dy)) / -vy : 0);
+    h += vh;
+    y += vy;
+    vh *= ARROW.drag;
+    vy = vy * ARROW.drag - ARROW.gravity;
+  }
+  return h;
 }
 
 /** Close a window left open by a script's own window code (R1). */
@@ -916,4 +1247,10 @@ export const HELPERS = {
   findBlock,
   nearestEntity,
   nearestHostile,
+  lookDir,
+  lineSlots,
+  groundAt,
+  faceYaw,
+  raiseShield,
+  entityOf,
 } as const;

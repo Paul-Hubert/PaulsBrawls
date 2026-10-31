@@ -133,7 +133,11 @@ declare global {
     readonly stopped: boolean;
     readonly signal: AbortSignal;
 
-    /** Run fn on each bot at once. One bot failing or leaving never rejects: check result.ok. */
+    /**
+     * Run fn on each bot at once. One bot failing or leaving never rejects: check result.ok. Given squad.bots or a
+     * squad.roles[x] array itself (not a copy), a bot that comes back from another order (it was reclaimed) runs fn
+     * again, and the call waits while a reclaimed bot can still come back: one result per run.
+     */
     parallel<T>(bots: SquadBot[] | SquadBot, fn: (bot: SquadBot) => Promise<T> | T): Promise<Array<ParallelResult<T>>>;
 
     /**
@@ -318,11 +322,13 @@ declare global {
     opts?: { timeoutMs?: number; leash?: SquadLeash; until?: () => boolean },
   ): Promise<{ killed: boolean; brokeOff?: 'leash' | 'until' }>;
   /**
-   * One aimed bow (or crossbow) shot at an entity; needs the weapon and arrows. Resolves as soon as the arrow has left
-   * (~1.25 s for a bow); when hawkEye finds no trajectory, it aims by hand (up to ~3 s). Throws "no arrow left the bow
-   * … (no clear line of fire? …)" when nothing was fired: step aside or move closer.
+   * One aimed bow (or crossbow) shot at an entity, or at a position (a volley on the ground: `shoot(bot, point)`);
+   * needs the weapon and arrows. Resolves as soon as the arrow has left (~1.25 s for a bow); when hawkEye finds no
+   * trajectory, it aims by hand (a position: the bow's angle from the arrow's flight) (up to ~3 s). Throws "no arrow
+   * left the bow … (no clear line of fire? …)" when nothing was fired: step aside or move closer. A snapshot entity
+   * (at.lookEntity) is only a position: shoot entityOf(bot, ref) to aim at the live one.
    */
-  function shoot(bot: SquadBot, entity: Entity | null | undefined, opts?: { weapon?: 'bow' | 'crossbow' }): Promise<{ shot: true }>;
+  function shoot(bot: SquadBot, target: Entity | Pos | null | undefined, opts?: { weapon?: 'bow' | 'crossbow' }): Promise<{ shot: true }>;
   /** Equip by id; "_sword" picks the best sword. */
   function equip(bot: SquadBot, name: string, destination?: 'hand' | 'off-hand' | 'head' | 'torso' | 'legs' | 'feet'): Promise<{ equipped: string }>;
   /** Eat the best safe food in the inventory. */
@@ -342,11 +348,50 @@ declare global {
   /**
    * A player in ctx.friends (the commander, co-owners, the bots of your team). Never target one. Bots of other owners
    * are not friends. PvP is on; the server only cancels a bot's hits on its own owners and on bots sharing an owner
-   * with it, so anyone else can be hurt: spare whom you mean to spare.
+   * with it, so anyone else can be hurt: spare whom you mean to spare. A snapshot entity (at.lookEntity) works too.
    */
-  function isFriend(entity: Entity | null | undefined): boolean;
+  function isFriend(entity: Entity | SquadAtEntity | null | undefined): boolean;
   /** A claim key for a block position. */
   function blockKey(pos: Pos): string;
+
+  // ---------------------------------------------------------------------------------------------------------
+  //  Formations and aiming (orders bound to items: a click re-aims a running order, see ctx.commander.on).
+  //  YAW CONVENTION: every helper below takes yaw as ctx.commander.at.yaw gives it, Minecraft's degrees:
+  //  0 = south (+Z), 90 = west (−X), 180 = north (−Z), −90 = east (+X). Pitch: Minecraft's degrees, negative = up.
+  //  (bot.entity.yaw / bot.entity.pitch are mineflayer's radians, another convention: do not mix them.)
+  // ---------------------------------------------------------------------------------------------------------
+
+  /** The unit view vector of a yaw (and pitch): lookDir(0) = (0, 0, 1), lookDir(90) = (−1, 0, 0), lookDir(0, −90) = straight up. */
+  function lookDir(yaw: number, pitch?: number): Vec3Class;
+  /**
+   * `count` positions on a line through `center`, perpendicular to the view `yaw`, `spacing` apart (default 1.5),
+   * ordered LEFT TO RIGHT as the commander sees them. With `ranks` > 1 they fill rank by rank, Math.ceil(count / ranks)
+   * per rank, each rank centred, rank r `depth * r` blocks (default 2) behind the first, toward the commander. Pure (no
+   * bot): every slot keeps center's y, so pass each through groundAt. Give bots their slots sorted by their position
+   * along the line (lookDir(yaw + 90) points to the commander's right) so their paths do not cross.
+   */
+  function lineSlots(center: Pos, yaw: number, count: number, opts?: { spacing?: number; ranks?: number; depth?: number }): Vec3Class[];
+  /**
+   * Where to stand in pos's column: the feet position (block centre) nearest pos.y with feet and head open and a solid
+   * block under, within `up` (default 3) blocks above and `down` (default 4) below; null when there is none or the
+   * chunk is not loaded. The top of a looked-at block: groundAt(bot, ctx.commander.at.lookBlock.offset(0.5, 1, 0.5)).
+   */
+  function groundAt(bot: SquadBot, pos: Pos, opts?: { up?: number; down?: number }): Vec3Class | null;
+  /** Turn the bot to a yaw (and pitch) in the commander's convention: faceYaw(bot, ctx.commander.at.yaw) faces where they looked. */
+  function faceYaw(bot: SquadBot, yaw: number, pitch?: number): Promise<{ yaw: number; pitch: number }>;
+  /**
+   * Raise the shield (on, default) or lower it (false). Raising moves a shield into the off-hand when it is elsewhere
+   * in the inventory (throws when there is none) and holds use; calling it again while raised sends nothing, so call it
+   * in your loop: it raises the shield again after something lowered it (auto-eat lowers it to eat). Blocking slows
+   * walking: lower it to walk, raise it once there. A bot leaving the order lowers it.
+   */
+  function raiseShield(bot: SquadBot, on?: boolean): Promise<{ raised: boolean }>;
+  /**
+   * The live entity of a snapshot entity (ctx.commander.at.lookEntity, at.trigger.hit.entity) as this bot sees it now,
+   * or null (dead, gone, out of its sight): by `id` (bot.entities[id]), else a player by `username`, else the nearest
+   * entity of that `name` within 4 blocks of the snapshot's position.
+   */
+  function entityOf(bot: SquadBot, ref: SquadAtEntity | { id?: number; name?: string; username?: string; position?: Pos } | null | undefined): Entity | null;
 }
 
 declare module 'squad' {
@@ -359,7 +404,7 @@ declare module 'squad' {
   export {
     mineBlock, craftItem, smeltItem, placeItem, killMob, exploreUntil, getItemFromChest, depositItemIntoChest,
     checkItemInsideChest, goTo, follow, attack, shoot, equip, eat, pickupDrops, findBlock, nearestEntity,
-    nearestHostile, isFriend, blockKey,
+    nearestHostile, isFriend, blockKey, lookDir, lineSlots, groundAt, faceYaw, raiseShield, entityOf,
   };
 }
 

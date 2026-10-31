@@ -196,6 +196,8 @@ export const SCOPE_NAMES = [
   'mineBlock', 'craftItem', 'smeltItem', 'placeItem', 'killMob', 'exploreUntil', 'getItemFromChest',
   'depositItemIntoChest', 'checkItemInsideChest', 'goTo', 'follow', 'attack', 'shoot', 'equip', 'eat',
   'pickupDrops', 'findBlock', 'nearestEntity', 'nearestHostile', 'isFriend', 'blockKey',
+  // formations (orders bound to items, docs/29 §5.4)
+  'lookDir', 'lineSlots', 'groundAt', 'faceYaw', 'raiseShield', 'entityOf',
 ] as const;
 
 /** Compile a command's source once per version. `filename` shows in stack traces. */

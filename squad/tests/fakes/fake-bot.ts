@@ -1,6 +1,8 @@
 // FakeBot — a no-Minecraft stand-in for a mineflayer bot, after Eden's (copied idea, rewritten for Squad's
-// surface): an event emitter with a position, an inventory, plugin objects whose long calls can be held open and
-// are rejected by the abort sequence (as pathfinder's goto is by stop/setGoal(null)), and a `calls` recorder.
+// surface): an event emitter with a position, an inventory (with the off-hand slot 45), plugin objects whose long
+// calls can be held open and are rejected by the abort sequence (as pathfinder's goto is by stop/setGoal(null)), and
+// a `calls` recorder. Optional: a block world (`world`, e.g. flatWorld()) and `autoWalk`, which makes a positional
+// pathfinder goal arrive (the bot stands on the goal block, the goal is cleared as a reached goal is).
 
 import { EventEmitter } from 'node:events';
 
@@ -11,14 +13,38 @@ export interface FakeItem {
   count: number;
 }
 
+export interface FakeBlock {
+  name: string;
+  boundingBox: string;
+}
+
+/** Stone up to `groundY`, air above; `solid` adds blocks ("x,y,z"), `unloaded(x, z)` makes a column unknown. */
+export function flatWorld(groundY = 63, solid: Iterable<string> = [], unloaded: (x: number, z: number) => boolean = () => false): (p: Vec3) => FakeBlock | null {
+  const extra = new Set(solid);
+  return (p: Vec3) => {
+    const x = Math.floor(p.x);
+    const y = Math.floor(p.y);
+    const z = Math.floor(p.z);
+    if (unloaded(x, z)) return null;
+    return y <= groundY || extra.has(`${x},${y},${z}`) ? { name: 'stone', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' };
+  };
+}
+
 export class FakeBot extends EventEmitter {
   username: string;
-  entity: { position: Vec3; type: string; username: string; isValid: boolean };
+  entity: { position: Vec3; type: string; username: string; isValid: boolean; yaw: number; pitch: number };
   readonly _client = new EventEmitter();
   health = 20;
   food = 20;
   heldItem: { name: string } | null = null;
+  /** Mineflayer's flag: set by activateItem, cleared by deactivateItem. */
+  usingHeldItem = false;
   currentWindow: unknown = null;
+  /** Blocks for blockAt (null: every block unknown, as an unloaded chunk). */
+  world: ((p: Vec3) => FakeBlock | null) | null = null;
+  /** When true, a pathfinder goal with a position (GoalBlock, GoalNear, GoalNearXZ) arrives after `walkMs`. */
+  autoWalk = false;
+  walkMs = 10;
   entities: Record<string, unknown> = {};
   players: Record<string, { entity: unknown }> = {};
   readonly calls: string[] = [];
@@ -32,7 +58,8 @@ export class FakeBot extends EventEmitter {
 
   readonly inventory = {
     items: (): FakeItem[] => [...this.items],
-    slots: [] as Array<{ name: string } | null>,
+    /** Only the off-hand (45) is kept here: items() are the rest. */
+    slots: [] as Array<FakeItem | null>,
   };
 
   readonly pathfinder = {
@@ -49,6 +76,7 @@ export class FakeBot extends EventEmitter {
       this.pathfinder.goal = g;
       this.calls.push(g === null ? 'pathfinder.setGoal(null)' : 'pathfinder.setGoal');
       if (g === null) this.rejectPending('GoalChanged: the goal was changed before it could be completed!');
+      else if (this.autoWalk) this.walkTo(g);
     },
     stop: () => {
       this.calls.push('pathfinder.stop');
@@ -94,12 +122,27 @@ export class FakeBot extends EventEmitter {
     super();
     this.setMaxListeners(100);
     this.username = username;
-    this.entity = { position: opts.position ?? new Vec3(0, 64, 0), type: 'player', username, isValid: true };
+    this.entity = { position: opts.position ?? new Vec3(0, 64, 0), type: 'player', username, isValid: true, yaw: 0, pitch: 0 };
     this.items = opts.items ? [...opts.items] : [];
   }
 
   setItems(items: FakeItem[]): void {
     this.items = [...items];
+  }
+
+  /** autoWalk: stand on the goal's block, then clear the goal as the pathfinder does with a reached goal. */
+  private walkTo(g: unknown): void {
+    const goal = g as { x?: unknown; y?: unknown; z?: unknown; entity?: unknown };
+    if (typeof goal.x !== 'number' || typeof goal.z !== 'number' || goal.entity) return;
+    const x = goal.x;
+    const z = goal.z;
+    const y = typeof goal.y === 'number' ? goal.y : this.entity.position.y;
+    setTimeout(() => {
+      if (this.pathfinder.goal !== g) return;
+      this.entity.position = new Vec3(x + 0.5, y, z + 0.5);
+      this.pathfinder.goal = null;
+      this.emit('goal_reached', g);
+    }, this.walkMs);
   }
 
   private longCall(name: string, onDone: () => void): Promise<void> {
@@ -141,9 +184,17 @@ export class FakeBot extends EventEmitter {
   }
   deactivateItem(): void {
     this.calls.push('deactivateItem');
+    this.usingHeldItem = false;
   }
-  activateItem(): void {
-    this.calls.push('activateItem');
+  activateItem(offHand = false): void {
+    this.calls.push(offHand ? 'activateItem(offHand)' : 'activateItem');
+    this.usingHeldItem = true;
+  }
+  /** Mineflayer's look: radians, its own convention (faceYaw converts). */
+  async look(yaw: number, pitch: number, force?: boolean): Promise<void> {
+    this.calls.push(`look(${yaw.toFixed(3)},${pitch.toFixed(3)}${force ? ',force' : ''})`);
+    this.entity.yaw = yaw;
+    this.entity.pitch = pitch;
   }
   clearControlStates(): void {
     this.calls.push('clearControlStates');
@@ -156,14 +207,24 @@ export class FakeBot extends EventEmitter {
     this.currentWindow = null;
   }
   async equip(item: unknown, dest: string): Promise<void> {
-    this.calls.push(`equip(${(item as { name?: string }).name ?? item},${dest})`);
-    this.heldItem = { name: String((item as { name?: string }).name ?? item) };
+    const name = String((item as { name?: string }).name ?? item);
+    this.calls.push(`equip(${name},${dest})`);
+    if (dest === 'off-hand') {
+      // Moved out of the inventory's items into slot 45 (what was there goes back to the items).
+      const i = this.items.findIndex((it) => it.name === name);
+      const moved = i >= 0 ? this.items.splice(i, 1)[0]! : { name, count: 1 };
+      const old = this.inventory.slots[45];
+      if (old) this.items.push(old);
+      this.inventory.slots[45] = moved;
+      return;
+    }
+    this.heldItem = { name };
   }
   async lookAt(): Promise<void> {
     this.calls.push('lookAt');
   }
-  blockAt(): null {
-    return null;
+  blockAt(p: Vec3): FakeBlock | null {
+    return this.world ? this.world(p) : null;
   }
   findBlocks(): Vec3[] {
     return [];

@@ -49,6 +49,8 @@ export default tseslint.config(
         depositItemIntoChest: 'readonly', checkItemInsideChest: 'readonly', attack: 'readonly', shoot: 'readonly',
         equip: 'readonly', eat: 'readonly', pickupDrops: 'readonly', findBlock: 'readonly',
         nearestEntity: 'readonly', nearestHostile: 'readonly', isFriend: 'readonly', blockKey: 'readonly',
+        lookDir: 'readonly', lineSlots: 'readonly', groundAt: 'readonly', faceYaw: 'readonly', raiseShield: 'readonly',
+        entityOf: 'readonly',
         sleep: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', setInterval: 'readonly',
         clearInterval: 'readonly', BotLeftError: 'readonly', OrderStoppedError: 'readonly',
       },

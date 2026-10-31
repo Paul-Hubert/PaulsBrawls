@@ -30,6 +30,7 @@ sources:
   - squad/src/script/compile.ts
   - squad/src/script/check.ts
   - squad/src/script/typecheck-worker.mjs
+  - squad/src/stock/
   - squad/src/authoring.ts
   - squad/src/http/server.ts
   - squad/src/http/mcp.ts
@@ -146,12 +147,12 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
 | Roster | `roster.ts` | Bots, owners, tags in `.squad-data/roster.json`; the runtime is its only writer |
 | Leases | `leases.ts` | A lease stack per bot (depth 4). `plan` :84 grants idle bots first, then busy ones for `take: 'reclaim'` roles, all or nothing. `apply` :106 runs the old order's cleanup before reuse. `release` :130 hands a bot back to the live order below |
 | Orders | `orders/runner.ts`, `order.ts`, `guard.ts`, `claims.ts` | `start` :141 (tracked per binding, below) → `launch` :147 resolves, compiles (once per version) and runs. Each script gets a **lease-guarded Proxy** of each bot (`guardBot` :81): calls check the lease, listeners and timers are tracked, chat is rate-limited, `quit` is refused. Every leave and every end runs the R4/R5 abort sequence. Claims are shared across orders. `trigger` :208: a bound item's click delivers to, restarts, starts or stops the player's order of that command (below) |
-| Dialect | `api/squad.ts`, `api/helpers.ts`, `api/scope.ts`, `reference/squad.d.ts` | `squad.parallel`, `squad.tasks` (work queue, re-queues the work of a leaving bot), claims, acquire/release, `ctx.commander` (with `on('trigger')`, `off`, `next`), `ctx.run`. Voyager-named helpers (`mineBlock`, `craftItem`, `goTo`, `shoot`…) |
+| Dialect | `api/squad.ts`, `api/helpers.ts`, `api/scope.ts`, `reference/squad.d.ts` | `squad.parallel`, `squad.tasks` (work queue, re-queues the work of a leaving bot), claims, acquire/release, `ctx.commander` (with `on('trigger')`, `off`, `next`), `ctx.run`. Voyager-named helpers (`mineBlock`, `craftItem`, `goTo`, `shoot`…), and the formation helpers of bound items (`lookDir`, `lineSlots`, `groundAt`, `faceYaw`, `raiseShield`, `entityOf`; below) |
 | Scripts | `script/compile.ts`, `manifest.ts`, `check.ts` | ESM rewritten in place, keeping lines (`vm.Script` filename `squad:<author>/<name>@vN.mjs`); loop budget + fences; manifest and args (French errors for players); `check_script` = compile + dry module run + typecheck (`BLOCKING_CODES` :40) |
 | Authoring | `authoring.ts`, `http/mcp.ts`, `agent/` | `cmd-…` tickets (30 min; manual 2 h). Seven MCP tools (`get_api_reference`, `get_context`, `list_commands`, `read_command`, `check_script`, `trial_run` ≤ 60 s on idle bots, `submit_command`). Claude Code config in `agent/claude-code/`, opencode config in `agent/opencode.json` |
 | Storage | `store/commands.ts`, `journal/journal.ts` | `.squad-data/commands/<uuid>/<name>/meta.json` + `vN.mjs` (append-only, shares, revert); SQLite `squad.db` (WAL, `synchronous=NORMAL`), one row per order with its full report, and one `vitals` row per minute |
 | HTTP | `http/server.ts` | 21 `POST /api/...` routes (incl. `/api/metrics`, `/api/orders/check`, `/api/orders/trigger`), `GET /events` (SSE: `hello`, `notice`, `state`; notices buffered while no mod listens), `POST /mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN` |
-| Stock | `src/stock/*.mjs` | `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`, `raid`. Usable by everyone, and the agent's examples. `defend` and `raid`: below |
+| Stock | `src/stock/*.mjs` | `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`, `raid`, and for bound items `mur-de-boucliers`, `epee`, `ligne-archers`, `tir`. Usable by everyone, and the agent's examples. `defend`, `raid` and the four: below |
 
 ## Orders bound to items — the runtime (docs/29 §5.4, 2026-10-31)
 
@@ -202,6 +203,69 @@ The mod keeps the binding on the item stack and sends each click; the runtime de
 - **Reference and prompt.** `squad.d.ts` types `SquadCommanderAt`, `SquadAtTrigger`, `SquadAtEntity` (with `id`) and
   `on` / `off` / `next`. The `squad-author` prompt has one paragraph: re-aim a running order rather than let it
   restart. Tests: `squad/tests/triggers.test.ts`, plus the HTTP round trip in `tests/http.test.ts`.
+
+## Orders bound to items — the helpers and the four stock commands (docs/29 §5.4 items 7–8)
+
+**The yaw convention.** Every formation helper takes yaw as `ctx.commander.at.yaw` gives it: Minecraft's degrees,
+0 = south (+Z), 90 = west (−X); pitch negative = up. Mineflayer's `bot.entity.yaw`/`pitch` are radians from another
+origin: `faceYaw` converts with mineflayer's own formulas (`lib/conversions.js`; `mineflayerYaw`/`mineflayerPitch` in
+`helpers.ts`, checked against mineflayer's in `tests/helpers.test.ts`).
+
+The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` `SCOPE_NAMES`; typed in `squad.d.ts`):
+- `lookDir(yaw, pitch = 0)`: the unit view vector (yaw 0 → (0, 0, 1), yaw 90 → (−1, 0, 0)).
+- `lineSlots(center, yaw, count, { spacing = 1.5, ranks = 1, depth = 2 })`: pure. Left to right as the commander sees it
+  (their right is `lookDir(yaw + 90)`, −X when facing south); `Math.ceil(count / ranks)` per rank, each rank centred,
+  rank r `depth × r` blocks behind, toward the commander. Slots keep center's y.
+- `groundAt(bot, pos, { up = 3, down = 4 })`: the block-centre feet position nearest `pos.y` with feet and head open (not
+  lava, fire, a berry bush, powder snow, cobweb or a wither rose) and a solid block under; null when there is none or the
+  chunk is not loaded. Between two equally near, the lower (the ground under a canopy, not the leaves).
+- `faceYaw(bot, yaw, pitch = 0)`: `bot.look(…, true)`; returns `{ yaw, pitch }`.
+- `raiseShield(bot, on = true)`: a shield not in the off-hand (slot 45, which `inventory.items()` does not include) is
+  equipped there, else "no shield in the off-hand or the inventory …" (English, for the author). Then
+  `bot.activateItem(true)`: in 1.21.1 mineflayer sends `use_item` with hand 1 (its `useItemWithOwnPacket` path).
+  `bot.deactivateItem()` (`block_dig` status 5) lowers it. Mineflayer's `usingHeldItem` is only a hint: any
+  `entity_status` packet, for any entity, clears it, and an axe's cooldown packet for an off-hand shield does not
+  (mineflayer checks the cooldown against the main-hand item). So `raiseShield` keeps its own record per body: it sends
+  again when the flag is false (harmless: the server ignores a use while one is held), and at most every 5 s while it
+  is true (`SHIELD_REASSERT_MS`, which recovers a shield the server dropped). Nothing is sent while auto-eat eats
+  (`autoEat.isEating`): auto-eat lowers the shield itself (`deactivateItem` before eating), and the next call raises it
+  again. A bot leaving an order lowers it (the abort sequence's `deactivateItem`).
+- `shoot(bot, target)`: an entity (anything with `isValid`, as prismarine-entity's are) or a position (a Vec3,
+  `[x, y, z]`, a block, a snapshot ref). A position goes to hawkEye as `{ position, isValid: true }`: hawkEye takes a
+  target without `type` for a point (`isEntity` is `"type" in e`), aims at it with no height offset, and derives its
+  velocity from the position history, not from a field. hawkEye is asked first (`getMasterGrade`): its block check
+  raycasts every step of the arc (`bot.world.raycast`), so a point on the ground can count as blocked. Without a
+  trajectory the bow is aimed by `bowAim` (exported, not a global): the arrow's flight tick by tick, as
+  `PersistentProjectileEntity` moves it (from the eyes − 0.1, 3 blocks per tick at full draw; move, then × 0.99, then
+  y − 0.05), the low arc (the first elevation whose flight passes through the point, refined by bisection), and out of
+  range the elevation that carries farthest. A hand-aimed release now waits 60 ms after the look (`LOOK_SETTLE_MS`):
+  `bot.look(…, true)` only sets the yaw and pitch, the look packet goes out with the next physics tick, and a release
+  sent at once (as the entity path did after hawkEye gave up) flew at the old aim.
+- `entityOf(bot, ref)`: by `id` in `bot.entities`, else a player by `username`, else the nearest entity of that `name`
+  within 4 blocks of the ref's position, the last only for a ref without an id: the id is the same for every client,
+  so a ref whose id the bot lacks is dead or out of its sight, and another zombie next to where it stood is not it.
+- `isFriend` accepts a snapshot entity too (it reads `type` and `username`).
+
+**What the four commands share** (`src/stock/mur-de-boucliers.mjs`, `epee.mjs`, `ligne-archers.mjs`, `tir.mjs`):
+- `ctx.commander.on('trigger', …)` is their first statement, so every later click is delivered (re-aim), never a restart.
+- One state object with a version number. A click recomputes it; every bot's loop looks again every 100–200 ms and
+  never awaits a long goal. Walking is a pathfinder goal set directly and kept while it is the same spot (`GoalBlock`
+  on a ground slot; `GoalNear` range 2 after 10 s without reaching it, or for a slot off known ground). A fight ends at
+  once on a new version (`attack`'s `until`).
+- The point: the block looked at (`lookBlock` + (0.5, 1, 0.5) through `groundAt`) when within `distance`
+  horizontally, else the commander's position + `lookDir(yaw)` × 5 (`mur-de-boucliers`) or × 10 (`ligne-archers`)
+  through `groundAt`; the raw point when no bot knows that chunk. `groundAt` runs with whichever bot knows it.
+- One loop per bot, started again for a bot that comes back from another order (`squad.on('joined')`). A token per bot
+  ends a stale loop: a returning bot gets the same guard object, so the old loop's calls would pass again.
+- A line keeps a bot's slot while it is away (reclaimed); a click, or a bot without a slot joining, re-forms it. The
+  slots go to the bots by their position along the line (the front-most to the front rank), so no two paths cross.
+
+| Command | Item | Roles | Params | As built |
+|---|---|---|---|---|
+| `mur-de-boucliers` | shield | `guards` (`hasItem: 'shield'`, min 1, reclaim) | `distance` 24, `spacing` 1 (1–3), `reach` 4; until stopped | `lineSlots(point, yaw, n, { spacing })` through `groundAt`. Shield down to walk; on the slot `faceYaw(yaw)` and `raiseShield`, re-asserted every look. A hostile, or a non-friend player who is not a spectator, within `reach` of the slot: shield down, `attack` leashed to the slot (radius `reach` + 1), then back to the slot. « Mur de boucliers rompu. » |
+| `epee` | sword | `archers` (bow, reclaim), `melee` (no bow, reclaim) | `radius` 16, `seconds` 60; until stopped | A non-friend `lookEntity` that `entityOf` resolves is the target, tracked by its id from then on: archers shoot it, at most 2 guards fight it, the other guards fight threats within `radius` of it (leashed to it), a bot that does not see it holds near the commander. Dead or gone (« Cible abattue (zombie). » when it was last within 20 blocks of a bot, else « Cible perdue de vue (…) : je reviens te défendre. ») or `seconds` (« Cible toujours debout après … ») → defend the commander. A `lookBlock`: defend that point (threats within `radius` of it, guards on a ring of 3, archers of 6 around it, by goals; fights leashed to it). The sky or a friend: defend the commander as `defend` does (rings via `follow` with `offset`). Guards at most 2 per threat, archers prefer an untaken one and step 1–2 blocks aside after "no clear line of fire" |
+| `ligne-archers` | arrow (right-click) | `archers` (bow, min 1, reclaim) | `distance` 24, `spacing` 2, `back` 4, `range` 24; until stopped | Centre = point − `lookDir(yaw)` × `back`, through `groundAt`; two ranks (depth 2) past 8 archers. On its slot an archer faces the view and shoots threats within `range` of the centre: in front of the line (dot with `lookDir` > 0) and untaken first, then in front, then untaken. After "no clear line of fire": 1–2 blocks aside, shooting from there for 3 s, then back to the slot |
+| `tir` | bow | `archers` (bow, min 1, reclaim) | `volley` 3 (1–16), `spread` 3, `seconds` 8; bounded, `maxMinutes` 1 | The target: `arrow-hit` with an entity → it, without → the point hit; `arrow-release` with a `lookEntity` → it, without → `ctx.commander.next(4000)`, then the `lookBlock`, else « Aucune cible. »; no trigger or `use` → `lookEntity`, else `lookBlock`. One of ours → « X est des nôtres : je ne tire pas dessus. »; an entity no archer sees → « Cible hors de vue des archers. ». Archers never move. An entity: every archer shoots it until dead or gone, or `seconds`. The ground: `volley` arrows per archer at points uniform over a disc of radius `spread`, y from `groundAt`. A later click retargets (a release waits for its hit, the next click). « Volée tirée : 9 flèches. », « Cible abattue (zombie) : 5 flèches. ». Archers reclaimed from a `ligne-archers` return to their slots there |
 
 ## `defend` and the damage rules (after a 20-bot fight, docs/29 §16)
 
@@ -288,7 +352,7 @@ Three layers now:
 
 ## Tests
 
-- **`squad/`:** `npm run check` = lint + tsc + 140 `node:test` tests on fakes (compile, leases, guard, orders and
+- **`squad/`:** `npm run check` = lint + tsc + 159 `node:test` tests on fakes (compile, leases, guard, orders and
   reclaim, check/typecheck of the stock commands, HTTP + the real MCP client, supervisor wedge, protocol hardening,
   helpers, agent config drift, `follow`, the `gather` freeze, one test per dependency patch, the vitals, the worker
   pool: same path as the main thread on a synthetic world, the mirror's refcounts, every fallback, a clean stop;
@@ -296,7 +360,14 @@ Three layers now:
   copy per bot, the slot fallback; friends (`raid.test.ts`: the team only, kept up to date; a guard attacks another
   owner's bot) and `raid` (the march formation, two guards per enemy, archers' fire, the hunt and the end); ladders on a synthetic world: each pathfinder patch, the workers' same paths;
   bound items (`triggers.test.ts`: delivery without restart, the slot, restart, start, stop, starts in flight, the
-  report's cap, a throwing listener, `ctx.run`, the reference typecheck, the check route, the snapshot sanitizer)).
+  report's cap, a throwing listener, `ctx.run`, the reference typecheck, the check route, the snapshot sanitizer); the
+  formation helpers (`helpers.test.ts`: `lookDir`/`lineSlots` at yaw 0/90/180/−90 and ranks, `groundAt` on a synthetic
+  column, `faceYaw` against mineflayer's conversions, `raiseShield`, `shoot` at a position through hawkEye and through
+  the ballistics checked by an independent flight, `bowAim`, `entityOf`); the four item commands
+  (`item-orders.test.ts`: the wall along z facing west, shields raised on arrival, a click re-forming it, a guard
+  fighting at its slot; `epee`'s target with two guards on it and the anchor rings; the archer line `back` blocks short,
+  front threats first, two ranks; `tir`'s volley count and spread, release then hit, the 4 s wait, a friend refused, and
+  archers taken from a line returning to their own slots)).
 - **Mod:** 30 JUnit tests in `src/test/java/com/paul/brawl/squad/` (incl. `SquadStatusFormatTest`, `SquadFriendsTest`,
   `SquadRaidPlanTest`).
 - **Live:** `npm run live-test`, using RCON against the dev server (`run/`) or production
@@ -333,6 +404,12 @@ Three layers now:
   - **Squad's own code** (the guard proxy, journal, loop budget) is under 0.5% of the busy time.
 - **The reworked `defend` and the friendly-fire hook** (2026-10-31) ran only on fakes and JUnit, not yet in a fight
   on a server; nor has the per-bot hawkEye copy.
+- **The formation helpers and the four item commands** (2026-10-31) ran only on fakes: never on a server. In
+  particular not verified live: the off-hand `use_item` raising a real shield (and staying up through mob noise),
+  `raiseShield`'s equip into slot 45, hawkEye's `{ position, isValid: true }` targets and how often its block check
+  refuses a point on the ground, the ballistic fallback's accuracy with the arrow's random divergence, and `groundAt`
+  with real blocks (slabs, snow layers, water). `CommanderSnap` sent no entity `id` when this was written: until it
+  does, `entityOf` finds a looked-at mob by name and position.
 - **`raid` and `/bots raid`** (2026-10-31) ran only on fakes and JUnit: never on a server (the surface, the
   arrival teleport and kit, the start as `Envahisseur`, a real 20-vs-20 fight, 40 bots on one runtime). A raider that
   dies respawns idle (it leaves its order, docs/29 §4) and does not rejoin the raid; one that arrives after the
@@ -340,6 +417,13 @@ Three layers now:
 - **`/bots status` in game:** only its JUnit test ran. **The worker pool's stats** are not in `/api/metrics` or the
   vitals.
 - **The worker pool on production:** only the dev server and the bench ran it (live test 5/5 with 4 and 14 workers).
+- **A bot given back runs its loop again (fixed 2026-10-31).** `squad.parallel` over the order's own live array
+  (`squad.bots`, `squad.roles.x`) also runs `fn` for a bot that joins it while the call runs (a bot reclaimed by another
+  order and given back, §6.3), and does not resolve while a reclaimed bot can still come back (`Order.suspended()`,
+  looked at again every second, since a death clears the lease stack silently). Before, `defend`, `raid` and `follow`
+  left such a bot idle: `defend`'s guards stood still after a shield wall borrowed them, and a `defend` whose bots
+  were all borrowed ended. `parallel` over a copy or a single bot is unchanged; the four item commands use
+  `parallel(bot, …)` per bot with their own `squad.on('joined')` (`tests/orders.test.ts`).
 - **Known, not fixed (docs/31 §11.9):** mineflayer-collectblock adds two listeners per cancelled stalled `mineBlock`
   (`MaxListenersExceededWarning` on sites with many stalls); unreachable logs are searched again by every bot and every
   `mineBlock` call (remembering them per order is recommended, not done).

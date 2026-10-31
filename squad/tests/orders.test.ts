@@ -70,6 +70,63 @@ export default async function (squad) {
   assert.ok(h.leases.isIdle('Archer1') && h.leases.isIdle('Brute1'));
 });
 
+test('parallel over a live role: a bot given back runs fn again, and the call waits while it can come back', async () => {
+  const h = harness();
+  h.bot('Archer1', [PAUL], [{ name: 'bow', count: 1 }]);
+  // Each run of the loop logs once; it ends only when the order stops, or when the bot leaves (BotLeftError).
+  h.command(PAUL, 'hold', `
+export const manifest = { summary: 'tenir', roles: { archers: { select: { hasItem: 'bow' }, take: 'free' } }, duration: 'until-stopped' };
+export default async function (squad, args, ctx) {
+  const r = await squad.parallel(squad.roles.archers, async (bot) => {
+    ctx.log('run ' + bot.username);
+    while (!squad.stopped) { bot.pathfinder.isMoving(); await squad.sleep(10); }
+  });
+  return 'runs ' + r.length;
+}`);
+  h.command(PAUL, 'borrow', `
+export const manifest = { summary: 'emprunter', roles: { archers: { select: { hasItem: 'bow' }, min: 1, take: 'reclaim' } } };
+export default async function (squad) { await squad.sleep(60); return 'rendu'; }`);
+  const g = await h.order(PAUL, 'hold');
+  assert.ok(g.ok, g.text);
+  const hold = h.runner.get(g.ok ? g.orderId : '')!;
+  await until(() => hold.report.logs.filter((l) => l === 'run Archer1').length === 1);
+
+  // Every bot of the role is borrowed: the call must not resolve (the order would end and Archer1 could not come back).
+  const b = await h.order(PAUL, 'borrow');
+  assert.ok(b.ok, b.text);
+  assert.deepEqual(hold.memberNames(), []);
+  assert.deepEqual(hold.suspended(), ['Archer1']);
+  await until(() => h.notices.some((n) => /« borrow » terminé/.test(n.text)));
+  await until(() => hold.report.logs.filter((l) => l === 'run Archer1').length === 2, 1000, 'Archer1 runs again in hold');
+  assert.equal(hold.status, 'running');
+  await h.runner.stop(PAUL, false, 'hold');
+  assert.equal(hold.status, 'stopped');
+});
+
+test('parallel over a live role stops waiting when a borrowed bot dies elsewhere', async () => {
+  const h = harness();
+  h.bot('Archer1', [PAUL], [{ name: 'bow', count: 1 }]);
+  h.command(PAUL, 'hold', `
+export const manifest = { summary: 'tenir', roles: { archers: { select: { hasItem: 'bow' }, take: 'free' } } };
+export default async function (squad) {
+  const r = await squad.parallel(squad.roles.archers, async (bot) => { while (!squad.stopped) { bot.pathfinder.isMoving(); await squad.sleep(10); } });
+  return 'fini ' + r.length;
+}`);
+  h.command(PAUL, 'borrow', `
+export const manifest = { summary: 'emprunter', roles: { archers: { select: { hasItem: 'bow' }, min: 1, take: 'reclaim' } }, duration: 'until-stopped' };
+export default async function (squad) { await squad.untilStopped(); }`);
+  const g = await h.order(PAUL, 'hold');
+  assert.ok(g.ok, g.text);
+  const hold = h.runner.get(g.ok ? g.orderId : '')!;
+  assert.ok((await h.order(PAUL, 'borrow')).ok);
+  await tick(30);
+  assert.equal(hold.status, 'running');
+  // A death clears the whole lease stack (§4): Archer1 can no longer come back, so hold's call resolves.
+  await h.runner.botGone('Archer1', 'died');
+  await until(() => hold.status === 'done', 3000, 'hold ends once nothing can come back');
+  assert.ok(h.notices.some((n) => n.text === '[Bots] « hold » terminé : fini 1'));
+});
+
 test('a role below its min refuses the order and reclaims nothing', async () => {
   const h = harness();
   h.bot('Brute1', [PAUL]);

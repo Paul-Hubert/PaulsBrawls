@@ -96,11 +96,11 @@ export class Squad {
    */
   async parallel<T>(bots: Bot[] | Bot, fn: (bot: Bot) => Promise<T> | T): Promise<Array<ParallelResult<T>>> {
     if (typeof fn !== 'function') throw new TypeError('squad.parallel(bots, fn): fn must be a function');
+    const live = Array.isArray(bots) && (bots === this.bots || Object.values(this.roles).includes(bots));
     const list = Array.isArray(bots) ? [...bots] : [bots];
-    const settled = await Promise.allSettled(list.map(async (bot) => fn(bot)));
+    const settled = live ? await this.parallelLive(bots, fn) : (await Promise.allSettled(list.map(async (bot) => fn(bot)))).map((s, i) => ({ bot: list[i] as Bot, s }));
     if (this.stopped) throw new OrderStoppedError('order ended');
-    return settled.map((s, i) => {
-      const bot = list[i] as Bot;
+    return settled.map(({ bot, s }) => {
       if (s.status === 'fulfilled') return { bot, ok: true, value: s.value };
       const e = s.reason;
       if (isStopped(e)) return { bot, ok: false, error: errorMessage(e) };
@@ -108,6 +108,61 @@ export class Squad {
       const left = isBotLeft(e) || !this.order.hasMember(name);
       if (!left) this.order.failure(name, 'parallel', e);
       return { bot, ok: false, error: errorMessage(e), ...(left ? { left: true } : {}) };
+    });
+  }
+
+  /**
+   * `parallel` over the order's own live array (`squad.bots`, `squad.roles.x`): a bot reclaimed by another order and
+   * given back (§6.3) runs `fn` again, and the call waits for such a bot while it can still come back. Without this a
+   * returning bot rejoined `squad.bots` but no loop drove it: `defend`'s guards stood idle after a shield wall
+   * borrowed them (docs/33). One result per run, so a bot that came back has two.
+   */
+  private parallelLive<T>(arr: Bot[], fn: (bot: Bot) => Promise<T> | T): Promise<Array<{ bot: Bot; s: PromiseSettledResult<T> }>> {
+    const order = this.order;
+    return new Promise((resolve) => {
+      const results: Array<{ bot: Bot; s: PromiseSettledResult<T> }> = [];
+      const running = new Set<Bot>();
+      let poll: ReturnType<typeof setInterval> | undefined;
+      let done = false;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        order.events.removeListener('joined', onJoined);
+        if (poll) clearInterval(poll);
+        resolve(results);
+      };
+      // A death or a disconnect clears the bot's whole lease stack without telling the orders below, so the wait
+      // looks again every second rather than only on events.
+      const check = (): void => {
+        if (running.size > 0) return;
+        if (!order.alive || order.suspended().length === 0) return finish();
+        if (!poll) {
+          poll = setInterval(check, 1_000);
+          poll.unref?.();
+        }
+      };
+      const run = (bot: Bot): void => {
+        if (done || running.has(bot)) return;
+        running.add(bot);
+        const slot = results.length;
+        results.push({ bot, s: { status: 'rejected', reason: new OrderStoppedError('order ended') } });
+        void (async () => fn(bot))()
+          .then(
+            (value) => (results[slot] = { bot, s: { status: 'fulfilled', value } }),
+            (reason: unknown) => (results[slot] = { bot, s: { status: 'rejected', reason } }),
+          )
+          .finally(() => {
+            running.delete(bot);
+            check();
+          });
+      };
+      // The order pushes a returning bot into its arrays before it emits 'joined'.
+      const onJoined = (bot: Bot): void => {
+        if (order.alive && arr.includes(bot)) run(bot);
+      };
+      order.events.on('joined', onJoined);
+      for (const bot of [...arr]) run(bot);
+      check();
     });
   }
 
