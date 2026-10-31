@@ -1,6 +1,6 @@
 // Helpers against the failures the production server showed (docs/29 §16), and the formation helpers of orders bound
 // to items (docs/29 §5.4): the yaw convention, line slots, the ground, facing, the shield, shots at a position and the
-// arrow's ballistics, snapshot entities.
+// arrow's ballistics, snapshot entities, and where the commander points (pointedTarget).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,11 +20,13 @@ import {
   mineflayerPitch,
   mineflayerYaw,
   OFF_HAND_SLOT,
+  pointedTarget,
   raiseShield,
   SHIELD_REASSERT_MS,
   shoot,
 } from '../src/api/helpers';
 import { HelperError } from '../src/api/errors';
+import { ORDER } from '../src/orders/guard';
 import { FakeBot, flatWorld } from './fakes/fake-bot';
 import { holdEventLoopPerTest } from './fakes/keep-alive';
 
@@ -269,4 +271,76 @@ test('entityOf: by network id, else a player by name, else the nearest of that n
   assert.equal(entityOf(b as never, { name: 'zombie', type: 'mob', position: new Vec3(14, 64, 0) }), z1 as never, 'without an id, the nearest of its kind');
   assert.equal(entityOf(b as never, { id: 99, name: 'player', type: 'player', username: 'Carol', position: new Vec3(0, 64, 0) }), null);
   assert.equal(entityOf(b as never, null), null);
+});
+
+/** A bot of an order whose team is Paul and Mate (pointedTarget reads the order's friends through the bot). */
+function teamBot(): FakeBot {
+  const b = new FakeBot('Archer');
+  (b as unknown as Record<symbol, unknown>)[ORDER] = { friends: new Set(['Paul', 'Mate', 'Archer']) };
+  return b;
+}
+
+/** ctx.commander.at with nothing looked at, Paul at (0.5, 64, 0.5); `over` adds what the click saw. */
+const pointing = (over: Record<string, unknown> = {}) =>
+  ({ position: new Vec3(0.5, 64, 0.5), yaw: -90, pitch: 0, dimension: 'overworld', heldItem: null, lookBlock: null, lookEntity: null, ...over }) as never;
+const block = (x: number, y: number, z: number) => Object.assign(new Vec3(x, y, z), { name: 'stone' });
+
+test('pointedTarget: the point is the arrow hit, else the crosshair entity, else the top of the block; the entity is the one there or the nearest within `near`', () => {
+  const b = teamBot();
+  const z = { id: 50, name: 'zombie', type: 'hostile', position: new Vec3(12.5, 64, 0.5), isValid: true };
+  const cow = { id: 51, name: 'cow', type: 'animal', position: new Vec3(30.5, 64, 30.5), isValid: true };
+  b.entities = { 50: z, 51: cow };
+  const xyzOf = (v: Vec3 | null) => (v ? xyz(v) : null);
+
+  // The block looked at: its top centre; the zombie 2 blocks from it is the target.
+  let p = pointedTarget(b as never, pointing({ lookBlock: block(10, 63, 0) }));
+  assert.deepEqual([xyzOf(p.position), p.entity, p.pending], [[10.5, 64, 0.5], z, false]);
+  // 6 blocks away: beyond the default `near` (4), not with near 8; near 0 only takes the exact one.
+  p = pointedTarget(b as never, pointing({ lookBlock: block(18, 63, 0) }));
+  assert.deepEqual([xyzOf(p.position), p.entity], [[18.5, 64, 0.5], null]);
+  assert.equal(pointedTarget(b as never, pointing({ lookBlock: block(18, 63, 0) }), { near: 8 }).entity, z as never);
+  assert.equal(pointedTarget(b as never, pointing({ lookBlock: block(10, 63, 0) }), { near: 0 }).entity, null);
+  // The crosshair entity: its position, itself (also with near 0).
+  const look = { id: 50, name: 'zombie', type: 'mob', position: new Vec3(12.5, 64, 0.5) };
+  p = pointedTarget(b as never, pointing({ lookEntity: look, lookBlock: block(20, 63, 0) }), { near: 0 });
+  assert.deepEqual([xyzOf(p.position), p.entity], [[12.5, 64, 0.5], z]);
+  // An arrow's hit wins over the look: the point it hit, and the zombie next to it; or the creature it hit.
+  const hitGround = { kind: 'arrow-hit', item: 'bow', hit: { position: new Vec3(13, 64.1, 2) } };
+  p = pointedTarget(b as never, pointing({ lookBlock: block(-20, 63, 0), trigger: hitGround }));
+  assert.deepEqual([xyzOf(p.position), p.entity], [[13, 64.1, 2], z]);
+  const hitCow = { kind: 'arrow-hit', item: 'bow', hit: { position: new Vec3(30.5, 65, 30.5), entity: { id: 51, name: 'cow', type: 'mob', position: new Vec3(30.5, 64, 30.5) } } };
+  assert.equal(pointedTarget(b as never, pointing({ trigger: hitCow })).entity, cow as never);
+  // A release: pending, the look provisionally.
+  p = pointedTarget(b as never, pointing({ lookBlock: block(10, 63, 0), trigger: { kind: 'arrow-release', item: 'bow' } }));
+  assert.deepEqual([xyzOf(p.position), p.entity, p.pending], [[10.5, 64, 0.5], z, true]);
+  // A right-click reads like no trigger at all; the sky is nothing.
+  assert.equal(pointedTarget(b as never, pointing({ lookBlock: block(10, 63, 0), trigger: { kind: 'use', item: 'stick' } })).entity, z as never);
+  assert.deepEqual(pointedTarget(b as never, pointing()), { position: null, entity: null, pending: false });
+  assert.throws(() => pointedTarget(b as never, pointing(), { near: -1 }), /near must be a number of blocks ≥ 0/);
+});
+
+test('pointedTarget: only a living, valid, non-friend, non-spectator entity qualifies (and filter); pointing at a friend gives the one nearest them', () => {
+  const b = teamBot();
+  const at = (x: number, z: number) => new Vec3(10.5 + x, 64, 0.5 + z);
+  const mate = { id: 60, name: 'player', type: 'player', username: 'Mate', position: at(0.5, 0), isValid: true };
+  const item = { id: 61, name: 'item', type: 'other', position: at(0.3, 0), isValid: true };
+  const arrow = { id: 62, name: 'arrow', type: 'projectile', position: at(0, 0.6), isValid: true };
+  const stand = { id: 63, name: 'armor_stand', type: 'mob', position: at(0.7, 0), isValid: true }; // the registry says 'living'
+  const orb = { id: 64, name: 'experience_orb', type: 'other', position: at(0, -0.4), isValid: true };
+  const spy = { id: 65, name: 'player', type: 'player', username: 'Spy', position: at(0.8, 0), isValid: true };
+  const dead = { id: 66, name: 'zombie', type: 'hostile', position: at(0.2, 0.2), isValid: false };
+  const enemy = { id: 67, name: 'player', type: 'player', username: 'Enemy', position: at(3, 0), isValid: true };
+  const z = { id: 68, name: 'zombie', type: 'hostile', position: at(0, 3.5), isValid: true };
+  b.entities = Object.fromEntries([mate, item, arrow, stand, orb, spy, dead, enemy, z].map((e) => [e.id, e]));
+  b.players = { Mate: { entity: mate, gamemode: 0 }, Spy: { entity: spy, gamemode: 3 }, Enemy: { entity: enemy, gamemode: 0 } };
+  b.registry.entitiesByName.armor_stand = { type: 'living' } as never;
+
+  const look = pointing({ lookBlock: block(10, 63, 0) });
+  assert.equal(pointedTarget(b as never, look).entity, enemy as never, 'past the friend, the item, the arrow, the stand, the orb, the spectator and the dead');
+  assert.equal(pointedTarget(b as never, look, { filter: (e) => e.type !== 'player' }).entity, z as never, 'filter');
+  // The crosshair on a friend: the qualifying entity nearest them; none within `near`: no entity, their position.
+  const onMate = pointing({ lookEntity: { id: 60, name: 'player', type: 'player', username: 'Mate', position: mate.position } });
+  assert.equal(pointedTarget(b as never, onMate).entity, enemy as never);
+  const p = pointedTarget(b as never, onMate, { near: 1 });
+  assert.deepEqual([p.entity, xyz(p.position!)], [null, xyz(mate.position)]);
 });

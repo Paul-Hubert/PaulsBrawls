@@ -1,17 +1,19 @@
-// Stock command, made for a bound arrow (/bots orders bind ligne-archers, used with a right-click): the archers form
-// a line across the commander's view, `back` blocks short of the point looked at (on the commander's side), face along
-// the view and shoot, from their slots, the threats within `range` of the line's centre: hostile mobs and players who
-// are not on our team, those in front of the line first, then one no other archer shoots. After "no clear line of
-// fire" an archer steps one or two blocks aside, shoots from there for a moment, then goes back to its slot. Each
-// click of the bound item re-forms the line where the commander now looks, without stopping the order (it listens:
-// ctx.commander.on('trigger')).
+// Stock command: the archers form a line across the commander's view, `back` blocks short of where they point (on the
+// commander's side), face along the view and shoot, from their slots, the threats within `range` of the line's centre:
+// hostile mobs and players who are not on our team, those in front of the line first, then one no other archer
+// shoots. Any item can carry it (/bots orders bind ligne-archers), an arrow, a bow, a stick, or none (/bots order): a
+// click only says WHERE (pointedTarget: an arrow's hit, else the crosshair's creature or block); too far (`distance`)
+// or the sky, the point is a few blocks ahead. After "no clear line of fire" an archer steps one or two blocks aside,
+// shoots from there for a moment, then goes back to its slot. Each later click re-forms the line where the commander
+// now points, without stopping the order (it listens: ctx.commander.on('trigger')); a bow's arrow-release does not
+// move it, its hit does.
 //
 // Past 8 archers the line has two ranks, 2 blocks apart. Slots go to the bots by where they stand (the front-most to
 // the front rank, then left to right as the commander sees it), so no two paths cross; that assignment holds for one
-// formation and is redone when the line moves or a new archer joins. An archer pulled away by another order (a `tir`
-// from the bound bow) keeps its slot, and goes back to it afterwards.
+// formation and is redone when the line moves or a new archer joins. An archer pulled away by another order (a `tir`)
+// keeps its slot, and goes back to it afterwards.
 export const manifest = {
-  summary: "Ligne d'archers en travers de mon regard, qui tire sur ce qui approche",
+  summary: "Ligne d'archers en travers de mon regard, en deçà du point visé, qui tire sur ce qui approche",
   params: {
     type: 'object',
     properties: {
@@ -27,7 +29,7 @@ export const manifest = {
 
 /** How often an archer looks again (a new formation, a threat). */
 const LOOK_MS = 200;
-/** Where the point is when the looked-at block is too far or there is none: this many blocks ahead. */
+/** Where the point is when the pointed one is too far or there is none (the sky): this many blocks ahead. */
 const AHEAD = 10;
 /** More archers than this: two ranks. */
 const ONE_RANK = 8;
@@ -40,7 +42,14 @@ const ASIDE_MS = 3_000;
 
 export default async function (squad, args, ctx) {
   // First: every later click re-forms the line instead of restarting the order.
-  ctx.commander.on('trigger', () => form());
+  // A bow's arrow-release says where only once its arrow lands: it does not move the line, the hit does. As the
+  // order's first snapshot it is used, provisionally.
+  let aimAt = ctx.commander.at;
+  ctx.commander.on('trigger', (at) => {
+    if (at.trigger && at.trigger.kind === 'arrow-release') return;
+    aimAt = at;
+    form();
+  });
   const distance = Number(args.distance) || 24;
   const spacing = Number(args.spacing) || 2;
   const back = Number(args.back ?? 4);
@@ -62,11 +71,14 @@ export default async function (squad, args, ctx) {
     return null;
   };
 
-  /** The point looked at: on top of the block when it is within `distance` horizontally, else AHEAD blocks along the view. */
-  const pointOf = (at) => {
-    const b = at.lookBlock;
-    if (b && Math.hypot(b.x + 0.5 - at.position.x, b.z + 0.5 - at.position.z) <= distance) {
-      const top = ground(b.offset(0.5, 1, 0.5));
+  /**
+   * Where the commander points (pointedTarget: an arrow's hit, else the crosshair's creature or the top of its block),
+   * standable and within `distance` horizontally; else AHEAD blocks along the view.
+   */
+  const pointOf = (at, bot) => {
+    const p = pointedTarget(bot, at, { near: 0 }).position;
+    if (p && Math.hypot(p.x - at.position.x, p.z - at.position.z) <= distance) {
+      const top = ground(p);
       if (top) return top;
     }
     const d = lookDir(at.yaw);
@@ -74,13 +86,13 @@ export default async function (squad, args, ctx) {
     return ground(ahead) ?? ahead;
   };
 
-  /** Line up `back` blocks short of where the commander looks now. */
+  /** Line up `back` blocks short of where the commander points now. */
   function form() {
-    const at = ctx.commander.at;
+    const at = aimAt;
     const bots = squad.bots.filter((b) => b.entity);
     const fwd = lookDir(at.yaw);
     const right = lookDir(at.yaw + 90);
-    const p = pointOf(at);
+    const p = bots.length > 0 ? pointOf(at, bots[0]) : at.position;
     const raw = p.offset(-fwd.x * back, 0, -fwd.z * back);
     const centre = ground(raw) ?? raw;
     const ranks = bots.length > ONE_RANK ? 2 : 1;

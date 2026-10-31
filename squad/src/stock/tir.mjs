@@ -1,21 +1,24 @@
-// Stock command, made for a bound bow (/bots orders bind tir): the archers shoot at what the commander's arrow went
-// for, from where they stand (they never move, so a line of archers keeps its formation). The target, from the click:
-//   • the arrow hit a creature or a player: that one. Every archer shoots it until it is dead or gone, or `seconds`;
-//   • the arrow hit the ground: a volley, `volley` arrows per archer at points spread evenly over a disc of radius
-//     `spread` around where it hit;
-//   • the arrow left the bow while the commander looked at a creature or a player: that one; looking at nothing,
-//     the order waits up to 4 s for that arrow's hit, then takes the block they looked at, else ends (« Aucune cible. »);
-//   • no arrow (`/bots order tir`, or a right-click): the creature looked at, else the block looked at.
-// One of our own as the target is refused. A new click while the archers shoot retargets them. Then the order ends:
-// archers it took from a `ligne-archers` go back to it, and to their slots there.
+// Stock command: the archers shoot where the commander points, from where they stand (they never move, so a line of
+// archers keeps its formation). Any item can carry it (/bots orders bind tir), a bow, a stick, or none (/bots order
+// tir): a click only says WHERE (pointedTarget): an arrow's hit, else the creature or the block in the crosshair.
+//   • a creature or a player there, or the nearest one within `near` blocks of the point: every archer shoots it until
+//     it is dead or gone, or `seconds`;
+//   • nobody there: a volley, `volley` arrows per archer at points spread evenly over a disc of radius `spread` around
+//     the point;
+//   • nothing pointed at (the sky): « Aucune cible. ».
+// A bow's arrow-release with no creature in the crosshair waits up to 4 s for that arrow's hit, then reads the look.
+// Pointing at one of our own with nobody to shoot within `near` of them is refused: never a volley onto a friend. A
+// new click while the archers shoot retargets them. Then the order ends: archers it took from a `ligne-archers` go
+// back to it, and to their slots there.
 export const manifest = {
-  summary: 'Tir des archers sur la cible de ma flèche',
+  summary: 'Tir des archers là où je vise : la créature la plus proche du point, sinon une volée au sol',
   params: {
     type: 'object',
     properties: {
       volley: { type: 'integer', minimum: 1, maximum: 16, default: 3, description: 'flèches par archer sur un point au sol' },
       spread: { type: 'number', minimum: 0, maximum: 16, default: 3, description: 'rayon de la volée autour du point visé' },
       seconds: { type: 'integer', minimum: 1, maximum: 50, default: 8, description: 'durée maximale du tir sur une créature' },
+      near: { type: 'integer', minimum: 0, maximum: 16, default: 4, description: 'distance autour du point visé où chercher une cible' },
     },
   },
   roles: { archers: { select: { hasItem: 'bow' }, min: 1, take: 'reclaim' } },
@@ -39,21 +42,35 @@ export default async function (squad, args, ctx) {
   const volley = Math.max(1, Math.min(16, Math.floor(Number(args.volley) || 3)));
   const spread = Math.max(0, Number(args.spread ?? 3));
   const seconds = Number(args.seconds) || 8;
+  const near = Math.max(0, Number(args.near ?? 4));
 
   /** A target: kind 'entity' (ref), 'ground' (point), 'wait' (a release: its hit follows), 'refuse' (text), 'none'. */
   const target = (kind, ref = null, point = null, text = '') => ({ kind, ref, point, text, id: null, username: null, name: '' });
 
-  /** What a click points at (see the header). */
-  const fromAt = (at) => {
-    const t = at.trigger;
-    const entity = (ref) => (isFriend(ref) ? target('refuse', ref, null, `${ref.username ?? ref.name} est des nôtres : je ne tire pas dessus.`) : target('entity', ref));
-    if (t && t.kind === 'arrow-hit') {
-      if (t.hit && t.hit.entity) return entity(t.hit.entity);
-      return t.hit ? target('ground', null, t.hit.position) : target('none');
+  /** Where a click points, as the archers see it: the first answer with an entity, else the point alone. */
+  const pointAt = (at) => {
+    let seen = null;
+    for (const b of squad.bots) {
+      try {
+        const p = pointedTarget(b, at, { near });
+        if (p.entity) return p;
+        seen = seen ?? p;
+      } catch (e) {
+        if (!(e instanceof BotLeftError)) throw e;
+      }
     }
-    if (at.lookEntity) return entity(at.lookEntity);
-    if (t && t.kind === 'arrow-release') return target('wait');
-    return at.lookBlock ? target('ground', null, at.lookBlock.offset(0.5, 1, 0.5)) : target('none');
+    return seen ?? { position: null, entity: null, pending: !!at.trigger && at.trigger.kind === 'arrow-release' };
+  };
+
+  /** What a click points at (see the header). `final`: a release read for its look, its hit no longer awaited. */
+  const fromAt = (at, final = false) => {
+    const p = pointAt(at);
+    if (p.entity) return target('entity', p.entity);
+    if (p.pending && !final) return target('wait');
+    const t = at.trigger;
+    const ref = t && t.kind === 'arrow-hit' && t.hit ? t.hit.entity : at.lookEntity;
+    if (ref && isFriend(ref)) return target('refuse', ref, null, `${ref.username ?? ref.name} est des nôtres : je ne tire pas dessus.`);
+    return p.position ? target('ground', null, p.position) : target('none');
   };
 
   /** The first answer of `fn` over the archers (one that has just left is skipped). */
@@ -148,12 +165,9 @@ export default async function (squad, args, ctx) {
   // The first target.
   let first = fromAt(ctx.commander.at);
   if (first.kind === 'wait') {
+    // The hit, or (none within 4 s, or another release) the look of the latest snapshot.
     const hit = await ctx.commander.next(HIT_WAIT_MS);
-    first = hit ? fromAt(hit) : first;
-    if (first.kind === 'wait') {
-      const b = (hit ?? ctx.commander.at).lookBlock;
-      first = b ? target('ground', null, b.offset(0.5, 1, 0.5)) : target('none');
-    }
+    first = fromAt(hit ?? ctx.commander.at, true);
   }
   if (first.kind === 'refuse') return first.text;
   if (first.kind === 'none') return 'Aucune cible.';

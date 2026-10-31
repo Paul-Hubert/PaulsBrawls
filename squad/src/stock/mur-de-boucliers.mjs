@@ -1,9 +1,10 @@
-// Stock command, made for a bound shield (/bots orders bind mur-de-boucliers): the guards line up across the
-// commander's view at the block they look at (or a few blocks ahead of them when it is too far, or nothing is looked
-// at), face along the view and raise their shields once in place. A hostile mob, or a player who is not on our team,
-// coming within `reach` of a guard's slot is fought, leashed to the slot; the guard then goes back and raises its
-// shield again. Each click of the bound shield re-forms the wall where the commander now looks, without stopping the
-// order (it listens: ctx.commander.on('trigger')).
+// Stock command: the guards line up across the commander's view where they point, face along the view and raise
+// their shields once in place. Any item can carry it (/bots orders bind mur-de-boucliers), a shield, a bow, a stick,
+// or none (/bots order): a click only says WHERE (pointedTarget: an arrow's hit, else the crosshair's creature or
+// block); too far (`distance`) or the sky, the wall forms a few blocks ahead. A hostile mob, or a player who is not on
+// our team, coming within `reach` of a guard's slot is fought, leashed to the slot; the guard then goes back and
+// raises its shield again. Each later click re-forms the wall where the commander now points, without stopping the
+// order (it listens: ctx.commander.on('trigger')); a bow's arrow-release does not move it, its hit does.
 //
 // Slots go to the bots in their order along the line (left to right as the commander sees it), so no two paths
 // cross; that assignment holds for one formation and is redone when the wall moves or a new guard joins. A guard
@@ -12,7 +13,7 @@
 // lowers it to eat). The bots walk with pathfinder goals and look again every 200 ms, so a new formation takes them
 // at once.
 export const manifest = {
-  summary: 'Mur de boucliers en travers de mon regard',
+  summary: 'Mur de boucliers en travers de mon regard, là où je vise',
   params: {
     type: 'object',
     properties: {
@@ -27,7 +28,7 @@ export const manifest = {
 
 /** How often a guard looks again (a new formation, a foe, its shield). */
 const LOOK_MS = 200;
-/** Where the wall goes when the looked-at block is too far or there is none: this many blocks ahead. */
+/** Where the wall goes when the point is too far or there is none (the sky): this many blocks ahead. */
 const AHEAD = 5;
 /** On its slot: within this many blocks horizontally. */
 const ARRIVED = 0.8;
@@ -36,7 +37,14 @@ const STUCK_MS = 10_000;
 
 export default async function (squad, args, ctx) {
   // First: every later click re-forms the wall instead of restarting the order.
-  ctx.commander.on('trigger', () => form());
+  // A bow's arrow-release says where only once its arrow lands: it does not move the wall, the hit does. As the
+  // order's first snapshot it is used, provisionally.
+  let aimAt = ctx.commander.at;
+  ctx.commander.on('trigger', (at) => {
+    if (at.trigger && at.trigger.kind === 'arrow-release') return;
+    aimAt = at;
+    form();
+  });
   const distance = Number(args.distance) || 24;
   const spacing = Math.min(3, Math.max(1, Number(args.spacing) || 1));
   const reach = Number(args.reach) || 4;
@@ -57,11 +65,14 @@ export default async function (squad, args, ctx) {
     return null;
   };
 
-  /** The point looked at: on top of the block when it is within `distance` horizontally, else AHEAD blocks along the view. */
-  const pointOf = (at) => {
-    const b = at.lookBlock;
-    if (b && Math.hypot(b.x + 0.5 - at.position.x, b.z + 0.5 - at.position.z) <= distance) {
-      const top = ground(b.offset(0.5, 1, 0.5));
+  /**
+   * Where the commander points (pointedTarget: an arrow's hit, else the crosshair's creature or the top of its block),
+   * standable and within `distance` horizontally; else AHEAD blocks along the view.
+   */
+  const pointOf = (at, bot) => {
+    const p = pointedTarget(bot, at, { near: 0 }).position;
+    if (p && Math.hypot(p.x - at.position.x, p.z - at.position.z) <= distance) {
+      const top = ground(p);
       if (top) return top;
     }
     const d = lookDir(at.yaw);
@@ -69,11 +80,12 @@ export default async function (squad, args, ctx) {
     return ground(ahead) ?? ahead;
   };
 
-  /** Line up where the commander looks now: slots across the view, given out left to right. */
+  /** Line up where the commander points now: slots across the view, given out left to right. */
   function form() {
-    const at = ctx.commander.at;
+    const at = aimAt;
     const bots = squad.bots.filter((b) => b.entity);
-    const slots = lineSlots(pointOf(at), at.yaw, bots.length, { spacing }).map((s) => ground(s) ?? s);
+    const point = bots.length > 0 ? pointOf(at, bots[0]) : at.position;
+    const slots = lineSlots(point, at.yaw, bots.length, { spacing }).map((s) => ground(s) ?? s);
     const right = lookDir(at.yaw + 90);
     const along = (p) => p.x * right.x + p.z * right.z;
     const sorted = [...bots].sort((a, b) => along(a.entity.position) - along(b.entity.position));

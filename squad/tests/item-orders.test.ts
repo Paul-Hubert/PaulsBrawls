@@ -1,7 +1,8 @@
 // The stock commands of orders bound to items (docs/29 §5.4 item 8), on FakeBots over a flat world (stone up to
-// y = 63) that walk to their pathfinder goals: `mur-de-boucliers` (shield), `epee` (sword), `ligne-archers` (arrow)
-// and `tir` (bow). Each test checks the command's choices: where the bots stand, what they face and fight, what a
-// later click changes without restarting the order, and what `tir` shoots.
+// y = 63) that walk to their pathfinder goals: `mur-de-boucliers`, `epee`, `ligne-archers` and `tir`, whatever item
+// carries them (a click only says where the commander points: pointedTarget). Each test checks the command's choices:
+// where the bots stand, what they face and fight, what a later click changes without restarting the order, and what
+// `tir` shoots.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -162,7 +163,55 @@ test('mur-de-boucliers: a guard pushed 2 blocks off its slot long after the wall
   }
 });
 
+test('mur-de-boucliers on a bow: the wall forms where the arrow landed, a later release does not move it, its hit does', async () => {
+  const f = field();
+  const guards = [f.add('Guard0', -3, 3, SHIELD), f.add('Guard1', -3, -2, SHIELD), f.add('Guard2', -3, 0, SHIELD)];
+  // The look went far past (30 blocks, beyond `distance`); the arrow hit the ground 8 blocks west.
+  const hitAt = (x: number, z: number) => ({ kind: 'arrow-hit' as const, item: 'bow', hit: { position: { x, y: 64.05, z } } });
+  const o = await f.start('mur-de-boucliers', f.snap({ yaw: 90, lookBlock: { x: -30, y: 63, z: 0, name: 'stone' }, trigger: hitAt(-7.5, 0.5) }));
+  try {
+    await until(() => guards.every(shieldUp), 3_000, 'the wall at the hit');
+    assert.deepEqual(guards.map(xz), [[-7.5, 1.5], [-7.5, -0.5], [-7.5, 0.5]]);
+    // A release while looking south: delivered, and the wall stays where it is.
+    const release = await f.click('mur-de-boucliers', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 10, name: 'stone' }, trigger: { kind: 'arrow-release', item: 'bow' } }));
+    assert.deepEqual(release, { ok: true, text: '', orderId: o.id, delivered: true });
+    await tick(500);
+    assert.deepEqual(guards.map(xz), [[-7.5, 1.5], [-7.5, -0.5], [-7.5, 0.5]], 'not moved by the release');
+    assert.ok(guards.every((g) => facing(g, 90) && shieldUp(g)));
+    // Its hit: the wall re-forms there, facing the release's view.
+    await f.click('mur-de-boucliers', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 10, name: 'stone' }, trigger: hitAt(0.5, 12.5) }));
+    await until(() => guards.every((g) => g.entity.position.z === 12.5 && shieldUp(g) && facing(g, 0)), 3_000, 'the wall at the new hit');
+    assert.equal(o.status, 'running');
+  } finally {
+    await f.h.runner.stopAll();
+  }
+});
+
 // -- epee ---------------------------------------------------------------------------------------------------------
+
+test('epee from any item: the creature nearest the point (within `near`) is attacked; farther than that, the bots hold the point', async () => {
+  const f = field();
+  const guards = [f.add('Guard0', 0, 2, SWORD), f.add('Guard1', 1, 2, SWORD)];
+  const stick = { kind: 'use' as const, item: 'stick' };
+  // The block (10, 63, 0): its top (10.5, 64, 0.5) is 2.8 blocks from the zombie.
+  const z = f.spawn(zombie(12.5, 2.5));
+  const o = await f.start('epee', f.snap({ yaw: -90, lookBlock: { x: 10, y: 63, z: 0, name: 'stone' }, trigger: stick }), ['radius=4']);
+  try {
+    await until(() => on(guards, z) === 2, 2_000, 'both guards on the zombie near the point');
+    z.isValid = false;
+    await until(() => o.report.logs.includes('say: Cible abattue (zombie).'), 2_000, 'the target down');
+    // The block (30, 63, 0) with a zombie 6 blocks from its top: no target, the bots hold the point (a radius of 4
+    // around it, so that zombie is not theirs either).
+    const far = f.spawn(zombie(30.5, 6.5));
+    const r = await f.click('epee', f.snap({ yaw: -90, lookBlock: { x: 30, y: 63, z: 0, name: 'stone' }, trigger: stick }));
+    assert.ok('delivered' in r && r.delivered);
+    const point = new Vec3(30.5, 64, 0.5);
+    await until(() => guards.every((g) => Math.abs(Math.hypot(g.entity.position.x - point.x, g.entity.position.z - point.z) - 3) < 1), 3_000, 'on the ring around the point');
+    assert.equal(on(guards, far), 0, 'the zombie 6 blocks off is left alone');
+  } finally {
+    await f.h.runner.stopAll();
+  }
+});
 
 test('epee: looking at a zombie, the archers shoot it and two guards fight it, the others take the one next to it; once it is dead, the bots defend the commander', async () => {
   const f = field();
@@ -240,6 +289,29 @@ test('ligne-archers: past 8 archers, two ranks 2 blocks apart', async () => {
 });
 
 // -- tir ----------------------------------------------------------------------------------------------------------
+
+test('tir from any item: the creature nearest the block pointed at (within `near`) is shot; farther than that, the volley goes on the block', async () => {
+  const f = field();
+  const archers = [f.add('Archer0', 0, 0, BOW), f.add('Archer1', 2, 0, BOW)];
+  // A stick's right-click at the block (10, 63, 0): the zombie 2.8 blocks from its top is the target.
+  const z = f.spawn(zombie(12.5, 2.5));
+  await f.click('tir', f.snap({ yaw: -90, lookBlock: { x: 10, y: 63, z: 0, name: 'stone' }, trigger: { kind: 'use', item: 'stick' } }));
+  await until(() => archers.every((a) => f.shots.get(a)!.includes(z)), 2_000, 'both archers on the zombie');
+  z.isValid = false;
+  await until(() => !!f.ended('tir'), 2_000, 'the end');
+  assert.match(f.ended('tir')!, /Cible abattue \(zombie\)/);
+
+  // `/bots order tir` (no trigger) at the same block, a zombie 6 blocks from it: a volley on the block, not the zombie.
+  f.h.notices.length = 0;
+  const before = archers.map((a) => f.shots.get(a)!.length);
+  const far = f.spawn(zombie(10.5, 6.5));
+  await f.click('tir', f.snap({ yaw: -90, lookBlock: { x: 10, y: 63, z: 0, name: 'stone' } }), ['volley=2', 'spread=0']);
+  await until(() => !!f.ended('tir'), 3_000, 'the volley');
+  assert.equal(f.ended('tir'), '[Bots] « tir » terminé : Volée tirée : 4 flèches.');
+  const volley = archers.flatMap((a, i) => f.shots.get(a)!.slice(before[i]!)) as Array<{ position?: Vec3 }>;
+  assert.ok(!volley.includes(far as never), 'not at the zombie');
+  assert.deepEqual(volley.map((s) => [s.position!.x, s.position!.y, s.position!.z]), Array(4).fill([10.5, 64, 0.5]));
+});
 
 test('tir: an arrow in the ground sends a volley, `volley` arrows per archer spread over the disc, from where they stand', async () => {
   const f = field();

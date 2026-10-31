@@ -83,21 +83,25 @@ the commander, at most two guards per creature, each bot on its own spot around 
 any enemy within `radius` of the leader on the way, then hunts the `target` player and their bots; it ends after
 `quiet` seconds, default 60, without an enemy player).
 
-Four stock commands are made for bound items (`/bots orders bind NAME`, docs/29 §5.4; e.g. a shield in hand,
-`/bots orders bind mur-de-boucliers spacing=2`); each click re-aims the running order where you look, without
-restarting it:
-- `mur-de-boucliers` (a shield): the guards with a shield line up across your view at the block you look at (or 5
-  blocks ahead), face along it and raise their shields once there; they fight what comes within `reach` (4) of their
-  slot, then go back. Params `distance` 24, `spacing` 1, `reach` 4.
-- `epee` (a sword): looking at a creature or an enemy, the archers shoot it and two guards fight it (the others fight
-  what is near it) until it is dead or `seconds` (60) pass; looking at the ground, the bots hold that spot (rings of 3
-  and 6 around it); looking at the sky or a friend, they defend you. Params `radius` 16, `seconds` 60.
-- `ligne-archers` (an arrow, right-click): the archers line up across your view, `back` (4) blocks short of the point,
-  in two ranks past 8, and shoot what comes within `range` (24) of the line, from their slots. Params `distance` 24,
-  `spacing` 2, `back` 4, `range` 24.
-- `tir` (a bow): the archers shoot where your arrow went, from where they stand: the creature it hit until it is dead or
-  `seconds` (8) pass, or a volley of `volley` (3) arrows each spread over `spread` (3) blocks around where it landed.
-  It ends after that; archers it took from a `ligne-archers` go back to their slots there.
+Four stock commands aim where you point (`/bots orders bind NAME`, docs/29 §5.4; e.g. a shield in hand,
+`/bots orders bind mur-de-boucliers spacing=2`); each click re-aims the running order without restarting it. **Any item
+can carry any of them** (the shield, sword, arrow and bow below are only examples): a click says where you point, the
+same way for every item and from `/bots order` too. Where you point: your arrow's hit (a bow), else the creature or the
+block in your crosshair. The target there: that creature, else the nearest one within `near` (4) blocks of the point.
+A bow's arrow-release waits for its hit (a release does not move a formation; its hit does).
+- `mur-de-boucliers` (e.g. a shield): the guards with a shield line up across your view where you point (or 5 blocks
+  ahead when that is too far or the sky), face along it and raise their shields once there; they fight what comes
+  within `reach` (4) of their slot, then go back. Params `distance` 24, `spacing` 1, `reach` 4.
+- `epee` (e.g. a sword): a creature or an enemy where you point: the archers shoot it and two guards fight it (the
+  others fight what is near it) until it is dead or `seconds` (60) pass; only the ground: the bots hold that spot
+  (rings of 3 and 6 around it); the sky or a friend: they defend you. Params `radius` 16, `seconds` 60, `near` 4.
+- `ligne-archers` (e.g. an arrow, right-click): the archers line up across your view, `back` (4) blocks short of where
+  you point, in two ranks past 8, and shoot what comes within `range` (24) of the line, from their slots. Params
+  `distance` 24, `spacing` 2, `back` 4, `range` 24.
+- `tir` (e.g. a bow, or a stick): the archers shoot where you point, from where they stand: the creature there (or the
+  nearest within `near`) until it is dead or `seconds` (8) pass, else a volley of `volley` (3) arrows each spread over
+  `spread` (3) blocks around the point. A friend with nobody near them is refused. It ends after that; archers it took
+  from a `ligne-archers` go back to their slots there.
 
 Bots never hurt their own team: the mod cancels a bot's damage to a bot sharing an owner with it, or to one of its
 owners. Everyone else (mobs, other players, other owners' bots) can be hit; PvP is on. A script's friends (`isFriend`)

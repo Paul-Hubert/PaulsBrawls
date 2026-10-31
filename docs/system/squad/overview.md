@@ -204,7 +204,12 @@ The mod keeps the binding on the item stack and sends each click; the runtime de
   `on` / `off` / `next`. The `squad-author` prompt has one paragraph: re-aim a running order rather than let it
   restart. Tests: `squad/tests/triggers.test.ts`, plus the HTTP round trip in `tests/http.test.ts`.
 
-## Orders bound to items — the helpers and the four stock commands (docs/29 §5.4 items 7–8)
+## Orders bound to items — the helpers and the four stock commands (docs/29 §5.4 items 5, 7–8)
+
+**Any item carries any order** (Paul, 2026-10-31, after the first build). The item and the trigger say only *where* the
+player points; every command reads that the same way, whatever the item or the trigger kind, and from `/bots order`
+with no trigger: `pointedTarget` below. The shield/sword/arrow/bow names in docs/29 §5.4 are examples, not a mapping: a
+stick can carry `tir`, a bow can carry `mur-de-boucliers` (the wall forms where the arrow lands).
 
 **The yaw convention.** Every formation helper takes yaw as `ctx.commander.at.yaw` gives it: Minecraft's degrees,
 0 = south (+Z), 90 = west (−X); pitch negative = up. Mineflayer's `bot.entity.yaw`/`pitch` are radians from another
@@ -245,6 +250,20 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
   within 4 blocks of the ref's position, the last only for a ref without an id: the id is the same for every client,
   so a ref whose id the bot lacks is dead or out of its sight, and another zombie next to where it stood is not it.
 - `isFriend` accepts a snapshot entity too (it reads `type` and `username`).
+- `pointedTarget(bot, at, { near = 4, filter } = {}) → { position, entity, pending }`: where the commander points.
+  - `position`: an `arrow-hit`'s `trigger.hit.position`; else the crosshair entity's position (`lookEntity`); else
+    the top centre of `lookBlock` (x + 0.5, y + 1, z + 0.5); else null (the sky).
+  - `entity`: the hit or crosshair entity (through `entityOf`) when it qualifies; else the qualifying entity nearest
+    `position` within `near` blocks, as this bot sees it (`nearestEntity` from the point); else null. `near: 0` takes
+    only the exact one.
+  - Qualifying: a living thing by minecraft-data's entity `type` (1.21.1: `player`, `mob`, `hostile`, `animal`,
+    `passive`, `ambient`, `water_creature`; the registry's type wins over `entity.type`), so not an item, an XP orb,
+    an arrow or other projectile, a vehicle, a frame, a display or the armor stand (type `living`); valid; not of the
+    order's team (the order's `friends`, read through the guarded bot, as `isFriend`); not a spectator (game mode 3);
+    and `filter(e)` when given.
+  - `pending`: true for an `arrow-release` (its hit follows; until then position and entity are the look's).
+  - Pointing at a friend gives the qualifying entity nearest them, else no entity and the friend's position: a
+    command decides what that means (`tir` refuses, `epee` defends the commander).
 
 **What the four commands share** (`src/stock/mur-de-boucliers.mjs`, `epee.mjs`, `ligne-archers.mjs`, `tir.mjs`):
 - `ctx.commander.on('trigger', …)` is their first statement, so every later click is delivered (re-aim), never a restart.
@@ -254,20 +273,24 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
   `mur-de-boucliers` and `ligne-archers` the 10 s count from each walk to the slot: a bot that had reached it and walks
   back (from a fight, pushed off) starts again with the exact goal (`heading.reached`; found live, docs/29 §16). A
   fight ends at once on a new version (`attack`'s `until`).
-- The point: the block looked at (`lookBlock` + (0.5, 1, 0.5) through `groundAt`) when within `distance`
-  horizontally, else the commander's position + `lookDir(yaw)` × 5 (`mur-de-boucliers`) or × 10 (`ligne-archers`)
-  through `groundAt`; the raw point when no bot knows that chunk. `groundAt` runs with whichever bot knows it.
+- The point of the two lines: `pointedTarget(…).position` (an arrow's hit, else the crosshair's creature, else the top
+  of the block) through `groundAt` when within `distance` horizontally, else the commander's position +
+  `lookDir(yaw)` × 5 (`mur-de-boucliers`) or × 10 (`ligne-archers`) through `groundAt`; the raw point when no bot
+  knows that chunk. `groundAt` runs with whichever bot knows it. An `arrow-release` does not re-form a running line
+  (its hit does); as the order's first snapshot it is used, provisionally.
+- `epee` and `tir` aim with `pointedTarget(…, { near })` (param `near`, default 4, 0–16), asked of each bot in turn
+  until one sees a qualifying entity.
 - One loop per bot, started again for a bot that comes back from another order (`squad.on('joined')`). A token per bot
   ends a stale loop: a returning bot gets the same guard object, so the old loop's calls would pass again.
 - A line keeps a bot's slot while it is away (reclaimed); a click, or a bot without a slot joining, re-forms it. The
   slots go to the bots by their position along the line (the front-most to the front rank), so no two paths cross.
 
-| Command | Item | Roles | Params | As built |
+| Command | Example item | Roles | Params | As built |
 |---|---|---|---|---|
-| `mur-de-boucliers` | shield | `guards` (`hasItem: 'shield'`, min 1, reclaim) | `distance` 24, `spacing` 1 (1–3), `reach` 4; until stopped | `lineSlots(point, yaw, n, { spacing })` through `groundAt`. Shield down to walk; on the slot `faceYaw(yaw)` and `raiseShield`, re-asserted every look. A hostile, or a non-friend player who is not a spectator, within `reach` of the slot: shield down, `attack` leashed to the slot (radius `reach` + 1), then back to the slot. « Mur de boucliers rompu. » |
-| `epee` | sword | `archers` (bow, reclaim), `melee` (no bow, reclaim) | `radius` 16, `seconds` 60; until stopped | A non-friend `lookEntity` that `entityOf` resolves is the target, tracked by its id from then on: archers shoot it, at most 2 guards fight it, the other guards fight threats within `radius` of it (leashed to it), a bot that does not see it holds near the commander. Dead or gone (« Cible abattue (zombie). » when it was last within 20 blocks of a bot, else « Cible perdue de vue (…) : je reviens te défendre. ») or `seconds` (« Cible toujours debout après … ») → defend the commander. A `lookBlock`: defend that point (threats within `radius` of it, guards on a ring of 3, archers of 6 around it, by goals; fights leashed to it). The sky or a friend: defend the commander as `defend` does (rings via `follow` with `offset`). Guards at most 2 per threat, archers prefer an untaken one and step 1–2 blocks aside after "no clear line of fire" |
+| `mur-de-boucliers` | shield | `guards` (`hasItem: 'shield'`, min 1, reclaim) | `distance` 24, `spacing` 1 (1–3), `reach` 4; until stopped | `lineSlots(point, yaw, n, { spacing })` through `groundAt`, at the point above. Shield down to walk; on the slot `faceYaw(yaw)` and `raiseShield`, re-asserted every look. A hostile, or a non-friend player who is not a spectator, within `reach` of the slot: shield down, `attack` leashed to the slot (radius `reach` + 1), then back to the slot. « Mur de boucliers rompu. » |
+| `epee` | sword | `archers` (bow, reclaim), `melee` (no bow, reclaim) | `radius` 16, `seconds` 60, `near` 4; until stopped | `pointedTarget`'s entity (the one pointed at, or the nearest within `near` of the point) is the target, tracked by its id from then on: archers shoot it, at most 2 guards fight it, the other guards fight threats within `radius` of it (leashed to it), a bot that does not see it holds near the commander. Dead or gone (« Cible abattue (zombie). » when it was last within 20 blocks of a bot, else « Cible perdue de vue (…) : je reviens te défendre. ») or `seconds` (« Cible toujours debout après … ») → defend the commander. A point and no entity: defend that point (threats within `radius` of it, guards on a ring of 3, archers of 6 around it, by goals; fights leashed to it). The sky, or a friend with nobody near them: defend the commander as `defend` does (rings via `follow` with `offset`). A release without an entity changes nothing (its hit decides). Guards at most 2 per threat, archers prefer an untaken one and step 1–2 blocks aside after "no clear line of fire" |
 | `ligne-archers` | arrow (right-click) | `archers` (bow, min 1, reclaim) | `distance` 24, `spacing` 2, `back` 4, `range` 24; until stopped | Centre = point − `lookDir(yaw)` × `back`, through `groundAt`; two ranks (depth 2) past 8 archers. On its slot an archer faces the view and shoots threats within `range` of the centre: in front of the line (dot with `lookDir` > 0) and untaken first, then in front, then untaken. After "no clear line of fire": 1–2 blocks aside, shooting from there for 3 s, then back to the slot |
-| `tir` | bow | `archers` (bow, min 1, reclaim) | `volley` 3 (1–16), `spread` 3, `seconds` 8; bounded, `maxMinutes` 1 | The target: `arrow-hit` with an entity → it, without → the point hit; `arrow-release` with a `lookEntity` → it, without → `ctx.commander.next(4000)`, then the `lookBlock`, else « Aucune cible. »; no trigger or `use` → `lookEntity`, else `lookBlock`. One of ours → « X est des nôtres : je ne tire pas dessus. »; an entity no archer sees → « Cible hors de vue des archers. ». Archers never move. An entity: every archer shoots it until dead or gone, or `seconds`. The ground: `volley` arrows per archer at points uniform over a disc of radius `spread`, y from `groundAt`. A later click retargets (a release waits for its hit, the next click). « Volée tirée : 9 flèches. », « Cible abattue (zombie) : 5 flèches. ». Archers reclaimed from a `ligne-archers` return to their slots there |
+| `tir` | bow | `archers` (bow, min 1, reclaim) | `volley` 3 (1–16), `spread` 3, `seconds` 8, `near` 4 (0–16); bounded, `maxMinutes` 1 | The target, from `pointedTarget`: an entity (pointed at, or the nearest within `near` of the point) → shoot it; else the point → a volley there; else « Aucune cible. ». The same from a stick's right-click, a bow's arrow or `/bots order tir`. A release with an entity starts on it; without, `ctx.commander.next(4000)`, then the release's look. A friend pointed at with nobody within `near` of them → « X est des nôtres : je ne tire pas dessus. » (never a volley onto a friend's position); an entity no archer sees → « Cible hors de vue des archers. ». Archers never move. An entity: every archer shoots it until dead or gone, or `seconds`. The ground: `volley` arrows per archer at points uniform over a disc of radius `spread`, y from `groundAt`. A later click retargets (a release waits for its hit, the next click). « Volée tirée : 9 flèches. », « Cible abattue (zombie) : 5 flèches. ». Archers reclaimed from a `ligne-archers` return to their slots there |
 
 ## `defend` and the damage rules (after a 20-bot fight, docs/29 §16)
 
@@ -456,7 +479,7 @@ clicks and sends each one; it decides nothing about what a click does.
 
 ## Tests
 
-- **`squad/`:** `npm run check` = lint + tsc + 162 `node:test` tests on fakes (compile, leases, guard, orders and
+- **`squad/`:** `npm run check` = lint + tsc + 167 `node:test` tests on fakes (compile, leases, guard, orders and
   reclaim, check/typecheck of the stock commands, HTTP + the real MCP client, supervisor wedge, protocol hardening,
   helpers, agent config drift, `follow`, the `gather` freeze, one test per dependency patch, the vitals, the worker
   pool: same path as the main thread on a synthetic world, the mirror's refcounts, every fallback, a clean stop;
@@ -472,7 +495,9 @@ clicks and sends each one; it decides nothing about what a click does.
   fighting at its slot, a guard pushed off its slot long after the wall formed going back to the exact slot; `epee`'s
   target with two guards on it and the anchor rings; the archer line `back` blocks short, front threats first, two
   ranks; `tir`'s volley count and spread, release then hit, the 4 s wait, a friend refused, and
-  archers taken from a line returning to their own slots)).
+  archers taken from a line returning to their own slots; any item: `tir` and `epee` on the zombie nearest the block
+  pointed at, the volley or the held point beyond `near`, a wall formed at an arrow's hit and not moved by a release);
+  `pointedTarget` (`helpers.test.ts`: the point and the target by trigger, `near`, pending, and what does not qualify)).
 - **Mod:** 54 JUnit tests in `src/test/java/com/paul/brawl/squad/` (incl. `SquadStatusFormatTest`, `SquadFriendsTest`,
   `SquadRaidPlanTest`; for bound items `SquadBindingTest`: the bind line, order names, the lore line and its removal,
   the custom-data round trip on a real `NbtCompound`; `SquadTriggerLimiterTest`: the burst, the refill, per-player
@@ -531,7 +556,8 @@ clicks and sends each one; it decides nothing about what a click does.
   live: a shield held up for minutes through mob noise (the live walls held for seconds), which aim made the live
   volleys (hawkEye or the ballistic fallback; neither is logged) and how often hawkEye's block check refuses a point on
   the ground, `groundAt` on anything but a flat floor (slabs, snow layers, water), and fights against mobs that move
-  (every live husk had NoAI).
+  (every live husk had NoAI). `pointedTarget` and the any-item reading (2026-10-31, after the live run) ran only on
+  fakes: a stick carrying `tir`, a bow carrying `mur-de-boucliers`, the nearest creature within `near` of a point.
 - **The mod side of bound items** passed live on the dev server (above). Still not run on a server: multishot (a
   crossbow), a held right-click against the limiter, the lore and glint as a real client renders them (only the
   stack's data was read), a rebind, and a bound item given to another player.

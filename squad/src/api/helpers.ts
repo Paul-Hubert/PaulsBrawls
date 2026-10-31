@@ -1,9 +1,9 @@
 // The helpers: scope globals every command can call (docs/29 §5.2). Voyager's primitives under Voyager's names
 // and signatures (mineBlock, craftItem, smeltItem, placeItem, killMob, exploreUntil, getItemFromChest,
 // depositItemIntoChest, checkItemInsideChest), plus movement, combat and lookup helpers, and the formation helpers
-// of orders bound to items (lookDir, lineSlots, groundAt, faceYaw, raiseShield, entityOf; docs/29 §5.4). The
-// hard-won fixes come from Eden's stock skills (copied): hops of ≤ 40 blocks (R7), window safety (R1–R3), numeric
-// ids for recipesFor (gap C), drops picked up by walking onto them (gap E).
+// of orders bound to items (lookDir, lineSlots, groundAt, faceYaw, raiseShield, entityOf, pointedTarget; docs/29
+// §5.4). The hard-won fixes come from Eden's stock skills (copied): hops of ≤ 40 blocks (R7), window safety
+// (R1–R3), numeric ids for recipesFor (gap C), drops picked up by walking onto them (gap E).
 //
 // Every helper:
 //   • takes a (guarded) bot first; when it belongs to an order, block targets are claimed across orders, so two bots
@@ -1124,6 +1124,75 @@ export function entityOf(bot: Bot, ref: EntityRefLike | null | undefined): Entit
   return nearestEntity(bot, (e) => e.name === name, 4, { from: toVec3(ref.position, 'entityOf ref.position') });
 }
 
+/**
+ * minecraft-data's entity types of living things (1.21.1: mob, hostile, animal, passive, ambient, water_creature,
+ * player). Left out: 'living' (only the armor stand), 'projectile' (arrows, tridents…) and 'other' (items, XP orbs,
+ * vehicles, item frames, paintings, evoker fangs, displays).
+ */
+const LIVING_TYPES = new Set(['player', 'mob', 'hostile', 'animal', 'passive', 'ambient', 'water_creature']);
+
+/** A creature or a player, by its type in the registry (mineflayer copies it to `entity.type`). */
+function isLiving(bot: Bot, e: Entity): boolean {
+  const data = e.name ? (bot.registry?.entitiesByName?.[e.name] as { type?: string } | undefined) : undefined;
+  return LIVING_TYPES.has(String(data?.type ?? e.type));
+}
+
+/** A player of the order's team (the scripts' isFriend, read from the order the bot belongs to). */
+function isTeammate(bot: Bot, e: { type?: string; username?: string }): boolean {
+  return e.type === 'player' && !!e.username && !!order(bot)?.friends?.has(e.username);
+}
+
+/** What `pointedTarget` reads: `ctx.commander.at`. */
+export interface PointedAt {
+  lookBlock?: PosLike | null;
+  lookEntity?: (EntityRefLike & { position?: PosLike }) | null;
+  trigger?: { kind?: string; hit?: { position?: PosLike; entity?: EntityRefLike | null } | null } | null;
+}
+
+/**
+ * Where the commander points, read the same way whatever the item and the trigger (and with no trigger, from
+ * `/bots order`): any item can carry any order, and a click only says where (Paul, 2026-10-31).
+ *   • position: an arrow's hit ('arrow-hit'), else the crosshair entity's position (lookEntity), else the top centre
+ *     of the block looked at, else null (the sky);
+ *   • entity: the hit or crosshair entity when it qualifies, else the qualifying entity nearest `position` within
+ *     `near` blocks (0: only the exact one), as this bot sees it. Qualifying: a living creature or a player (no item,
+ *     arrow, XP orb, vehicle or armor stand), valid, not of the order's team, not a spectator, and `filter(e)`;
+ *   • pending: an 'arrow-release' (its 'arrow-hit' follows; until then position and entity are the look's).
+ */
+export function pointedTarget(
+  bot: Bot,
+  at: PointedAt | null | undefined,
+  opts: { near?: number; filter?: (e: Entity) => boolean } = {},
+): { position: Vec3 | null; entity: Entity | null; pending: boolean } {
+  const label = `pointedTarget(${who(bot)})`;
+  if (!at || typeof at !== 'object') throw new HelperError(`${label}: expected ctx.commander.at, got ${safeJson(at)}`);
+  const near = Number(opts.near ?? 4);
+  if (!(near >= 0)) throw new HelperError(`${label}: near must be a number of blocks ≥ 0, got ${safeJson(opts.near)}`);
+  const t = at.trigger ?? null;
+  const hit = t?.kind === 'arrow-hit' && t.hit?.position ? t.hit : null;
+  let position: Vec3 | null = null;
+  if (hit) position = toVec3(hit.position, `${label} hit.position`);
+  else if (at.lookEntity?.position) position = toVec3(at.lookEntity.position, `${label} lookEntity.position`);
+  else if (at.lookBlock) {
+    const b = toVec3(at.lookBlock, `${label} lookBlock`);
+    position = new Vec3(Math.floor(b.x) + 0.5, Math.floor(b.y) + 1, Math.floor(b.z) + 0.5);
+  }
+  const qualifies = (e: Entity): boolean =>
+    !!e &&
+    e.isValid !== false &&
+    !!e.position &&
+    isLiving(bot, e) &&
+    !isTeammate(bot, e) &&
+    !(e.type === 'player' && !!e.username && bot.players?.[e.username]?.gamemode === 3) &&
+    (!opts.filter || !!opts.filter(e));
+  const ref = hit ? hit.entity ?? null : at.lookEntity ?? null;
+  const exact = ref ? entityOf(bot, ref) : null;
+  let entity: Entity | null = null;
+  if (exact && qualifies(exact)) entity = exact;
+  else if (position && near > 0) entity = nearestEntity(bot, qualifies, near, { from: position });
+  return { position, entity, pending: t?.kind === 'arrow-release' };
+}
+
 /** An arrow's flight (Minecraft 1.21 PersistentProjectileEntity): per tick, move by v, then v × 0.99, then v.y − 0.05. */
 export const ARROW = {
   /** Blocks per tick at full draw (a bow held ≥ 1 s; speed = pull × 3). */
@@ -1253,4 +1322,5 @@ export const HELPERS = {
   faceYaw,
   raiseShield,
   entityOf,
+  pointedTarget,
 } as const;

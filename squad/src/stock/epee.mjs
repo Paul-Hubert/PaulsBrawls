@@ -1,21 +1,27 @@
-// Stock command, made for a bound sword (/bots orders bind epee). What the commander looks at decides, and each click
-// of the bound sword decides again without stopping the order (it listens: ctx.commander.on('trigger')):
-//   • a creature or a player who is not on our team: everyone goes for it. Archers shoot it; at most two guards fight
-//     it, the other guards fight what is near it (within `radius` of it). Once it is dead or gone, or after
-//     `seconds`, a line to the commander and the bots defend the commander;
-//   • the ground (a block): the bots hold that spot, like `defend` anchored on a point instead of the commander:
+// Stock command: where the commander points decides, and each later click decides again without stopping the order
+// (it listens: ctx.commander.on('trigger')). Any item can carry it (/bots orders bind epee), a sword, a bow, a stick,
+// or none (/bots order epee): a click only says WHERE (pointedTarget): an arrow's hit, else the crosshair's creature
+// or block.
+//   • a creature or a player who is not on our team there, or the nearest one within `near` blocks of the point:
+//     everyone goes for it. Archers shoot it; at most two guards fight it, the other guards fight what is near it
+//     (within `radius` of it). Once it is dead or gone, or after `seconds`, a line to the commander and the bots
+//     defend the commander;
+//   • nobody there (the ground): the bots hold that spot, like `defend` anchored on a point instead of the commander:
 //     threats within `radius` of the point, guards on a ring of 3 around it, archers on a ring of 6, fights leashed
 //     to the point;
-//   • the sky, or one of our own: the bots defend the commander, as `defend` does.
-// Guards spread over the threats (at most two on one, an untaken one first); archers prefer a threat no other archer
-// shoots and step aside after "no clear line of fire". A bot reclaimed by another order resumes when it comes back.
+//   • the sky, or one of our own with nobody to fight near them: the bots defend the commander, as `defend` does.
+// A bow's arrow-release with no creature in the crosshair changes nothing: its arrow's hit decides (the first one
+// only starts the order on the look). Guards spread over the threats (at most two on one, an untaken one first);
+// archers prefer a threat no other archer shoots and step aside after "no clear line of fire". A bot reclaimed by
+// another order resumes when it comes back.
 export const manifest = {
-  summary: 'Épée : attaquer ce que je regarde, tenir le sol visé, sinon me défendre',
+  summary: 'Épée : attaquer ce que je vise, sinon tenir le point visé, sinon me défendre',
   params: {
     type: 'object',
     properties: {
       radius: { type: 'integer', minimum: 4, maximum: 48, default: 16, description: 'rayon défendu autour de moi, du point ou de la cible' },
       seconds: { type: 'integer', minimum: 5, maximum: 600, default: 60, description: 'durée maximale contre une même cible' },
+      near: { type: 'integer', minimum: 0, maximum: 16, default: 4, description: 'distance autour du point visé où chercher une cible' },
     },
   },
   roles: {
@@ -34,10 +40,11 @@ const NEAR = 20;
 
 export default async function (squad, args, ctx) {
   // First: every later click decides again instead of restarting the order.
-  ctx.commander.on('trigger', () => decide());
+  ctx.commander.on('trigger', (at) => decide(at));
   if (squad.bots.length === 0) throw new Error('no bot available (archers need a bow)');
   const radius = Number(args.radius) || 16;
   const seconds = Number(args.seconds) || 60;
+  const near = Math.max(0, Number(args.near ?? 4));
 
   /** What the bots do: kind 'target' (an entity), 'anchor' (a point) or 'commander'. One shape for every kind. */
   const mode = (kind, point = null, target = null) => ({ kind, point, target, until: 0, near: false });
@@ -68,21 +75,35 @@ export default async function (squad, args, ctx) {
     return e && e.isValid !== false ? e : null;
   };
 
-  function decide() {
-    const at = ctx.commander.at;
-    const ref = at.lookEntity;
-    let next = mode('commander');
-    if (ref && !isFriend(ref)) {
-      const e = anyBot((b) => entityOf(b, ref));
-      if (e && !isFriend(e)) {
-        next = mode('target', null, { id: e.id, username: e.username ?? null, name: e.username ?? e.name });
-        next.until = Date.now() + seconds * 1000;
-        next.near = nearABot(e);
+  /** Where a click points, as the bots see it: the first answer with an entity, else the point alone. */
+  const pointAt = (at) => {
+    let seen = null;
+    for (const b of squad.bots) {
+      try {
+        const p = pointedTarget(b, at, { near });
+        if (p.entity) return p;
+        seen = seen ?? p;
+      } catch (e) {
+        if (!(e instanceof BotLeftError)) throw e;
       }
     }
-    if (next.kind === 'commander' && at.lookBlock && !(ref && isFriend(ref))) {
-      const top = at.lookBlock.offset(0.5, 1, 0.5);
-      next = mode('anchor', anyBot((b) => groundAt(b, top)) ?? top);
+    return seen ?? { position: null, entity: null, pending: !!at.trigger && at.trigger.kind === 'arrow-release' };
+  };
+
+  /** Decide from a snapshot. `first`: the order's own snapshot, used even when it is a release (provisionally). */
+  function decide(at, first = false) {
+    const p = pointAt(at);
+    if (p.pending && !p.entity && !first) return; // its arrow's hit decides
+    const t = at.trigger;
+    const ref = t && t.kind === 'arrow-hit' && t.hit ? t.hit.entity : at.lookEntity;
+    let next = mode('commander');
+    if (p.entity) {
+      const e = p.entity;
+      next = mode('target', null, { id: e.id, username: e.username ?? null, name: e.username ?? e.name });
+      next.until = Date.now() + seconds * 1000;
+      next.near = nearABot(e);
+    } else if (p.position && !(ref && isFriend(ref))) {
+      next = mode('anchor', anyBot((b) => groundAt(b, p.position)) ?? p.position);
     }
     state.mode = next;
     state.v++;
@@ -237,7 +258,7 @@ export default async function (squad, args, ctx) {
   };
 
   squad.on('joined', (bot, role) => launch(bot, role));
-  decide();
+  decide(ctx.commander.at, true);
   for (const [role, list] of Object.entries(squad.roles)) for (const bot of list) launch(bot, role);
   while (!squad.stopped) {
     const m = state.mode;

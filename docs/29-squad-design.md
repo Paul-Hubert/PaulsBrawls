@@ -230,7 +230,9 @@ Extra read-only fields: `bot.tags`, `bot.role`.
   `nearestHostile(bot, maxDistance, { from, filter })` (distances from `from`, e.g. the commander).
 - For formations (§5.4 item 7; yaw always in the commander's convention, Minecraft degrees, 0 = south): `lookDir(yaw,
   pitch)`, `lineSlots(center, yaw, count, { spacing, ranks, depth })`, `groundAt(bot, pos, { up, down })`,
-  `faceYaw(bot, yaw, pitch)`, `raiseShield(bot, on)`, `entityOf(bot, ref)`.
+  `faceYaw(bot, yaw, pitch)`, `raiseShield(bot, on)`, `entityOf(bot, ref)`, and
+  `pointedTarget(bot, at, { near, filter })` (where the commander points and the target there, the same for every item
+  and trigger, §5.4 item 5).
 
 **Cooperation by default.** Inside an order, `mineBlock`, `collectBlocks` and `placeItem` claim their target block
 and skip blocks other bots have claimed. Two bots told `mineBlock(bot, 'oak_log', 5)` at the same time chop
@@ -290,7 +292,10 @@ export default async function (squad, { count }, ctx) {
 ### 5.4 Orders bound to items (docs/33, 2026-10-31)
 
 Holding an item, `/bots orders bind <order> [args…]` makes that item an order giver: using it starts the order, or
-re-aims it while it runs, with the player's position and view at the click and what the click hit. Decisions:
+re-aims it while it runs, with the player's position and view at the click and what the click hit. **Any item can
+carry any order**: the item and its trigger say only *where* the player points, and every command reads that the same
+way (item 5). The item named beside each command in item 8 is an example, not a mapping (Paul, 2026-10-31, §16).
+Decisions:
 
 1. **The binding lives on the item stack**, as `minecraft:custom_data` `{squad: {order, line, glint}}`, with one lore
    line (« Ordre : mur-de-boucliers ») and an enchantment glint, so the player sees it.
@@ -335,6 +340,14 @@ re-aims it while it runs, with the player's position and view at the click and w
    - An `entity` (in `hit` and in `lookEntity`) carries `id`, the network entity id, which is mineflayer's key:
      `bot.entities[id]`. The helper `entityOf(bot, ref)` resolves one.
    - An order started with `/bots order` has no `trigger`.
+   - **Where the player points** (the same for every command, item and trigger kind, and with no trigger): an
+     `arrow-hit`'s `hit.position`; else the crosshair entity's position (`lookEntity`); else the top centre of
+     `lookBlock`; else nothing (the sky). An `arrow-release` is *pending*: its hit follows, and until then the look
+     stands in for it. A pending trigger does not move a formation; as an order's first snapshot it is used.
+   - **The target there:** the hit or crosshair entity when it qualifies (a living creature or a player, not an
+     item, arrow, XP orb, vehicle or armor stand; valid; not a friend; not a spectator); else the qualifying entity
+     nearest the point within `near` blocks (default 4); else none, and the command acts on the point itself.
+   - The helper `pointedTarget(bot, at, { near, filter })` applies both (item 7).
 6. **A second click.** A binding has one running order per player: the running order of that command
    (author + name) whose commander is the player, whether a click or `/bots order` started it.
    - **Running and listening** (it has called `ctx.commander.on('trigger', …)` or `ctx.commander.next()`): the
@@ -362,21 +375,27 @@ re-aims it while it runs, with the player's position and view at the click and w
    - `shoot(bot, target)` takes a position as well as an entity, for a volley on the ground. hawkEye aims at a
      `{ position, isValid: true }`; when it cannot, the angle is computed from the arrow's ballistics (3 blocks per
      tick at full draw, gravity 0.05, drag 0.99).
+   - `pointedTarget(bot, at, { near = 4, filter })` → `{ position, entity, pending }`: where the player points and
+     the target there (item 5).
 8. **The first stock commands** (all `until-stopped` except `tir`; their roles `take: 'reclaim'`, because a click is
-   an explicit order and reclaimed bots return to their previous order afterwards, O4):
-   - **`mur-de-boucliers`** (shield): the guards (`hasItem: 'shield'`) line up perpendicular to the view at the
-     block looked at, or a few blocks in front of the player when it is too far or not standable. They face along
-     the view and raise their shields once in place. Hostiles or enemies that reach the line are fought, leashed to
-     the slot; the guard then returns to its slot.
-   - **`epee`** (sword):
-     - Looking at a non-friend entity: everyone attacks it, archers shooting and at most 2 guards on it. The other
-       guards fight what is near it. Once it is dead or gone, the bots defend the commander.
-     - Looking at the ground: the bots hold that spot, like `defend` anchored on a position instead of the commander.
-   - **`ligne-archers`** (arrow, use): the archers form a line perpendicular to the view, a few blocks short of the
-     point (on the player's side), and shoot threats within range from their slots.
-   - **`tir`** (fired from the bound bow; `bounded`): the archers shoot at the arrow's target, from where they stand.
-     - At an entity: until it is dead or a few seconds pass.
-     - At the ground: a volley of N arrows each, spread around the point.
+   an explicit order and reclaimed bots return to their previous order afterwards, O4). Each aims at the point and the
+   target of item 5, whatever item carries it; the item in brackets is only the obvious one:
+   - **`mur-de-boucliers`** (e.g. a shield): the guards (`hasItem: 'shield'`) line up perpendicular to the view at
+     the point, or a few blocks in front of the player when it is too far, not standable or the sky (a bow carrying it
+     places the wall where the arrow lands). They face along the view and raise their shields once in place. Hostiles
+     or enemies that reach the line are fought, leashed to the slot; the guard then returns to its slot.
+   - **`epee`** (e.g. a sword):
+     - A target: everyone attacks it, archers shooting and at most 2 guards on it. The other guards fight what is
+       near it. Once it is dead or gone, the bots defend the commander.
+     - No target, a point: the bots hold that spot, like `defend` anchored on a position instead of the commander.
+     - Nothing (the sky), or a friend with no target near them: the bots defend the commander.
+   - **`ligne-archers`** (e.g. an arrow, used): the archers form a line perpendicular to the view, a few blocks short
+     of the point (on the player's side), and shoot threats within range from their slots.
+   - **`tir`** (e.g. a bow; `bounded`): the archers shoot from where they stand.
+     - At a target: until it is dead or a few seconds pass.
+     - No target, a point: a volley of N arrows each, spread around the point.
+     - Nothing: « Aucune cible. ». A friend with no target near them is refused, never a volley onto them.
+     - A bow's release with no target waits for its arrow's hit.
      - Then the order ends. Archers it reclaimed from `ligne-archers` go back to their slots there, so the formation
        is kept.
 
@@ -843,6 +862,24 @@ completely, so missed events cannot leave it wrong.
      kits, another picked up the archer's bows (so `defend` took it for an archer), and `gather` found only logs it
      could not reach. On the dev world they now start from a camp the test lays (grass, two oaks, cleared
      inventories, at 1100,100,1000).
+- **Any item carries any order (2026-10-31, Paul's feedback after the first build).** « Items shouldn't necessarily
+  correspond to a specific action. An item bound to 'tir' should trigger firing at the entity closest to the position
+  pointed at, or the block if no entity close to it. » The first build read each trigger by its item: `tir` shot an
+  entity only when it was exactly hit or in the crosshair, so a stick's right-click at the ground beside a zombie sent a
+  volley onto the ground; `mur-de-boucliers` and `ligne-archers` took the look, so a bow carrying them placed the line
+  where the player looked, not where the arrow landed. Now (§5.4 items 5, 7, 8):
+  1. `pointedTarget(bot, at, { near, filter })` reads every snapshot the same way. The point: an arrow's hit, else the
+     crosshair entity, else the top of the block. The target: the qualifying entity there, else the nearest within
+     `near` (4) of the point. A release is `pending`. Qualifying is by minecraft-data's entity type (the living ones,
+     not `living`, which is only the armor stand, nor `projectile` or `other`), valid, not a friend, not a spectator.
+  2. `tir` and `epee` have a `near` param (default 4, 0–16) and aim with it. `mur-de-boucliers` and `ligne-archers`
+     place their line at its point. A release no longer moves a line (its hit does), and changes `epee`'s decision
+     only when it has a target.
+  3. Pointing at a friend gives the target nearest them; with none, `tir` refuses (never a volley onto a friend) and
+     `epee` defends the commander, as before.
+  Tests: `squad/tests/helpers.test.ts` (`pointedTarget`), `item-orders.test.ts` (a stick's `tir` and `epee` on the
+  zombie 2.8 blocks from the block, the volley and the held point when it is 6 away; a bow's wall at the arrow's hit,
+  not moved by a release). Not yet run on a server.
 - **Stopping the runtime on Windows:** stopping `npm start` from outside can leave `tsx src/supervisor.ts` and its
   child running. Use Ctrl+C in its console, or stop the `node` processes.
 - **Performance (docs/31, implemented by docs/32, 2026-10-30).** Measured: the bots' A* filled the one event loop at

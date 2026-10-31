@@ -46,7 +46,7 @@ export class FakeBot extends EventEmitter {
   autoWalk = false;
   walkMs = 10;
   entities: Record<string, unknown> = {};
-  players: Record<string, { entity: unknown }> = {};
+  players: Record<string, { entity: unknown; gamemode?: number }> = {};
   readonly calls: string[] = [];
   readonly sentChat: string[] = [];
   readonly registry = { itemsByName: {} as Record<string, { id: number }>, blocksByName: {} as Record<string, { id: number; name: string }>, entitiesByName: {} as Record<string, unknown>, foodsByName: {} };

@@ -392,6 +392,23 @@ declare global {
    * entity of that `name` within 4 blocks of the snapshot's position.
    */
   function entityOf(bot: SquadBot, ref: SquadAtEntity | { id?: number; name?: string; username?: string; position?: Pos } | null | undefined): Entity | null;
+  /**
+   * WHERE THE COMMANDER POINTS, read the same way whatever the item or the trigger (and with no trigger, from /bots
+   * order): any item can carry any command, and a click only says where. Use it for every order that aims.
+   *   • position: an arrow's hit (trigger 'arrow-hit'), else the crosshair entity's position (lookEntity), else the top
+   *     centre of the block looked at, else null (the sky);
+   *   • entity: the hit or crosshair entity when it qualifies, else the qualifying entity NEAREST `position` within
+   *     `near` blocks (default 4; 0 = only the exact one), as this bot sees it. Qualifying: a living creature or a
+   *     player (not an item, arrow, XP orb, vehicle or armor stand), valid, not isFriend, not a spectator, filter(e);
+   *   • pending: true for an 'arrow-release' (its 'arrow-hit' follows; position and entity are the look's until then).
+   * Pointing at a friend gives the qualifying entity nearest them, or entity null with the friend's position: never
+   * fire at that position.
+   */
+  function pointedTarget(
+    bot: SquadBot,
+    at: SquadCommanderAt,
+    opts?: { near?: number; filter?: (e: Entity) => boolean },
+  ): { position: Vec3Class | null; entity: Entity | null; pending: boolean };
 }
 
 declare module 'squad' {
@@ -404,7 +421,7 @@ declare module 'squad' {
   export {
     mineBlock, craftItem, smeltItem, placeItem, killMob, exploreUntil, getItemFromChest, depositItemIntoChest,
     checkItemInsideChest, goTo, follow, attack, shoot, equip, eat, pickupDrops, findBlock, nearestEntity,
-    nearestHostile, isFriend, blockKey, lookDir, lineSlots, groundAt, faceYaw, raiseShield, entityOf,
+    nearestHostile, isFriend, blockKey, lookDir, lineSlots, groundAt, faceYaw, raiseShield, entityOf, pointedTarget,
   };
 }
 
