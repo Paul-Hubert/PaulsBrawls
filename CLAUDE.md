@@ -10,7 +10,7 @@ features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 - **Gibber** — server-wide money system (a custom `coin` item) with admin gift commands and a periodic salary scheduler.
 - **Capture the Flag** — auto-drops any banner named "Flag" when its holder takes damage, disables elytra while a Flag is carried, and makes flag-holders glow.
 - **AI God** — a LangChain4j-driven `Dieu` who hears prayers (`/pray`), trades, punishes, and rewards. **Has a physical body**: drives a Mineflayer bot (the avatar) over a Node HTTP bridge. Most player-facing strings are French.
-- **Squad** — player-owned Mineflayer bots ([docs/29](docs/29-squad-design.md), [squad/README.md](squad/README.md)). An admin spawns bots with owners (`/bots spawn BOT P1 P2…`); a player asks for a command in words (`/bots create NAME …`), the `squad-author` agent (headless Claude Code, MCP tools only) writes one JS file controlling all their bots, checks it (typecheck against mineflayer's types), test-runs it and submits it; `/bots order NAME` runs it. Co-owners reclaim busy bots per role (archers pulled, melee kept; reclaimed bots return). No sandbox (players are trusted). The runtime is one Node process in [squad/](squad/) (`npm start`, `:8772`); the mod's front is `com.paul.brawl.squad`. As built: [docs/system/squad/overview.md](docs/system/squad/overview.md). **New work on bots goes here, not in Eden.**
+- **Squad** — player-owned Mineflayer bots ([docs/29](docs/29-squad-design.md), [squad/README.md](squad/README.md)). An admin spawns bots with owners (`/bots spawn BOT P1 P2…`); a player asks for a command in words (`/bots create NAME …`), the `squad-author` agent (headless Claude Code, MCP tools only) writes one JS file controlling all their bots, checks it (typecheck against mineflayer's types), test-runs it and submits it; `/bots order NAME` runs it. `/bots orders bind NAME` binds an order to the held item: a right-click starts or re-aims it (a bound bow: the arrows it shoots), sneak + right-click stops it (docs/29 §5.4; stock `mur-de-boucliers`, `epee`, `ligne-archers`, `tir`). Co-owners reclaim busy bots per role (archers pulled, melee kept; reclaimed bots return). No sandbox (players are trusted). The runtime is one Node process in [squad/](squad/) (`npm start`, `:8772`); the mod's front is `com.paul.brawl.squad`. As built: [docs/system/squad/overview.md](docs/system/squad/overview.md). **New work on bots goes here, not in Eden.**
 - **AI Village (Eden)** — **dead code (owner, 2026-10-26): do not build inside it or keep it in step; copy what is worth having.** Ten LM-powered villager bots + one God acting through a single shared, God-judged library of typed, composable skills. The brain is **Eden**, a from-scratch rewrite in [eden/](eden/) (one Node process). The mod's only contribution is server-authority: the trade-settlement listener (Eden's villagers settle accepted trades on it), `coin`, op-on-join, and the `/villagers` + `/village` commands.
 
 > **Verified reference:** [docs/system/](docs/system/README.md) is a code-checked, per-system reference (with
@@ -64,7 +64,7 @@ They copy the remapped jar into the paths set by `mods_folder` / `client_mods_fo
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
-The Java side has thirty-one JUnit 5 classes (980 test cases) under `src/test/java/com/paul/brawl/`, each covering a
+The Java side has forty-two JUnit 5 classes (1099 test cases) under `src/test/java/com/paul/brawl/`, each covering a
 Minecraft-free helper: `TradeMath`, `ImageMime`, `ImageAwareTokenEstimator`, `BuildGuard`, `GodToolGate`, `GodClamps`, `ItemIds`, `FlagGlow`,
 `GibberMath`, `BlockInfoJson`, `EdenRetry`, `GodActionQueue`, `AgentTickets`, plus `GodService` and `BuildService` (the
 world layer's rules, run against the `RecordingGodWorld` / `RecordingBuildWorld` test helpers) and the MCP contract
@@ -113,8 +113,8 @@ cd squad
 npm install
 cp squad.example.json squad.json   # gitignored: minecraft host/port, token (or PAULSBRAWLS_SQUAD_TOKEN, same as the mod's squad.properties)
 npm start                          # supervisor + runtime on 127.0.0.1:8772 (stop with Ctrl+C; killing npm can leave node running)
-npm run check                      # lint + tsc + node:test on fakes (97 tests)
-npm run live-test                  # real bots + RCON; SERVER_PROPERTIES=../server/server.properties for production; LIVE_PATH_WORKERS=N
+npm run check                      # lint + tsc + node:test on fakes (162 tests)
+npm run live-test                  # real bots + RCON; SERVER_PROPERTIES=../server/server.properties for production; LIVE_PATH_WORKERS=N; LIVE_ONLY=core|items
 ```
 
 - The bots run in the runtime's single event loop. A lag monitor watches it (warns at loop p99 > 250 ms or ELU > 0.9);

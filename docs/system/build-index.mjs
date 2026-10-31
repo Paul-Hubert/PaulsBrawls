@@ -46,7 +46,8 @@ function parseFrontmatter(text, file) {
 }
 
 const CITATION = /`((?:[\w.-]+\/)*[\w.-]+\.(?:java|ts|mjs|cjs|js|json|gradle|properties|md|txt|yml|ps1)):(\d+)(?:-\d+)?`/g;
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'build', '.gradle', 'run', '.eden-data']);
+// .claude: agent worktrees are whole repo copies, so every basename citation would be ambiguous.
+const SKIP_DIRS = new Set(['.git', 'node_modules', 'build', '.gradle', 'run', '.eden-data', '.claude']);
 const byName = new Map(); // basename -> [abs paths]
 (function index(dir) {
   for (const name of readdirSync(dir)) {

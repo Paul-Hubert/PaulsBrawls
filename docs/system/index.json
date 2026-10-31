@@ -2209,9 +2209,12 @@
         "squad/src/orders/guard.ts",
         "squad/src/api/squad.ts",
         "squad/src/api/helpers.ts",
+        "squad/src/api/scope.ts",
+        "squad/src/service.ts",
         "squad/src/script/compile.ts",
         "squad/src/script/check.ts",
         "squad/src/script/typecheck-worker.mjs",
+        "squad/src/stock/",
         "squad/src/authoring.ts",
         "squad/src/http/server.ts",
         "squad/src/http/mcp.ts",
@@ -2227,13 +2230,19 @@
         "Patched dependencies (`squad/patches/`, docs/32 B)",
         "Observability (docs/32 C)",
         "The runtime (`squad/src/`)",
+        "Orders bound to items — the runtime (docs/29 §5.4, 2026-10-31)",
+        "Orders bound to items — the helpers and the four stock commands (docs/29 §5.4 items 7–8)",
+        "`defend` and the damage rules (after a 20-bot fight, docs/29 §16)",
+        "`raid` and `/bots raid` (an enemy army, 2026-10-31)",
         "Protocol hardening (found live, docs/29 §16)",
         "The mod (`src/main/java/com/paul/brawl/squad/`)",
+        "Orders bound to items — the mod (docs/29 §5.4 items 1–5)",
+        "Bound items on the dev server (live, 2026-10-31)",
         "Tests",
         "State on the production server (`server/`, as of 2026-10-29)",
         "Not verified yet"
       ],
-      "bytes": 18569
+      "bytes": 55807
     }
   ]
 }
