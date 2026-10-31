@@ -250,8 +250,10 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
 - `ctx.commander.on('trigger', …)` is their first statement, so every later click is delivered (re-aim), never a restart.
 - One state object with a version number. A click recomputes it; every bot's loop looks again every 100–200 ms and
   never awaits a long goal. Walking is a pathfinder goal set directly and kept while it is the same spot (`GoalBlock`
-  on a ground slot; `GoalNear` range 2 after 10 s without reaching it, or for a slot off known ground). A fight ends at
-  once on a new version (`attack`'s `until`).
+  on a ground slot; `GoalNear` range 2 after 10 s without reaching it, or for a slot off known ground). In
+  `mur-de-boucliers` and `ligne-archers` the 10 s count from each walk to the slot: a bot that had reached it and walks
+  back (from a fight, pushed off) starts again with the exact goal (`heading.reached`; found live, docs/29 §16). A
+  fight ends at once on a new version (`attack`'s `until`).
 - The point: the block looked at (`lookBlock` + (0.5, 1, 0.5) through `groundAt`) when within `distance`
   horizontally, else the commander's position + `lookDir(yaw)` × 5 (`mur-de-boucliers`) or × 10 (`ligne-archers`)
   through `groundAt`; the raw point when no bot knows that chunk. `groundAt` runs with whichever bot knows it.
@@ -295,6 +297,14 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
   the slot (the commander on a ladder, at the edge of a tower: `slotStandable`, no floor within a block of the
   commander's height), the bot follows the commander itself at the same range, and goes back to the slot once it is
   open again (docs/29 §16).
+- **A bot given back runs its loop again** (fixed 2026-10-31, passed live the same day). `squad.parallel` over the
+  order's own live array (`squad.bots`, `squad.roles.x`) also runs `fn` for a bot that joins it while the call runs (a
+  bot reclaimed by another order and given back, §6.3). It does not resolve while a reclaimed bot can still come back
+  (`Order.suspended()`, looked at again every second, since a death clears the lease stack silently). Before,
+  `defend`, `raid` and `follow` left such a bot idle: `defend`'s guards stood still after a shield wall borrowed them,
+  and a `defend` whose bots were all borrowed ended. `parallel` over a copy or a single bot is unchanged; the four
+  item commands use `parallel(bot, …)` per bot with their own `squad.on('joined')` (`tests/orders.test.ts`). Live:
+  guards a wall reclaimed from `defend` follow the captain about 14 blocks once the wall stops.
 
 ## `raid` and `/bots raid` (an enemy army, 2026-10-31)
 
@@ -351,7 +361,7 @@ Three layers now:
 | `Squad` | Lifecycle, the SSE loop and the cache, notices (kept for offline players), whitelist, join gate (a bot name from a non-loopback address is kicked), arrival teleport (to the admin, or to a given spot with a callback), `hasPlayed` (spawn refuses names with a `playerdata` file), `equip` |
 | `SquadKits` | Kits for archer, guard, miner and farmer (Minecraft-free); `equip` wears armor, holds weapons and puts the shield in the off-hand |
 | `SquadAuthoring` | One `squad-author` turn: reserve the slot, open, run the agent, close, announce « Commande X prête » |
-| `SquadClient`, `SquadArgs`, `SquadNotice`, `CommanderSnap`, `SquadConfig` | HTTP/1.1 client and SSE framing; argument tokenizing; lines with clicks; exact position and look target (`lookEntity` with its network `id`); `squad.properties` |
+| `SquadClient`, `SquadArgs`, `SquadNotice`, `CommanderSnap`, `SquadConfig` | HTTP/1.1 client and SSE framing; argument tokenizing; lines with clicks; exact position and look target (`lookEntity` with its network `id`, only what a crosshair can target: `canHit()`); `squad.properties` |
 
 ## Orders bound to items — the mod (docs/29 §5.4 items 1–5)
 
@@ -405,7 +415,10 @@ clicks and sends each one; it decides nothing about what a click does.
 - **The snapshot** is `CommanderSnap.of(player)` at the click (at the hit for `arrow-hit`) plus `trigger: { kind,
   item, hit? }`, `item` being the item id's path (`shield`, `bow`). An entity, in `hit.entity` and `lookEntity`, is
   `{ id, name, type: 'player'|'mob', username?, position }`, `id` the network entity id (`CommanderSnap.entity`, the
-  JSON in `SquadTriggerJson`).
+  JSON in `SquadTriggerJson`). `lookEntity` is what a crosshair could target, as in vanilla: not a spectator, and
+  `Entity.canHit()`, which is true for living entities and false for arrows, items and XP orbs (a projectile only
+  when it can be deflected, like a fireball). Without that filter a bound bow's `arrow-release` snapshot, taken as
+  the arrow enters the world in front of the eyes, named that arrow (found live, docs/29 §16).
 - **The call:** async `POST /api/orders/trigger` with `by`, `admin` (perm ≥ 2), `command` = the binding's order,
   `tokens`/`filters`/`take` from `SquadArgs.order(line)`, `stop` for the stop gesture, `snap`. A non-blank answer is
   rendered like any `/bots` answer (`Squad.render`, with its click); a delivered click answers `''`, so nothing is
@@ -417,9 +430,33 @@ clicks and sends each one; it decides nothing about what a click does.
 - Registered from `ServerEntryPoint` (`SquadTriggers.register()`, after `SquadCommand.register()`); the mixin is in
   `paulsbrawls.mixins.json` (`defaultRequire: 1`: a wrong target fails at startup).
 
+## Bound items on the dev server (live, 2026-10-31)
+
+`live-tests/items.ts` (the Live bullet under Tests) passed on the dev server once two faults it found were fixed
+(docs/29 §16). What it showed, with the evidence it checks:
+- **The mod:** the mixin applies at startup. `/bots orders bind mur-de-boucliers` puts `custom_data.squad`, the
+  lore line « Ordre : mur-de-boucliers » and `enchantment_glint_override` on the held shield (RCON `SelectedItem`);
+  `/bots orders bound` lists « Bow : tir »; `unbind` removes all three. A right-click is a `use` trigger: the
+  snapshot's yaw is the player's (90) and its `lookBlock` the block looked at. A second click is delivered to the
+  same order, and sneak + right-click stops it (« [Bots] « mur-de-boucliers » arrêté. »). A real bow shot gives
+  `arrow-release` (`ENTITY_LOAD`), which starts `tir`, then `arrow-hit`. That hit comes from `onBlockHit` at the point
+  the arrow struck, a few blocks short of where the player looked, or from `onEntityHit` with the husk.
+- **`mur-de-boucliers`:** the guards stand on the slots (RCON `Pos` within 0.2), `Rotation` 90.0 for yaw 90 and 0.0
+  after the re-aim, shields up as another client sees them (flags 3). So the off-hand `use_item` raises a real
+  shield and `faceYaw` sets the exact yaw. A guard whose shield starts in its inventory gets it into the off-hand
+  (`raiseShield`'s equip into slot 45). A husk 2 blocks in front of the line, 11 s after the guards reached it, is
+  killed, and each guard is back within 0.8 of its slot. Leaving the order lowers the shields.
+- **`tir`:** a volley of exactly 3 arrows per archer; 7 arrows (the captain's and the six) lie within 6 blocks of the
+  hit. At a husk: « Cible abattue (husk) : 6 flèches. ».
+- **`epee`:** a NoAI husk looked at (`lookEntity` with its id, resolved by `entityOf`) is killed with at most 2 guards
+  within 3 blocks of it at once. Then the ground: guards within 4.5 blocks of the point, archers within 7.5.
+- **`ligne-archers`:** the archers walk about 13 blocks to the line 4 blocks short of the point, 2 apart, `Rotation` 0.
+- **A bot given back works again:** guards a wall reclaimed from `defend` are back in it once the wall stops, and
+  follow the captain about 14 blocks to a new spot (the `squad.parallel` live-array fix).
+
 ## Tests
 
-- **`squad/`:** `npm run check` = lint + tsc + 159 `node:test` tests on fakes (compile, leases, guard, orders and
+- **`squad/`:** `npm run check` = lint + tsc + 162 `node:test` tests on fakes (compile, leases, guard, orders and
   reclaim, check/typecheck of the stock commands, HTTP + the real MCP client, supervisor wedge, protocol hardening,
   helpers, agent config drift, `follow`, the `gather` freeze, one test per dependency patch, the vitals, the worker
   pool: same path as the main thread on a synthetic world, the mirror's refcounts, every fallback, a clean stop;
@@ -432,8 +469,9 @@ clicks and sends each one; it decides nothing about what a click does.
   column, `faceYaw` against mineflayer's conversions, `raiseShield`, `shoot` at a position through hawkEye and through
   the ballistics checked by an independent flight, `bowAim`, `entityOf`); the four item commands
   (`item-orders.test.ts`: the wall along z facing west, shields raised on arrival, a click re-forming it, a guard
-  fighting at its slot; `epee`'s target with two guards on it and the anchor rings; the archer line `back` blocks short,
-  front threats first, two ranks; `tir`'s volley count and spread, release then hit, the 4 s wait, a friend refused, and
+  fighting at its slot, a guard pushed off its slot long after the wall formed going back to the exact slot; `epee`'s
+  target with two guards on it and the anchor rings; the archer line `back` blocks short, front threats first, two
+  ranks; `tir`'s volley count and spread, release then hit, the 4 s wait, a friend refused, and
   archers taken from a line returning to their own slots)).
 - **Mod:** 54 JUnit tests in `src/test/java/com/paul/brawl/squad/` (incl. `SquadStatusFormatTest`, `SquadFriendsTest`,
   `SquadRaidPlanTest`; for bound items `SquadBindingTest`: the bind line, order names, the lore line and its removal,
@@ -443,8 +481,21 @@ clicks and sends each one; it decides nothing about what a click does.
   hooks and the mixin are checked only in game.
 - **Live:** `npm run live-test`, using RCON against the dev server (`run/`) or production
   (`SERVER_PROPERTIES=../server/server.properties`). `LIVE_PATH_WORKERS=N` runs it with N pathfinding workers.
-  On the dev world only, it builds a ladder high over the world and checks that a bot follows a climbing bot up it with
-  `follow`, then with `defend`.
+  `LIVE_ONLY=core|items` runs one group; the test's runtime listens on `LIVE_RUNTIME_PORT` (default any free port).
+  - **Core** (`live-tests/run.ts`): connect, `gather`, `come`, reclaim per role, despawn. On the dev world the bots
+    start from a camp the test lays (grass and two oaks at 1100,100,1000, cleared inventories), and a ladder built high
+    over the world checks that a bot follows a climbing bot up it with `follow`, then with `defend`.
+  - **Bound items** (`live-tests/items.ts`, dev world only, a stone arena at 1200,100,1000). A captain, `LiveCaptain`,
+    is a plain mineflayer client outside the roster. Its offline UUID owns three guards (sword, off-hand shield) and two
+    archers. The runtime alone (`/api/orders/trigger` with written snapshots): `mur-de-boucliers` (wall, re-aim, a husk
+    fought at the line, stop), `epee` (a NoAI husk, then the ground), `ligne-archers`, and a guard reclaimed from
+    `defend` by a wall that goes back and follows again. Through the mod, with the captain's real clicks and arrows:
+    `/bots orders bind|bound|unbind`, `mur-de-boucliers` started, re-aimed and stopped (sneak), and `tir` at the ground
+    and at a husk. The mod scenarios need `run/squad.properties` pointing the dev mod at the test's runtime
+    (`url=http://127.0.0.1:8779`, `token=live-test-token`) and `LIVE_RUNTIME_PORT=8779`; otherwise they are skipped
+    ([squad/README.md](../../../squad/README.md)). Ground truth: RCON `Pos`, `Rotation`, `SelectedItem`, arrow counts,
+    entities; a raised shield is the living-entity flags (metadata 8: 0x01 hand active, 0x02 off-hand) as the
+    captain's client sees the guard.
 - **Load:** `npm run bench:load` and the other `bench:*` tools ([squad/bench/README.md](../../../squad/bench/README.md)).
 
 ## State on the production server (`server/`, as of 2026-10-29)
@@ -473,18 +524,17 @@ clicks and sends each one; it decides nothing about what a click does.
     at up to 9.2 GB RSS.
   - **Not measured:** the laptop with the client running (the production case), more than 30 bots.
   - **Squad's own code** (the guard proxy, journal, loop budget) is under 0.5% of the busy time.
-- **The reworked `defend` and the friendly-fire hook** (2026-10-31) ran only on fakes and JUnit, not yet in a fight
-  on a server; nor has the per-bot hawkEye copy.
-- **The formation helpers and the four item commands** (2026-10-31) ran only on fakes: never on a server. In
-  particular not verified live: the off-hand `use_item` raising a real shield (and staying up through mob noise),
-  `raiseShield`'s equip into slot 45, hawkEye's `{ position, isValid: true }` targets and how often its block check
-  refuses a point on the ground, the ballistic fallback's accuracy with the arrow's random divergence, and `groundAt`
-  with real blocks (slabs, snow layers, water). `CommanderSnap` now sends the entity `id` (`lookEntity`, `hit.entity`),
-  so `entityOf` finds a looked-at mob by id; that path has not met a real server either.
-- **The mod side of bound items** (2026-10-31): only its JUnit tests ran, and `remapJar` (the mixin and its refmap in
-  the jar). Never run on a server: the mixin applying at startup, `/bots orders bind|unbind|bound`, the lore and glint
-  on a real stack (and their sync to the client), the use, release and hit triggers, multishot, a held right-click
-  against the limiter.
+- **The reworked `defend` and the friendly-fire hook** (2026-10-31) have not been in a real fight on a server, nor
+  has the per-bot hawkEye copy been checked as such. Live so far: guards holding their ring around the commander (the
+  bound-item scenarios), and one archer shooting a husk (the core reclaim scenario).
+- **The formation helpers and the four item commands** passed live on the dev server (above). Still not verified
+  live: a shield held up for minutes through mob noise (the live walls held for seconds), which aim made the live
+  volleys (hawkEye or the ballistic fallback; neither is logged) and how often hawkEye's block check refuses a point on
+  the ground, `groundAt` on anything but a flat floor (slabs, snow layers, water), and fights against mobs that move
+  (every live husk had NoAI).
+- **The mod side of bound items** passed live on the dev server (above). Still not run on a server: multishot (a
+  crossbow), a held right-click against the limiter, the lore and glint as a real client renders them (only the
+  stack's data was read), a rebind, and a bound item given to another player.
 - **`raid` and `/bots raid`** (2026-10-31) ran only on fakes and JUnit: never on a server (the surface, the
   arrival teleport and kit, the start as `Envahisseur`, a real 20-vs-20 fight, 40 bots on one runtime). A raider that
   dies respawns idle (it leaves its order, docs/29 §4) and does not rejoin the raid; one that arrives after the
@@ -492,13 +542,6 @@ clicks and sends each one; it decides nothing about what a click does.
 - **`/bots status` in game:** only its JUnit test ran. **The worker pool's stats** are not in `/api/metrics` or the
   vitals.
 - **The worker pool on production:** only the dev server and the bench ran it (live test 5/5 with 4 and 14 workers).
-- **A bot given back runs its loop again (fixed 2026-10-31).** `squad.parallel` over the order's own live array
-  (`squad.bots`, `squad.roles.x`) also runs `fn` for a bot that joins it while the call runs (a bot reclaimed by another
-  order and given back, §6.3), and does not resolve while a reclaimed bot can still come back (`Order.suspended()`,
-  looked at again every second, since a death clears the lease stack silently). Before, `defend`, `raid` and `follow`
-  left such a bot idle: `defend`'s guards stood still after a shield wall borrowed them, and a `defend` whose bots
-  were all borrowed ended. `parallel` over a copy or a single bot is unchanged; the four item commands use
-  `parallel(bot, …)` per bot with their own `squad.on('joined')` (`tests/orders.test.ts`).
 - **Known, not fixed (docs/31 §11.9):** mineflayer-collectblock adds two listeners per cancelled stalled `mineBlock`
   (`MaxListenersExceededWarning` on sites with many stalls); unreachable logs are searched again by every bot and every
   `mineBlock` call (remembering them per order is recommended, not done).

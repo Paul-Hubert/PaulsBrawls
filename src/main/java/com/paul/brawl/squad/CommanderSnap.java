@@ -18,8 +18,9 @@ import net.minecraft.world.RaycastContext;
 /**
  * Where the commander stands and looks when they give an order or ask for a command (docs/29 §7.1): the exact
  * position, rotation, dimension, held item, and what they look at within 64 blocks (the nearest block, and an
- * entity if one is in front of it). Taken on the main thread; it becomes {@code ctx.commander.at} in the script. A
- * bound item's click adds {@code trigger} to it (SquadTriggers).
+ * entity a crosshair could target if one is in front of it: a creature or a player, not an arrow or an item). Taken
+ * on the main thread; it becomes {@code ctx.commander.at} in the script. A bound item's click adds {@code trigger}
+ * to it (SquadTriggers).
  */
 public final class CommanderSnap {
 
@@ -53,8 +54,11 @@ public final class CommanderSnap {
             blockDist = block.getPos().distanceTo(eye);
         }
         Box box = p.getBoundingBox().stretch(dir.multiply(blockDist)).expand(1.0);
+        // What a crosshair can target, as vanilla's: canHit() is false for arrows, items and XP orbs. Without it a
+        // bound bow's arrow-release snapshot, taken as the arrow enters the world in front of the eyes, named that
+        // arrow as lookEntity, and `tir` shot at it before the hit came (found live, docs/29 §16).
         EntityHitResult hit = ProjectileUtil.raycast(p, eye, eye.add(dir.multiply(blockDist)), box,
-            e -> !e.isSpectator() && e != p, blockDist * blockDist);
+            e -> e != p && !e.isSpectator() && e.canHit(), blockDist * blockDist);
         if (hit != null) o.add("lookEntity", entity(hit.getEntity()).toJson());
         return o;
     }

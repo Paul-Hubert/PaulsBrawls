@@ -87,7 +87,7 @@ export default async function (squad, args, ctx) {
     nearestHostile(bot, reach, { from }) ??
     nearestEntity(bot, (e) => e.type === 'player' && !!e.username && !isFriend(e) && bot.players[e.username]?.gamemode !== 3, reach, { from });
 
-  /** Where each guard is heading: the slot's key, the goal set for it, since when, loose or exact. */
+  /** Where each guard is heading: the slot's key, the goal set for it, since when, loose or exact, reached once. */
   const heading = new Map();
   const keyOf = (s) => `${s.x},${s.y},${s.z}`;
 
@@ -95,9 +95,12 @@ export default async function (squad, args, ctx) {
   const walk = (bot, slot) => {
     const key = keyOf(slot);
     let h = heading.get(bot.username);
-    if (!h || h.key !== key) {
+    // A new slot, or the same one again after the guard had reached it (back from a fight, pushed off): a fresh
+    // exact goal and its own STUCK_MS. Timed from the first walk, a guard coming back after a fight later than that
+    // got the loose goal at once and held its shield up to 2.5 blocks off its slot (found live, docs/29 §16).
+    if (!h || h.key !== key || h.reached) {
       // A slot off the ground (an unloaded chunk) gets a loose goal from the start.
-      h = { key, since: Date.now(), loose: !Number.isInteger(slot.y), goal: null };
+      h = { key, since: Date.now(), loose: !Number.isInteger(slot.y), goal: null, reached: false };
       heading.set(bot.username, h);
     }
     if (!h.loose && Date.now() - h.since > STUCK_MS) {
@@ -137,6 +140,8 @@ export default async function (squad, args, ctx) {
       await squad.sleep(LOOK_MS);
       return;
     }
+    const h = heading.get(bot.username);
+    if (h && h.key === keyOf(slot)) h.reached = true;
     await faceYaw(bot, wall.yaw);
     await raiseShield(bot, true);
     await squad.sleep(LOOK_MS);

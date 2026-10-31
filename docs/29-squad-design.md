@@ -632,6 +632,8 @@ completely, so missed events cannot leave it wrong.
   2. A reclaim of archers from a running work queue, and their return.
   3. A runtime kill mid-order.
   4. One real authoring turn (`/bots create`) end to end.
+  5. Orders bound to items (`live-tests/items.ts`, `LIVE_ONLY=items`): the four item commands from
+     `/api/orders/trigger`, and `/bots orders bind` with a real player's clicks and arrows through the dev mod.
 
 ## 14. Phases
 
@@ -759,7 +761,7 @@ completely, so missed events cannot leave it wrong.
   bot follows a climbing bot up it with `follow`, then with `defend`.
 - **Orders bound to items: the formation helpers and the four stock commands (2026-10-31, §5.4 items 7–8).** As
   designed, with these additions. Details: docs/system/squad/overview.md. Tests: `squad/tests/helpers.test.ts`,
-  `item-orders.test.ts`. Not yet run on a server.
+  `item-orders.test.ts`. Run on the dev server since (the live entry below).
   1. *`entityOf` searches by name only for a ref without an id.* The id is the same for every client, so a ref whose id
      a bot lacks is dead or out of its sight; the zombie next to where it stood is another one (in a test, a killed
      target was replaced by its neighbour and `epee` never ended its attack).
@@ -786,7 +788,8 @@ completely, so missed events cannot leave it wrong.
      still come back (`tests/orders.test.ts`).
 - **Orders bound to items: the mod (2026-10-31, §5.4 items 1–5).** As designed, with these differences. Details:
   docs/system/squad/overview.md ("Orders bound to items — the mod"). Tests: `SquadBindingTest`,
-  `SquadTriggerLimiterTest`, `SquadArrowsTest`, `SquadTriggerJsonTest`. Not yet run on a server.
+  `SquadTriggerLimiterTest`, `SquadArrowsTest`, `SquadTriggerJsonTest`. Run on the dev server since (the live entry
+  below).
   1. *The binding also stores `lore`* (`{squad: {order, line, glint, lore}}`), the exact line the bind appended, and
      that line names the line too (« Ordre : mur-de-boucliers spacing=2 », cut at 60 characters). `unbind` removes the
      last lore line with that text, so a player's own lore is never touched.
@@ -801,6 +804,45 @@ completely, so missed events cannot leave it wrong.
      `bound` work with Squad off: they touch only the stack.
   6. *The bind's answer agrees with « Ordre »* (« Ordre « X » lié à ton objet (Épée en fer) : … »), since an item's
      name may be feminine.
+- **Orders bound to items on the dev server (2026-10-31, `live-tests/items.ts`).** The four item commands and the
+  mod's triggers ran live (`LIVE_ONLY=items`, the dev mod pointed at the test's runtime by `run/squad.properties`).
+  A captain, a plain mineflayer client outside the roster, owned three guards (sword, off-hand shield) and two archers
+  on a stone arena; RCON gave the ground truth. Passed once the two faults below were fixed:
+  - `mur-de-boucliers`, from `/api/orders/trigger` and through the mod. `/bots orders bind` writes `custom_data.squad`,
+    the lore line and the glint on the real stack. A right-click starts the order and a second one is delivered to the
+    same order, which re-forms. Sneak + right-click stops it, and `unbind` removes all three. The guards stood on the
+    line (`Pos` within 0.2 of the slots), `Rotation` 90.0 then 0.0, their shields up as another client sees them
+    (living-entity flags 3: hand active, off-hand); a guard whose shield started in its inventory got it into the
+    off-hand. A husk in front of the wall was killed and each guard went back within 0.8 of its slot, and the shields
+    came down when the order stopped.
+  - `tir` from a real bow (the `ENTITY_LOAD` release and both mixin injections). At the ground: exactly 3 arrows from
+    each archer, and 7 arrows within 6 blocks of the hit. At a husk: the hit named it and the archers killed it.
+  - `epee`: a NoAI husk killed, with at most 2 guards on it at once; then the ground held (guards within 4.5 blocks of
+    the point, archers within 7.5). `ligne-archers`: the line 4 blocks short of the point, 2 apart, `Rotation` 0.
+  - `squad.parallel` over a live array (item 6 above): guards a wall reclaimed from `defend` went back to it when the
+    wall stopped, and followed the commander 14 blocks to a new spot.
+  Faults found:
+  1. *The arrow-release snapshot looked at its own arrow.* `CommanderSnap`'s entity raycast took any non-spectator
+     entity. The release is taken inside `ENTITY_LOAD`, with the arrow just spawned at the eyes − 0.1, so that arrow
+     was `lookEntity`. `tir` aimed at the flying arrow; the hit then retargeted it to the ground, and the shots already
+     drawn made 8 arrows for a volley of 3 × 2 (« Volée tirée : 8 flèches. »). The raycast now keeps what a crosshair
+     can target, as vanilla's does: `Entity.canHit()`. That is true for living entities and false for arrows, items
+     and XP orbs; a projectile counts only when it can be deflected, like a fireball. No JUnit test, because the
+     predicate needs Minecraft entities. The live scenario checks that the release's snapshot looks at nothing and
+     that the volley is exactly 3 each.
+  2. *A guard back from a fight held its shield off its slot.* `mur-de-boucliers` gives a slot not reached in 10 s a
+     loose goal (`GoalNear` 2, "arrived" within 2.5), for a slot something stands on. The 10 s ran from the guard's
+     first walk to the slot, so a guard back from a fight more than 10 s after the wall formed got the loose goal at
+     once and raised its shield where it stopped: live, 0.4 off its slot and 8.6° off the wall's yaw, and it could
+     be 2.5 blocks. The timer now restarts for each walk to a slot the bot had reached (`heading.reached`), in
+     `ligne-archers` too, which shares the pattern. Test: `item-orders.test.ts` (a guard pushed 2 blocks off its slot
+     11 s later gets the exact goal and keeps its shield down until there; it got `GoalNear` before). The live
+     scenario waits 11 s before the husk and checks that each guard is back within 0.8 of its slot.
+  3. *The core live scenarios depended on where the last run left the bots.* A bot logs in where it last stood, and
+     earlier runs had left the dev world's archer at the bottom of a pond. Two bots drowned after login and lost their
+     kits, another picked up the archer's bows (so `defend` took it for an archer), and `gather` found only logs it
+     could not reach. On the dev world they now start from a camp the test lays (grass, two oaks, cleared
+     inventories, at 1100,100,1000).
 - **Stopping the runtime on Windows:** stopping `npm start` from outside can leave `tsx src/supervisor.ts` and its
   child running. Use Ctrl+C in its console, or stop the `node` processes.
 - **Performance (docs/31, implemented by docs/32, 2026-10-30).** Measured: the bots' A* filled the one event loop at

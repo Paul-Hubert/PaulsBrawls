@@ -128,7 +128,7 @@ export default async function (squad, args, ctx) {
     return null;
   };
 
-  /** Where each archer is heading: the slot's key, the goal set for it, since when, loose or exact. */
+  /** Where each archer is heading: the slot's key, the goal set for it, since when, loose or exact, reached once. */
   const heading = new Map();
   const keyOf = (s) => `${s.x},${s.y},${s.z}`;
 
@@ -136,8 +136,10 @@ export default async function (squad, args, ctx) {
   const walk = (bot, slot) => {
     const key = keyOf(slot);
     let h = heading.get(bot.username);
-    if (!h || h.key !== key) {
-      h = { key, since: Date.now(), loose: !Number.isInteger(slot.y), goal: null };
+    // A new slot, or the same one again after the archer had reached it (pushed off): a fresh exact goal and its own
+    // STUCK_MS, not the loose goal of a timer started at the first walk (docs/29 §16).
+    if (!h || h.key !== key || h.reached) {
+      h = { key, since: Date.now(), loose: !Number.isInteger(slot.y), goal: null, reached: false };
       heading.set(bot.username, h);
     }
     if (!h.loose && Date.now() - h.since > STUCK_MS) {
@@ -184,6 +186,8 @@ export default async function (squad, args, ctx) {
       await squad.sleep(LOOK_MS);
       return;
     }
+    const h = heading.get(bot.username);
+    if (h && h.key === keyOf(slot) && arrived(bot, slot)) h.reached = true;
     const t = pick(bot);
     if (!t) {
       await faceYaw(bot, line.yaw);

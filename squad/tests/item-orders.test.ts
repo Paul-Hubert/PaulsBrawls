@@ -122,6 +122,46 @@ test('mur-de-boucliers: facing west the guards line up along z at the block look
   await f.h.runner.stopAll();
 });
 
+/** The goal's class name: GoalBlock is a slot exactly, GoalNear the loose goal of a slot not reached in 10 s. */
+const goalOf = (b: FakeBot): string | undefined => (b.pathfinder.goal as { constructor?: { name: string } } | null)?.constructor?.name;
+
+/** Run `fn` with Date.now `ms` later (the scripts run in this realm, so their STUCK_MS timers see it too). */
+async function later<T>(ms: number, fn: () => Promise<T>): Promise<T> {
+  const real = Date.now;
+  Date.now = () => real() + ms;
+  try {
+    return await fn();
+  } finally {
+    Date.now = real;
+  }
+}
+
+test('mur-de-boucliers: a guard pushed 2 blocks off its slot long after the wall formed walks back to the exact slot, shield down until there', async () => {
+  const f = field();
+  const guards = [f.add('Guard0', -3, 3, SHIELD), f.add('Guard1', -3, -2, SHIELD), f.add('Guard2', -3, 0, SHIELD)];
+  await f.start('mur-de-boucliers', f.snap({ yaw: 90, lookBlock: { x: -8, y: 63, z: 0, name: 'grass_block' }, trigger: { kind: 'use', item: 'shield' } }));
+  await until(() => guards.every(shieldUp), 3_000, 'every shield up');
+  const g = guards[2]!;
+  const [sx, sz] = xz(g);
+  // 11 s after it reached its slot (STUCK_MS is 10 s), a fight leaves it 2 blocks off. Before the fix its timer still
+  // ran from the first walk: a loose GoalNear at once, "arrived" within 2.5, and the shield up 2 blocks off the slot.
+  try {
+    await later(11_000, async () => {
+      g.autoWalk = false;
+      g.entity.position = new Vec3(sx + 2, 64, sz);
+      await until(() => goalOf(g) !== undefined, 2_000, 'a goal back to the slot');
+      await tick(600); // three looks
+      assert.equal(goalOf(g), 'GoalBlock', 'an exact goal, with its own 10 s');
+      assert.equal(shieldUp(g), false, 'no shield raised 2 blocks off the slot');
+      g.autoWalk = true;
+      g.pathfinder.setGoal(g.pathfinder.goal); // the walk completes
+      await until(() => shieldUp(g) && xz(g)[0] === sx && xz(g)[1] === sz, 2_000, 'back on its exact slot, shield up');
+    });
+  } finally {
+    await f.h.runner.stopAll(); // also on a failure: the guards' loops would keep the test process alive
+  }
+});
+
 // -- epee ---------------------------------------------------------------------------------------------------------
 
 test('epee: looking at a zombie, the archers shoot it and two guards fight it, the others take the one next to it; once it is dead, the bots defend the commander', async () => {
