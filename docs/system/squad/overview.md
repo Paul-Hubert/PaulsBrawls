@@ -519,8 +519,8 @@ clicks and sends each one; it decides nothing about what a click does.
   buckets, the bound map, one release per shot, the repeated answer; `SquadArrowsTest`; `SquadTriggerJsonTest`: the
   trigger, hit and entity JSON and the request body). The stack edits themselves (`ItemStack` needs a bootstrap), the
   hooks and the mixin are checked only in game.
-- **Live:** `npm run live-test`, using RCON against the dev server (`run/`) or production
-  (`SERVER_PROPERTIES=../server/server.properties`). `LIVE_PATH_WORKERS=N` runs it with N pathfinding workers.
+- **Live:** `npm run live-test`, using RCON against the dev server (`dev/`, `./gradlew runDevServer`; the default) or
+  production (`SERVER_PROPERTIES=../run/server.properties`; the world is never changed there). `LIVE_PATH_WORKERS=N` runs it with N pathfinding workers.
   `LIVE_ONLY=core|items` runs one group; the test's runtime listens on `LIVE_RUNTIME_PORT` (default any free port).
   - **Core** (`live-tests/run.ts`): connect, `gather`, `come`, reclaim per role, despawn. On the dev world the bots
     start from a camp the test lays (grass and two oaks at 1100,100,1000, cleared inventories), and a ladder built high
@@ -534,7 +534,7 @@ clicks and sends each one; it decides nothing about what a click does.
     and at a husk. Any item, any order: `tir` and `epee` bound to a stick (beside a husk, then empty ground), a bow
     bound to `mur-de-boucliers` (the wall at the arrow's hit). Each scenario starts with the bots at the same spots and
     ends by stopping the captain's orders and killing its husks, failed or not, so a failure does not spill into the
-    next. The mod scenarios need `run/squad.properties` pointing the dev mod at the test's runtime
+    next. The mod scenarios need `dev/squad.properties` pointing the dev mod at the test's runtime
     (`url=http://127.0.0.1:8779`, `token=live-test-token`) and `LIVE_RUNTIME_PORT=8779`; otherwise they are skipped
     ([squad/README.md](../../../squad/README.md)). Ground truth: RCON `Pos`, `Rotation`, `SelectedItem`, arrow counts,
     entities; a raised shield is the living-entity flags (metadata 8: 0x01 hand active, 0x02 off-hand) as the
@@ -542,6 +542,11 @@ clicks and sends each one; it decides nothing about what a click does.
 - **Load:** `npm run bench:load` and the other `bench:*` tools ([squad/bench/README.md](../../../squad/bench/README.md)).
 
 ## State on the production server (`server/`, as of 2026-10-29)
+
+> **Since 2026-10-31 production is `run/`** (`./gradlew runServer`, port 25565: Paul's world, production's mods and
+> settings), with `squad/squad.json` on port 25565 and `run/squad.properties` holding the runtime's token and the
+> absolute `claudeDir`. Dev tests run in `dev/` (`./gradlew runDevServer`, dev/README.md). The notes below describe
+> the earlier setups.
 
 - **The mod jar** in `server/mods/` has `/bots` and `/bots equip`. Universal Shops was removed (backup in
   `server/mods-backup/`), and RCON is on (port 25575, password only in `server.properties`).

@@ -10,7 +10,7 @@
 // Two kinds of scenario:
 //   • the runtime alone: the test posts /api/orders/trigger with a snapshot it writes (what the mod would send);
 //   • through the mod: the captain types /bots orders bind, looks and right-clicks or shoots, and the dev server's
-//     mod sends the triggers. Those need the dev mod talking to this runtime: run/squad.properties with
+//     mod sends the triggers. Those need the dev mod talking to this runtime: dev/squad.properties with
 //     url=http://127.0.0.1:8779 and token=live-test-token, and LIVE_RUNTIME_PORT=8779. Otherwise they are skipped.
 
 import { createHash } from 'node:crypto';
@@ -39,7 +39,7 @@ export interface LiveKit {
   admin: { uuid: string; name: string };
 }
 
-/** The port run/squad.properties points the dev mod at. */
+/** The port dev/squad.properties points the dev mod at. */
 export const MOD_RUNTIME_PORT = 8779;
 
 /** The UUID an offline-mode server gives a player: UUID v3 of MD5("OfflinePlayer:" + name). */
@@ -359,7 +359,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
     });
 
     await clean('items: mur-de-boucliers through the mod: bind, click, click again, sneak-click, unbind', async () => {
-      if (!viaMod) return `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with run/squad.properties pointing at it)`;
+      if (!viaMod) return `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with dev/squad.properties pointing at it)`;
       await rcon.command(`clear ${CAPTAIN.name}`);
       await rcon.command(`item replace entity ${CAPTAIN.name} weapon.mainhand with minecraft:shield`);
       await placeCaptain(90);
@@ -433,7 +433,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
     };
 
     await clean('items: tir through the mod: the captain shoots the ground, arrow-release then arrow-hit (onBlockHit), a volley of 3 each', async () => {
-      if (!viaMod) return `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with run/squad.properties pointing at it)`;
+      if (!viaMod) return `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with dev/squad.properties pointing at it)`;
       await rcon.command(`clear ${CAPTAIN.name}`);
       await rcon.command(`item replace entity ${CAPTAIN.name} weapon.mainhand with minecraft:bow`);
       await rcon.command(`give ${CAPTAIN.name} arrow 16`);
@@ -479,7 +479,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
     });
 
     await clean('items: tir through the mod: the captain shoots a husk, arrow-hit names it (onEntityHit), the archers kill it', async () => {
-      if (!viaMod) return `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with run/squad.properties pointing at it)`;
+      if (!viaMod) return `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with dev/squad.properties pointing at it)`;
       await placeCaptain(90);
       await rcon.command(`summon husk ${A.x - 9.5} ${A.y + 1} ${A.z + 0.5} {PersistenceRequired:1b,NoAI:1b,Tags:["${TAG}"]}`);
       await until(() => Object.values(cap().entities).some((e) => e.name === 'husk'), 5_000, 'the captain seeing the husk');
@@ -505,7 +505,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
 
     // -- any item carries any order (pointedTarget): a click says where, the command decides -----------------------
 
-    const skipped = (): string => `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with run/squad.properties pointing at it)`;
+    const skipped = (): string => `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with dev/squad.properties pointing at it)`;
     /** Hold `item` alone (the inventory emptied first) and bind `line` to it. */
     const bindHeld = async (item: string, line: string): Promise<string> => {
       await rcon.command(`clear ${CAPTAIN.name}`);

@@ -24,6 +24,16 @@ loom {
 		}
 	}
 
+	// runServer is the production server (run/, port 25565). runDevServer is the server for dev tests (dev/, port
+	// 25599, its own world and ports, dev/README.md): the live tests target it, so they never touch production.
+	runs {
+		devServer {
+			inherit server
+			configName = "Dev Server"
+			runDir "dev"
+		}
+	}
+
 }
 
 dependencies {

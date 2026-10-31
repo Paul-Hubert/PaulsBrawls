@@ -1,12 +1,12 @@
 // The live test (docs/29 §13): the real runtime, real Mineflayer bots on a real server, RCON for ground truth.
 // Not part of `npm run check` (it needs a server). Against the dev server:
 //
-//   ./gradlew runServer                      (run/, port 25599, RCON 25575 — read run/server.properties, R28)
+//   ./gradlew runDevServer                   (dev/, port 25599, RCON 25576 — read dev/server.properties, R28)
 //   cd squad && npm run live-test
-//   SERVER_PROPERTIES=../server/server.properties npm run live-test     (the production server)
+//   SERVER_PROPERTIES=../run/server.properties npm run live-test        (the production server, run/)
 //
-// The ports and the RCON password come from that server.properties (default ../run/server.properties); MC_PORT,
-// RCON_PORT, RCON_PASSWORD override them. Only on the dev server (run/) does the test set the time, the gamerules and
+// The ports and the RCON password come from that server.properties (default ../dev/server.properties); MC_PORT,
+// RCON_PORT, RCON_PASSWORD override them. Only on the dev server (dev/) does the test set the time, the gamerules and
 // the difficulty; elsewhere it leaves the world as it is (LIVE_SETUP_WORLD=1 forces it). LIVE_ONLY=core runs only the
 // first group below, LIVE_ONLY=items only the second. The runtime listens on LIVE_RUNTIME_PORT (default 0: any free
 // port).
@@ -22,7 +22,7 @@
 // archers. `mur-de-boucliers` from /api/orders/trigger: the wall across yaw 90 (RCON Pos and Rotation, shields up as
 // the captain's client sees them; one guard's shield starts in its inventory, so raiseShield equips it), a second
 // click delivered to the same order re-forms it across yaw 0, a husk in front of it is fought and the line re-forms,
-// the stop lowers the shields. Through the mod (needs run/squad.properties
+// the stop lowers the shields. Through the mod (needs dev/squad.properties
 // → http://127.0.0.1:8779 and LIVE_RUNTIME_PORT=8779, else skipped): `/bots orders bind mur-de-boucliers` puts
 // custom_data.squad, a lore line and the glint on the held shield; a right-click starts the order, a second one
 // re-forms it, sneak + right-click stops it, unbind removes it all; `/bots orders bind tir` on a bow, real shots: at
@@ -54,7 +54,7 @@ import { Rcon } from './rcon';
 const { goals } = pathfinderPkg;
 
 const here = fileURLToPath(new URL('.', import.meta.url));
-const PROPS_FILE = process.env.SERVER_PROPERTIES ? resolve(process.env.SERVER_PROPERTIES) : resolve(here, '..', '..', 'run', 'server.properties');
+const PROPS_FILE = process.env.SERVER_PROPERTIES ? resolve(process.env.SERVER_PROPERTIES) : resolve(here, '..', '..', 'dev', 'server.properties');
 const props = Object.fromEntries(
   readFileSync(PROPS_FILE, 'utf8')
     .split(/\r?\n/)
@@ -62,9 +62,10 @@ const props = Object.fromEntries(
     .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]),
 ) as Record<string, string>;
 const MC_PORT = Number(process.env.MC_PORT ?? props['server-port'] ?? 25599);
-const RCON_PORT = Number(process.env.RCON_PORT ?? props['rcon.port'] ?? 25575);
+const RCON_PORT = Number(process.env.RCON_PORT ?? props['rcon.port'] ?? 25576);
 const RCON_PASSWORD = process.env.RCON_PASSWORD ?? props['rcon.password'] ?? '';
-const SETUP_WORLD = process.env.LIVE_SETUP_WORLD ? process.env.LIVE_SETUP_WORLD === '1' : /[\\/]run[\\/]server\.properties$/.test(PROPS_FILE);
+// Only the dev server's world may be changed (arenas, camps, killed entities): run/ is production since 2026-10-31.
+const SETUP_WORLD = process.env.LIVE_SETUP_WORLD ? process.env.LIVE_SETUP_WORLD === '1' : /[\\/]dev[\\/]server\.properties$/.test(PROPS_FILE);
 const TOKEN = 'live-test-token';
 const RUNTIME_PORT = Number(process.env.LIVE_RUNTIME_PORT ?? 0);
 const ONLY = process.env.LIVE_ONLY ?? '';

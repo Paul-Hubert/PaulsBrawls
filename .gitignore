@@ -117,12 +117,28 @@ run/llm_config.properties
 # god_agent.properties holds the MCP token and the agent password: never track it
 run/god_agent.properties
 run/bridge_config.properties
-# the dev server's copy of god-agent/ (god-agent/README.md, step 2)
+# the server's copy of god-agent/ (god-agent/README.md, step 2)
 run/god-agent/
 run/super-flat-builds/
+# squad.properties holds the squad runtime's token: never track it
+run/squad.properties
+# mod configs (voice chat, polymer…), old worlds and backups kept by hand
+run/config/
+run/world_old/
+run/backup-*/
+
+# dev/: the dev-test server (dev/README.md). Its world, logs and configs (tokens, keys) stay local.
+dev/*
+!dev/README.md
+!dev/server.properties
+!dev/eula.txt
 
 # minecraft-mcp-server's own history from before it was vendored (it was a separate repo)
 minecraft-mcp-server/.git-standalone/
 
 # The standalone server scripts/setup-server.mjs makes (worlds, jars, configs)
 /server/
+# run/ is production: its whitelist and bans are live server state
+run/whitelist.json
+run/banned-players.json
+run/banned-ips.json

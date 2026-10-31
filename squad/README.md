@@ -125,9 +125,9 @@ on `POST /api/orders/check` (bind) and `POST /api/orders/trigger` (each click; `
 ```powershell
 npm run check       # lint + tsc + node:test (fakes only, no Minecraft)
 npm run bench:load  # the load benchmark (bench/README.md; never against production)
-npm run live-test   # real bots on the dev server (run/); ports and RCON password read from its server.properties
+npm run live-test   # real bots on the dev server (dev/, ./gradlew runDevServer); ports and RCON password read from its server.properties
 $env:LIVE_PATH_WORKERS='4'; npm run live-test   # the same scenarios with 4 pathfinding workers
-$env:SERVER_PROPERTIES='../server/server.properties'; npm run live-test   # the production server (world left as is)
+$env:SERVER_PROPERTIES='../run/server.properties'; npm run live-test   # the production server (run/; world left as is)
 $env:LIVE_ONLY='items'; $env:LIVE_RUNTIME_PORT='8779'; npm run live-test   # only the bound-item scenarios (below)
 ```
 
@@ -136,7 +136,7 @@ the bound-item ones (`live-tests/items.ts`, dev world only): the four item comma
 clicks and arrows, any item carrying any order (`tir` and `epee` on a stick, a bow placing a shield wall where its arrow
 lands), and a guard coming back to `defend` after a wall. The test's runtime listens on `LIVE_RUNTIME_PORT`
 (default: any free port). The scenarios driven through the mod need the dev server's mod to talk to that runtime, and
-never to the real one on 8772. Before `./gradlew runServer`, create `run/squad.properties`:
+never to the real one on 8772. Before `./gradlew runDevServer`, set `dev/squad.properties` (it holds `enabled=false`):
 
 ```properties
 enabled=true
@@ -145,5 +145,4 @@ token=live-test-token
 ```
 
 Then run with `LIVE_RUNTIME_PORT=8779`, and make sure `PAULSBRAWLS_SQUAD_TOKEN` is not set (it overrides the token on
-both sides). Without them those scenarios are skipped. Delete `run/squad.properties` afterwards. The mod also adds the
-test bots to `run/whitelist.json`; `git checkout -- run/whitelist.json` restores it.
+both sides). Without them those scenarios are skipped. Set `enabled=false` in `dev/squad.properties` afterwards.

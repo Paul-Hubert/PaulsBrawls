@@ -39,7 +39,8 @@ features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 
 ```powershell
 ./gradlew build                # compile + remap; auto-copies the jar to mods folders (see below)
-./gradlew runServer            # launch dev dedicated server (cwd run/, dev port — read run/server.properties, R28)
+./gradlew runServer            # the PRODUCTION server (cwd run/, port 25565, RCON 25575; run/README.md)
+./gradlew runDevServer         # the dev-test server (cwd dev/, port 25599, RCON 25576, own ports; dev/README.md)
 ./gradlew runClient            # launch dev client
 ./gradlew genSources           # generate Minecraft sources for IDE navigation
 ./gradlew clean
@@ -49,7 +50,7 @@ The Gradle wrapper is tracked (`gradlew`, `gradlew.bat`, `gradle/wrapper/`, Grad
 work on a clean clone; the first run downloads Gradle. `run/` holds no server jar: Loom fetches the server for
 `runServer` ([run/README.md](run/README.md)).
 
-**A standalone server like production** (`PaulsBrawlsVanilla`) from a clone: `node scripts/setup-server.mjs [dir]`
+**A standalone server** (a Fabric launcher and jar instead of `./gradlew runServer`) from a clone: `node scripts/setup-server.mjs [dir]`
 (default `server/`, gitignored). It downloads the Fabric server launcher for the versions in `gradle.properties`,
 Fabric API, and the production server's other mods (WorldEdit 7.3.8, Simple Voice Chat 2.5.33,
 pinned and SHA-512-checked; Universal Shops was removed, docs/29 §16). It then builds the mod with `remapJar`, not `build`, whose finalizers copy into
@@ -154,9 +155,11 @@ The system prompt is loaded at
 runtime from [prompt.txt](prompt.txt) in the working directory (not bundled into the jar). LangChain4j
 settings persist to `llm_config.properties`; God-Body bridge settings to `bridge_config.properties`.
 
-> **The JVM runs in `PaulsBrawlsVanilla\`** (the production server dir) — that is where the runtime configs
-> (`llm_config.properties`, `bridge_config.properties`, …) and logs live, NOT `pauls-brawls/run/`. The
-> `./gradlew runServer` dev server runs in `run/` instead. **Two servers, two cwds.**
+> **Production runs in `run/`** (`./gradlew runServer`, port 25565, since 2026-10-31; `PaulsBrawlsVanilla\` is the
+> old production folder, kept but unused). That is where the runtime configs (`llm_config.properties`,
+> `bridge_config.properties`, …) and logs live. Dev tests run in `dev/` (`./gradlew runDevServer`, port 25599, its
+> own world, RCON 25576, settlement 8777, God MCP 8781, Squad off). **Two servers, two cwds**; the live tests default
+> to `dev/`.
 
 ---
 
@@ -414,7 +417,7 @@ run by `npm run check`) — imports run **strictly downward**, an upward import 
 
 - **Config:** [eden/eden.example.json](eden/eden.example.json) → `eden.json` (gitignored). Holds NO key (env-only). Sections: `minecraft`, `provider`, `villagers` (roster: `name`/`role`/`persona`/`items`; `home`/`chest` are not accepted keys — anchors are discovered in the world after spawn, R18/B3.6), `scenario` (wins over `villagers`), `god` (name/desks/budget/`embodiedVerdicts`/`godPrompt`), `behavior`, `llm` (strong/fast providers, `maxConcurrent`, cooldown), `skills`, `settlement.url` (`:8767`), `admin.port` (8770), `journal`.
 - **Data dir** `.eden-data/` (gitignored): `eden.db` (journal), `library/<skill>/skill.json` + `v*.js` (authored code), `bots/<name>.json` (memory + relations), `subscriptions/<name>.json`, `world.json` (world stamp), `llm/*.json` (transcripts).
-- **Port map** (R24 — a registry, never folklore): **8772 Squad runtime (control API, SSE, `/mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN`, docs/29)** · **8770** Eden admin (its only held port) · **8771 Java `god`/`builder` MCP servers (only with `godAgent = external`, bearer token, docs/27)** · 4096 opencode (`opencode serve`, the external God agent, Basic auth) · 8765/8766 v1 (reserved while coexisting) · **8767 Java settlement (stateless per request; Eden POSTs accepted trades to it, with `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when the mod sets `settlementToken`; `./gradlew runServer` steals it, R29)** · 25565 `PaulsBrawlsVanilla` (RCON 25575, production/eval) · 25599 dev server. **Read `run/server.properties`, never assume the port (R28).**
+- **Port map** (R24 — a registry, never folklore): **8772 Squad runtime (control API, SSE, `/mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN`, docs/29)** · **8770** Eden admin (its only held port) · **8771 Java `god`/`builder` MCP servers (only with `godAgent = external`, bearer token, docs/27)** · 4096 opencode (`opencode serve`, the external God agent, Basic auth) · 8765/8766 v1 (reserved while coexisting) · **8767 Java settlement (stateless per request; Eden POSTs accepted trades to it, with `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when the mod sets `settlementToken`; `./gradlew runServer` takes it, R29; the dev server uses 8777)** · 25565 production, `run/` (RCON 25575) · 25599 dev server, `dev/` (RCON 25576; God MCP 8781). **Read the server's `server.properties`, never assume the port (R28).**
 - **Identity** (R12): Eden's avatar is **`Dieu`** — never v1's `LLMBot`/`GodBot`; villagers use French roster names; the eval harness namespaces every username `EvalBot*`. Minecraft kicks the second login of a name, so every login across all coexisting systems must be pairwise distinct.
 
 ### Live test suite ([docs/19](docs/19-live-test-suite.md), [docs/20](docs/20-live-test-process.md), code in [eden/live-tests/](eden/live-tests/))
