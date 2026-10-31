@@ -10,7 +10,9 @@ import { plugin as tool } from 'mineflayer-tool';
 import { plugin as collectBlock } from 'mineflayer-collectblock';
 import { loader as autoEat } from 'mineflayer-auto-eat';
 import pathfinderPkg from 'mineflayer-pathfinder';
-import hawkEyeModule from 'minecrafthawkeye';
+import { createRequire } from 'node:module';
+import { dirname } from 'node:path';
+
 import type { Bot } from 'mineflayer';
 
 import { logger } from '../logger';
@@ -29,11 +31,28 @@ export const AUTO_EAT_OPTS = {
   eatingTimeout: 3000,
 } as const;
 
-// minecrafthawkeye is CJS with `exports.default = inject`; under tsx/Node ESM the default import is either the
-// function or the namespace holding it.
-const hawkEye = (typeof hawkEyeModule === 'function'
-  ? hawkEyeModule
-  : (hawkEyeModule as unknown as { default: unknown }).default) as unknown;
+// minecrafthawkeye keeps its state in module variables: the bot it drives (`loadBot.bot`, the LAST bot that loaded
+// the plugin), the target, the drawn bow. One process runs every squad bot, so with one shared copy
+// `archer.hawkEye.oneShot(t)` aimed and drew the bow of whichever bot logged in last (found after a 20-bot fight:
+// archers mostly fell back to the slow manual shot, and one bot turned toward everyone's targets). Each bot gets its
+// own copy of the module instead: its files are dropped from the require cache and loaded again for every bot.
+const requireHere = createRequire(import.meta.url);
+
+/** A fresh minecrafthawkeye (its own module state) for one bot. */
+export function freshHawkEye(): (bot: Bot, options?: unknown) => void {
+  const dir = dirname(requireHere.resolve('minecrafthawkeye'));
+  for (const k of Object.keys(requireHere.cache)) if (k.startsWith(dir)) delete requireHere.cache[k];
+  const m = requireHere('minecrafthawkeye') as { default?: unknown };
+  // CJS with `exports.default = inject`.
+  const inject = (typeof m === 'function' ? m : m.default) as (bot: Bot, options?: unknown) => void;
+  for (const k of Object.keys(requireHere.cache)) if (k.startsWith(dir)) delete requireHere.cache[k];
+  return inject;
+}
+
+/** The plugin: a new copy of hawkEye per bot it is loaded on. */
+function hawkEye(bot: Bot, options?: unknown): void {
+  freshHawkEye()(bot, options);
+}
 
 export interface PluginSet {
   pvp: unknown;

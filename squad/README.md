@@ -70,8 +70,12 @@ per minute goes to the `vitals` table of `.squad-data/squad.db` (kept 7 days).
 | `/bots status` | the runtime's load over the last 10 s: ELU, loop p99, the slowest bot's ticks/s |
 | admin: `despawn BOT` · `owners BOT add\|remove P…` · `list all` · `stop all` | |
 
-Stock commands everyone has: `come`, `follow`, `defend` (archers reclaimed, melee kept), `gather`, `deposit`,
+Stock commands everyone has: `come`, `follow`, `defend` (archers reclaimed, melee kept; threats within `radius` of
+the commander, at most two guards per creature, each bot on its own spot around the commander), `gather`, `deposit`,
 `attack`, `bring`.
+
+Bots never hurt their own team: the mod cancels a bot's damage to a bot sharing an owner with it, or to one of its
+owners. Everyone else (mobs, other players, other owners' bots) can be hit; PvP is on.
 
 ## A command
 

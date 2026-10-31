@@ -4,6 +4,8 @@
 
 import { createRequire } from 'node:module';
 
+import { GoalFollowOffset } from '../follow-goal';
+
 const require = createRequire(import.meta.url);
 
 interface Vec {
@@ -68,9 +70,9 @@ export function serializeGoal(goal: unknown, world: unknown): WireGoal | null {
       return f ? { t: name, f } : null;
     }
   }
-  if (ctor === goals.GoalFollow) {
-    // A snapshot of where the entity is now. The main thread keeps the real GoalFollow: its hasChanged() re-plans
-    // when the entity moves, as it does today.
+  if (ctor === goals.GoalFollow || ctor === GoalFollowOffset) {
+    // A snapshot of where the entity is now (or of the slot beside it). The main thread keeps the real goal: its
+    // hasChanged() re-plans when the entity moves, as it does today.
     const f = { x: g.x, y: g.y, z: g.z, rangeSq: g.rangeSq };
     if (!Object.values(f).every((v) => typeof v === 'number')) return null;
     return { t: 'GoalNear', f: f as Record<string, number> };

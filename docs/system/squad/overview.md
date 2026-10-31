@@ -133,7 +133,7 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
 
 | Area | Files | What it does |
 |---|---|---|
-| Bots | `bots/pool.ts`, `plugins.ts`, `hardening.ts`, `protocol.ts` | Dynamic pool, logins 4 s apart, reconnect with backoff, version pinned to 1.21.1, `viewDistance: 'short'`. Plugins: pathfinder, pvp, armor-manager, tool, collectblock, hawkEye, auto-eat. Pathfinder bounded (searchRadius 64, thinkTimeout 5 s, `hardening.ts`), its library patched and its A* budgeted (above). Per-bot vitals counters. Protocol hardening, below |
+| Bots | `bots/pool.ts`, `plugins.ts`, `hardening.ts`, `protocol.ts` | Dynamic pool, logins 4 s apart, reconnect with backoff, version pinned to 1.21.1, `viewDistance: 'short'`. Plugins: pathfinder, pvp, armor-manager, tool, collectblock, hawkEye (one copy of the module per bot: it keeps its bot and target in module variables, `freshHawkEye`), auto-eat. Pathfinder bounded (searchRadius 64, thinkTimeout 5 s, `hardening.ts`), its library patched and its A* budgeted (above). Per-bot vitals counters. Protocol hardening, below |
 | Roster | `roster.ts` | Bots, owners, tags in `.squad-data/roster.json`; the runtime is its only writer |
 | Leases | `leases.ts` | A lease stack per bot (depth 4). `plan` :84 grants idle bots first, then busy ones for `take: 'reclaim'` roles, all or nothing. `apply` :106 runs the old order's cleanup before reuse. `release` :130 hands a bot back to the live order below |
 | Orders | `orders/runner.ts`, `order.ts`, `guard.ts`, `claims.ts` | `start` :121 resolves, compiles (once per version) and runs. Each script gets a **lease-guarded Proxy** of each bot (`guardBot` :81): calls check the lease, listeners and timers are tracked, chat is rate-limited, `quit` is refused. Every leave and every end runs the R4/R5 abort sequence. Claims are shared across orders |
@@ -142,7 +142,28 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
 | Authoring | `authoring.ts`, `http/mcp.ts`, `agent/` | `cmd-…` tickets (30 min; manual 2 h). Seven MCP tools (`get_api_reference`, `get_context`, `list_commands`, `read_command`, `check_script`, `trial_run` ≤ 60 s on idle bots, `submit_command`). Claude Code config in `agent/claude-code/`, opencode config in `agent/opencode.json` |
 | Storage | `store/commands.ts`, `journal/journal.ts` | `.squad-data/commands/<uuid>/<name>/meta.json` + `vN.mjs` (append-only, shares, revert); SQLite `squad.db` (WAL, `synchronous=NORMAL`), one row per order with its full report, and one `vitals` row per minute |
 | HTTP | `http/server.ts` | 19 `POST /api/...` routes (incl. `/api/metrics`), `GET /events` (SSE: `hello`, `notice`, `state`; notices buffered while no mod listens), `POST /mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN` |
-| Stock | `src/stock/*.mjs` | `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`. Usable by everyone, and the agent's examples |
+| Stock | `src/stock/*.mjs` | `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`. Usable by everyone, and the agent's examples. `defend`: below |
+
+## `defend` and the damage rules (after a 20-bot fight, docs/29 §16)
+
+- **Damage rules (the mod).** `Squad.registerFriendlyFire` (an `ALLOW_DAMAGE` hook, registered in `ServerEntryPoint`
+  before FlagManager's, so a cancelled hit drops no Flag) cancels damage when the attacker (`source.getAttacker()`,
+  the shooter for an arrow) is a roster bot and the victim is a roster bot sharing an owner with it, or a player who
+  owns it. The decision is the Minecraft-free `SquadFriends`, rebuilt from the cached state (`bots[].owners`) on each
+  `refreshState`, so a hit costs two map lookups. Everything else is unchanged: bots hurt mobs, other players and
+  other owners' bots (PvP on, O5).
+- **Threats are relative to the commander.** Only threats within `radius` (default 16) of the commander as the bot
+  sees them (`nearestHostile`/`nearestEntity` with `from`), nearest to the commander first, hostiles before
+  non-friend players. A bot that cannot see the commander defends itself (distances from the bot).
+- **Guards** (`melee`, `take: 'free'`): at most 2 on one threat, an untaken threat first (a per-order map of who
+  fights what). `attack(…, { leash: { center: commander, radius } })` breaks off when the target leaves the circle or
+  the guard is more than radius + 4 from the commander; the guard then goes back to its slot.
+- **Archers** (`archers`, `take: 'reclaim'`): one shot, then the next target at once, preferring a threat no other
+  archer shoots. `shoot` returns when the arrow count drops. After "no clear line of fire" the archer steps 2 blocks
+  aside.
+- **Slots.** Between threats each bot follows its own point around the commander (`follow` with `offset`, a
+  `GoalFollowOffset`, `bots/follow-goal.ts`): guards on a ring of 3, archers of 6, an angle by the bot's index in its
+  role. Idle bots look for threats every 200 ms (`follow` keeps its goal between calls).
 
 ## Protocol hardening (found live, docs/29 §16)
 
@@ -160,6 +181,7 @@ Three layers now:
 |---|---|
 | `SquadCommand` | `/bots …` (Brigadier), permissions, tab completion from the cache, async calls; `/bots status` (perm 0) |
 | `SquadStatusFormat` | The `/bots status` line from `/api/metrics` (Minecraft-free, JUnit) |
+| `SquadFriends` | Friendly fire: which roster bot must not hurt whom (shared owner, or its own owner). Minecraft-free, JUnit; the hook is `Squad.registerFriendlyFire` |
 | `Squad` | Lifecycle, the SSE loop and the cache, notices (kept for offline players), whitelist, join gate (a bot name from a non-loopback address is kicked), arrival teleport, `hasPlayed` (spawn refuses names with a `playerdata` file), `equip` |
 | `SquadKits` | Kits for archer, guard, miner and farmer (Minecraft-free); `equip` wears armor, holds weapons and puts the shield in the off-hand |
 | `SquadAuthoring` | One `squad-author` turn: reserve the slot, open, run the agent, close, announce « Commande X prête » |
@@ -167,11 +189,13 @@ Three layers now:
 
 ## Tests
 
-- **`squad/`:** `npm run check` = lint + tsc + 97 `node:test` tests on fakes (compile, leases, guard, orders and
+- **`squad/`:** `npm run check` = lint + tsc + 107 `node:test` tests on fakes (compile, leases, guard, orders and
   reclaim, check/typecheck of the stock commands, HTTP + the real MCP client, supervisor wedge, protocol hardening,
   helpers, agent config drift, `follow`, the `gather` freeze, one test per dependency patch, the vitals, the worker
-  pool: same path as the main thread on a synthetic world, the mirror's refcounts, every fallback, a clean stop).
-- **Mod:** 19 JUnit tests in `src/test/java/com/paul/brawl/squad/` (incl. `SquadStatusFormatTest`).
+  pool: same path as the main thread on a synthetic world, the mirror's refcounts, every fallback, a clean stop;
+  `defend`: commander-relative threats, the leash, two guards per target, distinct slots, quick shots, a hawkEye
+  copy per bot).
+- **Mod:** 23 JUnit tests in `src/test/java/com/paul/brawl/squad/` (incl. `SquadStatusFormatTest`, `SquadFriendsTest`).
 - **Live:** `npm run live-test`, using RCON against the dev server (`run/`) or production
   (`SERVER_PROPERTIES=../server/server.properties`). `LIVE_PATH_WORKERS=N` runs it with N pathfinding workers.
 - **Load:** `npm run bench:load` and the other `bench:*` tools ([squad/bench/README.md](../../../squad/bench/README.md)).
@@ -202,6 +226,8 @@ Three layers now:
     at up to 9.2 GB RSS.
   - **Not measured:** the laptop with the client running (the production case), more than 30 bots.
   - **Squad's own code** (the guard proxy, journal, loop budget) is under 0.5% of the busy time.
+- **The reworked `defend` and the friendly-fire hook** (2026-10-31) ran only on fakes and JUnit, not yet in a fight
+  on a server; nor has the per-bot hawkEye copy.
 - **`/bots status` in game:** only its JUnit test ran. **The worker pool's stats** are not in `/api/metrics` or the
   vitals.
 - **The worker pool on production:** only the dev server and the bench ran it (live test 5/5 with 4 and 14 workers).

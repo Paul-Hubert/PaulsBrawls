@@ -28,6 +28,9 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 
 
 
+		// Squad friendly fire (docs/29): before FlagManager, so a cancelled hit between bots of one owner drops no Flag.
+		com.paul.brawl.squad.Squad.registerFriendlyFire();
+
 		FlagManager.register();
 
 		ChatBot.register();

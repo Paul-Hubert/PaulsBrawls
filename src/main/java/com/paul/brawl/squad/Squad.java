@@ -27,6 +27,7 @@ import com.paul.brawl.AgentBackend;
 import com.paul.brawl.AgentClient;
 import com.paul.brawl.ClaudeCodeClient;
 
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
@@ -61,6 +62,8 @@ public final class Squad {
     private static volatile Thread events;
     private static volatile boolean running;
     private static volatile JsonObject state = new JsonObject();
+    /** Who must not hurt whom (owners per bot), rebuilt with each state so the damage hook does no JSON work. */
+    private static volatile SquadFriends friends = SquadFriends.EMPTY;
 
     /** Lines for players who were offline (an order ending while they were away). */
     private static final Map<UUID, List<SquadNotice>> pending = new ConcurrentHashMap<>();
@@ -149,9 +152,25 @@ public final class Squad {
         c.post("/api/state", new JsonObject()).thenAccept(s -> {
             if (s.has("ok") && s.get("ok").getAsBoolean()) {
                 state = s;
+                friends = SquadFriends.of(stateArray("bots"));
                 MinecraftServer srv = server;
                 if (srv != null) srv.execute(() -> syncWhitelist(srv));
             }
+        });
+    }
+
+    // -- friendly fire -----------------------------------------------------------------------------------------------
+
+    /**
+     * Cancel damage a squad bot deals to a bot sharing an owner with it, or to one of its owners (SquadFriends). The
+     * attacker of an arrow is its shooter. Registered before FlagManager's hook, so a cancelled friendly hit does not
+     * make the victim drop a Flag either (the first hook returning false ends the event).
+     */
+    public static void registerFriendlyFire() {
+        ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
+            if (!(entity instanceof ServerPlayerEntity victim)) return true;
+            if (!(source.getAttacker() instanceof ServerPlayerEntity attacker) || attacker == victim) return true;
+            return !friends.spare(attacker.getGameProfile().getName(), victim.getGameProfile().getName(), victim.getUuid());
         });
     }
 

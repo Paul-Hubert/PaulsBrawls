@@ -251,12 +251,32 @@ declare global {
   function goTo(bot: SquadBot, pos: Pos, range?: number): Promise<{ arrived: true; position: Vec3Class }>;
   /**
    * Stay within `range` (default 3) of an entity, for untilMs (else until the order stops). A null entity just waits untilMs (default 1 s).
-   * Call it in a loop: the next call on the same entity and range keeps the path going; after the last call the goal is cleared ~0.3 s later.
+   * Call it in a loop: the next call on the same entity, range and offset keeps the path going; after the last call the goal is cleared ~0.3 s later.
+   * `offset` {x, z} follows a point that many blocks beside the entity: give each bot its own slot around the commander
+   * (e.g. an angle by its index in its role) so followers do not all stand in the same block.
    */
-  function follow(bot: SquadBot, entity: Entity | null | undefined, range?: number, opts?: { untilMs?: number }): Promise<{ following: boolean }>;
-  /** Melee an entity (best sword/axe) until it dies, is gone, or timeoutMs (default 30 s). */
-  function attack(bot: SquadBot, entity: Entity | null | undefined, opts?: { timeoutMs?: number }): Promise<{ killed: boolean }>;
-  /** One aimed bow (or crossbow) shot at an entity; needs the weapon and arrows. Takes ~1.4 s. */
+  function follow(bot: SquadBot, entity: Entity | null | undefined, range?: number, opts?: { untilMs?: number; offset?: { x: number; z: number } | null }): Promise<{ following: boolean }>;
+  /** Keep a fight near a point: center() (null/undefined = no leash right now) and how far from it. */
+  interface SquadLeash {
+    center: () => Pos | null | undefined;
+    radius: number;
+  }
+  /**
+   * Melee an entity (best sword/axe) until it dies, is gone, or timeoutMs (default 30 s).
+   * `leash` breaks off once the target is more than leash.radius from leash.center() (the commander's position), or the
+   * bot itself more than radius + 4; `until()` returning true breaks off too. Both are checked before the first swing
+   * and every 200 ms. `brokeOff` says which one ended the fight (absent when it died, left or timed out).
+   */
+  function attack(
+    bot: SquadBot,
+    entity: Entity | null | undefined,
+    opts?: { timeoutMs?: number; leash?: SquadLeash; until?: () => boolean },
+  ): Promise<{ killed: boolean; brokeOff?: 'leash' | 'until' }>;
+  /**
+   * One aimed bow (or crossbow) shot at an entity; needs the weapon and arrows. Resolves as soon as the arrow has left
+   * (~1.25 s for a bow); when hawkEye finds no trajectory, it aims by hand (up to ~3 s). Throws "no arrow left the bow
+   * … (no clear line of fire? …)" when nothing was fired: step aside or move closer.
+   */
   function shoot(bot: SquadBot, entity: Entity | null | undefined, opts?: { weapon?: 'bow' | 'crossbow' }): Promise<{ shot: true }>;
   /** Equip by id; "_sword" picks the best sword. */
   function equip(bot: SquadBot, name: string, destination?: 'hand' | 'off-hand' | 'head' | 'torso' | 'legs' | 'feet'): Promise<{ equipped: string }>;
@@ -267,11 +287,17 @@ declare global {
 
   /** Nearest block of that id within maxDistance (default 48), or null. "_log" = any log. */
   function findBlock(bot: SquadBot, name: string, maxDistance?: number): Block | null;
-  /** Nearest entity passing filter (a function, or a name like 'zombie' / a player name) within maxDistance (default 32), or null. */
-  function nearestEntity(bot: SquadBot, filter: ((e: Entity) => boolean) | string, maxDistance?: number): Entity | null;
-  /** Nearest hostile mob within maxDistance (default 16), or null. */
-  function nearestHostile(bot: SquadBot, maxDistance?: number): Entity | null;
-  /** A player in ctx.friends (the commander, co-owners, squad bots). PvP is on: nothing else protects them. */
+  /**
+   * Nearest entity passing filter (a function, or a name like 'zombie' / a player name) within maxDistance (default 32), or null.
+   * Distances are from the bot, or from `opts.from` (e.g. the commander's position: the threat nearest the player you defend).
+   */
+  function nearestEntity(bot: SquadBot, filter: ((e: Entity) => boolean) | string, maxDistance?: number, opts?: { from?: Pos | null }): Entity | null;
+  /** Nearest hostile mob within maxDistance (default 16), or null. `from` as in nearestEntity; `filter` narrows further (e.g. not already taken). */
+  function nearestHostile(bot: SquadBot, maxDistance?: number, opts?: { from?: Pos | null; filter?: (e: Entity) => boolean }): Entity | null;
+  /**
+   * A player in ctx.friends (the commander, co-owners, squad bots). Never target one. PvP is on; the server only
+   * cancels a bot's hits on its own owners and on bots sharing an owner with it, so anyone else is yours to spare.
+   */
   function isFriend(entity: Entity | null | undefined): boolean;
   /** A claim key for a block position. */
   function blockKey(pos: Pos): string;

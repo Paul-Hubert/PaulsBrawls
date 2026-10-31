@@ -207,7 +207,7 @@ export const manifest = {
 |---|---|
 | `ctx.commander` | `{ name, uuid, at: { position, yaw, pitch, lookBlock, lookEntity, heldItem, dimension } }`, a snapshot taken by the mod at order time |
 | `ctx.commander.entity(bot)` | The commander as that bot sees them now, or `null` when out of range. This is what `follow` and `come` use |
-| `ctx.friends` / `isFriend(entity)` | The commander, every co-owner of the squad's bots, and all roster bots. This lets PvP scripts avoid friendly fire; nothing enforces it (O5) |
+| `ctx.friends` / `isFriend(entity)` | The commander, every co-owner of the squad's bots, and all roster bots. Scripts never target them. The server enforces only one thing (§16, 2026-10-31): a bot's damage to a bot sharing an owner with it, or to one of its owners, is cancelled; PvP is otherwise on (O5) |
 | `ctx.args`, `ctx.log(...)`, `ctx.say(text)` | Parsed args; a log line in the report; a French chat line to the commander |
 | `ctx.run(name, args, { bots })` | Run another command the commander may use, as a subroutine on a subset of bots. Depth cap 8, cycle check |
 | `ctx.trial` | True during an authoring trial run (§8.3). Scripts rarely need it |
@@ -221,10 +221,12 @@ Extra read-only fields: `bot.tags`, `bot.role`.
   `smeltItem(bot, itemName, fuelName, count)`, `placeItem(bot, name, position)`, `killMob(bot, mobName, timeout)`,
   `exploreUntil(bot, direction, maxTime, callback)`, `getItemFromChest(bot, chestPos, items)`,
   `depositItemIntoChest(bot, chestPos, items)`, `checkItemInsideChest(bot, chestPos)`.
-- Added here: `goTo(bot, pos, range)` (hops of ≤ 40 blocks, R6), `follow(bot, entity, range, { untilMs })` (until
-  `untilMs`, the order stops or the bot leaves; a `null` entity just waits), `attack(bot, entity)`, `shoot(bot, entity)`, `equip(bot, name, dest)`, `eat(bot)`,
-  `pickupDrops(bot, radius)`, `findBlock(bot, name, maxDistance)`, `nearestEntity(bot, filter, maxDistance)`,
-  `nearestHostile(bot, maxDistance)`.
+- Added here: `goTo(bot, pos, range)` (hops of ≤ 40 blocks, R6), `follow(bot, entity, range, { untilMs, offset })` (until
+  `untilMs`, the order stops or the bot leaves; a `null` entity just waits; `offset` follows a slot beside the entity),
+  `attack(bot, entity, { timeoutMs, leash, until })` (a leash breaks off a fight that drifts from a point),
+  `shoot(bot, entity)`, `equip(bot, name, dest)`, `eat(bot)`, `pickupDrops(bot, radius)`,
+  `findBlock(bot, name, maxDistance)`, `nearestEntity(bot, filter, maxDistance, { from })`,
+  `nearestHostile(bot, maxDistance, { from, filter })` (distances from `from`, e.g. the commander).
 
 **Cooperation by default.** Inside an order, `mineBlock`, `collectBlocks` and `placeItem` claim their target block
 and skip blocks other bots have claimed. Two bots told `mineBlock(bot, 'oak_log', 5)` at the same time chop
@@ -232,7 +234,9 @@ different trees, and so do two players' orders.
 
 ### 5.3 Two examples (they are also `agent/prompts/exemplars/` and tests)
 
-**Reclaim per role.** Archers are pulled off whatever they were doing; melee bots are taken only if idle.
+**Reclaim per role.** Archers are pulled off whatever they were doing; melee bots are taken only if idle. (A first
+sketch; the stock `squad/src/stock/defend.mjs` has grown from it: commander-relative threats, a leash, targets spread
+over the guards, a slot per bot, §16.)
 
 ```js
 export const manifest = {
@@ -593,6 +597,22 @@ completely, so missed events cannot leave it wrong.
 - **hawkEye fires nothing when it finds no clear trajectory**, silently: an archer "shot" for a minute without
   using an arrow. `shoot` checks the arrow count, falls back to a manual aimed shot, and otherwise throws "no arrow
   left the bow … (no clear line of fire?)" (`tests/helpers.test.ts`).
+- **A 20-bot defence against zombie waves (2026-10-31; 10 archers, 10 guards, one owner).** Five faults, fixed together:
+  1. *Friendly fire broke the team at once* (arrows into guards, sweeps). The mod cancels a bot's damage to a bot
+     sharing an owner with it or to one of its owners (`SquadFriends`, an `ALLOW_DAMAGE` hook registered before
+     FlagManager's, `SquadFriendsTest`). Bots still hurt mobs, other players and other owners' bots.
+  2. *hawkEye is one per process.* `minecrafthawkeye` keeps the bot it drives (the last one that loaded it), the
+     target and the drawn bow in module variables, so `archer.hawkEye.oneShot(t)` drove another bot. Each bot now
+     loads its own copy (`plugins.ts`, `freshHawkEye`).
+  3. *Archers slow.* `shoot` waited a fixed 1.5 s; it now returns when the arrow count drops (polled every 50 ms, cap
+     1.45 s, then a manual shot). `defend` re-picks right after each shot, looks for threats every 200 ms instead of
+     1 s, and steps aside after "no clear line of fire".
+  4. *Guards on one creature, standing in one block.* Guards spread over the threats (at most 2 on one, an untaken
+     one first); archers prefer a threat no other archer shoots. Each bot holds its own slot around the commander
+     (`follow` with `offset`: guards on a ring of 3, archers of 6).
+  5. *Guards chased far away.* Threats count only within `radius` of the commander, nearest to the commander first;
+     `attack`'s `leash` breaks off when the target leaves that circle or the guard is more than radius + 4 away.
+  Tests: `squad/tests/defend.test.ts`.
 - **Stopping the runtime on Windows:** stopping `npm start` from outside can leave `tsx src/supervisor.ts` and its
   child running. Use Ctrl+C in its console, or stop the `node` processes.
 - **Performance (docs/31, implemented by docs/32, 2026-10-30).** Measured: the bots' A* filled the one event loop at

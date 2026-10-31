@@ -18,6 +18,7 @@ import pathfinderPkg from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 
 import { closeStrayWindow, windowOperation, type WindowBot } from '../bots/hardening';
+import { GoalFollowOffset, type FollowOffset } from '../bots/follow-goal';
 import { orderOf, unwrap } from '../orders/guard';
 import { HelperError, isBotLeft, isStopped } from './errors';
 
@@ -225,13 +226,21 @@ const followKept = new WeakMap<object, { goal: unknown; timer?: ReturnType<typeo
  * given, otherwise when the order stops, the entity is gone or the bot leaves. A null entity just waits `untilMs`
  * (default 1 s), so a loop around it can look again.
  *
+ * `offset` ({x, z}, blocks) follows a point beside the entity instead: a bot's own slot around the commander, so
+ * many followers do not all stand in the same block.
+ *
  * Commands call it in a loop (`follow(bot, e, 3, { untilMs: 1000 })`). A new goal resets the path and releases the
  * controls, so a follower used to stop and re-plan once a second (docs/31 §5.3). The goal is kept instead: a call
  * finding the GoalFollow it set last on the same entity at the same range leaves it alone, and a call that returns
  * clears the goal only FOLLOW_KEEP_MS later, if no call kept it and it is still that same goal object (so the timer
  * never clears a goal another order or another helper set meanwhile).
  */
-export async function follow(bot: Bot, entity: Entity | null | undefined, range = 3, opts: { untilMs?: number } = {}): Promise<{ following: boolean }> {
+export async function follow(
+  bot: Bot,
+  entity: Entity | null | undefined,
+  range = 3,
+  opts: { untilMs?: number; offset?: FollowOffset | null } = {},
+): Promise<{ following: boolean }> {
   const o = order(bot);
   if (!entity) {
     await sleepMs(opts.untilMs ?? 1_000);
@@ -246,13 +255,14 @@ export async function follow(bot: Bot, entity: Entity | null | undefined, range 
     kept.timer = undefined;
     kept.cancel = undefined;
   }
+  const offset = opts.offset ? { x: Number(opts.offset.x) || 0, z: Number(opts.offset.z) || 0 } : null;
   const current = real.pathfinder?.goal as { entity?: unknown; rangeSq?: number } | null | undefined;
   let goal: unknown;
-  if (kept && current === kept.goal && current instanceof goals.GoalFollow && current.entity === entity && current.rangeSq === range * range) {
+  if (kept && current === kept.goal && current instanceof goals.GoalFollow && current.entity === entity && current.rangeSq === range * range && sameOffset(current, offset)) {
     goal = current;
     bot.pathfinder.isMoving(); // a guarded call: the lease is checked here as setGoal would have
   } else {
-    goal = new goals.GoalFollow(entity, range);
+    goal = offset ? new GoalFollowOffset(entity, range, offset) : new goals.GoalFollow(entity, range);
     bot.pathfinder.setGoal(goal as never, true);
     followKept.set(real, { goal });
   }
@@ -269,6 +279,12 @@ export async function follow(bot: Bot, entity: Entity | null | undefined, range 
     if (o?.alive !== false) deferFollowClear(bot, real, goal, o);
   }
   return { following: true };
+}
+
+/** Whether a kept follow goal follows at that offset (none for a plain GoalFollow). */
+function sameOffset(goal: unknown, offset: FollowOffset | null): boolean {
+  if (!(goal instanceof GoalFollowOffset)) return offset === null;
+  return !!offset && goal.offset.x === offset.x && goal.offset.z === offset.z;
 }
 
 /**
@@ -669,15 +685,25 @@ export async function pickupDrops(bot: Bot, radius = 8, opts: { timeoutMs?: numb
 
 // -- entities and combat ---------------------------------------------------------------------------------------
 
-/** The nearest entity passing `filter` (a function, or an entity name like "zombie") within `maxDistance`. */
-export function nearestEntity(bot: Bot, filter: ((e: Entity) => boolean) | string, maxDistance = 32): Entity | null {
+/**
+ * The nearest entity passing `filter` (a function, or an entity name like "zombie") within `maxDistance`. Distances
+ * are from the bot, or from `opts.from` when given (the commander's position: "the threat nearest to the player I
+ * defend"). A null `from` means the bot.
+ */
+export function nearestEntity(
+  bot: Bot,
+  filter: ((e: Entity) => boolean) | string,
+  maxDistance = 32,
+  opts: { from?: PosLike | null } = {},
+): Entity | null {
   const test = typeof filter === 'string' ? (e: Entity) => e.name === bareName(filter) || e.username === filter : filter;
   const me = bot.entity;
+  const from = opts.from ? toVec3(opts.from, 'nearestEntity from') : me.position;
   let best: Entity | null = null;
   let bestD = maxDistance;
   for (const e of Object.values(bot.entities)) {
     if (!e || e === me || !e.position || !e.isValid) continue;
-    const d = e.position.distanceTo(me.position);
+    const d = e.position.distanceTo(from);
     if (d > bestD) continue;
     let ok = false;
     try {
@@ -700,22 +726,71 @@ export function isHostile(bot: Bot, e: Entity): boolean {
   return data?.category === 'Hostile mobs';
 }
 
-export function nearestHostile(bot: Bot, maxDistance = 16): Entity | null {
-  return nearestEntity(bot, (e) => isHostile(bot, e), maxDistance);
+/** The nearest hostile mob; `opts.from` as in nearestEntity, `opts.filter` narrows further (e.g. not yet taken). */
+export function nearestHostile(
+  bot: Bot,
+  maxDistance = 16,
+  opts: { from?: PosLike | null; filter?: (e: Entity) => boolean } = {},
+): Entity | null {
+  const more = opts.filter;
+  return nearestEntity(bot, (e) => isHostile(bot, e) && (!more || !!more(e)), maxDistance, { from: opts.from });
 }
 
-/** Fight an entity in melee (mineflayer-pvp) until it dies, is gone, or `timeoutMs`. Equips the best sword/axe first. */
-export async function attack(bot: Bot, entity: Entity | null | undefined, opts: { timeoutMs?: number } = {}): Promise<{ killed: boolean }> {
+/** Keep a fight near a point: `center()` (null = no leash right now) and how far from it. */
+export interface Leash {
+  center: () => PosLike | null | undefined;
+  radius: number;
+}
+
+/** How much farther than the leash radius the fighter itself may be (it stands next to a target at the edge). */
+export const LEASH_SLACK = 4;
+
+/** Why a fight should stop now, or null: the target left the leash, the fighter strayed, or `until()` said so. */
+function breakOff(bot: Bot, entity: Entity, opts: { leash?: Leash; until?: () => boolean }): 'leash' | 'until' | null {
+  if (opts.until && opts.until()) return 'until';
+  const c = opts.leash?.center();
+  if (opts.leash && c) {
+    const center = toVec3(c, 'attack leash center');
+    if (entity.position.distanceTo(center) > opts.leash.radius) return 'leash';
+    if (bot.entity.position.distanceTo(center) > opts.leash.radius + LEASH_SLACK) return 'leash';
+  }
+  return null;
+}
+
+/**
+ * Fight an entity in melee (mineflayer-pvp) until it dies, is gone, or `timeoutMs`. Equips the best sword/axe first.
+ * A guard must not chase one zombie across the map while the player it defends is attacked: with `opts.leash` it
+ * breaks off once the target is more than `radius` from `center()`, or the bot itself more than radius +
+ * LEASH_SLACK; `opts.until()` returning true breaks off too. Both are checked before the first swing and every
+ * 200 ms; `brokeOff` says which one ended the fight.
+ */
+export async function attack(
+  bot: Bot,
+  entity: Entity | null | undefined,
+  opts: { timeoutMs?: number; leash?: Leash; until?: () => boolean } = {},
+): Promise<{ killed: boolean; brokeOff?: 'leash' | 'until' }> {
   const label = `attack(${who(bot)})`;
   if (!entity) throw new HelperError(`${label}: no target (null)`);
+  if (opts.leash && !(opts.leash.radius >= 0)) throw new HelperError(`${label}: leash.radius must be a number ≥ 0, got ${safeJson(opts.leash.radius)}`);
+  let brokeOff: 'leash' | 'until' | null;
+  try {
+    // Before the first swing, outside the try below: pvp.stop() would also clear whatever goal the bot follows.
+    brokeOff = breakOff(bot, entity, opts);
+  } catch (e) {
+    passControl(e);
+    throw new HelperError(`${label}: ${(e as Error).message}`);
+  }
+  if (brokeOff) return { killed: false, brokeOff };
   const weapon = bot.inventory.items().filter((i) => /_sword$|_axe$/.test(i.name)).sort((a, b) => toolRank(b.name) - toolRank(a.name))[0];
   try {
     if (weapon && bot.heldItem?.name !== weapon.name) await bot.equip(weapon, 'hand');
     await bot.pvp.attack(entity);
     const deadline = Date.now() + (opts.timeoutMs ?? 30_000);
     while ((entity as { isValid?: boolean }).isValid && Date.now() < deadline) {
-      await sleepMs(250);
+      await sleepMs(200);
       if (!bot.pvp.target) break; // pvp gave up (out of reach for too long)
+      brokeOff = breakOff(bot, entity, opts);
+      if (brokeOff) break;
     }
   } catch (e) {
     passControl(e);
@@ -727,7 +802,8 @@ export async function attack(bot: Bot, entity: Entity | null | undefined, opts: 
       /* left */
     }
   }
-  return { killed: !(entity as { isValid?: boolean }).isValid };
+  const killed = !(entity as { isValid?: boolean }).isValid;
+  return brokeOff && !killed ? { killed, brokeOff } : { killed };
 }
 
 /** Voyager's killMob: the nearest `mobName` within 32 blocks, fought until dead or `timeout` seconds. */
@@ -739,9 +815,15 @@ export async function killMob(bot: Bot, mobName: string, timeout = 300): Promise
   return r;
 }
 
+/** How long `shoot` waits for hawkEye's arrow: its draw is 1.2 s (bow), plus a tick or two for the inventory update. */
+export const SHOT_WAIT_MS = { bow: 1_450, crossbow: 1_900 } as const;
+/** How often `shoot` looks at the arrow count while it waits. */
+export const SHOT_POLL_MS = 50;
+
 /**
  * Shoot once at an entity with a bow (or crossbow): aims with hawkEye (gravity and target motion), equips the
- * weapon, needs arrows. Resolves after the shot (~1.2 s draw).
+ * weapon, needs arrows. Resolves as soon as an arrow has left (the arrow count drops: ~1.25 s for a bow), so an
+ * archer can pick its next target at once.
  */
 export async function shoot(bot: Bot, entity: Entity | null | undefined, opts: { weapon?: 'bow' | 'crossbow' } = {}): Promise<{ shot: true }> {
   const label = `shoot(${who(bot)})`;
@@ -752,29 +834,43 @@ export async function shoot(bot: Bot, entity: Entity | null | undefined, opts: {
   const arrows = (): number => countItem(bot, 'arrow') + countItem(bot, 'spectral_arrow') + countItem(bot, 'tipped_arrow');
   const before = arrows();
   if (before === 0) throw new HelperError(`${label}: no arrows`);
-  const hawk = (bot as unknown as { hawkEye?: { oneShot?: (t: Entity, w: string) => void } }).hawkEye;
+  const gone = (): boolean => arrows() < before;
+  /** Poll the arrow count until one has left or `ms` ran out. */
+  const waitArrow = async (ms: number): Promise<boolean> => {
+    const deadline = Date.now() + ms;
+    while (!gone() && Date.now() < deadline) await sleepMs(Math.min(SHOT_POLL_MS, Math.max(1, deadline - Date.now())));
+    return gone();
+  };
+  const hawk = (bot as unknown as { hawkEye?: { oneShot?: (t: Entity, w: string) => void; stop?: () => void } }).hawkEye;
+  const aim = async (): Promise<void> => {
+    // A manual aim: a little above the target, for the drop over the distance.
+    const d = bot.entity.position.distanceTo(entity.position);
+    await bot.lookAt(entity.position.offset(0, (entity.height ?? 1.8) * 0.8 + d * 0.02, 0), true);
+  };
   try {
     if (bot.heldItem?.name !== weapon) await bot.equip(item, 'hand');
     // hawkEye aims for gravity and the target's motion, but when it finds no clear trajectory it silently fires
-    // nothing (found live: an archer "shot" for a minute through leaves without using an arrow, docs/29 §16).
+    // nothing and keeps the bow drawn (found live: an archer "shot" for a minute through leaves without using an
+    // arrow, docs/29 §16).
     if (hawk?.oneShot) {
       hawk.oneShot(entity, weapon);
-      await sleepMs(weapon === 'bow' ? 1_500 : 1_900);
+      if (await waitArrow(SHOT_WAIT_MS[weapon])) return { shot: true };
+      // Still drawn with no trajectory: aim by hand, then stop it (stopping releases the drawn bow, at our aim).
+      await aim();
+      hawk.stop?.();
+      if (await waitArrow(300)) return { shot: true };
     }
-    if (arrows() >= before) {
-      // A manual shot: aim a little above the target (drop over the distance), draw, release.
-      const d = bot.entity.position.distanceTo(entity.position);
-      await bot.lookAt(entity.position.offset(0, (entity.height ?? 1.8) * 0.8 + d * 0.02, 0), true);
-      bot.activateItem();
-      await sleepMs(1_100);
-      bot.deactivateItem();
-      await sleepMs(300);
-    }
+    // A manual shot: aim, draw, release.
+    await aim();
+    bot.activateItem();
+    await sleepMs(1_100);
+    bot.deactivateItem();
+    await waitArrow(500);
   } catch (e) {
     passControl(e);
     throw new HelperError(`${label}: ${(e as Error).message} at ${entity.name ?? entity.username ?? 'entity'} ${fmt(entity.position)}`);
   }
-  if (arrows() >= before) {
+  if (!gone()) {
     throw new HelperError(
       `${label}: no arrow left the bow at ${entity.name ?? entity.username ?? 'entity'} ${fmt(entity.position)} from ${fmt(bot.entity.position)} (no clear line of fire? move closer or into the open)`,
     );
