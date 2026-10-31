@@ -63,10 +63,9 @@ per minute goes to the `vitals` table of `.squad-data/squad.db` (kept 7 days).
 
 | | |
 |---|---|
-| `/bots spawn BOT P1 [P2 …]` (admin) | a bot owned by those players; it appears next to the admin |
+| `/bots spawn BOT P1 [P2 …]` (admin) | a bot owned by those players; it appears next to the admin; `@s` = whoever runs it (also inside a datapack function) |
 | `/bots raid [distance] [archers] [guards]` (admin, in game) | an enemy army (defaults: 200 blocks, 10 archers, 10 guards) owned by the virtual player `Envahisseur` appears on the ground that far ahead of you, equipped, and runs `raid` against you and your bots. `/bots raid stop` stops it, `/bots raid clear` despawns every raider. Mind `limits.maxBots` (above) |
 | `/bots equip BOT archer\|guard\|miner\|farmer` (admin) | the role's kit, worn and held (archer: chainmail, bow, arrows; guard: iron armor, iron sword, shield; miner: iron tools, torches; farmer: hoe, seeds, bone meal, water), and the role as the bot's tag; you also become one of its owners |
-| `/bots armee [archers] [gardes]` (admin, in game) | an army of your own (defaults: 5 archers, 5 guards: `Archer01…`, `Garde01…`) appears in rows just ahead of you, equipped, and is yours to order |
 | `/bots create NAME <what it should do>` | the agent writes it; you are told « Commande NAME prête » with `/bots order NAME` clickable |
 | `/bots order NAME [args] [@bot …] [--reclaim\|--free]` | run it on your bots |
 | `/bots stop [all \| #id \| NAME \| @bot]` | stop orders, or free one bot (it returns to the order it was reclaimed from) |

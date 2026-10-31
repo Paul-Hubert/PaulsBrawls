@@ -67,10 +67,6 @@ public final class SquadCommand {
                     .then(CommandManager.literal("stop").executes(c -> SquadRaid.stop(c.getSource())))
                     .then(CommandManager.argument("args", StringArgumentType.greedyString())
                         .executes(c -> SquadRaid.call(c.getSource(), StringArgumentType.getString(c, "args")))))
-                .then(CommandManager.literal("armee").requires(s -> s.hasPermissionLevel(2))
-                    .executes(c -> SquadArmy.call(c.getSource(), ""))
-                    .then(CommandManager.argument("args", StringArgumentType.greedyString())
-                        .executes(c -> SquadArmy.call(c.getSource(), StringArgumentType.getString(c, "args")))))
                 .then(CommandManager.literal("equip").requires(s -> s.hasPermissionLevel(2))
                     .then(CommandManager.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
                         .then(CommandManager.argument("kit", StringArgumentType.word()).suggests(KITS)
@@ -215,7 +211,7 @@ public final class SquadCommand {
         };
         for (String l : lines) src.sendFeedback(() -> Text.literal(l), false);
         if (src.hasPermissionLevel(2)) {
-            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · equip BOT archer|guard|miner|farmer (il devient aussi à toi) · armee [archers] [gardes] · raid [distance] [archers] [gardes] | clear | stop · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
+            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · equip BOT archer|guard|miner|farmer (il devient aussi à toi) · raid [distance] [archers] [gardes] | clear | stop · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
         }
         return Command.SINGLE_SUCCESS;
     }
@@ -233,7 +229,7 @@ public final class SquadCommand {
         if (bot.equalsIgnoreCase("all")) return reply(src, "[Bots] « all » est réservé (/bots despawn all) : choisis un autre nom.");
         JsonArray owners = new JsonArray();
         for (String name : SquadArgs.names(ownersText)) {
-            Optional<GameProfile> p = Squad.profile(srv, name);
+            Optional<GameProfile> p = owner(src, name);
             if (p.isEmpty()) return reply(src, "[Bots] Joueur inconnu : " + name);
             owners.add(Squad.player(p.get()));
         }
@@ -254,7 +250,7 @@ public final class SquadCommand {
     /**
      * {@code /bots equip BOT KIT} (admin): the kit's items server-side, then the kit's tag on the runtime's roster. The
      * caller, when a player, also becomes one of the bot's owners (its other owners keep it), so the bot they just
-     * armed is theirs to order.
+     * armed is theirs to order (the world's datapack function squad:equiper relies on it).
      */
     private static int equip(CommandContext<ServerCommandSource> c, String bot, String kitName) {
         if (!Squad.enabled()) return reply(c.getSource(), DISABLED);
@@ -280,6 +276,19 @@ public final class SquadCommand {
             Squad.client().post("/api/bots/owners", own).thenAccept(r -> src.getServer().execute(() -> show(src, r)));
         }
         return Command.SINGLE_SUCCESS;
+    }
+
+    /**
+     * A player named in {@code spawn}, {@code owners} or {@code share}: {@code @s} is whoever runs the command (a
+     * player typing it, or the player running a datapack function such as the world's squad:armee), else
+     * {@link Squad#profile}.
+     */
+    static Optional<GameProfile> owner(ServerCommandSource src, String name) {
+        if (name.equals("@s")) {
+            ServerPlayerEntity self = src.getPlayer();
+            return self == null ? Optional.empty() : Optional.of(self.getGameProfile());
+        }
+        return Squad.profile(src.getServer(), name);
     }
 
     static boolean reservedName(String bot) {
@@ -341,7 +350,7 @@ public final class SquadCommand {
         ServerCommandSource src = c.getSource();
         JsonArray players = new JsonArray();
         for (String name : SquadArgs.names(StringArgumentType.getString(c, "players"))) {
-            Optional<GameProfile> p = Squad.profile(src.getServer(), name);
+            Optional<GameProfile> p = owner(src, name);
             if (p.isEmpty()) return reply(src, "[Bots] Joueur inconnu : " + name);
             players.add(Squad.player(p.get()));
         }
@@ -473,7 +482,7 @@ public final class SquadCommand {
         ServerCommandSource src = c.getSource();
         JsonArray players = new JsonArray();
         for (String name : SquadArgs.names(StringArgumentType.getString(c, "players"))) {
-            Optional<GameProfile> p = Squad.profile(src.getServer(), name);
+            Optional<GameProfile> p = owner(src, name);
             if (p.isEmpty()) return reply(src, "[Bots] Joueur inconnu : " + name);
             players.add(Squad.player(p.get()));
         }
