@@ -27,10 +27,15 @@
 // custom_data.squad, a lore line and the glint on the held shield; a right-click starts the order, a second one
 // re-forms it, sneak + right-click stops it, unbind removes it all; `/bots orders bind tir` on a bow, real shots: at
 // the ground, arrow-release starts `tir`, arrow-hit (onBlockHit) reaches it, the archers fire exactly 3 arrows each
-// around the hit; at a husk, arrow-hit names it (onEntityHit) and the archers kill it. `epee` at a NoAI husk (archers
-// shoot, at most 2 guards on it, it dies), then at the ground (the bots hold around it); `ligne-archers` (a line across
-// the view, 4 short of the point); a guard reclaimed from `defend` by a wall goes back to `defend` when the wall stops
-// and follows the captain again.
+// around the hit; at a husk, arrow-hit names it (onEntityHit) and the archers kill it. Any item carries any order (a
+// click says where, pointedTarget): `tir` bound to a stick, a right-click on the ground 3 blocks from a husk (no
+// entity in the crosshair) kills the husk, on empty ground fires a volley there; a bow bound to `mur-de-boucliers`
+// forms the wall where its arrow lands (about 20 blocks ahead), not where the release looked, and drawing it while
+// sneaking stops it; `epee` bound to a stick beside a husk kills it, then holds empty ground. `epee` at a NoAI husk
+// (archers shoot, at most 2 guards on it, it dies), then at the ground (guards and archers on their rings);
+// `ligne-archers` (a line across the view, 4 short of the point); a guard reclaimed from `defend` by a wall goes back
+// to `defend` when the wall stops and follows the captain again. Each starts with the bots at the same spots and
+// stops the captain's orders at its end, failed or not.
 //
 // Evidence goes to live-tests/.runs/<ts>/ (journal, result.json).
 

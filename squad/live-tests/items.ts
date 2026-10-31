@@ -166,6 +166,36 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
     api('/api/orders/trigger', { by: CAPTAIN, command, tokens: [], filters: [], ...(stop ? { stop: true } : {}), snap: s });
   const mine = (command: string): Order | undefined => runner.running().find((o) => o.command.name === command && o.commander.uuid === CAPTAIN.uuid);
   const triggers = (o: Order): ReportEvent[] => o.report.events.filter((e) => e.kind === 'trigger');
+  /**
+   * The slot `epee` gives a bot around a held point: guards on a ring of 3 (from angle 0), archers on one of 6 (from
+   * π/8), by the bot's index in its role, offsets rounded to 0.1, then the centre of that column's block (groundAt).
+   */
+  const ringSlot = (name: string, point: { x: number; z: number }): { x: number; z: number } => {
+    const guard = GUARDS.includes(name);
+    const [i, n, r, phase] = guard ? [GUARDS.indexOf(name), GUARDS.length, 3, 0] : [ARCHERS.indexOf(name), ARCHERS.length, 6, Math.PI / 8];
+    const a = phase + (2 * Math.PI * i) / n;
+    const off = (v: number): number => Math.round(v * r * 10) / 10;
+    return { x: Math.floor(point.x + off(Math.cos(a))) + 0.5, z: Math.floor(point.z + off(Math.sin(a))) + 0.5 };
+  };
+  /**
+   * Every bot on its own slot: within RING_SLACK of it. GoalNear(slot, 1) counts whole blocks, so a bot stops in a block
+   * next to the slot's, up to about 1.7 from its centre, and is sent again only beyond 1.5.
+   */
+  const RING_SLACK = 1.8;
+  const holding = (point: { x: number; z: number }): boolean => ALL.every((b) => hdist(pos(b)!, ringSlot(b, point)) <= RING_SLACK);
+  /** Each bot: distance to the point and to its slot, and its pathfinder goal (for a failure). */
+  const ringReport = (point: { x: number; z: number }): string =>
+    ALL.map((name) => {
+      const slot = ringSlot(name, point);
+      const b = pool.bot(name)!;
+      const goal = b.pathfinder.goal as { constructor: { name: string }; x?: number; z?: number } | null;
+      const g = goal ? `${goal.constructor.name}(${goal.x},${goal.z})` : 'none';
+      const d = (q: { x: number; z: number }): string => hdist(pos(name)!, q).toFixed(1);
+      return `${name} ${fmt(pos(name))} ${d(point)} from the point, ${d(slot)} from slot ${slot.x},${slot.z}, goal ${g}, moving ${b.pathfinder.isMoving()}`;
+    }).join('; ');
+  /** The top centre of the block a snapshot looked at: where pointedTarget puts the point (null: the sky). */
+  const topOf = (s: Snapshot): { x: number; y: number; z: number } | null =>
+    s.lookBlock ? { x: s.lookBlock.x + 0.5, y: s.lookBlock.y + 1, z: s.lookBlock.z + 0.5 } : null;
   const describeTriggers = (o: Order): string => triggers(o).map((e) => `${e.trigger ?? '-'}:${e.outcome}${e.pos ? '@' + e.pos.join(',') : ''}`).join(' ');
 
   /** Every guard on a line: along z at `x` (lineAxis 'z') or along x at `z`; distinct places about `spacing` apart. */
@@ -270,7 +300,29 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
     });
     if (!captain || !ALL.every((b) => pool.status(b) === 'online')) return;
 
-    await scenario('items: mur-de-boucliers (runtime): a wall across yaw 90, re-formed across yaw 0 by a second click, a husk fought at the line', async () => {
+    /** The bots back at their first spots: guards south-east of the captain's spot, archers north of it. */
+    const home = async (): Promise<void> => {
+      for (const [i, g] of GUARDS.entries()) await rcon.command(`tp ${g} ${C.x + 3 + i} ${C.y} ${C.z + 3}`);
+      for (const [i, a] of ARCHERS.entries()) await rcon.command(`tp ${a} ${C.x} ${C.y} ${C.z - 4 - 2 * i}`);
+      await sleep(1000);
+    };
+    /**
+     * A scenario that starts from the same place and leaves nothing behind, failed or not: the bots at home first, and
+     * at the end the captain's orders stopped and the husks killed. A failure once left an `epee` running, and the next
+     * scenarios' clicks reached it instead of starting their own orders.
+     */
+    const clean = (name: string, fn: () => Promise<string>): Promise<void> =>
+      scenario(name, async () => {
+        await home();
+        try {
+          return await fn();
+        } finally {
+          await api('/api/orders/stop', { by: CAPTAIN, target: 'all' }).catch(() => undefined);
+          await rcon.command(`kill @e[type=minecraft:husk,tag=${TAG}]`).catch(() => '');
+        }
+      });
+
+    await clean('items: mur-de-boucliers (runtime): a wall across yaw 90, re-formed across yaw 0 by a second click, a husk fought at the line', async () => {
       // Looking west at the block 6 west of the captain: the wall runs along z at x = A.x − 5.5.
       const first = await trigger('mur-de-boucliers', shieldClick(90, block(A.x - 6, A.z)));
       if (!first.ok || first.started !== true) throw new Error(`first click: ${first.text}`);
@@ -306,7 +358,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       );
     });
 
-    await scenario('items: mur-de-boucliers through the mod: bind, click, click again, sneak-click, unbind', async () => {
+    await clean('items: mur-de-boucliers through the mod: bind, click, click again, sneak-click, unbind', async () => {
       if (!viaMod) return `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with run/squad.properties pointing at it)`;
       await rcon.command(`clear ${CAPTAIN.name}`);
       await rcon.command(`item replace entity ${CAPTAIN.name} weapon.mainhand with minecraft:shield`);
@@ -380,7 +432,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       return Number(/count: (\d+)/.exec(t)?.[1] ?? 0);
     };
 
-    await scenario('items: tir through the mod: the captain shoots the ground, arrow-release then arrow-hit (onBlockHit), a volley of 3 each', async () => {
+    await clean('items: tir through the mod: the captain shoots the ground, arrow-release then arrow-hit (onBlockHit), a volley of 3 each', async () => {
       if (!viaMod) return `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with run/squad.properties pointing at it)`;
       await rcon.command(`clear ${CAPTAIN.name}`);
       await rcon.command(`item replace entity ${CAPTAIN.name} weapon.mainhand with minecraft:bow`);
@@ -426,7 +478,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       return `"${bound}" | "${listed}" | ${evidence}`;
     });
 
-    await scenario('items: tir through the mod: the captain shoots a husk, arrow-hit names it (onEntityHit), the archers kill it', async () => {
+    await clean('items: tir through the mod: the captain shoots a husk, arrow-hit names it (onEntityHit), the archers kill it', async () => {
       if (!viaMod) return `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with run/squad.properties pointing at it)`;
       await placeCaptain(90);
       await rcon.command(`summon husk ${A.x - 9.5} ${A.y + 1} ${A.z + 0.5} {PersistenceRequired:1b,NoAI:1b,Tags:["${TAG}"]}`);
@@ -451,7 +503,204 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       return evidence;
     });
 
-    await scenario('items: epee (runtime): a husk looked at dies (archers + at most 2 guards); then the ground is held', async () => {
+    // -- any item carries any order (pointedTarget): a click says where, the command decides -----------------------
+
+    const skipped = (): string => `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with run/squad.properties pointing at it)`;
+    /** Hold `item` alone (the inventory emptied first) and bind `line` to it. */
+    const bindHeld = async (item: string, line: string): Promise<string> => {
+      await rcon.command(`clear ${CAPTAIN.name}`);
+      await rcon.command(`item replace entity ${CAPTAIN.name} weapon.mainhand with minecraft:${item}`);
+      await sleep(500);
+      const order = line.split(' ')[0]!;
+      return command(`/bots orders bind ${line}`, new RegExp(`Ordre « ${order} » lié`));
+    };
+    const killArrows = (): Promise<string> => rcon.command(`kill @e[type=minecraft:arrow,x=${A.x - 30},y=${A.y - 10},z=${A.z - 30},dx=60,dy=40,dz=60]`);
+    /** Right-click with the held (non-launcher) item; the order of `command` it starts or reaches, watched every 50 ms. */
+    const clickFor = async (command: string): Promise<Order> => {
+      let order: Order | undefined;
+      const watch = setInterval(() => (order ??= mine(command)), 50);
+      try {
+        await rightClick();
+        await until(() => !!order, 5_000, `a ${command} order from the click`);
+      } finally {
+        clearInterval(watch);
+      }
+      return order!;
+    };
+    const summonHusk = async (x: number, z: number) => {
+      await rcon.command(`summon husk ${x} ${A.y + 1} ${z} {PersistenceRequired:1b,NoAI:1b,Tags:["${TAG}"]}`);
+      await until(() => Object.values(cap().entities).some((e) => e.name === 'husk' && e.isValid !== false), 5_000, 'the captain seeing the husk');
+      return Object.values(cap().entities).find((e) => e.name === 'husk' && e.isValid !== false)!;
+    };
+    const huskAlive = async (): Promise<boolean> => /passed/i.test(await rcon.command(`execute if entity @e[type=minecraft:husk,tag=${TAG}]`));
+    /** Living things (and items, arrows…) within `r` of a point, as the captain sees them: the bots and the captain excepted. */
+    const othersNear = (p: { x: number; z: number }, r: number): string[] =>
+      Object.values(cap().entities)
+        .filter((e) => e !== cap().entity && !(e.username && (ALL.includes(e.username) || e.username === CAPTAIN.name)) && hdist(e.position, p) <= r)
+        .map((e) => e.name ?? '?');
+
+    await clean('items: tir bound to a stick (mod): the ground 3 blocks from a husk → the archers kill it; empty ground → a volley there', async () => {
+      if (!viaMod) return skipped();
+      await placeCaptain(90);
+      await killArrows();
+      for (const a of ARCHERS) {
+        await rcon.command(`clear ${a} arrow`);
+        await rcon.command(`give ${a} arrow 32`);
+      }
+      const bound = await bindHeld('stick', 'tir');
+      // The husk 10 blocks west; the captain looks at the floor 3 blocks short of it, between them: the crosshair
+      // meets the floor first, so the click's snapshot names no entity, and pointedTarget finds the husk within 4.
+      const husk = await summonHusk(A.x - 9.5, A.z + 0.5);
+      await look({ x: A.x - 6.5, y: A.y + 1, z: A.z + 0.5 });
+      const before1 = ARCHERS.map(arrows);
+      const first = await clickFor('tir');
+      await until(() => first.ended, 40_000, 'the tir at the husk to end');
+      await sleep(1500);
+      const after1 = ARCHERS.map(arrows);
+      const s1 = first.report.snap;
+      const top1 = s1.lookBlock ? { x: s1.lookBlock.x + 0.5, z: s1.lookBlock.z + 0.5 } : null;
+      const alive = await huskAlive();
+      const ev1 =
+        `#${first.id} ${describeTriggers(first)}; lookEntity ${s1.lookEntity?.name ?? 'none'}, lookBlock ${JSON.stringify(s1.lookBlock)} ` +
+        `(${top1 ? hdist(top1, husk.position).toFixed(1) : '?'} from the husk); result "${first.report.result}"; ` +
+        `archers' arrows ${shots(before1, after1)}; husk ${alive ? 'alive' : 'dead'}`;
+      if (triggers(first)[0]?.trigger !== 'use' || triggers(first)[0]?.item !== 'stick') throw new Error(`not a stick's use trigger: ${ev1}`);
+      if (s1.lookEntity) throw new Error(`the click looked at an entity (the point must be beside the husk): ${ev1}`);
+      if (!top1 || hdist(top1, husk.position) < 2 || hdist(top1, husk.position) > 4) throw new Error(`the point is not 2–4 blocks from the husk: ${ev1}`);
+      if (alive || !/^Cible abattue \(husk\)/.test(String(first.report.result))) throw new Error(`the husk beside the point was not killed: ${ev1}`);
+
+      // Empty ground north-west: nothing within 4 blocks of the point, so a volley of 3 per archer there.
+      await killArrows();
+      const point = { x: A.x - 5.5, y: A.y + 1, z: A.z - 9.5 };
+      const around = othersNear(point, 4);
+      if (around.length) throw new Error(`the empty ground is not empty: ${around.join(', ')}`);
+      await look({ x: point.x, y: A.y + 1, z: point.z });
+      const before2 = ARCHERS.map(arrows);
+      const second = await clickFor('tir');
+      await until(() => second.ended, 40_000, 'the volley to end');
+      await sleep(1500);
+      const after2 = ARCHERS.map(arrows);
+      // Counted around where the click really pointed (its block's top centre).
+      const aimed = topOf(second.report.snap) ?? point;
+      const landed = await arrowsNear(aimed, 6);
+      // Where each arrow lies, as the captain sees them: distance from the point.
+      const lying = Object.values(cap().entities).filter((e) => e.name === 'arrow').map((e) => `${fmt(e.position)} (${hdist(e.position, aimed).toFixed(1)})`);
+      const s2 = second.report.snap;
+      const ev2 =
+        `#${second.id} ${describeTriggers(second)}; lookEntity ${s2.lookEntity?.name ?? 'none'}; result "${second.report.result}"; ` +
+        `archers' arrows ${shots(before2, after2)}; arrows within 6 of the point: ${landed}; arrows seen: ${lying.join(', ')}`;
+      const fired = before2.map((b, i) => b - after2[i]!);
+      if (second.report.result !== 'Volée tirée : 6 flèches.' || fired.some((n) => n !== 3)) throw new Error(`a volley of 3 each was expected: ${ev2}`);
+      if (landed < 4) throw new Error(`the volley did not land around the point: ${ev2}`);
+      const unbound = await command('/bots orders unbind', /délié de ton objet/);
+      return `"${bound}" | husk: ${ev1} | ground: ${ev2} | "${unbound}"`;
+    });
+
+    await clean('items: a bow bound to mur-de-boucliers (mod): the wall forms where the arrow lands, not at the release; sneak-draw stops', async () => {
+      if (!viaMod) return skipped();
+      // From 10 east of the middle, looking west 2° down: the crosshair meets nothing within `distance` (24), so the
+      // release alone would put the wall 5 blocks ahead; the full-draw arrow lands about 20 blocks ahead.
+      const from = { x: A.x + 10.5, y: A.y + 1, z: A.z + 0.5 };
+      await rcon.command(`tp ${CAPTAIN.name} ${from.x} ${from.y} ${from.z} 90 0`);
+      for (const [i, g] of GUARDS.entries()) await rcon.command(`tp ${g} ${from.x + i} ${from.y} ${from.z + 4}`);
+      await killArrows();
+      const bound = await bindHeld('bow', 'mur-de-boucliers');
+      await rcon.command(`give ${CAPTAIN.name} arrow 16`);
+      await sleep(1000);
+      await look({ x: from.x - 50, y: from.y + 1.62 - 50 * Math.tan((2 * Math.PI) / 180), z: from.z });
+      let order: Order | undefined;
+      const watch = setInterval(() => (order ??= mine('mur-de-boucliers')), 50);
+      try {
+        cap().activateItem();
+        await sleep(1200);
+        cap().deactivateItem();
+        await until(() => !!order, 5_000, 'a mur-de-boucliers started by the arrow');
+        await until(() => triggers(order!).some((e) => e.trigger === 'arrow-hit'), 5_000, "the arrow's hit delivered");
+      } finally {
+        clearInterval(watch);
+      }
+      const o = order!;
+      const release = o.report.snap;
+      const hit = o.snap.trigger?.kind === 'arrow-hit' ? o.snap.trigger.hit?.position : undefined;
+      if (!hit) throw new Error(`no hit position in the order's latest snapshot: ${describeTriggers(o)}`);
+      const lineX = Math.floor(hit.x) + 0.5;
+      const releaseX = from.x - 5; // where the release alone puts the wall
+      const where =
+        `#${o.id} ${describeTriggers(o)}; release lookBlock ${JSON.stringify(release.lookBlock)}; ` +
+        `hit ${fmt({ x: hit.x, y: hit.y, z: hit.z })} (${(from.x - hit.x).toFixed(1)} blocks ahead)`;
+      if (triggers(o)[0]?.trigger !== 'arrow-release' || triggers(o)[0]?.outcome !== 'started') throw new Error(`not started by the release: ${where}`);
+      if (Math.abs(lineX - releaseX) < 6) throw new Error(`the hit is too close to the release's point to tell them apart: ${where}`);
+      const wall = await checkWall('z', lineX, Math.floor(hit.z) + 0.5, 90, 'at the hit');
+      const off = GUARDS.map((g) => Math.abs(pos(g)!.x - hit.x));
+      const offs = off.map((d) => d.toFixed(2)).join(', ');
+      if (off.some((d) => d > 1.5)) throw new Error(`a guard is more than 1.5 from the line through the hit (${offs}): ${wall}`);
+
+      // Sneak + draw the bound bow: the stop gesture. The arrow shot while sneaking starts nothing.
+      const said0 = chat.length;
+      cap().setControlState('sneak', true);
+      await sleep(400);
+      await rightClick();
+      await sleep(300);
+      cap().setControlState('sneak', false);
+      await until(() => o.ended, 5_000, 'the wall stopped by sneak + drawing the bow');
+      await until(() => said(/« mur-de-boucliers » arrêté/, said0), 5_000, 'the stop line in chat');
+      await sleep(1500);
+      if (mine('mur-de-boucliers')) throw new Error('the arrow shot while sneaking started another wall');
+      const unbound = await command('/bots orders unbind', /délié de ton objet/);
+      return `"${bound}" | ${where} | wall: ${wall} | off the line through the hit: ${offs} | sneak-draw stopped it | "${unbound}"`;
+    });
+
+    await clean('items: epee bound to a stick (mod): beside a husk → the bots kill it; empty ground → they hold it', async () => {
+      if (!viaMod) return skipped();
+      await placeCaptain(90);
+      await killArrows();
+      const bound = await bindHeld('stick', 'epee');
+      const husk = await summonHusk(A.x - 9.5, A.z + 0.5);
+      const hp = husk.position.clone();
+      await look({ x: A.x - 6.5, y: A.y + 1, z: A.z + 0.5 });
+      const before = ARCHERS.map(arrows);
+      const n0 = notices.length;
+      const o = await clickFor('epee');
+      let most = 0;
+      const end = Date.now() + 45_000;
+      while (await huskAlive()) {
+        if (Date.now() > end) throw new Error(`the husk still stands after 45 s (${describeTriggers(o)}; log ${o.report.logs.slice(-5).join(' | ')})`);
+        most = Math.max(most, GUARDS.filter((g) => (pos(g)?.distanceTo(hp) ?? 99) <= 3).length);
+        await sleep(250);
+      }
+      await until(() => notices.slice(n0).some((n) => /Cible abattue \(husk\)/.test(n.text)), 5_000, 'the « Cible abattue (husk). » line');
+      const s0 = o.report.snap;
+      if (s0.lookEntity) throw new Error(`the click looked at ${s0.lookEntity.name} (the point must be beside the husk)`);
+      if (most > 2 || most < 1) throw new Error(`${most} guards on the husk at once (1–2 expected)`);
+      const shot = ARCHERS.map((a, i) => before[i]! - arrows(a));
+
+      // Empty ground: delivered to the same order, the bots hold around it (the point: the block the click hit).
+      const aim = { x: A.x - 7.5, z: A.z + 8.5 };
+      const busy = othersNear(aim, 4);
+      if (busy.length) throw new Error(`the empty ground is not empty: ${busy.join(', ')}`);
+      await look({ x: aim.x, y: A.y + 1, z: aim.z });
+      await rightClick();
+      await until(() => triggers(o).some((e) => e.outcome === 'delivered'), 5_000, 'the second click delivered');
+      if (mine('epee') !== o) throw new Error('the second click started another order');
+      const point = topOf(o.snap);
+      if (!point || o.snap.lookEntity) {
+        throw new Error(`the second click: lookBlock ${JSON.stringify(o.snap.lookBlock)}, lookEntity ${o.snap.lookEntity?.name ?? 'none'}`);
+      }
+      try {
+        await until(() => holding(point), 40_000, 'the bots on their rings around the point');
+      } catch (e) {
+        throw new Error(`${(e as Error).message}: ${ringReport(point)}`);
+      }
+      const around = ALL.map((b) => `${b} ${hdist(pos(b)!, point).toFixed(1)} (slot ${hdist(pos(b)!, ringSlot(b, point)).toFixed(1)})`).join(', ');
+      await api('/api/orders/stop', { by: CAPTAIN, target: `#${o.id}` });
+      const unbound = await command('/bots orders unbind', /délié de ton objet/);
+      return (
+        `"${bound}" | #${o.id} ${describeTriggers(o)}; husk dead, at most ${most} guards within 3 of it, ` +
+        `archers' shots ${shot.join('+')}; ground ${fmt(point)} held, each bot within ${RING_SLACK} of its ring slot: ${around} | "${unbound}"`
+      );
+    });
+
+    await clean('items: epee (runtime): a husk looked at dies (archers + at most 2 guards); then the ground is held', async () => {
       // Arrows on the floor would be picked up by bots walking over them, and blur the archers' counts.
       await rcon.command(`kill @e[type=minecraft:arrow,x=${A.x - 30},y=${A.y - 10},z=${A.z - 30},dx=60,dy=40,dz=60]`);
       await placeCaptain(90);
@@ -493,12 +742,11 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       const ground = await trigger('epee', snap(135, { heldItem: 'iron_sword', lookBlock: block(A.x - 8, A.z + 8), trigger: use('iron_sword') }));
       if (!ground.ok || ground.delivered !== true || String(ground.orderId) !== id) throw new Error(`ground click not delivered: ${JSON.stringify(ground)}`);
       try {
-        const held = (): boolean => GUARDS.every((g) => hdist(pos(g)!, point) <= 4.5) && ARCHERS.every((a) => hdist(pos(a)!, point) <= 7.5);
-        await until(held, 40_000, 'the bots around the point');
+        await until(() => holding(point), 40_000, 'the bots on their rings around the point');
       } catch (e) {
-        throw new Error(`${(e as Error).message}: ${ALL.map((b) => `${b} ${hdist(pos(b)!, point).toFixed(1)}`).join(', ')}`);
+        throw new Error(`${(e as Error).message}: ${ringReport(point)}`);
       }
-      const around = ALL.map((b) => `${b} ${hdist(pos(b)!, point).toFixed(1)}`).join(', ');
+      const around = ALL.map((b) => `${b} ${hdist(pos(b)!, point).toFixed(1)} (slot ${hdist(pos(b)!, ringSlot(b, point)).toFixed(1)})`).join(', ');
       await api('/api/orders/stop', { by: CAPTAIN, target: `#${id}` });
       return (
         `#${id}: husk dead, at most ${most} guards within 3 blocks of it at once, archers' shots ${shot.join('+')}; ` +
@@ -506,7 +754,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       );
     });
 
-    await scenario('items: ligne-archers (runtime): the archers line up across yaw 0, back 4 from the point', async () => {
+    await clean('items: ligne-archers (runtime): the archers line up across yaw 0, back 4 from the point', async () => {
       // From north of the captain, so they have to walk to the line (about 13 blocks).
       for (const [i, a] of ARCHERS.entries()) await rcon.command(`tp ${a} ${C.x - 2 * i} ${C.y} ${C.z - 4}`);
       await sleep(1000);
@@ -534,7 +782,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       return `#${r.orderId}: ${line}`;
     });
 
-    await scenario('items: a reclaimed guard comes back and works: defend → wall reclaims the guards → stop → they follow again', async () => {
+    await clean('items: a reclaimed guard comes back and works: defend → wall reclaims the guards → stop → they follow again', async () => {
       await placeCaptain(90);
       const d = await api('/api/orders/start', { by: CAPTAIN, command: 'defend', tokens: ['radius=16'], snap: snap(90) });
       if (!d.ok) throw new Error(`defend: ${d.text}`);

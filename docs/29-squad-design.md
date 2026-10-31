@@ -879,7 +879,24 @@ completely, so missed events cannot leave it wrong.
      `epee` defends the commander, as before.
   Tests: `squad/tests/helpers.test.ts` (`pointedTarget`), `item-orders.test.ts` (a stick's `tir` and `epee` on the
   zombie 2.8 blocks from the block, the volley and the held point when it is 6 away; a bow's wall at the arrow's hit,
-  not moved by a release). Not yet run on a server.
+  not moved by a release).
+  Live on the dev server (`live-tests/items.ts`, through the mod):
+  - `tir` bound to a stick: the floor 3 blocks from a NoAI husk (no entity in the crosshair) → the husk killed;
+    empty ground → a volley of 3 each, all 6 arrows within 3 blocks of the point.
+  - A bow bound to `mur-de-boucliers`: the release looked at nothing within 24 blocks, the arrow landed 20 blocks
+    ahead, and the wall formed on the line through the hit (guards within 0.4 of it), not 5 ahead. Sneak + draw
+    stopped it.
+  - `epee` bound to a stick: beside a husk, killed (at most 2 guards on it); empty ground, held (each bot within 1.5 of
+    its ring slot).
+  One fault found, fixed: *hawkEye's arc for a point on the ground overshot at short range.* The stick's volley 7 blocks
+  away put 3 of 6 arrows near the point, one 18 blocks past it, two off the arena. minecrafthawkeye's `getMasterGrade`
+  accepts an arc whose nearest pass is within 4 blocks of its target. Offline, for flat ground at 6, 9 and 10 blocks it
+  gave −5°, +1° and +2°: arcs passing 1–1.8 blocks over the point that land at 13, 27 and 31 blocks (at 15 and 20 blocks
+  its arcs land within a block). `shoot` keeps hawkEye's arc for a position only when our own flight of it
+  (`aimOvershoot`, ARROW's model) comes down within `POINT_REACH` (1 block) of the point; otherwise `bowAim` aims. A
+  crossbow is flown at 3.15 blocks per tick (`CROSSBOW_SPEED`), in this check and in `bowAim`. Test: `helpers.test.ts`
+  (the +1° arc at 9 blocks is refused and the shot aimed by `bowAim` onto the point; an arc that lands is still
+  hawkEye's). Live after the fix: the stick's volley landed all 6 within 3 blocks of its point.
 - **Stopping the runtime on Windows:** stopping `npm start` from outside can leave `tsx src/supervisor.ts` and its
   child running. Use Ctrl+C in its console, or stop the `node` processes.
 - **Performance (docs/31, implemented by docs/32, 2026-10-30).** Measured: the bots' A* filled the one event loop at

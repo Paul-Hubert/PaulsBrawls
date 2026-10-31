@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import { Vec3 } from 'vec3';
 
 import {
+  aimOvershoot,
   ARROW,
   bowAim,
   entityOf,
@@ -20,6 +21,7 @@ import {
   mineflayerPitch,
   mineflayerYaw,
   OFF_HAND_SLOT,
+  POINT_REACH,
   pointedTarget,
   raiseShield,
   SHIELD_REASSERT_MS,
@@ -252,6 +254,41 @@ test('shoot at a position: with no hawkEye trajectory, the bow is aimed by the b
   const c = new FakeBot('Archer2', { items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] });
   Object.assign(c.hawkEye, { getMasterGrade: () => undefined });
   await assert.rejects(shoot(c as never, point), /no arrow left the bow at \(-30, 63, 18\) .*no clear line of fire/);
+});
+
+test('shoot at a position: a hawkEye arc that would fly past the point is not used; one that lands on it is', { timeout: 20_000 }, async () => {
+  // The grades minecrafthawkeye's getMasterGrade gave for a point on flat ground 9 blocks away (+1°, its nearest pass
+  // 1.6 blocks above the point: it lands 27 blocks out) and 15 blocks away (−4.3°: it lands 14 out). Live, such an arc
+  // put a volley's arrow 18 blocks past its point.
+  const from = new Vec3(0.5, 64, 0.5);
+  assert.ok(aimOvershoot(from, new Vec3(9.5, 64, 0.5), 1) > 15, 'the +1° arc at 9 blocks overshoots');
+  assert.ok(Math.abs(aimOvershoot(from, new Vec3(15.5, 64, 0.5), -4.3)) <= POINT_REACH, 'the −4.3° arc at 15 blocks lands');
+  const archer = (grade: number) => {
+    const b = new FakeBot('Archer', { position: from.clone(), items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] });
+    Object.assign(b.hawkEye, { getMasterGrade: () => ({ grade, nearestDistance: 1.6 }) });
+    const release = () => b.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: 9 }]);
+    b.hawkEye.oneShot = (() => {
+      b.calls.push('hawkEye.oneShot');
+      setTimeout(release, 20);
+    }) as never;
+    b.deactivateItem = () => {
+      b.calls.push('deactivateItem');
+      release();
+    };
+    return b;
+  };
+  const near = new Vec3(9.5, 64, 0.5);
+  const over = archer(1);
+  await shoot(over as never, near);
+  assert.ok(!over.calls.includes('hawkEye.oneShot'), `the overshooting arc is not fired: ${over.calls.join(' ')}`);
+  assert.ok(over.calls.includes('activateItem') && over.calls.includes('deactivateItem'), 'a hand shot instead');
+  const yaw = ((Math.PI - over.entity.yaw) * 180) / Math.PI;
+  const pitch = (-over.entity.pitch * 180) / Math.PI;
+  assert.ok(closestApproach(over.entity.position, yaw, pitch, near) < 1, `aimed by bowAim onto the point (yaw ${yaw}, pitch ${pitch})`);
+
+  const good = archer(bowAim(from, near).pitch * -1);
+  await shoot(good as never, near);
+  assert.ok(good.calls.includes('hawkEye.oneShot') && !good.calls.includes('activateItem'), `an arc that lands is hawkEye's: ${good.calls.join(' ')}`);
 });
 
 test('entityOf: by network id, else a player by name, else the nearest of that name near the snapshot position', () => {

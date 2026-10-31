@@ -837,6 +837,13 @@ export const SHOT_POLL_MS = 50;
  * release sent at once flew at the old aim, so a hand-aimed release waits this long after the look.
  */
 export const LOOK_SETTLE_MS = 60;
+/**
+ * hawkEye's arc for a position is kept only when, flown by our own model (ARROW), it comes down within this many blocks
+ * (horizontally) of the point; otherwise bowAim aims the shot.
+ */
+export const POINT_REACH = 1;
+/** A crossbow's arrow leaves at 3.15 blocks per tick (CrossbowItem), a full-draw bow's at 3. */
+export const CROSSBOW_SPEED = 3.15;
 
 /** A live entity (prismarine-entity always has `isValid`), as opposed to a position, a block or a snapshot ref. */
 function isLiveEntity(t: unknown): t is Entity {
@@ -851,7 +858,9 @@ function isLiveEntity(t: unknown): t is Entity {
  * A position goes to hawkEye as `{ position, isValid: true }` (a target without `type` is a point to it). hawkEye's
  * block check raycasts every step of its arc, so a point on the ground can count as blocked: when it has no
  * trajectory for a position (`getMasterGrade`), the bow's pitch comes from the arrow's ballistics (bowAim) and the
- * shot is made by hand. A snapshot ref (`at.lookEntity`) is a position here: pass `entityOf(bot, ref)` for the live one.
+ * shot is made by hand. Its trajectory for a position is also refused when it would not land on the point (POINT_REACH):
+ * hawkEye accepts an arc passing up to 4 blocks from its target. A snapshot ref (`at.lookEntity`) is a position here:
+ * pass `entityOf(bot, ref)` for the live one.
  */
 export async function shoot(bot: Bot, target: Entity | PosLike | null | undefined, opts: { weapon?: 'bow' | 'crossbow' } = {}): Promise<{ shot: true }> {
   const label = `shoot(${who(bot)})`;
@@ -877,11 +886,17 @@ export async function shoot(bot: Bot, target: Entity | PosLike | null | undefine
     hawkEye?: { oneShot?: (t: HawkTarget, w: string) => void; stop?: () => void; getMasterGrade?: (t: HawkTarget, speed: Vec3, w: string) => unknown };
   }).hawkEye;
   const hawkTarget: HawkTarget = entity ?? { position: point as Vec3, isValid: true };
-  /** Whether hawkEye has a trajectory: always tried for an entity (it moves); asked first for a position. */
+  const speed = weapon === 'crossbow' ? CROSSBOW_SPEED : ARROW.speed;
+  /** Whether hawkEye has a trajectory that hits: always tried for an entity (it moves); asked first for a position. */
   const hawkCanAim = (): boolean => {
     if (entity || !hawk?.getMasterGrade) return true;
     try {
-      return !!hawk.getMasterGrade(hawkTarget, new Vec3(0, 0, 0), weapon);
+      const g = hawk.getMasterGrade(hawkTarget, new Vec3(0, 0, 0), weapon) as { grade?: unknown } | null | undefined;
+      if (!g) return false;
+      // hawkEye accepts an arc whose nearest pass is within 4 blocks of its target. For a point on the ground that
+      // arc flies over it and on: at 6 to 10 blocks it lands 2 to 3 times as far (a volley's arrow lay 18 blocks past
+      // its point, found live). Kept only when our own flight of its elevation comes down on the point.
+      return typeof g.grade === 'number' && Math.abs(aimOvershoot(bot.entity.position, point as Vec3, g.grade, speed)) <= POINT_REACH;
     } catch (e) {
       passControl(e);
       return false;
@@ -894,7 +909,7 @@ export async function shoot(bot: Bot, target: Entity | PosLike | null | undefine
       await bot.lookAt(entity.position.offset(0, (entity.height ?? 1.8) * 0.8 + d * 0.02, 0), true);
       return;
     }
-    const a = bowAim(bot.entity.position, point as Vec3);
+    const a = bowAim(bot.entity.position, point as Vec3, speed);
     await bot.look(mineflayerYaw(a.yaw), mineflayerPitch(a.pitch), true);
   };
   try {
@@ -1272,6 +1287,16 @@ export function bowAim(from: PosLike, to: PosLike, speed: number = ARROW.speed):
     }
   }
   return { yaw, pitch: snap(-best), error: bestReach - d, ticks: Infinity };
+}
+
+/**
+ * How far past `to` (horizontally, blocks; negative = short) an arrow shot from a bot standing at `from` (feet) at
+ * `elevationDeg` (degrees, + = up, as hawkEye's grade) comes down through the point's height (ARROW's flight).
+ */
+export function aimOvershoot(from: PosLike, to: PosLike, elevationDeg: number, speed: number = ARROW.speed): number {
+  const f = toVec3(from, 'aimOvershoot from');
+  const t = toVec3(to, 'aimOvershoot to');
+  return arrowReach(elevationDeg, t.y - (f.y + ARROW.eye), speed) - Math.hypot(t.x - f.x, t.z - f.z);
 }
 
 /** How far (horizontally) the arrow gets before it comes down through the height `dy` (relative to where it left). */

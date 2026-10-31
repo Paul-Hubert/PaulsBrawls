@@ -133,7 +133,8 @@ $env:LIVE_ONLY='items'; $env:LIVE_RUNTIME_PORT='8779'; npm run live-test   # onl
 
 `LIVE_ONLY=core` runs the first scenarios (connect, `gather`, `come`, reclaim, ladders, despawn), `LIVE_ONLY=items`
 the bound-item ones (`live-tests/items.ts`, dev world only): the four item commands, `/bots orders bind` with real
-clicks and arrows, and a guard coming back to `defend` after a wall. The test's runtime listens on `LIVE_RUNTIME_PORT`
+clicks and arrows, any item carrying any order (`tir` and `epee` on a stick, a bow placing a shield wall where its arrow
+lands), and a guard coming back to `defend` after a wall. The test's runtime listens on `LIVE_RUNTIME_PORT`
 (default: any free port). The scenarios driven through the mod need the dev server's mod to talk to that runtime, and
 never to the real one on 8772. Before `./gradlew runServer`, create `run/squad.properties`:
 

@@ -239,9 +239,13 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
   `[x, y, z]`, a block, a snapshot ref). A position goes to hawkEye as `{ position, isValid: true }`: hawkEye takes a
   target without `type` for a point (`isEntity` is `"type" in e`), aims at it with no height offset, and derives its
   velocity from the position history, not from a field. hawkEye is asked first (`getMasterGrade`): its block check
-  raycasts every step of the arc (`bot.world.raycast`), so a point on the ground can count as blocked. Without a
-  trajectory the bow is aimed by `bowAim` (exported, not a global): the arrow's flight tick by tick, as
-  `PersistentProjectileEntity` moves it (from the eyes − 0.1, 3 blocks per tick at full draw; move, then × 0.99, then
+  raycasts every step of the arc (`bot.world.raycast`), so a point on the ground can count as blocked. Its arc is also
+  refused unless, flown by our own model (`aimOvershoot`), it comes down within `POINT_REACH` (1 block) of the point:
+  hawkEye accepts an arc whose nearest pass is within 4 blocks of its target, and for a point on the ground 6–10 blocks
+  away that arc flies over it and lands 2–3 times as far (found live, docs/29 §16). Without a trajectory that lands,
+  the bow is aimed by `bowAim` (exported, not a global): the arrow's flight tick by tick, as
+  `PersistentProjectileEntity` moves it (from the eyes − 0.1, 3 blocks per tick at full draw, a crossbow's 3.15
+  (`CROSSBOW_SPEED`); move, then × 0.99, then
   y − 0.05), the low arc (the first elevation whose flight passes through the point, refined by bisection), and out of
   range the elevation that carries farthest. A hand-aimed release now waits 60 ms after the look (`LOOK_SETTLE_MS`):
   `bot.look(…, true)` only sets the yaw and pitch, the look packet goes out with the next physics tick, and a release
@@ -455,8 +459,8 @@ clicks and sends each one; it decides nothing about what a click does.
 
 ## Bound items on the dev server (live, 2026-10-31)
 
-`live-tests/items.ts` (the Live bullet under Tests) passed on the dev server once two faults it found were fixed
-(docs/29 §16). What it showed, with the evidence it checks:
+`live-tests/items.ts` (the Live bullet under Tests) passed on the dev server once the faults it found were fixed
+(docs/29 §16): two in the first run, one more after the any-item change. What it showed, with the evidence it checks:
 - **The mod:** the mixin applies at startup. `/bots orders bind mur-de-boucliers` puts `custom_data.squad`, the
   lore line « Ordre : mur-de-boucliers » and `enchantment_glint_override` on the held shield (RCON `SelectedItem`);
   `/bots orders bound` lists « Bow : tir »; `unbind` removes all three. A right-click is a `use` trigger: the
@@ -472,14 +476,24 @@ clicks and sends each one; it decides nothing about what a click does.
 - **`tir`:** a volley of exactly 3 arrows per archer; 7 arrows (the captain's and the six) lie within 6 blocks of the
   hit. At a husk: « Cible abattue (husk) : 6 flèches. ».
 - **`epee`:** a NoAI husk looked at (`lookEntity` with its id, resolved by `entityOf`) is killed with at most 2 guards
-  within 3 blocks of it at once. Then the ground: guards within 4.5 blocks of the point, archers within 7.5.
+  within 3 blocks of it at once. Then the ground: every bot within 1.8 of its own ring slot (seen: 0.3–1.5).
+- **Any item carries any order** (`pointedTarget`, after `2023e12`):
+  - `tir` bound to a stick: a right-click on the floor 3 blocks from a NoAI husk names no entity (the crosshair meets
+    the floor first), yet the archers kill the husk (the nearest within `near` 4). On empty ground, nothing within 4
+    blocks, it fires a volley of 3 per archer, all 6 arrows within 3 blocks of the point.
+  - A bow bound to `mur-de-boucliers`, shot from 10 east of the middle 2° down: the release looks at nothing within
+    24 blocks, and its arrow lands about 20 blocks ahead. The wall forms on the line through the hit (the guards
+    within 0.4 of it, `Rotation` 90), not 5 blocks ahead, where the release alone would put it. Drawing the bow while
+    sneaking stops it, and the arrow shot while sneaking starts nothing.
+  - `epee` bound to a stick: beside a husk the bots kill it (at most 2 guards on it); then on empty ground they hold
+    it, each bot within 1.5 of its ring slot.
 - **`ligne-archers`:** the archers walk about 13 blocks to the line 4 blocks short of the point, 2 apart, `Rotation` 0.
 - **A bot given back works again:** guards a wall reclaimed from `defend` are back in it once the wall stops, and
   follow the captain about 14 blocks to a new spot (the `squad.parallel` live-array fix).
 
 ## Tests
 
-- **`squad/`:** `npm run check` = lint + tsc + 167 `node:test` tests on fakes (compile, leases, guard, orders and
+- **`squad/`:** `npm run check` = lint + tsc + 168 `node:test` tests on fakes (compile, leases, guard, orders and
   reclaim, check/typecheck of the stock commands, HTTP + the real MCP client, supervisor wedge, protocol hardening,
   helpers, agent config drift, `follow`, the `gather` freeze, one test per dependency patch, the vitals, the worker
   pool: same path as the main thread on a synthetic world, the mirror's refcounts, every fallback, a clean stop;
@@ -490,7 +504,8 @@ clicks and sends each one; it decides nothing about what a click does.
   report's cap, a throwing listener, `ctx.run`, the reference typecheck, the check route, the snapshot sanitizer); the
   formation helpers (`helpers.test.ts`: `lookDir`/`lineSlots` at yaw 0/90/180/−90 and ranks, `groundAt` on a synthetic
   column, `faceYaw` against mineflayer's conversions, `raiseShield`, `shoot` at a position through hawkEye and through
-  the ballistics checked by an independent flight, `bowAim`, `entityOf`); the four item commands
+  the ballistics checked by an independent flight, a hawkEye arc that would fly past the point refused, `bowAim`,
+  `entityOf`); the four item commands
   (`item-orders.test.ts`: the wall along z facing west, shields raised on arrival, a click re-forming it, a guard
   fighting at its slot, a guard pushed off its slot long after the wall formed going back to the exact slot; `epee`'s
   target with two guards on it and the anchor rings; the archer line `back` blocks short, front threats first, two
@@ -516,7 +531,10 @@ clicks and sends each one; it decides nothing about what a click does.
     fought at the line, stop), `epee` (a NoAI husk, then the ground), `ligne-archers`, and a guard reclaimed from
     `defend` by a wall that goes back and follows again. Through the mod, with the captain's real clicks and arrows:
     `/bots orders bind|bound|unbind`, `mur-de-boucliers` started, re-aimed and stopped (sneak), and `tir` at the ground
-    and at a husk. The mod scenarios need `run/squad.properties` pointing the dev mod at the test's runtime
+    and at a husk. Any item, any order: `tir` and `epee` bound to a stick (beside a husk, then empty ground), a bow
+    bound to `mur-de-boucliers` (the wall at the arrow's hit). Each scenario starts with the bots at the same spots and
+    ends by stopping the captain's orders and killing its husks, failed or not, so a failure does not spill into the
+    next. The mod scenarios need `run/squad.properties` pointing the dev mod at the test's runtime
     (`url=http://127.0.0.1:8779`, `token=live-test-token`) and `LIVE_RUNTIME_PORT=8779`; otherwise they are skipped
     ([squad/README.md](../../../squad/README.md)). Ground truth: RCON `Pos`, `Rotation`, `SelectedItem`, arrow counts,
     entities; a raised shield is the living-entity flags (metadata 8: 0x01 hand active, 0x02 off-hand) as the
@@ -556,8 +574,8 @@ clicks and sends each one; it decides nothing about what a click does.
   live: a shield held up for minutes through mob noise (the live walls held for seconds), which aim made the live
   volleys (hawkEye or the ballistic fallback; neither is logged) and how often hawkEye's block check refuses a point on
   the ground, `groundAt` on anything but a flat floor (slabs, snow layers, water), and fights against mobs that move
-  (every live husk had NoAI). `pointedTarget` and the any-item reading (2026-10-31, after the live run) ran only on
-  fakes: a stick carrying `tir`, a bow carrying `mur-de-boucliers`, the nearest creature within `near` of a point.
+  (every live husk had NoAI). The any-item reading passed live too (above); not live: a crossbow, `ligne-archers` from a
+  bow, a friend pointed at.
 - **The mod side of bound items** passed live on the dev server (above). Still not run on a server: multishot (a
   crossbow), a held right-click against the limiter, the lore and glint as a real client renders them (only the
   stack's data was read), a rebind, and a bound item given to another player.
