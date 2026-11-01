@@ -10,6 +10,7 @@ import mineflayer, { type Bot } from 'mineflayer';
 
 import { logger } from '../logger';
 import { boundPathfinder, defaultMovements, type AbortableBot } from './hardening';
+import { installMeleeHits } from './hits';
 import { loadPlugins, pathfinder } from './plugins';
 import { keepDecodersAlive, RECIPES_AS_BYTES, type SkippedPacket } from './protocol';
 import type { MirroredBot } from './pathworkers/client';
@@ -391,6 +392,7 @@ function reportSkipped(s: SkippedPacket): void {
 function realSetup(bot: Bot): void {
   boundPathfinder(bot as unknown as AbortableBot); // R6
   loadPlugins(bot); // R15/R16/R17
+  installMeleeHits(bot); // bot.on('meleeHit'): who hit it in melee, a shield block included
 }
 
 function safeMovements(bot: Bot): unknown {

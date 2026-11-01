@@ -12,15 +12,20 @@ import {
   aimOvershoot,
   ARROW,
   bowAim,
+  bowSpeed,
   entityOf,
   faceYaw,
+  FULL_DRAW_TICKS,
   goTo,
   groundAt,
+  HEAD_CLEARANCE,
   lineSlots,
   lookDir,
+  MIN_DRAW_TICKS,
   mineflayerPitch,
   mineflayerYaw,
   OFF_HAND_SLOT,
+  overAim,
   POINT_REACH,
   pointedTarget,
   raiseShield,
@@ -289,6 +294,112 @@ test('shoot at a position: a hawkEye arc that would fly past the point is not us
   const good = archer(bowAim(from, near).pitch * -1);
   await shoot(good as never, near);
   assert.ok(good.calls.includes('hawkEye.oneShot') && !good.calls.includes('activateItem'), `an arc that lands is hawkEye's: ${good.calls.join(' ')}`);
+});
+
+// -- shooting over a friend (a shield wall in front of the archers) ----------------------------------------------
+
+/** An independent flight due south (+Z) at `speed` and a Minecraft pitch (negative = up): the arrow's height (absolute) where it crosses z, and how near it passes `target`. */
+function southFlight(feet: Vec3, pitchDeg: number, speed: number) {
+  const pitch = (pitchDeg * Math.PI) / 180;
+  const pts: Vec3[] = [];
+  let p = feet.offset(0, 1.52, 0);
+  let v = new Vec3(0, -Math.sin(pitch), Math.cos(pitch)).scaled(speed);
+  for (let t = 0; t < 400; t++) {
+    pts.push(p);
+    p = p.plus(v);
+    v = new Vec3(v.x * 0.99, v.y * 0.99 - 0.05, v.z * 0.99);
+  }
+  return {
+    heightAt(z: number): number {
+      for (let i = 1; i < pts.length; i++) {
+        const [a, b] = [pts[i - 1]!, pts[i]!];
+        if (b.z >= z) return a.y + ((b.y - a.y) * (z - a.z)) / (b.z - a.z || 1);
+      }
+      return -Infinity;
+    },
+    nearest(target: Vec3): number {
+      let best = Infinity;
+      for (let i = 1; i < pts.length; i++) {
+        const [a, b] = [pts[i - 1]!, pts[i]!];
+        const seg = b.minus(a);
+        const k = Math.max(0, Math.min(1, target.minus(a).dot(seg) / (seg.dot(seg) || 1)));
+        best = Math.min(best, a.plus(seg.scaled(k)).distanceTo(target));
+      }
+      return best;
+    },
+  };
+}
+
+test('bowSpeed and overAim: an arc over a friend 2 or 4 blocks ahead onto the target, a shorter draw or a lob; the flat arc would hit them', () => {
+  assert.equal(bowSpeed(20), 3);
+  assert.ok(Math.abs(bowSpeed(10) - 1.25) < 1e-9 && bowSpeed(MIN_DRAW_TICKS) > bowSpeed(3) && bowSpeed(3) / 3 >= 0.1);
+  const from = new Vec3(0.5, 64, 0.5);
+  for (const [ahead, d] of [[2, 6], [2, 10], [2, 20], [4, 6], [4, 24], [1, 3]] as const) {
+    const target = new Vec3(0.5, 64.9, 0.5 + d);
+    const friend = { name: 'Mate', along: ahead, feet: 64, height: 1.8 };
+    const flat = southFlight(from, bowAim(from, target).pitch, 3);
+    assert.ok(flat.heightAt(0.5 + ahead) < 64 + 1.8, `the flat arc at ${ahead} blocks is at head height (${flat.heightAt(0.5 + ahead)})`);
+    const o = overAim(from, target, [friend]);
+    assert.ok(o, `an arc over a friend ${ahead} ahead to ${d}`);
+    assert.ok(o.draw >= MIN_DRAW_TICKS && o.draw <= FULL_DRAW_TICKS && o.speed === bowSpeed(o.draw));
+    for (const speed of [o.speed, bowSpeed(o.draw - 1)]) {
+      const f = southFlight(from, o.pitch, speed);
+      for (const z of [0.5 + ahead - 0.6, 0.5 + ahead, 0.5 + ahead + 0.6]) {
+        assert.ok(f.heightAt(z) > 64 + 1.8 + HEAD_CLEARANCE - 1e-6, `over the friend at z ${z} (draw ${o.draw}, pitch ${o.pitch}, speed ${speed}): ${f.heightAt(z)}`);
+      }
+    }
+    assert.ok(southFlight(from, o.pitch, o.speed).nearest(target) < 0.5, `onto the target ${d} out (draw ${o.draw}, pitch ${o.pitch})`);
+  }
+  // No arrow climbs over something 200 blocks tall right in front: null.
+  assert.equal(overAim(from, new Vec3(0.5, 64.9, 6.5), [{ name: 'Tower', along: 1, feet: 64, height: 200 }]), null);
+});
+
+test('shoot: a friend 2 blocks in front is shot over at once (a short draw by hand, not hawkEye); aside, hawkEye shoots; a crossbow does not draw', { timeout: 20_000 }, async () => {
+  const zombie = { id: 70, name: 'zombie', type: 'hostile', position: new Vec3(0.5, 64, 12.5), height: 1.95, isValid: true };
+  const mate = { id: 71, name: 'player', type: 'player', username: 'Mate', position: new Vec3(0.7, 64, 2.5), height: 1.8, isValid: true };
+  const archer = (weapon = 'bow') => {
+    const b = teamBot();
+    b.entity.position = new Vec3(0.5, 64, 0.5);
+    b.setItems([{ name: weapon, count: 1 }, { name: 'arrow', count: 10 }]);
+    b.entities = { 70: zombie, 71: mate };
+    const at: Record<string, number> = {};
+    b.hawkEye.oneShot = (() => {
+      b.calls.push('hawkEye.oneShot');
+      setTimeout(() => b.setItems([{ name: weapon, count: 1 }, { name: 'arrow', count: 9 }]), 20);
+    }) as never;
+    b.activateItem = () => {
+      b.calls.push('activateItem');
+      at.drawn = Date.now();
+    };
+    b.deactivateItem = () => {
+      b.calls.push('deactivateItem');
+      at.released = Date.now();
+      b.setItems([{ name: weapon, count: 1 }, { name: 'arrow', count: 9 }]);
+    };
+    return { b, at };
+  };
+
+  const { b, at } = archer();
+  assert.deepEqual(await shoot(b as never, zombie as never), { shot: true });
+  assert.ok(!b.calls.includes('hawkEye.oneShot'), `not hawkEye's flat arc into Mate's back: ${b.calls.join(' ')}`);
+  const pitch = (-b.entity.pitch * 180) / Math.PI;
+  const o = overAim(new Vec3(0.5, 64, 0.5), zombie.position.offset(0, 1.95 / 2, 0), [{ name: 'Mate', along: 2, feet: 64, height: 1.8 }])!;
+  assert.ok(Math.abs(pitch - o.pitch) < 1e-6, `aimed over Mate (pitch ${pitch}, overAim ${o.pitch})`);
+  const held = at.released! - at.drawn!;
+  // Held its ticks exactly (the server counts the ticks that start during the hold), not half a tick more.
+  assert.ok(o.draw < FULL_DRAW_TICKS && held >= o.draw * 50 - 10 && held < o.draw * 50 + 20, `drawn ${o.draw} ticks: held ${held} ms`);
+
+  // Mate steps 2 blocks aside: out of the line of fire, hawkEye shoots as before.
+  mate.position = new Vec3(2.5, 64, 2.5);
+  const aside = archer().b;
+  await shoot(aside as never, zombie as never);
+  assert.ok(aside.calls.includes('hawkEye.oneShot') && !aside.calls.includes('activateItem'), aside.calls.join(' '));
+
+  // A crossbow fires at one speed: no arc over Mate, an error before drawing (the archer line steps aside on it).
+  mate.position = new Vec3(0.7, 64, 2.5);
+  const xbow = archer('crossbow').b;
+  await assert.rejects(shoot(xbow as never, zombie as never, { weapon: 'crossbow' }), /Mate in the line of fire to zombie .*no clear line of fire/);
+  assert.ok(!xbow.calls.includes('activateItem') && !xbow.calls.includes('hawkEye.oneShot'));
 });
 
 test('entityOf: by network id, else a player by name, else the nearest of that name near the snapshot position', () => {

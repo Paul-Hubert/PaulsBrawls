@@ -33,7 +33,10 @@ interface Mob {
 let nextId = 100;
 const zombie = (x: number, z: number): Mob => ({ id: nextId++, type: 'hostile', name: 'zombie', position: new Vec3(x, 64, z), isValid: true, height: 1.95 });
 
-const SHIELD: FakeItem[] = [{ name: 'iron_sword', count: 1 }, { name: 'shield', count: 1 }];
+/** A shot made by hand over a friend in the line of fire (helpers' shoot): field() records it in place of a target. */
+const BY_HAND = 'by-hand';
+
+const SHIELD: FakeItem[] =[{ name: 'iron_sword', count: 1 }, { name: 'shield', count: 1 }];
 const SWORD: FakeItem[] = [{ name: 'iron_sword', count: 1 }];
 const BOW: FakeItem[] = [{ name: 'bow', count: 1 }, { name: 'arrow', count: 64 }];
 
@@ -45,7 +48,10 @@ function field() {
   const players: Record<string, { entity: unknown }> = { Paul: { entity: commander } };
   const shots = new Map<FakeBot, unknown[]>();
   let id = 10;
-  /** A bot of Paul's standing on the block (x, 63, z). Archers shoot at once: an arrow leaves 20 ms after hawkEye is told. */
+  /**
+   * A bot of Paul's standing on the block (x, 63, z). Archers shoot at once: an arrow leaves 20 ms after hawkEye is
+   * told, or when a bow drawn by hand (a shot over a friend in the way) is released, recorded as `BY_HAND`.
+   */
   const add = (name: string, x: number, z: number, items: FakeItem[]): FakeBot => {
     const b = h.bot(name, [PAUL], items);
     b.entity.position = new Vec3(x + 0.5, 64, z + 0.5);
@@ -62,6 +68,15 @@ function field() {
       const left = (b.inventory.items().find((i) => i.name === 'arrow')?.count ?? 1) - 1;
       setTimeout(() => b.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: left }]), 20);
     }) as never;
+    b.deactivateItem = () => {
+      b.calls.push('deactivateItem');
+      const drawn = b.usingHeldItem && b.heldItem?.name === 'bow';
+      b.usingHeldItem = false;
+      if (!drawn) return;
+      shots.get(b)!.push(BY_HAND);
+      const left = (b.inventory.items().find((i) => i.name === 'arrow')?.count ?? 1) - 1;
+      b.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: left }]);
+    };
     return b;
   };
   const spawn = (m: Mob): Mob => {
@@ -109,18 +124,68 @@ test('mur-de-boucliers: facing west the guards line up along z at the block look
   guards.forEach((g, i) => assert.ok(g.calls.filter((c) => c === 'deactivateItem').length > lowered[i]!, `${g.username} lowered its shield to walk`));
   assert.equal(o.status, 'running');
   assert.equal(f.h.runner.running().length, 1);
-
-  // A zombie within `reach` (4) of one slot only: that guard lowers its shield and fights it, the others hold.
-  const z = f.spawn(zombie(5, 12));
-  const fighter = guards.find((g) => g.entity.position.x === 1.5)!;
-  await until(() => fighter.pvp.target === z, 2_000, 'the guard nearest the zombie on it');
-  assert.equal(fighter.usingHeldItem, false);
-  assert.equal(on(guards, z), 1);
-  assert.ok(guards.filter((g) => g !== fighter).every(shieldUp), 'the others keep their shields up');
-  z.isValid = false;
-  await until(() => fighter.pvp.target === null && shieldUp(fighter), 2_000, 'back on its slot, shield up');
-  assert.deepEqual(xz(fighter), [1.5, 10.5]);
   await f.h.runner.stopAll();
+});
+
+test('mur-de-boucliers: a guard keeps its shield up with a zombie at the wall; hit in melee it hits back once, then raises its shield again', async () => {
+  const f = field();
+  const guards = [f.add('Guard0', -3, 3, SHIELD), f.add('Guard1', -3, -2, SHIELD), f.add('Guard2', -3, 0, SHIELD)];
+  await f.start('mur-de-boucliers', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 10, name: 'stone' }, trigger: { kind: 'use', item: 'shield' } }));
+  try {
+    await until(() => guards.every((g) => g.entity.position.z === 10.5 && shieldUp(g) && facing(g, 0)), 3_000, 'the wall facing south');
+    const g = guards.find((b) => b.entity.position.x === 0.5)!;
+
+    // A zombie 1.5 blocks in front of the wall: nobody leaves the wall or lowers a shield for it (before, the nearest
+    // guard went to fight anything within `reach` of its slot).
+    const z = f.spawn(zombie(0.5, 12));
+    await tick(600);
+    assert.ok(guards.every(shieldUp), 'every shield still up');
+    assert.ok(guards.every((b) => b.hits.length === 0 && b.pvp.target === null), 'nobody struck or chased it');
+
+    // It hits Guard1's shield: one blow back, at it, with the shield down for it, then the shield up again.
+    const before = g.calls.length;
+    g.emit('meleeHit', z, { blocked: true });
+    await until(() => g.hits.length === 1, 1_000, 'the blow back');
+    assert.equal(g.hits[0], z);
+    await until(() => shieldUp(g), 1_000, 'the shield up again');
+    const after = g.calls.slice(before);
+    const lower = after.indexOf('deactivateItem');
+    const blow = after.indexOf('attack');
+    assert.ok(lower >= 0 && lower < blow && blow < after.lastIndexOf('activateItem(offHand)'), `shield down, blow, shield up: ${after.join(' ')}`);
+    await tick(600);
+    assert.equal(g.hits.length, 1, 'once per hit');
+    assert.deepEqual(xz(g), [0.5, 10.5], 'on its slot');
+    assert.ok(guards.filter((b) => b !== g).every((b) => b.hits.length === 0 && shieldUp(b)), 'the others did nothing');
+
+    // A friend's blow (isFriend), and a hit from far off (no melee: beyond arm's reach plus `reach`), are not answered.
+    g.emit('meleeHit', f.commander, { blocked: false });
+    g.emit('meleeHit', f.spawn(zombie(0.5, 25)), { blocked: false });
+    await tick(600);
+    assert.equal(g.hits.length, 1);
+    assert.ok(shieldUp(g));
+  } finally {
+    await f.h.runner.stopAll();
+  }
+});
+
+test('mur-de-boucliers: hit by an attacker out of arm\'s reach, the guard steps toward it, strikes once and walks back to its slot', async () => {
+  const f = field();
+  const g = f.add('Guard0', -3, 0, SHIELD);
+  await f.start('mur-de-boucliers', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 10, name: 'stone' }, trigger: { kind: 'use', item: 'shield' } }));
+  try {
+    await until(() => g.entity.position.z === 10.5 && shieldUp(g), 3_000, 'on its slot');
+    // Knocked back by the shield, the zombie stands 4 blocks off: a step toward it first.
+    const z = f.spawn(zombie(0.5, 14.5));
+    g.emit('meleeHit', z, { blocked: true });
+    await until(() => (g.pathfinder.goal as { entity?: unknown } | null)?.entity === z, 1_000, 'a step toward it');
+    assert.equal(g.hits.length, 0, 'no blow out of reach');
+    g.entity.position = new Vec3(0.5, 64, 12.5); // the step
+    await until(() => g.hits.length === 1, 1_000, 'the blow');
+    await until(() => xz(g)[1] === 10.5 && shieldUp(g), 2_000, 'back on its slot, shield up');
+    assert.equal(g.hits.length, 1);
+  } finally {
+    await f.h.runner.stopAll();
+  }
 });
 
 /** The goal's class name: GoalBlock is a slot exactly, GoalNear the loose goal of a slot not reached in 10 s. */
@@ -244,7 +309,8 @@ test('epee: looking at the ground, the bots hold that spot (guards on a ring of 
   // A zombie near the point, 25 blocks from the commander: fought, because the point is what they hold.
   const z = f.spawn(zombie(25, 5));
   await until(() => on(guards, z) === 2, 2_000, 'the guards on it');
-  await until(() => archers.every((a) => f.shots.get(a)!.includes(z)), 2_000, 'the archers on it');
+  // A guard on its ring can stand between an archer and the zombie: that archer shoots over it, by hand.
+  await until(() => archers.every((a) => f.shots.get(a)!.some((s) => s === z || s === BY_HAND)), 2_000, 'the archers on it');
 
   // Looking at the sky: defend the commander, and that zombie is now outside the circle around them.
   const r = await f.click('epee', f.snap({ yaw: -90, pitch: -60, trigger: { kind: 'use', item: 'iron_sword' } }));
@@ -278,6 +344,40 @@ test('ligne-archers: the line stands `back` blocks short of the point, across th
   await f.h.runner.stopAll();
 });
 
+test('ligne-archers behind a shield wall: each archer shoots over the guard 2 blocks in front of it at once, from its slot (by hand, a steep arc), not into its back', { timeout: 15_000 }, async () => {
+  const f = field();
+  const archers = [-2, 0, 2].map((x, i) => f.add(`Archer${i}`, x, -3, BOW));
+  // A manual release lets an arrow go (hawkEye's shots are recorded by field()).
+  const released = new Map<FakeBot, number[]>();
+  for (const a of archers) {
+    released.set(a, []);
+    a.deactivateItem = () => {
+      a.calls.push('deactivateItem');
+      if (!a.usingHeldItem) return;
+      a.usingHeldItem = false;
+      released.get(a)!.push(a.entity.pitch);
+      const left = (a.inventory.items().find((i) => i.name === 'arrow')?.count ?? 1) - 1;
+      a.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: left }]);
+    };
+  }
+  // The wall: one of Paul's guards 2 blocks in front of each archer's slot (x −1.5, 0.5, 2.5 at z 8.5).
+  [-2, 0, 2].forEach((x, i) => f.add(`Guard${i}`, x, 10, SHIELD));
+  await f.start('ligne-archers', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 12, name: 'grass_block' }, trigger: { kind: 'use', item: 'arrow' } }), ['back=4']);
+  try {
+    await until(() => archers.every((a) => a.entity.position.z === 8.5), 3_000, 'the line formed');
+    const z = f.spawn(zombie(0.5, 16));
+    await until(() => archers.every((a) => released.get(a)!.length > 0), 4_000, 'every archer shooting');
+    for (const a of archers) {
+      assert.equal(f.shots.get(a)!.length, 0, `${a.username}: no flat hawkEye arc into the guard's back`);
+      assert.ok(released.get(a)!.every((p) => p > 0.5), `${a.username} shot upward over the wall: ${released.get(a)}`);
+      assert.equal(a.entity.position.z, 8.5, 'from its slot, no step aside');
+    }
+    z.isValid = false;
+  } finally {
+    await f.h.runner.stopAll();
+  }
+});
+
 test('ligne-archers: past 8 archers, two ranks 2 blocks apart', async () => {
   const f = field();
   const archers = Array.from({ length: 10 }, (_, i) => f.add(`Archer${i}`, i - 5, -6, BOW));
@@ -292,7 +392,8 @@ test('ligne-archers: past 8 archers, two ranks 2 blocks apart', async () => {
 
 test('tir from any item: the creature nearest the block pointed at (within `near`) is shot; farther than that, the volley goes on the block', async () => {
   const f = field();
-  const archers = [f.add('Archer0', 0, 0, BOW), f.add('Archer1', 2, 0, BOW)];
+  // Side by side across their line of fire (one beside the other's line would be shot over: helpers' shoot).
+  const archers = [f.add('Archer0', 0, 0, BOW), f.add('Archer1', 0, 2, BOW)];
   // A stick's right-click at the block (10, 63, 0): the zombie 2.8 blocks from its top is the target.
   const z = f.spawn(zombie(12.5, 2.5));
   await f.click('tir', f.snap({ yaw: -90, lookBlock: { x: 10, y: 63, z: 0, name: 'stone' }, trigger: { kind: 'use', item: 'stick' } }));
@@ -315,7 +416,8 @@ test('tir from any item: the creature nearest the block pointed at (within `near
 
 test('tir: an arrow in the ground sends a volley, `volley` arrows per archer spread over the disc, from where they stand', async () => {
   const f = field();
-  const archers = [0, 2, 4].map((x, i) => f.add(`Archer${i}`, x, 0, BOW));
+  // Out of each other's line of fire to the disc.
+  const archers = [0, -2, -4].map((z, i) => f.add(`Archer${i}`, 0, z, BOW));
   const hit = { x: 20.5, y: 64.05, z: 10.5 };
   const r = await f.click('tir', f.snap({ yaw: -60, trigger: { kind: 'arrow-hit', item: 'bow', hit: { position: hit } } }), ['volley=3', 'spread=3']);
   assert.ok(r.ok && 'started' in r && r.started, r.text);

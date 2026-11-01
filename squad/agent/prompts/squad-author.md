@@ -48,6 +48,10 @@ Every tool except `get_api_reference` takes the ticket from the first message.
   `depositItemIntoChest`, …) to raw mineflayer for anything they cover: they are proven on the real server and throw
   errors that say what and where. Use raw mineflayer (`bot.pathfinder`, `bot.dig`, `bot.setControlState`,
   `bot.on(...)`) for everything else: the bot is a real Mineflayer bot.
+- **Combat events and friends in the way**: `bot.on('meleeHit', (attacker, { blocked }) => …)` fires when the bot is
+  hit in melee, including a blow its raised shield stopped (mineflayer's `entityHurt` misses those); check
+  `isFriend(attacker)`. `shoot` shoots over a friend standing in the line of fire (a steeper, weaker arc) and throws
+  "no clear line of fire" when no arc passes over: step aside then.
 - **The commander**: `ctx.commander.at` is exactly where they stood and looked when they typed the order
   (`lookBlock` = the block under their crosshair, often the target: a chest, a spot to build at). For a moving
   target use `ctx.commander.entity(bot)` (null when out of range: handle it).

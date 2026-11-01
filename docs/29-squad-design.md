@@ -382,15 +382,18 @@ Decisions:
    target of item 5, whatever item carries it; the item in brackets is only the obvious one:
    - **`mur-de-boucliers`** (e.g. a shield): the guards (`hasItem: 'shield'`) line up perpendicular to the view at
      the point, or a few blocks in front of the player when it is too far, not standable or the sky (a bow carrying it
-     places the wall where the arrow lands). They face along the view and raise their shields once in place. Hostiles
-     or enemies that reach the line are fought, leashed to the slot; the guard then returns to its slot.
+     places the wall where the arrow lands). They face along the view and raise their shields once in place. A guard
+     goes after nobody: hit in melee, blocked or not, it hits back once (a step toward the attacker when out of reach),
+     then raises its shield again (Paul, 2026-11-01; before, guards fought whatever reached the line).
    - **`epee`** (e.g. a sword):
      - A target: everyone attacks it, archers shooting and at most 2 guards on it. The other guards fight what is
        near it. Once it is dead or gone, the bots defend the commander.
      - No target, a point: the bots hold that spot, like `defend` anchored on a position instead of the commander.
      - Nothing (the sky), or a friend with no target near them: the bots defend the commander.
    - **`ligne-archers`** (e.g. an arrow, used): the archers form a line perpendicular to the view, a few blocks short
-     of the point (on the player's side), and shoot threats within range from their slots.
+     of the point (on the player's side), and shoot threats within range from their slots. A friend in front of an
+     archer (a shield wall) is shot over at once, in an arc above their head (Paul, 2026-11-01; `shoot` does it for
+     every order).
    - **`tir`** (e.g. a bow; `bounded`): the archers shoot from where they stand.
      - At a target: until it is dead or a few seconds pass.
      - No target, a point: a volley of N arrows each, spread around the point.
@@ -898,6 +901,27 @@ completely, so missed events cannot leave it wrong.
   crossbow is flown at 3.15 blocks per tick (`CROSSBOW_SPEED`), in this check and in `bowAim`. Test: `helpers.test.ts`
   (the +1° arc at 9 blocks is refused and the shot aimed by `bowAim` onto the point; an arc that lands is still
   hawkEye's). Live after the fix: the stick's volley landed all 6 within 3 blocks of its point.
+- **The shield wall and the archers behind it (Paul, 2026-11-01).**
+  1. *A guard holds its shield and only hits back.* `mur-de-boucliers` no longer fights whatever comes within `reach`
+     of a slot: a guard hit in melee hits back once, then raises its shield again. Mineflayer cannot say who hit a
+     raised shield: the server sends entity status 29 (`BLOCK_WITH_SHIELD`), with no attacker, and mineflayer emits
+     nothing for it (its `entityHurt` is the damage_event of an unblocked hit). The runtime's `meleeHit` event
+     (`bots/hits.ts`) names the attacker by the arm swing nearest the block. Tests: `hits.test.ts`,
+     `item-orders.test.ts`.
+  2. *Archers shot into the guards' backs.* hawkEye's trajectory check raycasts blocks, not entities, and the flat arc
+     to a target beyond a wall passes at head height through it. With speed 3 there is no arc between flat and a
+     near-vertical lob that clears a guard 2 blocks ahead and lands 10 blocks out, so `shoot` also shortens the draw: a
+     slower arrow on a steeper arc (`overAim`). The cost is damage (2–3 instead of 6). For every order, not only
+     `ligne-archers`. Tests: `helpers.test.ts`, `item-orders.test.ts`.
+  3. *A partial draw must last exactly its ticks* (found live). The server counts the ticks that start during the
+     hold, so a hold of n ticks and a half is n + 1 ticks half the time, and the arrow is 17% faster at 7 ticks. Held
+     `n × 50 + 25` ms, two archers used 54 + 53 arrows on one husk; held `n × 50 − 3`, 23 + 23. The live scenario
+     records each arrow's launch speed from its spawn packet (0.69 ×44, 0.82 ×4 for a 6-tick draw).
+  4. *A guard's sword sweep knocks its neighbour out of the wall* (seen live, up to 0.9 blocks). Vanilla applies the
+     sweep's knockback before the damage, which the friendly-fire hook cancels; the neighbour walks back. Not fixed
+     (it would take a mixin, or an axe instead of the sword).
+  Live on `dev/`: `live-tests/items.ts` (a NoAI husk left alone, an attacking husk killed by 4 blows back; archers 2
+  blocks behind the guards kill a husk 6 blocks beyond the wall from their slots).
 - **Stopping the runtime on Windows:** stopping `npm start` from outside can leave `tsx src/supervisor.ts` and its
   child running. Use Ctrl+C in its console, or stop the `node` processes.
 - **Performance (docs/31, implemented by docs/32, 2026-10-30).** Measured: the bots' A* filled the one event loop at

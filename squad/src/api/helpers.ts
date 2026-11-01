@@ -844,6 +844,108 @@ export const LOOK_SETTLE_MS = 60;
 export const POINT_REACH = 1;
 /** A crossbow's arrow leaves at 3.15 blocks per tick (CrossbowItem), a full-draw bow's at 3. */
 export const CROSSBOW_SPEED = 3.15;
+/** A bow drawn this many ticks (1 s) shoots at full speed. */
+export const FULL_DRAW_TICKS = 20;
+/** The shortest partial draw `shoot` makes: one tick fewer (a lagging server) still fires (pull ≥ 0.1 from 3 ticks). */
+export const MIN_DRAW_TICKS = 4;
+/**
+ * A partial draw of n ticks is held n × 50 ms less this (the re-aim and the timers add about as much). The server
+ * counts the ticks that start between the use and the release: a hold of exactly n ticks counts n, whatever the phase;
+ * n ticks and a half counts n + 1 half the time, a 17% faster arrow at 7 ticks that lands a third farther (live, two
+ * archers over a wall used 54 + 53 arrows on one husk with 25 ms of slack, 23 + 23 without).
+ */
+const DRAW_EARLY_MS = 3;
+/**
+ * A friend counts as in the line of fire within this many blocks of it, horizontally: half a body (0.3), Minecraft's
+ * margin around an entity for a projectile (0.3), and some slack.
+ */
+export const LINE_HALF_WIDTH = 0.8;
+/** How far above a friend's head (and below its feet) an arc must pass: Minecraft's margin, and some slack. */
+export const HEAD_CLEARANCE = 0.5;
+
+/** The speed (blocks per tick) of an arrow from a bow drawn `ticks` ticks: BowItem.getPullProgress × 3. */
+export function bowSpeed(ticks: number): number {
+  const t = ticks / 20;
+  return Math.min(1, (t * t + 2 * t) / 3) * 3;
+}
+
+/** A friend standing in the line of fire: how far along it (horizontally), its feet and its height. */
+interface InTheWay {
+  name: string;
+  along: number;
+  feet: number;
+  height: number;
+}
+
+/**
+ * The order's friends (isTeammate) standing between the shooter at `from` (feet) and `to`, within LINE_HALF_WIDTH of
+ * the line between them, nearest first. A bot outside an order has none.
+ */
+function friendsInLine(bot: Bot, from: Vec3, to: Vec3, target: Entity | null): InTheWay[] {
+  if (!order(bot)?.friends?.size) return [];
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const d = Math.hypot(dx, dz);
+  if (d < 1) return [];
+  const ux = dx / d;
+  const uz = dz / d;
+  const out: InTheWay[] = [];
+  for (const e of Object.values(bot.entities ?? {})) {
+    if (!e || e === bot.entity || e === target || !e.position || e.isValid === false || e.username === bot.username || !isTeammate(bot, e)) continue;
+    const rx = e.position.x - from.x;
+    const rz = e.position.z - from.z;
+    const along = rx * ux + rz * uz;
+    if (along <= 0 || along >= d || Math.abs(rx * uz - rz * ux) > LINE_HALF_WIDTH) continue;
+    out.push({ name: e.username ?? '?', along, feet: e.position.y, height: e.height ?? 1.8 });
+  }
+  return out.sort((a, b) => a.along - b.along);
+}
+
+/** Whether an arrow shot from `from` (feet) at `elevationDeg` and `speed` passes over (or under) every friend in the way. */
+function arcClears(from: Vec3, elevationDeg: number, speed: number, inTheWay: InTheWay[]): boolean {
+  // The front, middle and back of each body (half a body and Minecraft's margin on each side).
+  const depth = LINE_HALF_WIDTH - 0.2;
+  for (const f of inTheWay) {
+    for (const x of [f.along - depth, f.along, f.along + depth]) {
+      if (x <= 0.3) continue;
+      const r = arrowHeightAt(elevationDeg, x, speed);
+      if (!r) continue;
+      const y = from.y + ARROW.eye + r.y;
+      if (y > f.feet - HEAD_CLEARANCE && y < f.feet + f.height + HEAD_CLEARANCE) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * An aim over the friends in the way (a shield wall in front of the archers): the arc that passes over every one of
+ * them and through `to`, with the shortest flight. First the flattest: low arcs from a full draw down to
+ * MIN_DRAW_TICKS (a shorter draw, a slower arrow, a steeper arc that also hits less hard); then high arcs (lobs),
+ * slowest first. A partial draw must also clear with one tick fewer, as a lagging server counts it. Null when no arc
+ * clears. A crossbow fires at one speed only.
+ */
+export function overAim(
+  from: PosLike,
+  to: PosLike,
+  inTheWay: InTheWay[],
+  opts: { weapon?: 'bow' | 'crossbow'; draws?: number[] } = {},
+): { yaw: number; pitch: number; draw: number; speed: number; ticks: number } | null {
+  const f = toVec3(from, 'overAim from');
+  const t = toVec3(to, 'overAim to');
+  const fixed = opts.weapon === 'crossbow';
+  const draws = opts.draws ?? (fixed ? [FULL_DRAW_TICKS] : Array.from({ length: FULL_DRAW_TICKS - MIN_DRAW_TICKS + 1 }, (_, i) => FULL_DRAW_TICKS - i));
+  const speedOf = (n: number): number => (fixed ? CROSSBOW_SPEED : bowSpeed(n));
+  const clears = (n: number, elevation: number): boolean =>
+    arcClears(f, elevation, speedOf(n), inTheWay) && (fixed || n >= FULL_DRAW_TICKS || arcClears(f, elevation, speedOf(n - 1), inTheWay));
+  for (const arc of ['low', 'high'] as const) {
+    for (const n of arc === 'low' ? draws : [...draws].reverse()) {
+      const a = bowAim(f, t, speedOf(n), arc);
+      if (Math.abs(a.error) > 0.05 || !Number.isFinite(a.ticks)) continue;
+      if (clears(n, -a.pitch)) return { yaw: a.yaw, pitch: a.pitch, draw: n, speed: speedOf(n), ticks: a.ticks };
+    }
+  }
+  return null;
+}
 
 /** A live entity (prismarine-entity always has `isValid`), as opposed to a position, a block or a snapshot ref. */
 function isLiveEntity(t: unknown): t is Entity {
@@ -861,6 +963,11 @@ function isLiveEntity(t: unknown): t is Entity {
  * shot is made by hand. Its trajectory for a position is also refused when it would not land on the point (POINT_REACH):
  * hawkEye accepts an arc passing up to 4 blocks from its target. A snapshot ref (`at.lookEntity`) is a position here:
  * pass `entityOf(bot, ref)` for the live one.
+ *
+ * A friend of the order in the line of fire whom the flat arc would hit (the shield wall in front of an archer line)
+ * is shot over: overAim's arc passing above every friend in the way and onto the target, a shorter draw (a slower,
+ * steeper, weaker arrow) or a lob, made by hand at once. When no arc of the bow passes over (or with a crossbow), it
+ * throws "… in the line of fire … (no clear line of fire? step aside)" before drawing.
  */
 export async function shoot(bot: Bot, target: Entity | PosLike | null | undefined, opts: { weapon?: 'bow' | 'crossbow' } = {}): Promise<{ shot: true }> {
   const label = `shoot(${who(bot)})`;
@@ -912,12 +1019,41 @@ export async function shoot(bot: Bot, target: Entity | PosLike | null | undefine
     const a = bowAim(bot.entity.position, point as Vec3, speed);
     await bot.look(mineflayerYaw(a.yaw), mineflayerPitch(a.pitch), true);
   };
+  // A friend in the line of fire (the shield wall in front of the archers): hawkEye checks blocks, not bodies, and the
+  // flat arc went into their backs. The arrow goes over them instead (overAim: a steeper arc from a shorter draw, else
+  // a lob), at once, from where the archer stands.
+  const aimPoint = (): Vec3 => (entity ? entity.position.offset(0, (entity.height ?? 1.8) / 2, 0) : (point as Vec3));
+  const inTheWay = friendsInLine(bot, bot.entity.position, aimPoint(), entity);
+  let over: ReturnType<typeof overAim> = null;
+  if (inTheWay.length > 0 && !arcClears(bot.entity.position, -bowAim(bot.entity.position, aimPoint(), speed).pitch, speed, inTheWay)) {
+    over = weapon === 'bow' ? overAim(bot.entity.position, aimPoint(), inTheWay) : null;
+    if (!over) {
+      const names = inTheWay.map((f) => f.name).join(', ');
+      throw new HelperError(`${label}: ${names} in the line of fire to ${what} from ${fmt(bot.entity.position)}, and no arc of the ${weapon} passes over (no clear line of fire? step aside)`);
+    }
+  }
+  /** The shot over the friends: aim, draw `draw` ticks, aim again at where the target is now, release. */
+  const overShot = async (o: NonNullable<typeof over>): Promise<void> => {
+    await bot.look(mineflayerYaw(o.yaw), mineflayerPitch(o.pitch), true);
+    bot.activateItem();
+    const hold = o.draw >= FULL_DRAW_TICKS ? 1_100 : o.draw * 50 - DRAW_EARLY_MS;
+    await sleepMs(Math.max(0, hold - LOOK_SETTLE_MS));
+    if (entity) {
+      const now = bot.entity.position;
+      const again = overAim(now, aimPoint(), friendsInLine(bot, now, aimPoint(), entity), { draws: [o.draw] });
+      if (again) await bot.look(mineflayerYaw(again.yaw), mineflayerPitch(again.pitch), true);
+    }
+    await sleepMs(LOOK_SETTLE_MS);
+    bot.deactivateItem();
+    await waitArrow(500);
+  };
   try {
     if (bot.heldItem?.name !== weapon) await bot.equip(item, 'hand');
     // hawkEye aims for gravity and the target's motion, but when it finds no clear trajectory it silently fires
     // nothing and keeps the bow drawn (found live: an archer "shot" for a minute through leaves without using an
     // arrow, docs/29 §16).
-    if (hawk?.oneShot && hawkCanAim()) {
+    if (over) await overShot(over);
+    else if (hawk?.oneShot && hawkCanAim()) {
       hawk.oneShot(hawkTarget, weapon);
       if (await waitArrow(SHOT_WAIT_MS[weapon])) return { shot: true };
       // Still drawn with no trajectory: aim by hand, then stop it (stopping releases the drawn bow, at our aim).
@@ -926,18 +1062,21 @@ export async function shoot(bot: Bot, target: Entity | PosLike | null | undefine
       hawk.stop?.();
       if (await waitArrow(300)) return { shot: true };
     }
-    // A manual shot: aim, draw, release.
-    await aim();
-    bot.activateItem();
-    await sleepMs(1_100);
-    bot.deactivateItem();
-    await waitArrow(500);
+    if (!over) {
+      // A manual shot: aim, draw, release.
+      await aim();
+      bot.activateItem();
+      await sleepMs(1_100);
+      bot.deactivateItem();
+      await waitArrow(500);
+    }
   } catch (e) {
     passControl(e);
     throw new HelperError(`${label}: ${(e as Error).message} at ${what}`);
   }
   if (!gone()) {
-    throw new HelperError(`${label}: no arrow left the bow at ${what} from ${fmt(bot.entity.position)} (no clear line of fire? move closer or into the open)`);
+    const across = over ? ` over ${inTheWay.map((f) => f.name).join(', ')}` : '';
+    throw new HelperError(`${label}: no arrow left the bow${across} at ${what} from ${fmt(bot.entity.position)} (no clear line of fire? move closer or into the open)`);
   }
   return { shot: true };
 }
@@ -1241,10 +1380,15 @@ function arrowHeightAt(elevationDeg: number, d: number, speed: number): { y: num
 /**
  * The bow's aim to hit `to` from a bot standing at `from` (feet), in the commander's convention: yaw and pitch in
  * Minecraft degrees (pitch negative = up). The low arc: the smallest elevation whose flight passes through the point
- * (simulated tick by tick, ARROW); out of range, the elevation that gets nearest. `error` is how far above (+) or
- * below the point the arrow passes, `ticks` its flight time.
+ * (simulated tick by tick, ARROW); `arc: 'high'`, the largest (a lob). Out of range, the elevation that gets nearest.
+ * `error` is how far above (+) or below the point the arrow passes, `ticks` its flight time.
  */
-export function bowAim(from: PosLike, to: PosLike, speed: number = ARROW.speed): { yaw: number; pitch: number; error: number; ticks: number } {
+export function bowAim(
+  from: PosLike,
+  to: PosLike,
+  speed: number = ARROW.speed,
+  arc: 'low' | 'high' = 'low',
+): { yaw: number; pitch: number; error: number; ticks: number } {
   const f = toVec3(from, 'bowAim from');
   const t = toVec3(to, 'bowAim to');
   const dx = t.x - f.x;
@@ -1261,20 +1405,38 @@ export function bowAim(from: PosLike, to: PosLike, speed: number = ARROW.speed):
     const r = arrowHeightAt(e, d, speed);
     return { yaw, pitch: snap(-e), error: r ? r.y - dy : -Infinity, ticks: r ? r.ticks : Infinity };
   };
-  // The miss rises with the elevation up to the longest-range angle, then falls: the low arc is its first root.
-  let lo = -89;
-  if (miss(lo) >= 0) return result(lo);
-  for (let e = -88; e <= 89; e++) {
-    if (miss(e) >= 0) {
-      let hi = e;
-      for (let i = 0; i < 40; i++) {
-        const mid = (lo + hi) / 2;
-        if (miss(mid) >= 0) hi = mid;
-        else lo = mid;
+  // The miss rises with the elevation up to the longest-range angle, then falls: the low arc is its first root, the
+  // high arc its last.
+  if (arc === 'high') {
+    let above = 89;
+    if (miss(above) >= 0) return result(above);
+    for (let e = 88; e >= -89; e--) {
+      if (miss(e) >= 0) {
+        let at = e;
+        for (let i = 0; i < 40; i++) {
+          const mid = (at + above) / 2;
+          if (miss(mid) >= 0) at = mid;
+          else above = mid;
+        }
+        return result(at);
       }
-      return result(hi);
+      above = e;
     }
-    lo = e;
+  } else {
+    let lo = -89;
+    if (miss(lo) >= 0) return result(lo);
+    for (let e = -88; e <= 89; e++) {
+      if (miss(e) >= 0) {
+        let hi = e;
+        for (let i = 0; i < 40; i++) {
+          const mid = (lo + hi) / 2;
+          if (miss(mid) >= 0) hi = mid;
+          else lo = mid;
+        }
+        return result(hi);
+      }
+      lo = e;
+    }
   }
   // Out of range: the elevation that carries farthest at the point's height, falling short by `error` (negative).
   let best = 0;

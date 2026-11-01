@@ -144,23 +144,34 @@ test('raid: it fights the other army on the way (two guards per enemy at most, a
   const s = battlefield(4, 2);
   const shots: unknown[] = [];
   for (const a of s.archers) {
+    const release = (): void => a.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: a.inventory.items().find((i) => i.name === 'arrow')!.count - 1 }]);
     a.hawkEye.oneShot = ((t: unknown) => {
       shots.push(t);
-      const left = a.inventory.items().find((i) => i.name === 'arrow')!.count - 1;
-      setTimeout(() => a.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: left }]), 30);
+      setTimeout(release, 30);
     }) as never;
+    // The guards stand between the archers and the enemies: those shots go over them, drawn by hand (helpers' shoot).
+    a.deactivateItem = () => {
+      a.calls.push('deactivateItem');
+      if (!a.usingHeldItem || a.heldItem?.name !== 'bow') return;
+      a.usingHeldItem = false;
+      shots.push('by-hand');
+      release();
+    };
   }
   s.foe('Paul', 100);
   const e1 = s.foe('PaulGuard1', 10, 3);
   const e2 = s.foe('PaulGuard2', 10, -3);
   await s.start(['x=100', 'y=64', 'z=0', 'target=Paul', 'radius=24']);
-  const on = (e: unknown) => s.guards.filter((g) => g.pvp.target === e).length;
-  await until(() => on(e1) === 2 && on(e2) === 2, 2_000, 'two guards on each enemy bot');
-  await until(() => shots.length >= 2, 3_000, 'the archers shooting');
-  const raiderEntities = new Set(s.raiders.map((b) => b.entity));
-  assert.ok(shots.every((t) => !raiderEntities.has(t as never)), 'no arrow at a raider');
-  assert.ok(s.guards.every((g) => !raiderEntities.has(g.pvp.target as never)));
-  await s.h.runner.stopAll();
+  try {
+    const on = (e: unknown) => s.guards.filter((g) => g.pvp.target === e).length;
+    await until(() => on(e1) === 2 && on(e2) === 2, 2_000, 'two guards on each enemy bot');
+    await until(() => shots.length >= 2, 3_000, 'the archers shooting');
+    const raiderEntities = new Set(s.raiders.map((b) => b.entity));
+    assert.ok(shots.every((t) => !raiderEntities.has(t as never)), 'no arrow at a raider');
+    assert.ok(s.guards.every((g) => !raiderEntities.has(g.pvp.target as never)));
+  } finally {
+    await s.h.runner.stopAll(); // also on a failure: the bots' loops would keep the test process alive
+  }
 });
 
 test('raid: at the point it hunts the nearest enemy, then ends after `quiet` seconds without one', async () => {

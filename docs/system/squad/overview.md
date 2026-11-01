@@ -250,6 +250,26 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
   range the elevation that carries farthest. A hand-aimed release now waits 60 ms after the look (`LOOK_SETTLE_MS`):
   `bot.look(…, true)` only sets the yaw and pitch, the look packet goes out with the next physics tick, and a release
   sent at once (as the entity path did after hawkEye gave up) flew at the old aim.
+- **`shoot` over a friend** (2026-11-01): hawkEye checks blocks, not bodies, so archers behind a shield wall shot
+  into the guards' backs. Before drawing, `shoot` looks for the order's friends (`isTeammate`) between the archer and
+  the target (an entity's body centre) within `LINE_HALF_WIDTH` (0.8) of the line, and flies the low arc past each
+  (its front, middle and back). If that arc passes within `HEAD_CLEARANCE` (0.5) of a body, it shoots `overAim`'s arc
+  at once, by hand, from where it stands: the flattest low arc through the target that clears every friend, from a
+  full draw down to `MIN_DRAW_TICKS` (4; a shorter draw is a slower arrow, `bowSpeed` = `BowItem.getPullProgress` × 3,
+  so a steeper and weaker arc), else a lob (high arcs, slowest first). A partial draw is held exactly its ticks (`ticks × 50 − 3` ms: the server counts the
+  ticks that start during the hold, so half a tick more is one tick more half the time, a faster arrow that lands
+  long) and must also clear one tick slower, as a lagging server counts it; an entity is re-aimed just before the release. No
+  arc clears, or a crossbow (one speed): `… in the line of fire … (no clear line of fire? step aside)`, without
+  drawing, which the archer line answers by stepping aside. In numbers (flat ground, a guard 2 blocks ahead): a target
+  10 blocks out takes a 7-tick draw at −62°, 20 blocks a 9-tick draw at −30°; a guard 4 ahead and a target at 6, a
+  10-tick lob at −83° (2.4 s of flight). Damage is the arrow's speed × 2: 2–3 instead of 6.
+- **`meleeHit`** (`bots/hits.ts`, installed on every bot after spawn): `bot.on('meleeHit', (attacker, { blocked }) =>
+  …)`. Unblocked, it is a `damage_event` on the bot whose direct source is its cause (not an arrow, a fireball or
+  fangs), a living entity within `MELEE_REACH` (5). Blocked, the server sends only entity status 29
+  (`BLOCK_WITH_SHIELD`), which names nobody and which mineflayer does not report: the attacker is the entity within
+  5 blocks whose arm swing (animation 0) came nearest, from 400 ms before the block to `SWING_LATE_MS` (150 ms) after
+  it (a mob swings in the tick of its hit, before it; a player's client sends its attack, then its swing). Nobody
+  swung (an arrow, an explosion): no event. Typed in `squad.d.ts` (`BotEvents`).
 - `entityOf(bot, ref)`: by `id` in `bot.entities`, else a player by `username`, else the nearest entity of that `name`
   within 4 blocks of the ref's position, the last only for a ref without an id: the id is the same for every client,
   so a ref whose id the bot lacks is dead or out of its sight, and another zombie next to where it stood is not it.
@@ -291,9 +311,9 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
 
 | Command | Example item | Roles | Params | As built |
 |---|---|---|---|---|
-| `mur-de-boucliers` | shield | `guards` (`hasItem: 'shield'`, min 1, reclaim) | `distance` 24, `spacing` 1 (1–3), `reach` 4; until stopped | `lineSlots(point, yaw, n, { spacing })` through `groundAt`, at the point above. Shield down to walk; on the slot `faceYaw(yaw)` and `raiseShield`, re-asserted every look. A hostile, or a non-friend player who is not a spectator, within `reach` of the slot: shield down, `attack` leashed to the slot (radius `reach` + 1), then back to the slot. « Mur de boucliers rompu. » |
+| `mur-de-boucliers` | shield | `guards` (`hasItem: 'shield'`, min 1, reclaim) | `distance` 24, `spacing` 1 (1–3), `reach` 4; until stopped | `lineSlots(point, yaw, n, { spacing })` through `groundAt`, at the point above. Shield down to walk; on the slot `faceYaw(yaw)` and `raiseShield`, re-asserted every look. A guard goes after nobody: hit in melee (`bot.on('meleeHit')`, below; the shield stopped the blow or not; a friend's ignored, one 2 s old forgotten), it lowers the shield and hits back once (`bot.attack`, best sword or axe in hand, eyes to hitbox ≤ 3), first stepping toward the attacker (`GoalFollow`, at most 1.5 s, not past `reach` from the slot) when out of arm's reach, then raises the shield again (back on the slot first if the step took it off). Attackers farther than `reach` + 3 from the slot, arrows and explosions: only blocked (since 2026-11-01; before, a guard fought anything within `reach` of its slot). « Mur de boucliers rompu. » |
 | `epee` | sword | `archers` (bow, reclaim), `melee` (no bow, reclaim) | `radius` 16, `seconds` 60, `near` 4; until stopped | `pointedTarget`'s entity (the one pointed at, or the nearest within `near` of the point) is the target, tracked by its id from then on: archers shoot it, at most 2 guards fight it, the other guards fight threats within `radius` of it (leashed to it), a bot that does not see it holds near the commander. Dead or gone (« Cible abattue (zombie). » when it was last within 20 blocks of a bot, else « Cible perdue de vue (…) : je reviens te défendre. ») or `seconds` (« Cible toujours debout après … ») → defend the commander. A point and no entity: defend that point (threats within `radius` of it, guards on a ring of 3, archers of 6 around it, by goals; fights leashed to it). The sky, or a friend with nobody near them: defend the commander as `defend` does (rings via `follow` with `offset`). A release without an entity changes nothing (its hit decides). Guards at most 2 per threat, archers prefer an untaken one and step 1–2 blocks aside after "no clear line of fire" |
-| `ligne-archers` | arrow (right-click) | `archers` (bow, min 1, reclaim) | `distance` 24, `spacing` 2, `back` 4, `range` 24; until stopped | Centre = point − `lookDir(yaw)` × `back`, through `groundAt`; two ranks (depth 2) past 8 archers. On its slot an archer faces the view and shoots threats within `range` of the centre: in front of the line (dot with `lookDir` > 0) and untaken first, then in front, then untaken. After "no clear line of fire": 1–2 blocks aside, shooting from there for 3 s, then back to the slot |
+| `ligne-archers` | arrow (right-click) | `archers` (bow, min 1, reclaim) | `distance` 24, `spacing` 2, `back` 4, `range` 24; until stopped | Centre = point − `lookDir(yaw)` × `back`, through `groundAt`; two ranks (depth 2) past 8 archers. On its slot an archer faces the view and shoots threats within `range` of the centre: in front of the line (dot with `lookDir` > 0) and untaken first, then in front, then untaken. A friend in front (a shield wall) is shot over at once from the slot (`shoot`, below). After "no clear line of fire": 1–2 blocks aside, shooting from there for 3 s, then back to the slot |
 | `tir` | bow | `archers` (bow, min 1, reclaim) | `volley` 3 (1–16), `spread` 3, `seconds` 8, `near` 4 (0–16); bounded, `maxMinutes` 1 | The target, from `pointedTarget`: an entity (pointed at, or the nearest within `near` of the point) → shoot it; else the point → a volley there; else « Aucune cible. ». The same from a stick's right-click, a bow's arrow or `/bots order tir`. A release with an entity starts on it; without, `ctx.commander.next(4000)`, then the release's look. A friend pointed at with nobody within `near` of them → « X est des nôtres : je ne tire pas dessus. » (never a volley onto a friend's position); an entity no archer sees → « Cible hors de vue des archers. ». Archers never move. An entity: every archer shoots it until dead or gone, or `seconds`. The ground: `volley` arrows per archer at points uniform over a disc of radius `spread`, y from `groundAt`. A later click retargets (a release waits for its hit, the next click). « Volée tirée : 9 flèches. », « Cible abattue (zombie) : 5 flèches. ». Archers reclaimed from a `ligne-archers` return to their slots there |
 
 ## `defend` and the damage rules (after a 20-bot fight, docs/29 §16)
@@ -472,8 +492,12 @@ clicks and sends each one; it decides nothing about what a click does.
 - **`mur-de-boucliers`:** the guards stand on the slots (RCON `Pos` within 0.2), `Rotation` 90.0 for yaw 90 and 0.0
   after the re-aim, shields up as another client sees them (flags 3). So the off-hand `use_item` raises a real
   shield and `faceYaw` sets the exact yaw. A guard whose shield starts in its inventory gets it into the off-hand
-  (`raiseShield`'s equip into slot 45). A husk 2 blocks in front of the line, 11 s after the guards reached it, is
-  killed, and each guard is back within 0.8 of its slot. Leaving the order lowers the shields.
+  (`raiseShield`'s equip into slot 45). Since 2026-11-01: a NoAI husk 1.5 blocks in front of the wall is left alone
+  (every shield up for 3 s). An attacking husk 2 blocks in front, 11 s after the guards reached the wall, is killed by
+  the guard it hits, 4 blows back (`meleeHit` from the blocked hits: status 29 and the husk's swing work on a real
+  server). The striker's sword sweep knocks its neighbour up to 0.9 off its slot (the sweep's knockback comes before
+  the damage the friendly-fire hook cancels); it walks back, and each guard is within 0.8 of its slot again. Leaving
+  the order lowers the shields.
 - **`tir`:** a volley of exactly 3 arrows per archer; 7 arrows (the captain's and the six) lie within 6 blocks of the
   hit. At a husk: « Cible abattue (husk) : 6 flèches. ».
 - **`epee`:** a NoAI husk looked at (`lookEntity` with its id, resolved by `entityOf`) is killed with at most 2 guards
@@ -489,6 +513,11 @@ clicks and sends each one; it decides nothing about what a click does.
   - `epee` bound to a stick: beside a husk the bots kill it (at most 2 guards on it); then on empty ground they hold
     it, each bot within 1.5 of its ring slot.
 - **`ligne-archers`:** the archers walk about 13 blocks to the line 4 blocks short of the point, 2 apart, `Rotation` 0.
+  Behind a `mur-de-boucliers` (`back=2`, a guard 2 blocks in front of each archer), they kill a NoAI husk 6 blocks
+  beyond the wall from their slots, shooting over the guards, with no "no clear line of fire": 23 + 23 arrows, launch
+  speeds (the captain's view of each arrow's spawn packet) 0.68–0.70 ×44 (a 6-tick draw) and 0.82 ×4 (7 ticks). The
+  first run held a draw half a tick long (`+ 25` ms) and used 54 + 53 arrows. At 2 damage an arrow and two archers
+  firing every ~0.4 s, many hits land in the husk's half-second of hurt immunity and do nothing.
 - **A bot given back works again:** guards a wall reclaimed from `defend` are back in it once the wall stops, and
   follow the captain about 14 blocks to a new spot (the `squad.parallel` live-array fix).
 
@@ -506,11 +535,15 @@ clicks and sends each one; it decides nothing about what a click does.
   formation helpers (`helpers.test.ts`: `lookDir`/`lineSlots` at yaw 0/90/180/−90 and ranks, `groundAt` on a synthetic
   column, `faceYaw` against mineflayer's conversions, `raiseShield`, `shoot` at a position through hawkEye and through
   the ballistics checked by an independent flight, a hawkEye arc that would fly past the point refused, `bowAim`,
-  `entityOf`); the four item commands
-  (`item-orders.test.ts`: the wall along z facing west, shields raised on arrival, a click re-forming it, a guard
-  fighting at its slot, a guard pushed off its slot long after the wall formed going back to the exact slot; `epee`'s
+  `entityOf`, `overAim` over a friend 1–4 blocks ahead checked by an independent flight at its draw and one tick
+  less, `shoot` over a friend by hand with a draw of exactly its ticks, hawkEye once the friend steps aside, a
+  crossbow refused); `meleeHit` (`hits.test.ts`: an unblocked hit by its cause, not an arrow or from afar; a
+  blocked one by the swing just before or after; none without a swing); the four item commands
+  (`item-orders.test.ts`: the wall along z facing west, shields raised on arrival, a click re-forming it, a zombie
+  at the wall left alone, a melee hit answered by one blow then the shield up again, a friend's or a far hit ignored,
+  a step toward an attacker out of reach then back to the slot, a guard pushed off its slot long after the wall formed going back to the exact slot; `epee`'s
   target with two guards on it and the anchor rings; the archer line `back` blocks short, front threats first, two
-  ranks; `tir`'s volley count and spread, release then hit, the 4 s wait, a friend refused, and
+  ranks, shots over a guard 2 blocks in front by hand from the slots; `tir`'s volley count and spread, release then hit, the 4 s wait, a friend refused, and
   archers taken from a line returning to their own slots; any item: `tir` and `epee` on the zombie nearest the block
   pointed at, the volley or the held point beyond `near`, a wall formed at an arrow's hit and not moved by a release);
   `pointedTarget` (`helpers.test.ts`: the point and the target by trigger, `near`, pending, and what does not qualify)).
@@ -582,6 +615,9 @@ clicks and sends each one; it decides nothing about what a click does.
   the ground, `groundAt` on anything but a flat floor (slabs, snow layers, water), and fights against mobs that move
   (every live husk had NoAI). The any-item reading passed live too (above); not live: a crossbow, `ligne-archers` from a
   bow, a friend pointed at.
+- **The shield wall and the archers over it** (2026-11-01) passed live against one husk each (above). Not live: a
+  player's blows on a shield (the swing after the block), a wall against several attackers or moving targets, archers
+  in two ranks behind a wall, and how fast 64 arrows run out at a short draw.
 - **The mod side of bound items** passed live on the dev server (above). Still not run on a server: multishot (a
   crossbow), a held right-click against the limiter, the lore and glint as a real client renders them (only the
   stack's data was read), a rebind, and a bound item given to another player.
