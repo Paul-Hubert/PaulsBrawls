@@ -13,8 +13,8 @@
 // those N), --stagger <ms> (default: the runtime's 4000), --center x,z (default: the nearest forest to spawn),
 // --no-pregen; experiments (bench-only, the runtime's defaults stay as they are): --tick-timeout, --think-timeout,
 // --search-radius, --plugins all|none|-autoEat,-hawkEye…, --view short|normal|tiny|<chunks>, --movements canDig=false,…,
-// --astar-budget <ms per 50 ms> (the runtime's pathfinding.astarBudgetMs), --workers <N> (the runtime's
-// pathfinding.workers, the pathfinding worker pool), --think-on-compute, --lookahead-cap <ticks>, --lookahead-memo <ticks>,
+// --astar-budget <ms per 50 ms> (the runtime's pathfinding.astarBudgetMs), --workers <N> (the runtime's workers.count:
+// A* on N reader workers over the shared world, docs/37 P4), --think-on-compute, --lookahead-cap <ticks>, --lookahead-memo <ticks>,
 // --lookahead-blockcache, --stuck-ticks, --mcdata-memo, --cheap-varint, --astar-blockcache, --astar-blockcache-world.
 // The server is read from SERVER_PROPERTIES (default ../run/server.properties). The production server is refused.
 
@@ -31,6 +31,7 @@ import { Vec3 } from 'vec3';
 
 import { parseConfig, DEFAULT_LIMITS } from '../src/config';
 import { start, type Started } from '../src/main';
+import type { PathOffloadStats } from '../src/bots/pathworkers/offload';
 import { boundPathfinder, type AbortableBot } from '../src/bots/hardening';
 import { loadPlugins, pathfinder, type PluginSet } from '../src/bots/plugins';
 import { keepDecodersAlive, RECIPES_AS_BYTES } from '../src/bots/protocol';
@@ -73,7 +74,7 @@ const VARIANT = {
   movements: Object.fromEntries((opt('movements') ?? '').split(',').filter(Boolean).map((kv) => kv.split('=')).map(([k, v]) => [k, v === 'true' ? true : v === 'false' ? false : Number(v)])) as Record<string, unknown>,
   /** The runtime's own A* budget (config pathfinding.astarBudgetMs, the patched AStar.setBudget), not a prototype. */
   astarBudget: opt('astar-budget') === undefined ? undefined : Number(opt('astar-budget')),
-  /** The runtime's pathfinding worker pool (config pathfinding.workers; capped at the cores but one). */
+  /** The runtime's reader workers (config workers.count, which turns the shared world on; capped at the cores but one). */
   workers: Number(opt('workers') ?? 0),
   thinkOnCompute: flag('think-on-compute'),
   lookaheadCap: Number(opt('lookahead-cap') ?? 0),
@@ -199,7 +200,7 @@ async function main(): Promise<void> {
   }
 
   const cfg = parseConfig(
-    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: { ...(VARIANT.astarBudget === undefined ? {} : { astarBudgetMs: VARIANT.astarBudget }), workers: VARIANT.workers } },
+    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: VARIANT.astarBudget === undefined ? {} : { astarBudgetMs: VARIANT.astarBudget }, workers: { count: VARIANT.workers } },
     { PAULSBRAWLS_SQUAD_TOKEN: TOKEN },
   );
   const rt = await start(cfg, { connectBots: true, installGuards: true, pool: { createBot, setup } });
@@ -231,6 +232,7 @@ async function main(): Promise<void> {
   };
   const save = (): void => writeFileSync(join(runDir, 'results.json'), JSON.stringify({ env, results }, null, 2));
 
+  let lastPaths: PathOffloadStats | null = null;
   try {
     let online = 0;
     let center: { x: number; z: number } | null = null;
@@ -247,12 +249,25 @@ async function main(): Promise<void> {
       }
       for (const phase of n === 0 ? (['idle'] as Phase[]) : PHASES) {
         if (n > 0) await place(rt, rcon, center as { x: number; z: number }, n);
-        const r: PhaseResult & { pathWorkers?: unknown } = await runPhase(rt, rcon, meters, n, phase, center, serverPid);
-        if (rt.pathWorkers) {
-          // Cumulative since the start: searches offloaded and answered, and why any stayed on the main thread.
-          const st = rt.pathWorkers.stats();
-          r.pathWorkers = st;
-          log(`path workers: ${st.alive}/${st.workers} alive, ${st.chunks} chunks mirrored, ${st.offloaded} offloaded, ${st.done} answered, fallbacks ${JSON.stringify(st.fallbacks)}, restarts ${st.restarts}`);
+        const r: PhaseResult & { paths?: unknown; jobs?: unknown; world?: unknown } = await runPhase(rt, rcon, meters, n, phase, center, serverPid);
+        if (rt.paths && rt.jobs) {
+          // A* on the reader workers: this phase's searches (offloaded, answered, cancelled, partial paths received,
+          // and why any stayed on the main thread), the pool's state now, and the shared world's size.
+          const st = rt.paths.stats();
+          const d = diffPaths(st, lastPaths);
+          lastPaths = st;
+          const j = rt.jobs.stats();
+          const pt = j.types.path;
+          const w = rt.world?.stats();
+          r.paths = d;
+          r.jobs = { alive: j.alive, workers: j.workers, restarts: j.restarts, path: pt, perWorker: j.perWorker.map((x) => x.budgetMs) };
+          const worldMb = w ? Math.round(w.bytes / 1048576) : null;
+          r.world = w && { columnsLive: w.columnsLive, sections: w.sections, mb: worldMb };
+          log(
+            `paths: ${d.probed} done by the probe, ${d.offloaded} offloaded, ${d.answered} answered, ${d.cancelled} cancelled, ${d.partials} partial paths, fallbacks ${JSON.stringify(d.fallbacks)}; ` +
+              `workers ${j.alive}/${j.workers} alive, restarts ${j.restarts}, path slice ${pt?.costMs ?? '-'} ms, latency p50/p95 ${pt?.latencyMs.p50 ?? '-'}/${pt?.latencyMs.p95 ?? '-'} ms, ` +
+              `budget used ${j.perWorker.map((x) => x.budgetMs.mean).join('/')} ms per tick; world ${w?.columnsLive ?? '-'} columns, ${worldMb ?? '-'} MB`,
+          );
         }
         results.push(r);
         save();
@@ -267,6 +282,22 @@ async function main(): Promise<void> {
   }
   log(`done: ${runDir}`);
   process.exit(0);
+}
+
+/** One phase's searches: the offload's counters since the previous phase (inFlight as it is now). */
+function diffPaths(now: PathOffloadStats, prev: PathOffloadStats | null): PathOffloadStats {
+  if (!prev) return now;
+  const fallbacks: Record<string, number> = {};
+  for (const [k, v] of Object.entries(now.fallbacks)) if (v - (prev.fallbacks[k] ?? 0) > 0) fallbacks[k] = v - (prev.fallbacks[k] ?? 0);
+  return {
+    probed: now.probed - prev.probed,
+    offloaded: now.offloaded - prev.offloaded,
+    answered: now.answered - prev.answered,
+    cancelled: now.cancelled - prev.cancelled,
+    partials: now.partials - prev.partials,
+    inFlight: now.inFlight,
+    fallbacks,
+  };
 }
 
 function log(line: string): void {

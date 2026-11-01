@@ -3,8 +3,8 @@
 > Plan, 2026-11-01. It follows the measurements of [docs/36](36-squad-fight-performance.md) and Paul's decisions of
 > the same day. Every expected number is an estimate from docs/36's profiles and is re-measured after each phase with
 > `bench:fight` and `bench:load`. **Built so far: P0** (the hawkEye leak), **P1** (the shared world, off by default; as
-> built in §9) and **P2** (the job queue, dispatcher and reader workers, off by default; as built in §8). The rest is a
-> plan.
+> built in §9), **P2** (the job queue, dispatcher and reader workers, off by default; as built in §8) and **P4** (A* on
+> the reader workers over the shared world, the old per-worker mirror retired; as built in §10). The rest is a plan.
 
 ## 0. Owner decisions (Paul, 2026-11-01)
 
@@ -211,7 +211,7 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 | **P1** ✅ | L | The shared world: pages, sections, index, epochs, cache, per-state tables, the writer thread, fed from the bots' packets beside today's worlds (nothing reads it yet) | **Done 2026-11-01** (§9): 19 tests on fakes (`tests/world.test.ts`); the live probe (`live-tests/probe-world.ts`), three runs, each comparing 184.6 M blocks of 1 878 held columns twice: 0 mismatches |
 | **P2** ✅ | M | The job queue, dispatcher and reader workers (budget, priorities, deadlines, carry-over, affinity, fallbacks, metrics), with a test job type | **Done 2026-11-01** (§8): `tests/jobs.test.ts` (budget respected, priorities, `late`, a worker killed mid-batch, …); `/api/metrics` shows `jobs`. Off by default (`workers.count` 0) until P3 |
 | **P3** | M | Raycast (blocks + hitboxes), LOS and the aim solver as jobs; `shoot` on the schedule with turning; hawkEye removed | `bench:fight`: full-strength ELU ≤ 0.35 (from 0.60–0.66); arrow kills per shot ≥ 3.2 %; failed shots ≤ 5 %; friendly hits 0. Live items tests (`tir`, `ligne-archers`, `defend`) pass |
-| **P4** | M | A* on the reader workers over the shared world (Movements reads per-state tables); the old per-worker mirror retired | `bench:load` walk / gather at 10 and 30 bots: legs and logs per minute ≥ docs/31 §11; live core tests pass; process memory flat with the worker count |
+| **P4** ✅ | M | A* on the reader workers over the shared world (Movements reads per-state Block templates); the old per-worker mirror retired | `bench:load` walk / gather at 10 and 30 bots: legs and logs per minute ≥ docs/31 §11; live core tests pass; process memory flat with the worker count. **Done 2026-11-01** (§10) |
 | **P5** | L | The bots read the one copy: a patched mineflayer blocks plugin sends chunks to the writer; `bot.world` is a shared store-backed world (prismarine-world's sync API, `blockUpdate`/`chunkColumnLoad`/`chunkColumnUnload` per bot, block entities on the main thread). Behind `world.shared` (default off until it passes) | `bench:fight` and `bench:load`: ~30–40 MB less per bot; 40 logins with no stall over 250 ms; every live test passes with `world.shared: true` |
 | **P6** | S | `findBlocks` as a job (gather's search) | `bench:load` gather unchanged or better, no main-thread freeze in the docs/31 §2.6 case |
 
@@ -230,8 +230,11 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 - `world.enabled`, `cacheSeconds`, `cacheColumns` and `verify` exist since P1 (§9): `world.enabled` builds the store
   (P2/P3 turn it on), `verify` is the debug comparison of §6.
 
-- `workers.count`: default cores − 2.
-- `pathfinding.workers` remains an alias of `workers.count`.
+- `workers.count`: default cores − 2 in the plan; **0 (off) as built** (§8.5), until the final measurements.
+- `pathfinding.workers` remains an alias of `workers.count` (since P4): read when `workers.count` is not set; when both
+  are set, `workers.count` wins.
+- `world.enabled` defaults to `workers.count` > 0 (since P4): the workers read the store. An explicit `false` with
+  workers on keeps A* on the main thread (`main.ts` warns).
 - `world.shared` turns P5 on.
 
 ## 6. Risks
@@ -350,7 +353,8 @@ its dispatch. P3's aim schedule must submit two ticks ahead (or P3 changes the a
 ### 8.5 Where it differs from §2.4–2.5
 
 - **`workers.count` defaults to 0** (off), not cores − 2: no job type needs it yet. `pathfinding.workers` is untouched
-  (P4 merges them); until then each pool caps itself at cores − 1 on its own.
+  (P4 merges them); until then each pool caps itself at cores − 1 on its own. (Since P4: one pool, `pathfinding.workers`
+  an alias, §10.)
 - **Teams:** a row's `team` is the owner group (bots joined through any shared owner, a superset of every order's
   `isFriend`), and **owner players carry their team's number too**, since `isFriend` counts them as friends; other
   players and mobs are 0. A `kind` column was added (projectiles and items must not block a raycast).
@@ -502,3 +506,95 @@ sessions, so indicative):
 - the store in `/api/metrics` and the vitals (P2 adds the metrics);
 - `world.shared` (P5);
 - nothing reads the store but `verify` and the tests.
+
+## 10. P4 as built (2026-11-01)
+
+A* runs on the reader workers, over the shared world. docs/32 D's pathfinding worker pool (`bots/pathworkers/client.ts`,
+`worker.mjs`: one parsed mirror of every chunk in each worker) is gone. **Off by default** (`workers.count` 0): every
+search stays on the main thread, as before; the orchestrator turns it on after the final measurements.
+
+**Files:**
+
+| File | What |
+|---|---|
+| `squad/src/jobs/handlers/path.mjs` | The `path` job type: the patched mineflayer-pathfinder's `AStar`, `Movements` and goals over a stand-in bot that reads the store; the slices, the progress, the timeout's discount |
+| `squad/src/world/blocks.mjs` (+ `.d.mts`) | `BlockTemplates` (one prismarine `Block` per state id, specialised by position) and `StoreWorld` (prismarine-world's sync `getBlock`/`raycast` over the store). P5's `blockAt` can use them |
+| `squad/src/bots/pathworkers/offload.ts` | `PathOffload` (main thread): the `searchOffload` hook, the submit, the cancels, the fallbacks, `stats()`; `OffloadedSearch`, the AStar context the plugin sees |
+| `squad/src/bots/pathworkers/serialize.ts` | Kept from docs/32 D: goals, Movements settings and paths across threads |
+| `squad/src/world/shared-world.ts` | + `applied()`, `dimensionOf(bot)`, `isLive(dim, x, z)`, `writerState` |
+| `squad/src/jobs/pool.ts`, `batch.mjs`, `worker.mjs` | + the progress channel, elastic types, `workersAlive()` (§8.6) |
+| `squad/src/config.ts`, `main.ts`, `bots/pool.ts` | One pool (`workers.count`; `pathfinding.workers` its alias), the world on with the workers; the job pool built before the bot pool; the bot pool's seam is `pathSearch.install(bot)` at spawn (the shared world's own `attach` follows the packets) |
+| `squad/src/vitals/metrics.ts` | `/api/metrics` `paths`: the offload's counters |
+
+Tests: `tests/pathworkers.test.ts` (16, rewritten for the new path), `tests/ladders.test.ts` (its worker case ported),
+`tests/jobs-long.test.ts` (6: the progress channel and elastic types), on a shared rig (`tests/fakes/path-rig.ts`: the
+real shared world, job pool and `path` handler).
+
+**A search, end to end:**
+1. The plugin plans (its own `planPath`, never a caller's `getPathTo`) and calls `searchOffload`. `PathOffload` checks
+   what can cross (or falls back, below) and cancels the bot's previous search. Then **the probe**: the plugin's own
+   A* runs here for at most 3 ms (`DEFAULT_PROBE_MS`, under the A* budget). Done, the answer is returned at once
+   (`ProbedSearch`), as without workers. Not done, it returns an `OffloadedSearch`, whose `compute()` answers
+   `partial` with the probe's best path until the worker reports (the start node alone if the probe found none: never
+   an empty path, which `goto()` would take for "arrived").
+2. Once `SharedWorld.applied()` resolves (the writer has applied every batch sent so far, so a block change heard just
+   before is in the store), it submits `{ type: 'path', input, signal, onProgress }`: priority 0 (below P3's aim), no
+   deadline.
+3. On a worker, the first slice builds the search: a `StoreWorld` for the bot's dimension; a stand-in bot (blocks from
+   the store, the request's inventory and effects, `index.js`'s `bestHarvestTool`); a `Movements` made with
+   `Object.create(Movements.prototype)` and the settings (its constructor walks the registry, ~1 ms, and the settings
+   carry every field it sets, or serialize.ts refuses them); the goal rebuilt by class; `new AStar(…)`.
+4. Each slice runs `computeSlice(max(0.5, ctx.shareMs()))`, after emptying `Movements`' block cache if the store's
+   version moved (`blockUpdate` on the stand-in, `lib/tick.js`). Still partial, it answers `{ continue, progress }`:
+   the chunks entered since the last slice, and the best path on the first slice, then when it changed, at most every
+   250 ms. Done, the answer.
+5. On the main thread, `onProgress` adds the chunks to `visitedChunks` (the plugin re-plans when one next to them
+   loads) and rebuilds the partial path as `Move`s once; `compute()` returns it until the next one. The answer is
+   rebuilt the same way.
+
+**Decisions:**
+- **The probe.** Without it, gather on the workers mined a fraction of the logs of the main thread (run (d) below, 1
+  worker: 28 logs at 30 bots against 167). A worker's first answer comes 1–3 ticks after the search, and meanwhile the
+  plugin resets the search on every block change next to the bot (`block_updated`: 547 in that phase). In gather
+  those come all the time (logs cut, leaves decaying, the neighbours chopping), so searches were cancelled again and
+  again before they answered (497 of 784). Most of gather's searches are short (0.7 ms at the median on the main
+  thread), so they are answered by the probe at once, as before, and only the long ones (walking, exhaustive
+  searches for unreachable logs) move to the workers. Cost on the main thread: at most 3 ms a search start, inside the
+  A* budget.
+- **Elastic slices, not the bot's `tickTimeout`.** A first version sliced at the bot's `tickTimeout` (10 ms, as on the
+  main thread). One bot walking on the dev world then planned in 1.1 s p50 (the main thread: 1.6 s), its worker busy
+  2.6 ms a tick out of 40. With the worker's share instead: 87 ms p50. `tickTimeout` keeps a search from holding up
+  the bots' event loop; a worker has no bots.
+- **`thinkTimeout`** is wall time from the first slice, as on the main thread, minus the ticks the search got no slice
+  because its worker's budget went to other jobs (counted in ticks, capped by the wall time, since the ticks of one
+  catch-up burst share one dispatch). The main-thread A* budget's waits do not count either. The queue's wait before
+  the first slice does not count (the AStar starts on the worker).
+- **Cancellation:** the plugin's `path_reset`, `goal_updated`, `path_stop`, the bot's `end` and a newer search for
+  the same bot abort the job's signal. The pool takes it off the queue or, if it is out, drops its state on the worker
+  when the slice comes back. A dropped search never runs on the main thread.
+- **Fallbacks** to the main-thread search, counted by reason (`PathOffload.stats()`): `goal`, `movements` (cannot
+  cross, serialize.ts); `noDimension`; `noColumn` (the bot's own column not live in the store yet); `noWorld` (the
+  writer disabled); `noWorker` (no live worker: the pool's inline fallback would run it on the main thread anyway, so
+  the plugin's own search does, under the A* budget); the job's failure (`threw`, `workerDied` when its worker died
+  twice under it, `lostInput`, `clone`, `unknownType`, `unavailable`, `stopped`, `late`); `deadline` (no progress
+  for `thinkTimeout` + 2 s: a wedged worker, which the pool itself cannot see). A worker that dies once mid-search:
+  the pool queues the job again from the start, on the restarted worker, which needs no resync.
+- **Blocks:** one template per state id (`Block.fromStateId`, kept), specialised with `Object.create(template)` and an
+  own `position`; what Movements and raycasts write lands on that object. On one thread: 35–56 ns a lookup over 20–200
+  distinct states, against 140–240 ns for `fromStateId` (at 2 000 distinct states the prototypes go megamorphic and it
+  is slower, 790 against 360 ns; a search touches tens to hundreds). `Movements`' own `getBlock` (a string key and a
+  Map per lookup) now dominates a node: a whole search costs 37 µs a node over the store against 40 µs over
+  prismarine-world (the same answers in 90 of 90 searches on a synthetic forest). The gain is where A* runs.
+- **Config:** one pool. `pathfinding.workers` is read when `workers.count` is not set; `workers.count` wins when both
+  are. `world.enabled` defaults to `workers.count` > 0, because A* (and P3's aim) need the store; an explicit `false`
+  with workers on keeps every search on the main thread and says so at start.
+
+**Measured:** §10.1.
+
+**Not done, known:**
+- A worker wedged inside a batch (a handler that never returns) is not detected by the pool (P2): the offload's
+  `deadline` gives up on its searches, but the slot stays busy. A* slices are bounded by their own clock.
+- `Movements`' per-node cost (its string-keyed caches, `getNumEntitiesAt`) is unchanged: the next gain for A* is
+  there, not in block lookups.
+- Unreachable logs are still searched again by every `mineBlock` call (docs/31 §11.9).
+- The bots keep their own worlds (P5).

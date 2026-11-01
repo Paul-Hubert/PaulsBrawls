@@ -125,7 +125,8 @@ npm run live-test                  # real bots + RCON; SERVER_PROPERTIES=../serv
   minecraft-protocol, mineflayer-pathfinder). A patch that no longer applies fails the install; the runtime refuses to
   start on an unpatched pathfinder. Change a patch by editing `node_modules` and running `npx patch-package <pkg>`.
 - `squad.json` `pathfinding.astarBudgetMs` (default 20 ms of A* per 50 ms window for all bots, 0 = off) and
-  `pathfinding.workers` (default 0; pathfinding worker threads, capped at cores − 1, ~9 GB RSS at 30 gathering bots).
+  `workers.count` (default 0; reader worker threads, capped at cores − 1; the bots' A* runs there over the shared world,
+  docs/37 P4; `pathfinding.workers` is its old alias).
 - A server mod whose items mineflayer cannot decode used to leave bots silently deaf (Universal Shops); the
   protocol hardening in `squad/src/bots/protocol.ts` now drops such packets (docs/29 §16).
 

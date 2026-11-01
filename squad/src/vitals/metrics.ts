@@ -11,8 +11,10 @@
 // stream, R44).
 //
 // With the reader workers on (workers.count > 0, docs/37 P2), each window also carries the job pool's window: per job
-// type submitted, done, carried, late, failed, inline, latency p50/p95, and each worker's budget use.
+// type submitted, done, carried, late, failed, inline, latency p50/p95, and each worker's budget use; and, when A* runs
+// there (docs/37 P4), the offload's counters since the start (searches offloaded, answered, cancelled, fallbacks).
 
+import type { PathOffloadStats } from '../bots/pathworkers/offload';
 import type { BotMeterReading } from '../bots/pool';
 import type { JobStats } from '../jobs/pool';
 import type { VitalsRow } from '../journal/journal';
@@ -74,6 +76,8 @@ export interface Metrics {
   bots: BotMetrics[];
   /** The job pool's window (docs/37 P2), when the reader workers are on. */
   jobs?: JobStats;
+  /** A* on the reader workers (docs/37 P4): counters since the start, not per window. */
+  paths?: PathOffloadStats;
 }
 
 export interface VitalsOptions {
@@ -84,6 +88,8 @@ export interface VitalsOptions {
   loop?: LoopSource;
   /** The job pool (workers.count > 0). */
   jobs?: JobStatsSource;
+  /** A* on the reader workers (bots/pathworkers/offload.ts). */
+  paths?: { stats(): PathOffloadStats };
   now?: () => number;
 }
 
@@ -179,6 +185,7 @@ export class Vitals {
       bots,
     };
     if (this.opts.jobs) m.jobs = this.opts.jobs.stats(reset);
+    if (this.opts.paths) m.paths = this.opts.paths.stats();
     m.text = statusText(m);
     return m;
   }

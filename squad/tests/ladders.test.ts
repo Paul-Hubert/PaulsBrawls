@@ -2,15 +2,16 @@
 // columns, no server) with a pillar, a ladder on its south face and a platform on top pins each fix of
 // patches/mineflayer-pathfinder: someone on the ladder no longer makes it unclimbable, a ladder is entered from its
 // front, the block a ladder hangs on is never dug, and a search spread over many ticks ends on the same path as one
-// run at once. The pathfinding workers give the same answers.
+// run at once. A* on the reader workers (docs/37 P4) gives the same answers.
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 
-import { PathWorkerPool, type MirroredBot, type SearchParams } from '../src/bots/pathworkers/client';
+import type { SearchParams } from '../src/bots/pathworkers/offload';
 import { holdEventLoopPerTest } from './fakes/keep-alive';
+import { pathRig, type PathRig } from './fakes/path-rig';
 
 holdEventLoopPerTest();
 
@@ -58,7 +59,7 @@ function buildColumns(): Map<string, any> {
   return cols;
 }
 
-/** Enough of a bot for Movements, A* and the plugin's planning: a world, a packet stream for the worker pool. */
+/** Enough of a bot for Movements, A* and the plugin's planning: a world, a packet stream for the shared world. */
 function ladderBot(cols = buildColumns()): any {
   const world = new World(null, null, 0).sync;
   for (const [k, c] of cols) {
@@ -222,19 +223,19 @@ test('ladders: a search over many ticks ends on the same path as one run at once
   assert.deepEqual(ladder, [...new Set(ladder)], 'one node per ladder block');
 });
 
-const pools: PathWorkerPool[] = [];
+const rigs: PathRig[] = [];
 after(async () => {
-  for (const p of pools) await p.stop();
+  for (const r of rigs) await r.stop();
 });
 
-test('ladders: the pathfinding workers find the same paths (someone on the ladder, a start beside it)', async () => {
-  const pool = new PathWorkerPool({ workers: 1, version: VERSION });
-  pools.push(pool);
+test('ladders: A* on the reader workers finds the same paths (someone on the ladder, a start beside it)', async () => {
+  const rig = await pathRig();
+  rigs.push(rig);
   const cols = buildColumns();
   const bot = ladderBot(cols);
-  pool.attach(bot as MirroredBot);
-  pool.install(bot as MirroredBot);
+  rig.attach(bot);
   login(bot, cols);
+  await rig.world.settle();
   bot.entities = { 7: climber(GROUND + 4) };
   const goal = new goals.GoalBlock(SUMMIT.x, SUMMIT.y, SUMMIT.z);
   for (const from of [
@@ -251,13 +252,7 @@ test('ladders: the pathfinding workers find the same paths (someone on the ladde
     assert.equal(local.status, 'success');
     const ctx = bot.pathfinder.searchOffload(params()) as { compute(): any };
     assert.ok(ctx, 'offloaded');
-    let r = ctx.compute();
-    const end = Date.now() + 10_000;
-    while (r.status === 'partial') {
-      if (Date.now() > end) throw new Error('the offloaded search never settled');
-      await new Promise((res) => setTimeout(res, 5));
-      r = ctx.compute();
-    }
+    const r = await rig.settle(ctx);
     assert.equal(r.status, 'success');
     assert.deepEqual(coords(r.path), coords(local.path), `from ${from.x},${from.z}`);
     assert.equal(r.cost, local.cost);

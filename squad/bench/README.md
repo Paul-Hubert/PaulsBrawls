@@ -72,7 +72,7 @@ npm run bench:load -- --ns 10,30 --profile 10,30 --label profiled
 | `--view normal` | the bots' view distance (`short` = 8 chunks; R8 rules out `tiny`) |
 | `--movements canDig=false,allowSprinting=false` | overrides on the runtime's Movements object (it is restored after every order, so they hold) |
 | `--astar-budget 0` / `--astar-budget 10` | the runtime's own A* budget (`pathfinding.astarBudgetMs`, the patched `AStar.setBudget`; it was a prototype here; without the flag the runtime's default, 20 ms, applies, so `0` is the no-budget control of docs/31): all bots together get at most that many ms of A* per 50 ms window; a search that finds the window spent waits (its waiting does not count against `thinkTimeout`) |
-| `--workers 4` | the runtime's pathfinding worker pool (`pathfinding.workers`, docs/32 D): the bots' A* searches run on 4 worker threads over a mirror of the world; capped at the cores but one. After each phase the log line `path workers:` gives the searches offloaded, answered and the fallbacks to the main thread (cumulative), also in `results.json` |
+| `--workers 4` | the runtime's reader workers (`workers.count`, docs/37 P4; it turns the shared world on): the bots' A* searches run on 4 worker threads over the shared world; capped at the cores but one. After each phase the log line `paths:` gives that phase's searches (offloaded, answered, cancelled, partial paths, the fallbacks to the main thread by reason), the pool's state (workers alive, restarts, a slice's cost, latency, budget used per worker) and the shared world's size, also in `results.json` (`paths`, `jobs`, `world`). Before docs/37 P4 this flag ran docs/32 D's pathfinding worker pool (`pathfinding.workers`, now an alias of `workers.count`) |
 | `--think-on-compute` | prototype: `thinkTimeout` counts compute time, not wall time |
 | `--lookahead-cap 20`, `--lookahead-memo 4`, `--lookahead-blockcache` | the pathfinder's look-ahead (`lib/physics.js`): a horizon cap; the same sprint/jump decision for the same next node for 4 ticks; its block reads cached for the tick |
 | `--astar-blockcache`, `--astar-blockcache-world` | A*'s neighbour lookups (`Movements.getBlock`) cached for the tick, or until the block changes (`blockUpdate`, chunk events) |
@@ -87,7 +87,7 @@ dependency's code changed. `npm run bench:compare` lines the experiments up agai
 the new control, and an "after" run needs no flag. `--physics-hoist` and `--stuck-ticks` now refuse to start (the
 code they edit has changed). `--mcdata-memo`, `--cheap-varint`, `--lookahead-*` and `--astar-blockcache(-world)` still
 load, but each stacks a second memo or cache on the patched one, so they measure nothing new. `--astar-budget` sets
-the runtime's config. `--workers N` sets `pathfinding.workers`, the pathfinding worker pool.
+the runtime's config. `--workers N` sets `workers.count`, the reader workers (A* on them since docs/37 P4).
 
 **Run it on AC power, with the PC unlocked and awake.** Locking a modern-standby laptop puts it to sleep, whatever
 `SetThreadExecutionState` asks. A standby freezes both the runtime and the server, and the phase it cuts is lost.

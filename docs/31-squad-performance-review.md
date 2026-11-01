@@ -821,6 +821,11 @@ the 60 s phase.
 
 ### 11.6 The worker pool
 
+> **Replaced (2026-11-01, [docs/37](37-squad-worker-reads-plan.md) P4).** A* now runs on the reader workers of docs/37
+> over the one shared copy of the world, and this pool, whose workers each parsed their own copy of every chunk, is
+> gone. `pathfinding.workers` is an alias of `workers.count`. docs/37 §10 measures the new path against this pool
+> and against the defaults. The numbers below are the old pool's.
+
 **First pass, same site ((−4000, 0)), before the block-cache fix of §11.9.** Workers 0 with budget 0 (the control)
 against 14 workers. "CPU" is the whole process, in % of one core.
 
@@ -882,7 +887,7 @@ against 14 workers. "CPU" is the whole process, in % of one core.
   same site (§11.5). Without a cap, many searches together fill the loop, every bot moves in slow motion, and searches
   time out more. A lone search still gets its 10 ms `tickTimeout`, so light loads are unchanged. `0` turns it off;
   at most 50.
-- **`pathfinding.workers` = 0 (off).**
+- **`pathfinding.workers` = 0 (off).** (Since docs/37 P4: `workers.count`, the same default; see docs/37 §10.)
   - With the budget on, the main thread is no longer saturated at 30 moving bots on this machine (§11.7).
   - The workers' gather did less work in both comparisons. They finish exhaustive no-path searches that the main
     thread would time out, at 11–12 cores of CPU (§11.6).

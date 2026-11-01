@@ -42,11 +42,6 @@ export interface PathfindingConfig {
    * (docs/31 §11): uncapped searches fill the loop, slow every bot down, and time out more.
    */
   astarBudgetMs: number;
-  /**
-   * Pathfinding worker threads (docs/32 D, src/bots/pathworkers/): the bots' A* searches run there, over a mirror of
-   * the world, instead of on the main thread. 0 = off: every search on the main thread, as before.
-   */
-  workers: number;
 }
 
 /** The A* budget when squad.json sets none (docs/31 §11). */
@@ -54,15 +49,17 @@ export const DEFAULT_ASTAR_BUDGET_MS = 20;
 /** A budget above the 50 ms window would never bind. */
 export const MAX_ASTAR_BUDGET_MS = 50;
 
-/** A sane ceiling on pathfinding workers (each one is a thread with its own copy of the registry, ~50 MB). */
-export const MAX_PATH_WORKERS = 16;
-
 /**
  * The reader workers (docs/37 §2.5, src/jobs/): the read-only calculations (aim, raycasts, line of sight, A*, block
- * searches, as docs/37's later phases add them) run there in batches, each worker with a CPU budget per 50 ms tick.
+ * searches, as docs/37's phases add them) run there in batches, each worker with a CPU budget per 50 ms tick.
  */
 export interface WorkersConfig {
-  /** Reader worker threads. 0 = off (the default in P2: no job type needs them yet). */
+  /**
+   * Reader worker threads (each one a thread with its own copy of the registry, ~25 MB, and nothing per chunk: they
+   * read the shared world). 0 = off (the default): every search on the main thread. The bots' A* runs there since
+   * docs/37 P4. `pathfinding.workers` (docs/32 D's pathfinding worker pool, which P4 replaced) is an alias, read only
+   * when `workers.count` is not set: when both are set, `workers.count` wins.
+   */
   count: number;
   /** Each worker's CPU budget per 50 ms tick, ms (Paul, 2026-11-01: 40). */
   tickBudgetMs: number;
@@ -75,9 +72,14 @@ export const MAX_JOB_WORKERS = 16;
 
 /**
  * The shared world (docs/37 P1, src/world/): one copy of the chunks the bots receive, in shared memory, written by
- * one writer thread and readable by every thread. Off by default: in P1 nothing reads it but `verify`.
+ * one writer thread and readable by every thread.
  */
 export interface WorldConfig {
+  /**
+   * Default: on exactly when the reader workers are (workers.count > 0), since they read it (A*, docs/37 P4). An
+   * explicit false with workers on keeps A* on the main thread (main.ts warns); true without workers builds the store
+   * for `verify` alone.
+   */
   enabled: boolean;
   /** A column no bot holds any more is kept this long (readers see it as unknown) in case a bot receives it again. */
   cacheSeconds: number;
@@ -87,6 +89,7 @@ export interface WorldConfig {
   verify: boolean;
 }
 
+/** `enabled` here is the default without reader workers; with them it defaults to true (parseConfig). */
 export const DEFAULT_WORLD: WorldConfig = { enabled: false, cacheSeconds: 60, cacheColumns: 2_000, verify: false };
 
 export interface SquadConfig {
@@ -148,12 +151,13 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
   if (astarBudgetMs > MAX_ASTAR_BUDGET_MS) {
     throw new ConfigError(`squad.json: pathfinding.astarBudgetMs is per 50 ms window, so at most ${MAX_ASTAR_BUDGET_MS}, got ${astarBudgetMs}`);
   }
-  const workers = num(pathRaw.workers, 0, 'pathfinding.workers');
-  if (!Number.isInteger(workers) || workers > MAX_PATH_WORKERS) {
-    throw new ConfigError(`squad.json: pathfinding.workers must be an integer from 0 to ${MAX_PATH_WORKERS}, got ${workers}`);
+  // pathfinding.workers: the alias of workers.count (docs/37 P4), used when workers.count is not set.
+  const alias = num(pathRaw.workers, 0, 'pathfinding.workers');
+  if (!Number.isInteger(alias) || alias > MAX_JOB_WORKERS) {
+    throw new ConfigError(`squad.json: pathfinding.workers (an alias of workers.count) must be an integer from 0 to ${MAX_JOB_WORKERS}, got ${alias}`);
   }
   const workersRaw = (o.workers ?? {}) as Record<string, unknown>;
-  const count = num(workersRaw.count, 0, 'workers.count');
+  const count = workersRaw.count === undefined || workersRaw.count === null ? alias : num(workersRaw.count, 0, 'workers.count');
   if (!Number.isInteger(count) || count > MAX_JOB_WORKERS) {
     throw new ConfigError(`squad.json: workers.count must be an integer from 0 to ${MAX_JOB_WORKERS}, got ${count}`);
   }
@@ -163,7 +167,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
   }
   const worldRaw = (o.world ?? {}) as Record<string, unknown>;
   const world: WorldConfig = {
-    enabled: bool(worldRaw.enabled, DEFAULT_WORLD.enabled, 'world.enabled'),
+    enabled: bool(worldRaw.enabled, count > 0, 'world.enabled'),
     cacheSeconds: num(worldRaw.cacheSeconds, DEFAULT_WORLD.cacheSeconds, 'world.cacheSeconds'),
     cacheColumns: num(worldRaw.cacheColumns, DEFAULT_WORLD.cacheColumns, 'world.cacheColumns'),
     verify: bool(worldRaw.verify, DEFAULT_WORLD.verify, 'world.verify'),
@@ -176,7 +180,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
     dataDir: resolve(baseDir, typeof o.dataDir === 'string' && o.dataDir ? o.dataDir : '.squad-data'),
     limits,
     loginStaggerMs: num(o.loginStaggerMs, 100, 'loginStaggerMs'),
-    pathfinding: { astarBudgetMs, workers },
+    pathfinding: { astarBudgetMs },
     workers: { count, tickBudgetMs },
     world,
   };
@@ -196,14 +200,9 @@ export function applyPathfinding(p: PathfindingConfig): void {
 }
 
 /**
- * The pathfinding workers this machine gets: the configured count, at most one per core other than the main thread's
- * (a worker that shares the main thread's core takes time from the bots' physics). Logged by the caller when it caps.
+ * The reader workers this machine gets: the configured count, at most one per core other than the main thread's (a
+ * worker that shares the main thread's core takes time from the bots' physics). Logged by the caller when it caps.
  */
-export function pathWorkerCount(p: PathfindingConfig, cores = availableParallelism()): number {
-  return Math.max(0, Math.min(p.workers, cores - 1));
-}
-
-/** The reader workers this machine gets: as pathWorkerCount, at most one per core other than the main thread's. */
 export function jobWorkerCount(w: WorkersConfig, cores = availableParallelism()): number {
   return Math.max(0, Math.min(w.count, cores - 1));
 }

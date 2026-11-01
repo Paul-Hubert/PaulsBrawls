@@ -1,6 +1,6 @@
-// Following a bot's world packets (docs/37 §2.2): the same packets and the same rules as the pathfinding workers'
-// mirror (bots/pathworkers/client.ts attach, which P4 retires), so the shared world sees exactly what mineflayer's
-// blocks plugin applies to the bot's own world:
+// Following a bot's world packets (docs/37 §2.2): the same packets and the same rules as docs/32 D's pathfinding
+// mirror had (retired in P4: A* reads this store now), so the shared world sees exactly what mineflayer's blocks
+// plugin applies to the bot's own world:
 //   • login, and a respawn into another world (1.20.5+: worldState; a respawn into the same dimension, or into the
 //     same world with copyMetadata, keeps the columns, as mineflayer does): a new dimension drops every column;
 //   • map_chunk (the raw chunkData), unload_chunk;

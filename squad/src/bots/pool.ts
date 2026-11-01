@@ -12,12 +12,14 @@ import { logger } from '../logger';
 import { boundPathfinder, defaultMovements, type AbortableBot } from './hardening';
 import { loadPlugins, pathfinder } from './plugins';
 import { keepDecodersAlive, RECIPES_AS_BYTES, type SkippedPacket } from './protocol';
-import type { MirroredBot } from './pathworkers/client';
+import type { OffloadedBot } from './pathworkers/offload';
 
-/** The pathfinding worker pool's two seams (pathworkers/client.ts): feed it a bot's packets, then hand it the search. */
-export interface PathWorkers {
-  attach(bot: MirroredBot): void;
-  install(bot: MirroredBot): void;
+/**
+ * A* on the reader workers (pathworkers/offload.ts, docs/37 P4): it takes over the bot's pathfinder searches at spawn.
+ * The world they read is the shared world's, fed by its own attach (WorldFeed).
+ */
+export interface PathSearch {
+  install(bot: OffloadedBot): void;
 }
 
 /** The shared world's seam (world/shared-world.ts): it follows a bot's world packets from its first one. */
@@ -104,8 +106,8 @@ export interface BotPoolOptions {
   setup?: (bot: Bot) => void;
   /** Override {@link DEAF_MS} (tests). */
   deafMs?: number;
-  /** The pathfinding workers (config pathfinding.workers > 0); absent = every search on the main thread. */
-  pathWorkers?: PathWorkers;
+  /** A* on the reader workers (workers.count > 0 with the shared world); absent = every search on the main thread. */
+  pathSearch?: PathSearch;
   /** The shared world (config world.enabled); absent = the bots' packets feed only their own worlds. */
   world?: WorldFeed;
 }
@@ -274,8 +276,7 @@ export class BotPool extends EventEmitter {
     }
     rec.bot = bot;
     rec.lastPacket = Date.now();
-    // Before the first packet: the workers' mirror and the shared world need this bot's login and every chunk it receives.
-    this.withPathWorkers(rec, (pw) => pw.attach(bot as unknown as MirroredBot));
+    // Before the first packet: the shared world needs this bot's login and every chunk it receives.
     if (this.opts.world) {
       try {
         this.opts.world.attach(bot);
@@ -298,7 +299,7 @@ export class BotPool extends EventEmitter {
       } catch (e) {
         logger.warn(`bot:${rec.name}`, `post-spawn setup failed: ${(e as Error).message}`);
       }
-      this.withPathWorkers(rec, (pw) => pw.install(bot as unknown as MirroredBot));
+      this.withPathSearch(rec, bot);
       rec.onlineAt = Date.now();
       this.meter(rec, bot);
       this.setStatus(rec, 'online');
@@ -320,14 +321,14 @@ export class BotPool extends EventEmitter {
     });
   }
 
-  /** A failure of the worker pool's wiring must never cost the bot: its searches then simply stay on this thread. */
-  private withPathWorkers(rec: Record_, fn: (pw: PathWorkers) => void): void {
-    const pw = this.opts.pathWorkers;
-    if (!pw) return;
+  /** A failure of the offload's wiring must never cost the bot: its searches then simply stay on this thread. */
+  private withPathSearch(rec: Record_, bot: Bot): void {
+    const ps = this.opts.pathSearch;
+    if (!ps) return;
     try {
-      fn(pw);
+      ps.install(bot as unknown as OffloadedBot);
     } catch (e) {
-      logger.warn(`bot:${rec.name}`, `pathfinding workers: ${(e as Error).message}`);
+      logger.warn(`bot:${rec.name}`, `A* on the workers: ${(e as Error).message}`);
     }
   }
 

@@ -51,35 +51,34 @@ applies them too. To change a patch: edit the file in `node_modules`, then `npx 
 `squad.json`'s `pathfinding.astarBudgetMs` (default 20, 0 = off, at most 50) caps the A* time of all bots together per
 50 ms window: measured better than no cap at 10-30 moving bots (docs/31 §11).
 
-**Pathfinding workers (optional).** `squad.json`'s `pathfinding.workers` (default 0 = off, at most 16, capped at the
-cores minus one) runs the bots' A* searches on that many worker threads, over a shared mirror of the world
-([src/bots/pathworkers/](src/bots/pathworkers/)). The bots, their physics and the scripts stay on the main thread.
-Searches the workers cannot take (unknown goals, exclusion areas, a dead or silent worker) run on the main thread as
-before. Turn it on when the main thread is the limit (a slower PC, more bots): with 14 workers, 30 moving bots ran at a
-main-thread ELU of 0.2-0.34 instead of 0.44-0.62 (two sites, so rough), but the process grew to about 9 GB at 30 gathering bots
-(docs/31 §11.6).
-
-**Reader workers (docs/37, P2: built, off).** The job pool of [src/jobs/](src/jobs/): read-only calculations (aim,
-raycasts, line of sight, A*, block searches, as the later phases of
-[docs/37](../docs/37-squad-worker-reads-plan.md) add them) run on worker threads, in batches, each worker with a CPU
-budget per 50 ms tick. P2 ships only the framework and a trivial `echo` job type, so it stays off:
+**Reader workers (optional, [docs/37](../docs/37-squad-worker-reads-plan.md)).** The job pool of [src/jobs/](src/jobs/):
+read-only calculations run on worker threads, in batches, each worker with a CPU budget per 50 ms tick. Since P4 the
+bots' **A* searches** run there, over the shared world below (a search first gets 3 ms on the main thread: most of
+gather's end there and are answered at once, the long ones move to a worker). The bots, their physics, the look-ahead and the
+scripts stay on the main thread. This replaced docs/32 D's pathfinding worker pool, whose workers each parsed their
+own copy of every chunk (about 9 GB at 14 workers and 30 gathering bots, docs/31 §11.6): now every worker reads the
+one copy in shared memory. Off by default:
 
 | Key in `squad.json` | Default | |
 |---|---|---|
-| `workers.count` | 0 (off) | reader worker threads, an integer up to 16, capped at the cores minus one. Independent of `pathfinding.workers` (P4 merges them) |
-| `workers.tickBudgetMs` | 40 | each worker's CPU budget per 50 ms tick (above 0, at most 50). A worker stops its batch when it is spent; what it did not start goes back to the queue |
+| `workers.count` | 0 (off) | reader worker threads, an integer up to 16, capped at the cores minus one. `pathfinding.workers`, the old pool's key, is an alias: it is read when `workers.count` is not set; when both are set, `workers.count` wins |
+| `workers.tickBudgetMs` | 40 | each worker's CPU budget per 50 ms tick (above 0, at most 50). A worker stops its batch when it is spent; what it did not start goes back to the queue. Searches share it: one search alone on a worker computes up to 40 ms a tick |
 
-With `workers.count` > 0 the dispatcher ticks on one online bot's physics ticks (a self-correcting 50 ms timer when
-none is online), publishes a snapshot of every entity the bots know into shared memory, and runs the jobs on the main
-thread when no worker is alive (every slot crashed 3 times in a minute).
+With `workers.count` > 0 the shared world is on too (`world.enabled` defaults to true then), the dispatcher ticks on
+one online bot's physics ticks (a self-correcting 50 ms timer when none is online), and it publishes a snapshot of
+every entity the bots know into shared memory. A search runs on the main thread as before when the workers cannot take
+it: an unknown goal class, exclusion areas, a subclassed `Movements`, a column the store does not hold yet, no live
+worker (every slot crashed 3 times in a minute), a failed job, or no sign of life for `thinkTimeout` + 2 s. `POST
+/api/metrics` shows the job pool (`jobs`) and the searches (`paths`: offloaded, answered, cancelled, fallbacks by
+reason).
 **Shared world (optional, [docs/37](../docs/37-squad-worker-reads-plan.md) P1).** `squad.json`'s `world` block
 builds one copy of the chunks the bots receive, in shared memory ([src/world/](src/world/)). One writer thread decodes
-it from the bots' packets, and any thread can read it lock-free. The bots keep their own worlds: in P1 nothing reads
-the store but `verify`. Later phases (aim, A* and the bots' own reads on worker threads) turn it on.
+it from the bots' packets, and any thread can read it lock-free. The bots keep their own worlds; the reader workers
+read the store (A* since P4).
 
 | Key in `squad.json` | Default | |
 |---|---|---|
-| `world.enabled` | `false` | build the store (a writer thread, ~70 MB for 850 columns) |
+| `world.enabled` | on with the reader workers (`workers.count` > 0), else `false` | build the store (a writer thread, ~70 MB for 850 columns). `false` with workers on keeps A* on the main thread (a warning at start) |
 | `world.cacheSeconds` | 60 | a column no bot holds any more is kept this long, unreadable, in case a bot receives it again (no decode then) |
 | `world.cacheColumns` | 2000 | at most this many such columns, oldest dropped first |
 | `world.verify` | `false` | once a second, compare 256 random blocks of the store with the bots' own worlds and log mismatches (debug) |
@@ -168,7 +167,7 @@ npm run check       # lint + tsc + node:test (fakes only, no Minecraft)
 npm run bench:load  # the load benchmark (bench/README.md; never against production)
 npm run bench:jobs  # the job pool's own overhead: latency, dispatch cost, the entity snapshot (no server)
 npm run live-test   # real bots on the dev server (dev/, ./gradlew runDevServer); ports and RCON password read from its server.properties
-$env:LIVE_PATH_WORKERS='4'; npm run live-test   # the same scenarios with 4 pathfinding workers
+$env:LIVE_WORKERS='4'; npm run live-test   # the same scenarios with 4 reader workers (A* there; LIVE_PATH_WORKERS is its old name)
 $env:SERVER_PROPERTIES='../run/server.properties'; npm run live-test   # the production server (run/; world left as is)
 $env:LIVE_ONLY='items'; $env:LIVE_RUNTIME_PORT='8779'; npm run live-test   # only the bound-item scenarios (below)
 ```

@@ -2,7 +2,7 @@
 id: squad.overview
 title: Squad — player-owned Mineflayer bots ordered by LLM-written commands (as built)
 system: squad
-summary: What runs today for /bots — the Node runtime in squad/ (processes, threads incl. the optional pathfinding workers, bots, leases, orders, the command dialect, authoring over MCP, storage, HTTP API, the patched dependencies, the lag monitor, /api/metrics and the vitals journal) and the mod's thin front in com.paul.brawl.squad (incl. /bots status) — with the live results on the production server, the protocol hardening, and what is still unverified.
+summary: What runs today for /bots — the Node runtime in squad/ (processes, threads incl. the optional reader workers that run A*, bots, leases, orders, the command dialect, authoring over MCP, storage, HTTP API, the patched dependencies, the lag monitor, /api/metrics and the vitals journal) and the mod's thin front in com.paul.brawl.squad (incl. /bots status) — with the live results on the production server, the protocol hardening, and what is still unverified.
 tags: [squad, bots, mineflayer, orders, leases, reclaim, authoring, mcp, squad-author, claude-code, kits, 8772, production, performance, patch-package, lag-monitor, metrics, vitals, pathfinding-workers, astar-budget, reader-workers, jobs]
 sources:
   - docs/29-squad-design.md
@@ -12,9 +12,9 @@ sources:
   - squad/src/bots/pool.ts
   - squad/src/bots/protocol.ts
   - squad/src/bots/hardening.ts
-  - squad/src/bots/pathworkers/client.ts
-  - squad/src/bots/pathworkers/worker.mjs
+  - squad/src/bots/pathworkers/offload.ts
   - squad/src/bots/pathworkers/serialize.ts
+  - squad/src/jobs/handlers/path.mjs
   - squad/src/jobs/pool.ts
   - squad/src/jobs/worker.mjs
   - squad/src/jobs/batch.mjs
@@ -58,8 +58,8 @@ verified_at: 2026-10-30 (branch rework at 32e086a)
 - No sandbox: players are trusted (docs/29 O1).
 - The runtime is one Node process in `squad/` on `127.0.0.1:8772`; the mod is a thin front. Design and decisions:
   [docs/29](../../29-squad-design.md); §16 there lists where the code differs.
-- Performance: patched library hot spots, an A* budget on by default, an optional pathfinding worker pool, and a lag
-  monitor with `POST /api/metrics`, a vitals journal and `/bots status` ([docs/31 §11](../../31-squad-performance-review.md)).
+- Performance: patched library hot spots, an A* budget on by default, optional reader workers that run A* over a
+  shared world (docs/37 P4), and a lag monitor with `POST /api/metrics`, a vitals journal and `/bots status` ([docs/31 §11](../../31-squad-performance-review.md)).
 
 ## Processes and threads
 
@@ -67,9 +67,8 @@ verified_at: 2026-10-30 (branch rework at 32e086a)
 |---|---|---|
 | Supervisor | `squad/src/supervisor.ts` | The parent process (`npm start`). It forks the runtime with `--import tsx`, expects an IPC heartbeat every second, kills the runtime after 10 s of silence (`HEARTBEAT_TIMEOUT_MS`, :15) and restarts it with backoff 1/2/5/10/30 s |
 | Runtime, main thread | `squad/src/main.ts` `start()` :35 | **Everything else**: every mineflayer bot (protocol decoding, physics ticks, the pathfinder's look-ahead, and A* unless the workers are on; plugins), every order's script, the leases, the HTTP + SSE + MCP server, the synchronous SQLite journal, the vitals sampler |
-| Pathfinding workers (optional) | `squad/src/bots/pathworkers/client.ts` `PathWorkerPool` :113, `worker.mjs`; built in `main.ts` :53 | **Off by default** (`pathfinding.workers` 0). When on: the bots' own A* searches, over a mirror of the world. Details below |
-| Reader workers (optional) | `squad/src/jobs/pool.ts` `JobPool`, `worker.mjs`; built in `main.ts` `startJobs` | **Off by default** (`workers.count` 0), and no real job type yet (docs/37 P2: the framework and an `echo` type). When on: batches of read-only jobs under a per-tick CPU budget, ticked on one online bot's `physicsTick`; an entity snapshot in shared memory. [docs/37 §8](../../37-squad-worker-reads-plan.md) |
-| Shared-world writer (optional) | `squad/src/world/shared-world.ts` `SharedWorld`, `writer.mjs`, `store.mjs`; built in `main.ts` when `world.enabled` | **Off by default.** One copy of the bots' chunks in SharedArrayBuffers, decoded by this thread and readable by any thread (`reader.mjs`). P1 of [docs/37](../../37-squad-worker-reads-plan.md) (§8 there is the as-built): nothing reads it yet but `world.verify` |
+| Reader workers (optional) | `squad/src/jobs/pool.ts` `JobPool`, `worker.mjs`; built in `main.ts` `startJobs` | **Off by default** (`workers.count` 0). When on: batches of read-only jobs under a per-tick CPU budget, ticked on one online bot's `physicsTick`; an entity snapshot in shared memory ([docs/37 §8](../../37-squad-worker-reads-plan.md)). Job types: the bots' A* (`path`, docs/37 P4, below) and the trivial `echo`. They replaced docs/32 D's pathfinding worker pool |
+| Shared-world writer (optional) | `squad/src/world/shared-world.ts` `SharedWorld`, `writer.mjs`, `store.mjs`; built in `main.ts` when `world.enabled` (on by default with the reader workers) | One copy of the bots' chunks in SharedArrayBuffers, decoded by this thread and readable by any thread (`reader.mjs`). P1 of [docs/37](../../37-squad-worker-reads-plan.md) (§9 there is the as-built). The reader workers' A* reads it |
 | Typecheck worker | `squad/src/script/typecheck-worker.mjs`, started by `check.ts` `typecheckWorker()` :156 | TypeScript `checkJs` for `check_script`/`submit_command`. First check about 5 s (it parses the library types), later ones 0.1–0.3 s; warmed 2 s after boot. Unref'd when idle |
 | The mod | `com.paul.brawl.squad` in the server JVM | `/bots` commands and the commander snapshot on the server thread; HTTP to the runtime is async; the SSE reader is a virtual thread (`squad-events`); authoring turns are virtual threads running `claude -p` (`ClaudeCodeClient`) |
 
@@ -82,31 +81,48 @@ start, `main.ts` :42 and :49):
 | Key in `squad.json` | Default | What |
 |---|---|---|
 | `pathfinding.astarBudgetMs` | **20** (`DEFAULT_ASTAR_BUDGET_MS`, `config.ts` :53); 0 = off, at most 50 (:55) | All A* searches together spend at most this many ms per 50 ms window (the patched `AStar.setBudget`, applied by `applyPathfinding` :133, which throws if the patches are missing). A search that finds the window spent waits with its best partial path; the wait does not count against `thinkTimeout` |
-| `pathfinding.workers` | **0** (off); an integer up to 16 (`MAX_PATH_WORKERS` :58) | Pathfinding worker threads, capped at the cores minus one (`pathWorkerCount` :145; `main.ts` :51 warns when it caps) |
-| `workers.count`, `workers.tickBudgetMs` | **0** (off), **40** ms (`config.ts` `WorkersConfig`) | The reader workers of docs/37 (an integer up to 16, capped at the cores minus one by `jobWorkerCount`; a budget above 0 and at most 50 ms per 50 ms tick). Independent of `pathfinding.workers` until docs/37 P4 |
+| `workers.count`, `workers.tickBudgetMs` | **0** (off), **40** ms (`config.ts` `WorkersConfig`) | The reader workers of docs/37 (an integer up to 16, capped at the cores minus one by `jobWorkerCount`; a budget above 0 and at most 50 ms per 50 ms tick). With them on, the bots' A* runs there. `pathfinding.workers` (the old pool's key) is an alias, read only when `workers.count` is not set |
+| `world.enabled` | **true when `workers.count` > 0**, else false (`parseConfig`) | The shared world the workers read. An explicit `false` with workers on keeps A* on the main thread (`main.ts` warns) |
 
 Why these defaults (measured on a desktop, [docs/31 §11](../../31-squad-performance-review.md)): the budget was better
 than none in every moving phase at 10–30 bots; with it, the main thread was not saturated at 30 moving bots, and the
 workers cost about 9 GB of RSS at 30 gathering bots and did less gather work.
 
-**The pathfinding worker pool** (`bots/pathworkers/`, docs/32 D):
+**A* on the reader workers** (docs/37 P4; it replaced docs/32 D's pathfinding worker pool, whose workers each parsed
+their own copy of every chunk):
 - **What moves:** only the pathfinder plugin's own planning, through the `bot.pathfinder.searchOffload` hook the patch
-  adds (`client.ts` :202). A caller's synchronous `getPathTo` stays on the main thread. The bots, physics, look-ahead
-  and scripts stay there too, so O2 (the real bot) and O4 (instant reclaim) hold.
-- **The mirror:** the pool attaches to each bot before its first packet (`pool.ts` :262) and installs the hook at spawn
-  (:278). Login/respawn, chunk, block-change and explosion packets are forwarded; one world per dimension is shared by
-  every bot, each chunk is copied once into a `SharedArrayBuffer` (`client.ts` `shared` :537) and refcounted by bot.
-- **The search:** the worker runs mineflayer-pathfinder's own `AStar` and `Movements` over a stand-in bot (blocks from
-  the mirror; inventory, effects, registry from a snapshot sent per search), in 10 ms slices (`worker.mjs`
-  `SLICE_MS` :39), with partial paths every 250 ms (`PROGRESS_MS` :41). Each search starts with an empty block cache
-  (`worker.mjs` :170).
-- **On the main thread** (`OffloadedSearch`, `client.ts` :450): the start node until the worker answers, then its path
-  as `Move` objects. Goals are serialized by class (`serialize.ts`; `GoalFollow` becomes a `GoalNear` snapshot and the
-  main thread keeps `hasChanged`).
-- **Fallbacks to the main-thread search:** an unknown goal, exclusion areas or a non-plain `Movements`, no live worker,
-  a worker that died or threw, no answer by `thinkTimeout` + 2 s (`DEFAULT_GRACE_MS` :109). A dead worker is restarted
-  and refilled; a slot that dies 3 times in a minute is disabled (`MAX_CRASHES_PER_MINUTE` :111). `stats()` (:408)
-  counts offloaded, answered, fallbacks and restarts, but nothing reports it yet (the bench prints it).
+  adds (`bots/pathworkers/offload.ts` `install` :150, installed at spawn by `bots/pool.ts` `withPathSearch` :325). A
+  caller's synchronous `getPathTo` stays on the main thread. The bots, physics, look-ahead and scripts stay there too,
+  so O2 (the real bot) and O4 (instant reclaim) hold.
+- **The probe:** a search that can cross first runs on the main thread for at most 3 ms (`DEFAULT_PROBE_MS`, the
+  plugin's own A* under the A* budget). Most of gather's searches end there and are answered at once; the others move
+  to a worker, and the bot walks the probe's best path meanwhile. Without it, gather's searches were reset by nearby
+  block changes before a worker could answer (docs/37 §10).
+- **The world:** the shared world of docs/37 P1, which follows every bot's packets from its first one (`pool.ts` :282).
+  Nothing is mirrored or kept per worker. A search is submitted once the writer has applied what the bots heard
+  (`SharedWorld.applied` :422), so a block change heard just before it is in the store.
+- **The job:** one search is one `path` job (`jobs/handlers/path.mjs`): mineflayer-pathfinder's own `AStar`,
+  `Movements` and goals over a stand-in bot (blocks from the store; inventory, effects and the Movements' settings
+  from a snapshot sent with the job, `serialize.ts`), run in slices, one per tick, each slice its share of the
+  worker's `workers.tickBudgetMs` (an elastic job type: `elasticMinMs` 2 ms, `path.mjs` :39; a search alone takes up
+  to 40 ms a tick, ten share it). The search's state stays on its worker (the pool pins a continued job). Each slice
+  answers `progress` (the pool's `onProgress`): the chunks it entered, and the best partial path on the first slice
+  and then at most every 250 ms (`PROGRESS_MS` :43). Ticks where its worker had no budget left for it do not count
+  against `thinkTimeout` (`run` :64), as the main-thread A* budget's waits do not.
+- **Blocks:** `world/blocks.mjs` `BlockTemplates` :22: one prismarine `Block` per state id, built once, specialised by
+  position (`at` :42: `Object.create(template)` + position); `StoreWorld` :54 is prismarine-world's sync
+  `getBlock`/`raycast` over the store (for look-at and place goals). No biome, light or block entity.
+- **On the main thread** (`OffloadedSearch`, `offload.ts` :265): the start node until the worker reports, then its
+  partial paths, then its path as `Move` objects. Goals are serialized by class (`serialize.ts`; `GoalFollow` becomes
+  a `GoalNear` snapshot and the main thread keeps `hasChanged`). The plugin's `path_reset`, `goal_updated`,
+  `path_stop` and the bot's `end` cancel the job (its state on the worker is dropped); a newer search supersedes it.
+- **Fallbacks to the main-thread search** (the same search from the start, under `pathfinding.astarBudgetMs`),
+  counted by reason in `stats()` (:250): `goal`, `movements` (cannot cross threads), `noDimension`, `noColumn` (the
+  bot's column is not live in the store), `noWorld` (the writer disabled), `noWorker` (no live worker: the pool would
+  run the job inline, where the plugin's own search is the better one), a failed job (`threw`, `workerDied`,
+  `lostInput`, `clone`, `unknownType`, `unavailable`, `stopped`, `late`; the pool retries a job whose worker died
+  once, on the restarted worker), and `deadline`: no sign of life for `thinkTimeout` + 2 s (`DEFAULT_GRACE_MS`
+  :133). `/api/metrics` shows them as `paths`.
 
 ## Patched dependencies (`squad/patches/`, docs/32 B)
 
@@ -126,7 +142,7 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
   front of a ladder (`pathFromPlayer`, `stepsOntoLadder`); a path never ends on a ladder nor
   rises over its top (`AStar.computeSlice`, `getMoveUp`), and the executor does not count a goal as reached while the
   bot hangs on one (`index.js` `onClimbable`); `postProcessPath` works on copies of the nodes, so a search spread over
-  ticks is not changed under it (`copyMove`). The workers run the same `lib/`, so they find the same paths.
+  ticks is not changed under it (`copyMove`). The reader workers run the same `lib/`, so they find the same paths.
 
 ## Observability (docs/32 C)
 
@@ -509,10 +525,13 @@ clicks and sends each one; it decides nothing about what a click does.
 - **`squad/`:** `npm run check` = lint + tsc + 168 `node:test` tests on fakes (compile, leases, guard, orders and
   reclaim, check/typecheck of the stock commands, HTTP + the real MCP client, supervisor wedge, protocol hardening,
   helpers, agent config drift, `follow`, the `gather` freeze, one test per dependency patch, the vitals, the worker
-  pool: same path as the main thread on a synthetic world, the mirror's refcounts, every fallback, a clean stop;
+  A* on the reader workers (`pathworkers.test.ts`: the same path as the main thread on a synthetic world, partial paths,
+  cancellation, a timeout, a worker dying mid-search, every fallback, world changes, the budget shared and its waits
+  not counted, a silent worker, the plugin's hook, a clean stop, the store's blocks and raycasts, the config; the job
+  pool's progress channel and elastic types, `jobs-long.test.ts`);
   `defend`: commander-relative threats, the leash, two guards per target, distinct slots, quick shots, a hawkEye
   copy per bot, the slot fallback; friends (`raid.test.ts`: the team only, kept up to date; a guard attacks another
-  owner's bot) and `raid` (the march formation, two guards per enemy, archers' fire, the hunt and the end); ladders on a synthetic world: each pathfinder patch, the workers' same paths;
+  owner's bot) and `raid` (the march formation, two guards per enemy, archers' fire, the hunt and the end); ladders on a synthetic world: each pathfinder patch, the reader workers' same paths;
   bound items (`triggers.test.ts`: delivery without restart, the slot, restart, start, stop, starts in flight, the
   report's cap, a throwing listener, `ctx.run`, the reference typecheck, the check route, the snapshot sanitizer); the
   formation helpers (`helpers.test.ts`: `lookDir`/`lineSlots` at yaw 0/90/180/−90 and ranks, `groundAt` on a synthetic
@@ -533,7 +552,7 @@ clicks and sends each one; it decides nothing about what a click does.
   trigger, hit and entity JSON and the request body). The stack edits themselves (`ItemStack` needs a bootstrap), the
   hooks and the mixin are checked only in game.
 - **Live:** `npm run live-test`, using RCON against the dev server (`dev/`, `./gradlew runDevServer`; the default) or
-  production (`SERVER_PROPERTIES=../run/server.properties`; the world is never changed there). `LIVE_PATH_WORKERS=N` runs it with N pathfinding workers.
+  production (`SERVER_PROPERTIES=../run/server.properties`; the world is never changed there). `LIVE_WORKERS=N` runs it with N reader workers (A* there; `LIVE_PATH_WORKERS` is its old name).
   `LIVE_ONLY=core|items` runs one group; the test's runtime listens on `LIVE_RUNTIME_PORT` (default any free port).
   - **Core** (`live-tests/run.ts`): connect, `gather`, `come`, reclaim per role, despawn. On the dev world the bots
     start from a camp the test lays (grass and two oaks at 1100,100,1000, cleared inventories), and a ladder built high
@@ -601,11 +620,10 @@ clicks and sends each one; it decides nothing about what a click does.
   arrival teleport and kit, the start as `Envahisseur`, a real 20-vs-20 fight, 40 bots on one runtime). A raider that
   dies respawns idle (it leaves its order, docs/29 §4) and does not rejoin the raid; one that arrives after the
   timeout is equipped but stays idle.
-- **The reader workers (docs/37 P2):** only on fakes (`tests/jobs.test.ts`) and `bench:jobs`; no job type uses them
-  yet, so they are off.
-- **`/bots status` in game:** only its JUnit test ran. **The worker pool's stats** are not in `/api/metrics` or the
-  vitals.
-- **The worker pool on production:** only the dev server and the bench ran it (live test 5/5 with 4 and 14 workers).
+- **The reader workers (docs/37 P2, P4):** off by default. A* on them ran on fakes (`tests/pathworkers.test.ts`), the
+  dev server's `bench:load` and the live core tests (docs/37 §10), never on production.
+- **`/bots status` in game:** only its JUnit test ran. The A* offload's counters are in `/api/metrics` (`paths`), not
+  in the vitals journal.
 - **Known, not fixed (docs/31 §11.9):** mineflayer-collectblock adds two listeners per cancelled stalled `mineBlock`
   (`MaxListenersExceededWarning` on sites with many stalls); unreachable logs are searched again by every bot and every
   `mineBlock` call (remembering them per order is recommended, not done).

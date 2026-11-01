@@ -115,9 +115,11 @@ async function main(): Promise<void> {
     await rcon.command('difficulty easy');
   }
 
-  // LIVE_PATH_WORKERS=N runs the same scenarios with the pathfinding worker pool (docs/32 D).
-  const pathfinding = { workers: Number(process.env.LIVE_PATH_WORKERS ?? 0) };
-  const cfg = parseConfig({ minecraft: { port: MC_PORT }, port: RUNTIME_PORT, dataDir: join(runDir, 'data'), loginStaggerMs: 1500, pathfinding }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN });
+  // LIVE_WORKERS=N runs the same scenarios with N reader workers (workers.count, which turns the shared world on): the
+  // bots' A* runs there (docs/37 P4). LIVE_PATH_WORKERS=N, its old name (docs/32 D's pathfinding workers), still works.
+  const workers = { count: Number(process.env.LIVE_WORKERS ?? process.env.LIVE_PATH_WORKERS ?? 0) };
+  const cfg = parseConfig({ minecraft: { port: MC_PORT }, port: RUNTIME_PORT, dataDir: join(runDir, 'data'), loginStaggerMs: 1500, workers }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN });
+  if (workers.count > 0) console.log(`reader workers: ${workers.count} (A* on the workers, over the shared world)`);
   const rt = await start(cfg, { connectBots: true, installGuards: true });
   const { pool, runner } = rt.service.deps;
   runner.on('notice', (n: Notice) => {
@@ -299,7 +301,9 @@ async function main(): Promise<void> {
       await itemScenarios({ rcon, rt, mcPort: MC_PORT, setupWorld: SETUP_WORLD, notices, api, scenario, until, sleep, admin: PAUL });
     }
   } finally {
-    writeFileSync(join(runDir, 'result.json'), JSON.stringify({ results, notices }, null, 2));
+    const paths = rt.paths?.stats();
+    if (paths) console.log(`A* on the workers: ${paths.probed} done by the main-thread probe, ${paths.offloaded} offloaded, ${paths.answered} answered, ${paths.cancelled} cancelled, fallbacks ${JSON.stringify(paths.fallbacks)}`);
+    writeFileSync(join(runDir, 'result.json'), JSON.stringify({ results, notices, ...(paths ? { paths } : {}) }, null, 2));
     await rt.stop();
     rcon.close();
   }

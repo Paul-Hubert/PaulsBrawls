@@ -3,7 +3,7 @@
 // and stand inside each other; with an offset each one keeps its own spot and still moves with the player.
 //
 // It only changes where the followed point is (the constructor and hasChanged); heuristic and isEnd are
-// GoalFollow's, on x/y/z, so the pathfinding workers can mirror it exactly as they mirror a GoalFollow.
+// GoalFollow's, on x/y/z, so A* on the reader workers can send it exactly as it sends a GoalFollow.
 
 import type { Entity } from 'prismarine-entity';
 import pathfinderPkg from 'mineflayer-pathfinder';
