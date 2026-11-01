@@ -1,5 +1,7 @@
-// Summarise V8 CPU profiles (.cpuprofile, from bench/load.ts --profile or `node --cpu-prof`): self time by package,
-// by bucket (protocol, world, physics, pathfinder, plugins, squad, GC…) and the top functions.
+// Summarise V8 CPU profiles (.cpuprofile, from bench/load.ts --profile, bench/fight.ts or `node --cpu-prof`): self
+// time by package, by bucket (protocol, world, physics, pathfinder, plugins, squad, GC…), the top functions by self
+// time, and by total time (inclusive: the function or anything it called was running; a recursive function counts
+// once per sample), with a table of Squad's own frames (runtime, helpers, the commands' code).
 //
 //   cd squad && npm run bench:profiles -- bench/.runs/<run>/profiles/*.cpuprofile   (or a directory)
 
@@ -75,6 +77,10 @@ export interface Summary {
   packages: Array<{ pkg: string; ms: number; pctBusy: number }>;
   buckets: Array<{ bucket: string; ms: number; pctBusy: number }>;
   top: Array<{ fn: string; pkg: string; ms: number; pctBusy: number }>;
+  /** By total time (self + callees), the largest first. */
+  inclusive: Array<{ fn: string; pkg: string; ms: number; pctBusy: number; selfMs: number }>;
+  /** Squad's own functions (squad/src, the commands), by total time. */
+  squad: Array<{ fn: string; pkg: string; ms: number; pctBusy: number; selfMs: number }>;
   causes: Array<{ cause: string; ms: number; pctBusy: number }>;
 }
 
@@ -90,12 +96,15 @@ export function summarise(file: string): Summary {
   const totalUs = [...self.values()].reduce((a, b) => a + b, 0);
   const pkgs = new Map<string, number>();
   const fns = new Map<string, { pkg: string; us: number }>();
+  const keyOf = (n: ProfileNode): string => {
+    const where = n.callFrame.url ? `${basename(n.callFrame.url.replace(/\\/g, '/'))}:${n.callFrame.lineNumber + 1}` : '';
+    return `${n.callFrame.functionName || '(anonymous)'} ${where}`.trim();
+  };
   for (const [id, us] of self) {
     const n = byId.get(id) as ProfileNode;
     const pkg = pkgOf(n);
     pkgs.set(pkg, (pkgs.get(pkg) ?? 0) + us);
-    const where = n.callFrame.url ? `${basename(n.callFrame.url.replace(/\\/g, '/'))}:${n.callFrame.lineNumber + 1}` : '';
-    const key = `${n.callFrame.functionName || '(anonymous)'} ${where}`.trim();
+    const key = keyOf(n);
     const f = fns.get(key) ?? { pkg, us: 0 };
     f.us += us;
     fns.set(key, f);
@@ -143,7 +152,60 @@ export function summarise(file: string): Summary {
     .sort((a, b) => b[1].us - a[1].us)
     .slice(0, 25)
     .map(([fn, f]) => ({ fn, pkg: f.pkg, ms: ms(f.us), pctBusy: pct(f.us) }));
-  return { file, totalMs: ms(totalUs), busyMs: ms(busyUs), packages, buckets, top, causes };
+  // By total time: a node's subtree time, added to its function unless the same function is already on the stack.
+  const subtree = new Map<number, number>();
+  const sub = (id: number): number => {
+    const known = subtree.get(id);
+    if (known !== undefined) return known;
+    // Iterative post-order: profiles of long runs are deep enough to overflow a recursive walk.
+    const stack: Array<[number, boolean]> = [[id, false]];
+    while (stack.length) {
+      const [cur, done] = stack.pop() as [number, boolean];
+      if (done) {
+        let t = self.get(cur) ?? 0;
+        for (const c of byId.get(cur)?.children ?? []) t += subtree.get(c) ?? 0;
+        subtree.set(cur, t);
+        continue;
+      }
+      stack.push([cur, true]);
+      for (const c of byId.get(cur)?.children ?? []) if (!subtree.has(c)) stack.push([c, false]);
+    }
+    return subtree.get(id) ?? 0;
+  };
+  const roots = p.nodes.filter((n) => !parent.has(n.id));
+  for (const r of roots) sub(r.id);
+  const incl = new Map<string, { pkg: string; us: number }>();
+  const active = new Map<string, number>();
+  for (const r of roots) {
+    const walk: Array<[number, boolean]> = [[r.id, false]];
+    while (walk.length) {
+      const [id, leaving] = walk.pop() as [number, boolean];
+      const n = byId.get(id) as ProfileNode;
+      const key = keyOf(n);
+      if (leaving) {
+        const left = (active.get(key) ?? 1) - 1;
+        if (left === 0) active.delete(key);
+        else active.set(key, left);
+        continue;
+      }
+      if (!active.has(key)) {
+        const f = incl.get(key) ?? { pkg: pkgOf(n), us: 0 };
+        f.us += subtree.get(id) ?? 0;
+        incl.set(key, f);
+      }
+      active.set(key, (active.get(key) ?? 0) + 1);
+      walk.push([id, true]);
+      for (const c of n.children ?? []) walk.push([c, false]);
+    }
+  }
+  const inclRows = [...incl.entries()]
+    // Node's dispatchers (timers, emitters, streams, the module loader) are on every stack: they say nothing.
+    .filter(([k, f]) => !/^\(/.test(f.pkg) && !/^\((root|program|idle|garbage collector)\)/.test(k) && !/^(node:(main|modules|timers|process|events|internal|streams|stream|net)|readable-stream)$/.test(f.pkg))
+    .sort((a, b) => b[1].us - a[1].us)
+    .map(([fn, f]) => ({ fn, pkg: f.pkg, ms: ms(f.us), pctBusy: pct(f.us), selfMs: ms(fns.get(fn)?.us ?? 0) }));
+  const inclusive = inclRows.slice(0, 40);
+  const squad = inclRows.filter((r) => r.pkg.startsWith('squad ')).slice(0, 40);
+  return { file, totalMs: ms(totalUs), busyMs: ms(busyUs), packages, buckets, top, inclusive, squad, causes };
 }
 
 export function render(s: Summary): string {
@@ -167,6 +229,14 @@ export function render(s: Summary): string {
     '| top self-time function | package | ms | % of busy |',
     '|---|---|---|---|',
     ...s.top.map((t) => `| \`${t.fn.replace(/\|/g, '\\|')}\` | ${t.pkg} | ${t.ms} | ${t.pctBusy} |`),
+    '',
+    '| top total-time function (itself + what it calls) | package | total ms | % of busy | self ms |',
+    '|---|---|---|---|---|',
+    ...s.inclusive.map((t) => `| \`${t.fn.replace(/\|/g, '\\|')}\` | ${t.pkg} | ${t.ms} | ${t.pctBusy} | ${t.selfMs} |`),
+    '',
+    '| Squad function (runtime, helpers, commands) by total time | package | total ms | % of busy | self ms |',
+    '|---|---|---|---|---|',
+    ...s.squad.map((t) => `| \`${t.fn.replace(/\|/g, '\\|')}\` | ${t.pkg} | ${t.ms} | ${t.pctBusy} | ${t.selfMs} |`),
     '',
   ];
   return lines.join('\n');

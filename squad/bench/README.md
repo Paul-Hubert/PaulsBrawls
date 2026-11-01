@@ -7,11 +7,14 @@ and only overrides a setting when an experiment flag asks for it.
 | Command | What | Needs |
 |---|---|---|
 | `npm run bench:load -- --label baseline` | N = 0, 1, 5, 10, 20, 30 real bots; phases idle, follow, walk, gather (60 s each) | the **dev** server (`run/`), RCON, `max-players` ≥ the largest N |
+| `npm run bench:fight -- --label baseline` | 10 guards + 10 archers (`defend`) against the exact same army (`raid`) on an arena; per round: the fight, a CPU profile, helper timings, a per-second timeline | the **dev** server with `max-players` ≥ 40 and `dev/squad.properties` pointing the mod at the bench runtime (friendly fire) |
 | `npm run bench:micro` | Squad's own overhead: guard proxy, loop budget, `squad.tasks`, journal writes, SSE, `nearestEntity` | nothing |
-| `npm run bench:profiles -- <run>/profiles` | from the `.cpuprofile` files: time by cause (what is on the stack: A*, look-ahead, packets, own physics, Squad…), self time by package and the top functions | a run with `--profile` |
+| `npm run bench:profiles -- <run>/profiles` | from the `.cpuprofile` files: time by cause (what is on the stack: A*, look-ahead, packets, own physics, Squad…), self time by package, the top functions by self time and by total time (itself + what it calls), and Squad's own frames by total time | a run with `--profile` |
 | `npm run bench:callers -- <file.cpuprofile> fn …` | who calls a hot function (5 levels of callers, by self time) | a profile |
+| `npm run bench:callees -- <file.cpuprofile> fn …` | where a function's time goes: its total time split by its direct callees (`emit` is see-through, so `tickPhysics` shows the physicsTick listeners, `emitPacket` the packet handlers) | a profile |
 | `npm run bench:report -- <run1> <run2> …` | repeated runs merged: mean and spread per (N, phase) | two or more runs |
 | `npm run bench:compare -- bench/.runs` | every `exp-*` and `control-*` run at N = 10, side by side per phase | experiment runs |
+| `node --expose-gc --import tsx bench/repro-hawkeye-leak.ts` | docs/36 §5.1: every bot hawkEye was loaded on stays reachable after GC (exit 1 while the leak is there) | nothing |
 | `npm run bench:repro-tasks-spin` | the `gather` freeze of docs/31 §2.6 on the fakes (`FIND_MS=20` by default) | nothing |
 
 Results go to `bench/.runs/<timestamp>-<label>/` (gitignored): `results.json`, `summary.md`, `profiles/`.
@@ -87,6 +90,55 @@ the runtime's config. `--workers N` sets `pathfinding.workers`, the pathfinding 
 
 **Run it on AC power, with the PC unlocked and awake.** Locking a modern-standby laptop puts it to sleep, whatever
 `SetThreadExecutionState` asks. A standby freezes both the runtime and the server, and the phase it cuts is lost.
+
+## The fight benchmark
+
+```powershell
+# 1. the dev server, with max-players=48 in dev/server.properties and dev/squad.properties set to
+#    enabled=true, url=http\://127.0.0.1\:8779, token=live-test-token (put both back afterwards)
+$env:JAVA_HOME = 'C:/Users/Paul/AppData/Roaming/PrismLauncher/java/java-runtime-delta'
+./gradlew runDevServer
+# 2. the fight (two rounds: the first profiled, the second for clean timings)
+cd squad
+npm run bench:fight -- --label baseline
+npm run bench:fight -- --rounds 3 --profile-rounds 0 --label repeat      # timings only
+npm run bench:fight -- --blue "raid radius=24" --label mirror            # both armies raid each other
+```
+
+- **The armies.** Blue: `BleuGarde01..10` and `BleuArcher01..10`, owned by `BenchBleu`, run `defend radius=24` (Paul's
+  squad standing its ground). Red: `RougeGarde01..10` and `RougeArcher01..10`, owned by `BenchRouge`, run `raid
+  radius=24` on blue's front (what `/bots raid` starts). Both get the kits of `/bots squad spawn guard|archer`
+  (`SquadKits.java`, item for item, over RCON) and the role tags; `--guards`, `--archers` change the counts.
+- **Every round starts the same:** the arena (a stone floor at y 100, x 1400 ± 48, z 1000 ± 24, barrier walls,
+  `--arena x,z`) cleared of arrows and items, every bot back on its slot (rows of 5, 2 blocks apart, guards in front,
+  the two front rows `--gap 40` blocks apart, facing each other), kits and health restored. The world: day, no mobs,
+  no weather, `keepInventory` (docs/35 D2: the dead drop nothing), immediate respawn, difficulty hard (production's).
+- **A round ends** when one army has no bot left, when both orders ended, or after `--seconds 240`. A bot that dies
+  is despawned (docs/35 D2: the dead disconnect) and spawned back between rounds; `--dead respawn` keeps today's
+  runtime instead (it respawns at the world spawn, far from the arena, and reloads its chunks during the fight).
+- **The friendly-fire rule** (an archer's arrow or a guard's sweep never hurts its own army) is the mod's, from the
+  runtime's roster: the bench waits for the dev mod's event stream and refuses to start without it (`--no-mod` runs
+  anyway, friendly fire on, which is not a real fight). The runtime listens on `--port 8779`, the token is
+  `live-test-token`.
+- **Measured per round,** plus `--idle 20` seconds of the 40 bots standing first:
+  - everything of the load benchmark's phases (ELU, loop delay, CPU, memory, decode / inflate / physics / look-ahead /
+    A* time, ticks/s, packets, path searches, the server's tick and "Can't keep up!");
+  - **the helpers as the commands call them** (`lib/helper-timing.ts` wraps every entry of `HELPERS` before the
+    orders start): calls, how they ended (ok, `no clear line of fire`, `BotLeftError`…), wall time p50 / p95 / max /
+    total (a shot or a melee fight in game time), and the synchronous part that blocks the loop;
+  - **a CPU profile** of the first `--profile-rounds 1` rounds and of the idle phase (`--sampling-us 1000`),
+    summarised in `summary.md` by `profile-summary.ts`: by cause, by package, the top functions by self and by total
+    time, and Squad's frames (runtime, helpers, the commands' own functions such as `pick` and `nearestFoe`);
+  - **a timeline**, one row per second: bots alive and their health per army, ELU, the worst loop delay, CPU, ms of
+    A* / physics / look-ahead / decode, helper calls, ticks/s and entities per bot;
+  - **the fight:** who died when, killed by whom and how (the server log's death messages), friendly kills (0 with
+    the mod), the orders' results and their most frequent log lines.
+- **Experiment** (bench-only): `--hawkeye-every 4` runs hawkEye's aim (`getGrades`, a trajectory search with
+  raycasts on every physics tick of a drawing archer) on one tick in four; the bow still turns every tick to the last
+  aim (docs/36 §7).
+- Results go to `bench/.runs/<timestamp>-<label>/`: `results.json`, `summary.md`, `profiles/*.cpuprofile`. A profiled
+  round is slower (the profiler's sampling), so compare timings between unprofiled rounds. The analysis of the first
+  runs: [docs/36](../../docs/36-squad-fight-performance.md).
 
 ## Micro-benchmarks
 

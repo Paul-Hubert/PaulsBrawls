@@ -19,9 +19,11 @@
     "bench:load": "tsx bench/load.ts",
     "bench:micro": "tsx bench/micro.ts",
     "bench:profiles": "tsx bench/profile-summary.ts",
+    "bench:fight": "tsx bench/fight.ts",
     "bench:report": "tsx bench/report.ts",
     "bench:compare": "tsx bench/compare.ts",
     "bench:callers": "tsx bench/callers.ts",
+    "bench:callees": "tsx bench/callees.ts",
     "bench:repro-tasks-spin": "tsx bench/repro-tasks-spin.ts"
   },
   "dependencies": {
