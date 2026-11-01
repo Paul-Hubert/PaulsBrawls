@@ -1,6 +1,7 @@
-// What crosses the thread boundary of the pathfinding workers (docs/32 D): goals, Movements settings and paths. Only
-// data crosses (structured clone), never functions, so anything that carries code (a goal class we do not know, an
-// exclusion area, a subclassed Movements) is refused here and the search stays on the main thread.
+// What crosses the thread boundary when A* runs on a reader worker (docs/37 P4, first written for docs/32 D's
+// pathfinding workers): goals, Movements settings and paths. Only data crosses (structured clone), never functions, so
+// anything that carries code (a goal class we do not know, an exclusion area, a subclassed Movements) is refused here
+// and the search stays on the main thread. offload.ts sends them; jobs/handlers/path.mjs rebuilds them.
 
 import { createRequire } from 'node:module';
 
@@ -29,7 +30,7 @@ const Move = require('mineflayer-pathfinder/lib/move') as new (
 const Movements = require('mineflayer-pathfinder/lib/movements') as { prototype: object };
 const goals = require('mineflayer-pathfinder/lib/goals') as Record<string, new (...a: never[]) => object>;
 
-/** A goal as the worker rebuilds it (worker.mjs, buildGoal). */
+/** A goal as the worker rebuilds it (jobs/handlers/path.mjs, buildGoal). */
 export type WireGoal =
   | { t: 'GoalBlock' | 'GoalNear' | 'GoalXZ' | 'GoalNearXZ' | 'GoalY' | 'GoalGetToBlock'; f: Record<string, number> }
   | { t: 'GoalCompositeAny' | 'GoalCompositeAll'; goals: WireGoal[] }
@@ -58,7 +59,7 @@ function numericFields(goal: object): Record<string, number> | null {
 /**
  * A goal the worker can rebuild, or null (the search stays on the main thread). Classes are matched exactly, not by
  * instanceof: a subclass may override heuristic or isEnd. `world` is the bot's own world: a goal that raycasts a
- * different world cannot be mirrored.
+ * different world cannot be searched on a worker.
  */
 export function serializeGoal(goal: unknown, world: unknown): WireGoal | null {
   if (!goal || typeof goal !== 'object') return null;

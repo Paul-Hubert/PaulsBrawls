@@ -1,6 +1,6 @@
 // The shared world's memory layout (docs/37 §2.1): every number the reader (reader.mjs, any thread) and the writer
 // (store.mjs, the writer thread) must agree on, and the allocation of the buffers. Plain JS so a worker needs no
-// loader (as bots/pathworkers/worker.mjs).
+// loader (as script/typecheck-worker.mjs).
 //
 // Five SharedArrayBuffers, allocated once by the main thread (SharedWorld) and shared by reference with every thread:
 //   control   Int32: the epoch, the change counter, the high-water marks, then one epoch slot per reader.

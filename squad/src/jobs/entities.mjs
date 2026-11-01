@@ -1,7 +1,7 @@
 // The entity snapshot (docs/37 §2.4): one row per entity any online bot knows, written by the main thread once per
 // dispatcher tick into SharedArrayBuffers, read by the reader workers (aim lead, hitbox raycasts) without a message.
 //
-// Plain JS so a worker imports it with no loader (like pathworkers/worker.mjs); entities.d.mts types it for the
+// Plain JS so a worker imports it with no loader (like worker.mjs); entities.d.mts types it for the
 // main thread. This file holds both sides of the memory protocol, so it lives in one place:
 //
 //  - Two row buffers (double-buffered). The writer fills the one that is neither published nor held, then publishes

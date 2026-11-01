@@ -6,3 +6,4 @@ export const STOCK_HANDLERS: URL[] = [new URL('./echo.mjs', import.meta.url)];
 STOCK_HANDLERS.push(new URL('./find-blocks.mjs', import.meta.url));
 // docs/37 P3: one aim update of a drawing archer (aim/solve.mjs), submitted by aim/draw.ts.
 STOCK_HANDLERS.push(new URL('./aim.mjs', import.meta.url));
+STOCK_HANDLERS.push(new URL('./path.mjs', import.meta.url)); // P4: A* (docs/37), bots/pathworkers/offload.ts submits it

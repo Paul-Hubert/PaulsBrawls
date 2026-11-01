@@ -2,7 +2,7 @@
 // phases add their handlers) under a per-tick CPU budget, reading the shared world (P1) and the entity snapshot
 // without a message. It never writes the world and never touches a bot.
 //
-// Plain JS so the worker needs no loader (as pathworkers/worker.mjs). workerData:
+// Plain JS so the worker needs no loader (as script/typecheck-worker.mjs). workerData:
 //   { handlers: string[] (module URLs), budgetMs, worldModule?: string, world?: descriptor, entities: EntityHandles,
 //     version, index }
 //
@@ -10,12 +10,12 @@
 //   { t: 'batch', tick, budgetMs, jobs: [{ id, type, input?, resume?, transferred?, deadlineTick, est }] }
 //   { t: 'drop', ids }        forget the state or the held input of these jobs (cancelled, late, superseded)
 // Messages out:
-//   { t: 'ready', types, errors }
-//   { t: 'done', tick, usedMs, results }      one per batch (batch.mjs's results)
+//   { t: 'ready', types, errors, elastic }   elastic: { type: elasticMinMs } of the elastic types (batch.mjs)
+//   { t: 'done', tick, usedMs, results }      one per batch (batch.mjs's results; a 'continue' may carry `progress`)
 
 import { parentPort, workerData } from 'node:worker_threads';
 
-import { loadHandlers, runBatch, serializeError } from './batch.mjs';
+import { elasticMinMs, loadHandlers, runBatch, serializeError } from './batch.mjs';
 import { openEntities } from './entities.mjs';
 
 const data = workerData;
@@ -39,8 +39,17 @@ parentPort.on('message', async (m) => {
   try {
     parentPort.postMessage(msg);
   } catch {
-    // A result that cannot be copied fails alone, not its whole batch.
+    // A result that cannot be copied fails alone, not its whole batch; a progress that cannot be copied is dropped
+    // (the job goes on).
     for (const r of out.results) {
+      if (r.r === 'continue' && Object.hasOwn(r, 'progress')) {
+        try {
+          structuredClone(r.progress);
+        } catch {
+          delete r.progress;
+        }
+        continue;
+      }
       if (r.r !== 'done') continue;
       try {
         structuredClone(r.value);
@@ -55,4 +64,6 @@ parentPort.on('message', async (m) => {
   }
 });
 
-parentPort.postMessage({ t: 'ready', types: [...handlers.keys()], errors });
+const elastic = {};
+for (const [type, h] of handlers) if (elasticMinMs(h) !== undefined) elastic[type] = elasticMinMs(h);
+parentPort.postMessage({ t: 'ready', types: [...handlers.keys()], errors, elastic });

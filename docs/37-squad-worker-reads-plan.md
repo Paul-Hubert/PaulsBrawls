@@ -4,8 +4,9 @@
 > the same day. Every expected number is an estimate from docs/36's profiles and is re-measured after each phase with
 > `bench:fight` and `bench:load`. **Built so far: P0** (the hawkEye leak), **P1** (the shared world, off by default; as
 > built in §9), **P2** (the job queue, dispatcher and reader workers, off by default; as built in §8), **P3** (Squad's
-> own aim, hawkEye removed; as built in §11) and **P6** (gather's block search as a `findBlocks` job, off by default; as
-> built in §10). The rest is a plan.
+> own aim, hawkEye removed; as built in §11), **P4** (A* on the reader workers over the shared world, the old per-worker
+> mirror retired; as built in §12) and **P6** (gather's block search as a `findBlocks` job, off by default; as built in
+> §10). The rest is a plan.
 
 ## 0. Owner decisions (Paul, 2026-11-01)
 
@@ -215,7 +216,7 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 | **P1** ✅ | L | The shared world: pages, sections, index, epochs, cache, per-state tables, the writer thread, fed from the bots' packets beside today's worlds (nothing reads it yet) | **Done 2026-11-01** (§9): 19 tests on fakes (`tests/world.test.ts`); the live probe (`live-tests/probe-world.ts`), three runs, each comparing 184.6 M blocks of 1 878 held columns twice: 0 mismatches |
 | **P2** ✅ | M | The job queue, dispatcher and reader workers (budget, priorities, deadlines, carry-over, affinity, fallbacks, metrics), with a test job type | **Done 2026-11-01** (§8): `tests/jobs.test.ts` (budget respected, priorities, `late`, a worker killed mid-batch, …); `/api/metrics` shows `jobs`. Off by default (`workers.count` 0) until P3 |
 | **P3** ✅ | M | Raycast (blocks + hitboxes), LOS and the aim solver as jobs; `shoot` on the schedule with turning; hawkEye removed | **Done 2026-11-01** (§11): the aim from 42 % of the main thread to 1–2 %; full-strength ELU 0.34–0.36 inline (today's baseline 0.65–0.70); kills per shot 3.5–5.2 %; friendly 0; failed shots 19–32 % (not met: friends in the line, D5's check, §11.7); live items tests pass. The `raycast`/`los` job types are not built (nothing calls them) |
-| **P4** | M | A* on the reader workers over the shared world (Movements reads per-state tables); the old per-worker mirror retired | `bench:load` walk / gather at 10 and 30 bots: legs and logs per minute ≥ docs/31 §11; live core tests pass; process memory flat with the worker count |
+| **P4** ✅ | M | A* on the reader workers over the shared world (Movements reads per-state Block templates); the old per-worker mirror retired | `bench:load` walk / gather at 10 and 30 bots: legs and logs per minute ≥ docs/31 §11; live core tests pass; process memory flat with the worker count. **Built 2026-11-01** (§12): walk, the live core tests and memory (~60 MB a worker) met; gather not shown to match (§12.1), so the default stays off |
 | **P5** | L | The bots read the one copy: a patched mineflayer blocks plugin sends chunks to the writer; `bot.world` is a shared store-backed world (prismarine-world's sync API, `blockUpdate`/`chunkColumnLoad`/`chunkColumnUnload` per bot, block entities on the main thread). Behind `world.shared` (default off until it passes) | `bench:fight` and `bench:load`: ~30–40 MB less per bot; 40 logins with no stall over 250 ms; every live test passes with `world.shared: true` |
 | **P6** ✅ | S | `findBlocks` as a job (gather's search) | **Done 2026-11-01** (§10), off by default (it needs `workers.count` > 0 and `world.enabled`): mineflayer's answer, position for position, on real chunk data (`tests/find-blocks.test.ts`); 0.1 ms on the store against 15 ms in mineflayer. `bench:load` gather at N = 10: logs unchanged within two sites' noise (96 off / 100 on, first runs), block searches on the main thread 0.65–1.0 s a minute → 0; the §2.6 case (no reachable log): the main thread blocked 1 225–1 340 ms at the order's start (ten searches back to back) → 15–65 ms at most, no search on the main thread |
 
@@ -234,8 +235,11 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 - `world.enabled`, `cacheSeconds`, `cacheColumns` and `verify` exist since P1 (§9): `world.enabled` builds the store
   (P2/P3 turn it on), `verify` is the debug comparison of §6.
 
-- `workers.count`: default cores − 2.
-- `pathfinding.workers` remains an alias of `workers.count`.
+- `workers.count`: default cores − 2 in the plan; **0 (off) as built** (§8.5), until the final measurements.
+- `pathfinding.workers` remains an alias of `workers.count` (since P4): read when `workers.count` is not set; when both
+  are set, `workers.count` wins.
+- `world.enabled` defaults to `workers.count` > 0 (since P4): the workers read the store. An explicit `false` with
+  workers on keeps A* on the main thread (`main.ts` warns).
 - `world.shared` turns P5 on.
 
 ## 6. Risks
@@ -354,7 +358,8 @@ its dispatch. P3's aim schedule must submit two ticks ahead (or P3 changes the a
 ### 8.5 Where it differs from §2.4–2.5
 
 - **`workers.count` defaults to 0** (off), not cores − 2: no job type needs it yet. `pathfinding.workers` is untouched
-  (P4 merges them); until then each pool caps itself at cores − 1 on its own.
+  (P4 merges them); until then each pool caps itself at cores − 1 on its own. (Since P4: one pool, `pathfinding.workers`
+  an alias, §12.)
 - **Teams:** a row's `team` is the owner group (bots joined through any shared owner, a superset of every order's
   `isFriend`), and **owner players carry their team's number too**, since `isFriend` counts them as friends; other
   players and mobs are 0. A `kind` column was added (projectiles and items must not block a raycast).
@@ -374,6 +379,23 @@ its dispatch. P3's aim schedule must submit two ticks ahead (or P3 changes the a
   good.
 - **`/bots status`:** the runtime's `text` gets « calculs : 3/4 workers, file 12, p95 75 ms, 2 en retard, … » when the
   pool is on; the mod's own short line (`SquadStatusFormat`) is unchanged.
+
+### 8.6 Added in P4 (the A* job needed them)
+
+All backward compatible: a handler that uses none of them runs exactly as before.
+- **Progress:** `JobSpec.onProgress?(progress)`. A handler that answers `{ continue: state, progress }` hands `progress`
+  (structured-cloned) to it at the next tick's apply step, after the job is queued again, so a callback that cancels the
+  job finds it queued and its state is dropped. Never called once the job is settled; a callback that throws is
+  logged. A progress the worker cannot copy is dropped, not the job. The `continue` `WireResult` carries `progress?`.
+- **Elastic types:** a handler module may `export const elasticMinMs = 2`. The pool packs it into batches by that, not
+  by its measured cost (the EWMA, still kept for the stats), and `ctx.shareMs()` (in every job's `ctx`) gives a run its
+  fair share: what is left of the batch's budget, split evenly with the jobs after it. A search alone on a worker
+  computes up to the whole 40 ms; ten share it. A worker lists its elastic types in its `ready` message
+  (`elastic: { type: ms }`); the inline fallback reads them from its own handlers.
+- **`jobs.workersAlive()`:** a cheap count of the live workers (`stats()` sorts latencies).
+- **`resourceLimits`** (`JobPoolOptions`): each worker's V8 heap limits, passed to `new Worker`. `main.ts` gives the
+  reader workers a young generation of 16 MB and an old one of 512 MB (`READER_HEAP`, §12.1: without it each
+  isolate let A*'s garbage pile up against V8's default limit of several GB).
 
 ## 9. P1 as built (2026-11-01)
 
@@ -853,3 +875,184 @@ Variants (inline unless said), for the choices of §11.7:
    the real draw (FakeBot's `archer()`), the stock commands' tests record their targets through `tests/fakes/shots.ts`
    (the real `shoot` still runs). Two stock-test layouts were moved (`item-orders.test.ts`): archers standing one
    behind the other in the line of fire now stop each other's arrows, as they should.
+
+## 12. P4 as built (2026-11-01)
+
+A* runs on the reader workers, over the shared world. docs/32 D's pathfinding worker pool (`bots/pathworkers/client.ts`,
+`worker.mjs`: one parsed mirror of every chunk in each worker) is gone. **Off by default** (`workers.count` 0): every
+search stays on the main thread, as before; the orchestrator turns it on after the final measurements.
+
+**Files:**
+
+| File | What |
+|---|---|
+| `squad/src/jobs/handlers/path.mjs` | The `path` job type: the patched mineflayer-pathfinder's `AStar`, `Movements` and goals over a stand-in bot that reads the store; the slices, the progress, the timeout's discount |
+| `squad/src/world/blocks.mjs` (+ `.d.mts`) | `BlockTemplates` (one prismarine `Block` per state id, specialised by position) and `StoreWorld` (prismarine-world's sync `getBlock`/`raycast` over the store). P5's `blockAt` can use them |
+| `squad/src/bots/pathworkers/offload.ts` | `PathOffload` (main thread): the `searchOffload` hook, the submit, the cancels, the fallbacks, `stats()`; `OffloadedSearch`, the AStar context the plugin sees |
+| `squad/src/bots/pathworkers/serialize.ts` | Kept from docs/32 D: goals, Movements settings and paths across threads |
+| `squad/src/world/shared-world.ts` | + `applied()`, `dimensionOf(bot)`, `isLive(dim, x, z)`, `writerState` |
+| `squad/src/jobs/pool.ts`, `batch.mjs`, `worker.mjs` | + the progress channel, elastic types, `workersAlive()` (§8.6) |
+| `squad/src/config.ts`, `main.ts`, `bots/pool.ts` | One pool (`workers.count`; `pathfinding.workers` its alias), the world on with the workers; the job pool built before the bot pool; the workers' heaps sized (`READER_HEAP`); the bot pool's seam is `pathSearch.install(bot)` at spawn (the shared world's own `attach` follows the packets) |
+| `squad/src/vitals/metrics.ts` | `/api/metrics` `paths`: the offload's counters |
+
+Tests: `tests/pathworkers.test.ts` (18, rewritten for the new path), `tests/ladders.test.ts` (its worker case ported),
+`tests/jobs-long.test.ts` (7: the progress channel, elastic types, `resourceLimits`), on a shared rig (`tests/fakes/path-rig.ts`: the
+real shared world, job pool and `path` handler).
+
+**A search, end to end:**
+1. The plugin plans (its own `planPath`, never a caller's `getPathTo`) and calls `searchOffload`. `PathOffload` checks
+   what can cross (or falls back, below) and cancels the bot's previous search. Then **the probe**: the plugin's own
+   A* runs here for at most 3 ms (`DEFAULT_PROBE_MS`; all probes together at most 10 ms per 50 ms window,
+   `PROBE_BUDGET_MS`, outside the A* budget). Done, the answer is returned at once
+   (`ProbedSearch`), as without workers. Not done, it returns an `OffloadedSearch`, whose `compute()` answers
+   `partial` with the probe's best path until the worker reports (the start node alone if the probe found none: never
+   an empty path, which `goto()` would take for "arrived").
+2. Once `SharedWorld.applied()` resolves (the writer has applied every batch sent so far, so a block change heard just
+   before is in the store), it submits `{ type: 'path', input, signal, onProgress }`: priority 0 (below P3's aim), no
+   deadline.
+3. On a worker, the first slice builds the search: a `StoreWorld` for the bot's dimension; a stand-in bot (blocks from
+   the store, the request's inventory and effects, `index.js`'s `bestHarvestTool`); a `Movements` made with
+   `Object.create(Movements.prototype)` and the settings (its constructor walks the registry, ~1 ms, and the settings
+   carry every field it sets, or serialize.ts refuses them); the goal rebuilt by class; `new AStar(…)`.
+4. Each slice runs `computeSlice` for its share (`ctx.shareMs()`, at least 0.5 ms; a quarter of it once the search
+   has computed 50 ms and others follow it in the batch; the batch's last slice leaves up to 5 ms unused), after
+   emptying `Movements`' block cache if the store's version moved (`blockUpdate` on the stand-in, `lib/tick.js`). Still partial, it answers `{ continue, progress }`:
+   the chunks entered since the last slice, and the best path on the first slice, then when it changed, at most every
+   250 ms. Done, the answer.
+5. On the main thread, `onProgress` adds the chunks to `visitedChunks` (the plugin re-plans when one next to them
+   loads) and rebuilds the partial path as `Move`s once; `compute()` returns it until the next one. The answer is
+   rebuilt the same way.
+
+**Decisions:**
+- **The probe.** Without it, gather on the workers mined a fraction of the logs of the main thread (run d1 below, 1
+  worker: 28 logs at 30 bots against 167). A worker's first answer comes 1–3 ticks after the search, and meanwhile the
+  plugin resets the search on every block change next to the bot (`block_updated`: 547 in that phase). In gather
+  those come all the time (logs cut, leaves decaying, the neighbours chopping), so searches were cancelled again and
+  again before they answered (497 of 784). Most of gather's searches are short (0.7–1 ms at the median on the main
+  thread), so they are answered by the probe at once, as before, and only the long ones (walking, exhaustive
+  searches for unreachable logs) move to the workers. The probes have their own budget (10 ms per 50 ms window):
+  under the A* budget, each got its fair share of 20 ms, ~0.7 ms at 30 bots, and only 22 % of gather's searches ended
+  there (run c2).
+- **Scheduling on a worker.** Searches share the batch's budget evenly (an elastic type), with two corrections. A
+  search that has computed 50 ms keeps a quarter of its share when others follow it (least attained service: gather's
+  exhaustive searches for unreachable logs, 13 000–20 000 nodes, no longer slow down the short ones). And the batch's
+  last slice leaves up to 5 ms of the budget unused: a batch that ran the full 40 ms was often still out at the next
+  dispatch (the bot ticks the dispatcher follows are 31–62 ms apart on Windows), and every worker then ran a batch
+  every other tick, 20.0 ms a tick on average instead of 40 (run c3).
+- **Elastic slices, not the bot's `tickTimeout`.** A first version sliced at the bot's `tickTimeout` (10 ms, as on the
+  main thread). One bot walking on the dev world then planned in 1.1 s p50 (the main thread: 1.6 s), its worker busy
+  2.6 ms a tick out of 40. With the worker's share instead: 87 ms p50. `tickTimeout` keeps a search from holding up
+  the bots' event loop; a worker has no bots.
+- **`thinkTimeout`** is wall time from the first slice, as on the main thread, minus the ticks the search got no slice
+  because its worker's budget went to other jobs (counted in ticks, capped by the wall time, since the ticks of one
+  catch-up burst share one dispatch). The main-thread A* budget's waits do not count either. The queue's wait before
+  the first slice does not count (the AStar starts on the worker).
+- **Cancellation:** the plugin's `path_reset`, `goal_updated`, `path_stop`, the bot's `end` and a newer search for
+  the same bot abort the job's signal. The pool takes it off the queue or, if it is out, drops its state on the worker
+  when the slice comes back. A dropped search never runs on the main thread.
+- **Fallbacks** to the main-thread search, counted by reason (`PathOffload.stats()`): `goal`, `movements` (cannot
+  cross, serialize.ts); `noDimension`; `noColumn` (the bot's own column not live in the store yet); `noWorld` (the
+  writer disabled); `noWorker` (no live worker: the pool's inline fallback would run it on the main thread anyway, so
+  the plugin's own search does, under the A* budget); the job's failure (`threw`, `workerDied` when its worker died
+  twice under it, `lostInput`, `clone`, `unknownType`, `unavailable`, `stopped`, `late`); `deadline` (no progress
+  for `thinkTimeout` + 2 s: a wedged worker, which the pool itself cannot see). A worker that dies once mid-search:
+  the pool queues the job again from the start, on the restarted worker, which needs no resync.
+- **Blocks:** one template per state id (`Block.fromStateId`, kept), specialised with `Object.create(template)` and an
+  own `position`; what Movements and raycasts write lands on that object. On one thread: 35–56 ns a lookup over 20–200
+  distinct states, against 140–240 ns for `fromStateId` (at 2 000 distinct states the prototypes go megamorphic and it
+  is slower, 790 against 360 ns; a search touches tens to hundreds). `Movements`' own `getBlock` (a string key and a
+  Map per lookup) now dominates a node: a whole search costs 37 µs a node over the store against 40 µs over
+  prismarine-world (the same answers in 90 of 90 searches on a synthetic forest). The gain is where A* runs.
+- **Config:** one pool. `pathfinding.workers` is read when `workers.count` is not set; `workers.count` wins when both
+  are. `world.enabled` defaults to `workers.count` > 0, because A* (and P3's aim) need the store; an explicit `false`
+  with workers on keeps every search on the main thread and says so at start.
+- **Memory: each worker's heap is sized** (`main.ts` `READER_HEAP`: a young generation of 16 MB, an old one of
+  512 MB, through the pool's new `resourceLimits`). The first live runs grew ~240 MB of RSS per worker (§12.1). It
+  was not state kept without a bound: after a forced GC every worker held 26 MB (its registry, Block templates and
+  code; templates are bounded by the 26 684 states, a `Movements` is made per search and dropped with it), 31–35 MB
+  while 7 047 searches were cancelled in a minute (a cancelled search's state is dropped on its worker), at most 125 MB
+  live with 30 searches on one worker, and RSS was flat over time. It was garbage: A* allocates per node (a `Move`, a
+  `PathNode`, a hash string, keys and blocks), and against V8's default limit (4.3 GB on this 64 GB machine) each
+  isolate let 150–320 MB of it pile up before collecting (335–442 MB committed per worker). Sized to its job, each
+  collects early. A worker that outgrows 512 MB (4× the worst live set measured) dies and is restarted like any dead
+  one. Two allocations per block lookup were also cut (the `Vec3` Movements passes becomes the block's position;
+  `getNumEntitiesAt` answers 0 without building its key when no entity is in the way): 17 % more searches in the same
+  time on the synthetic load below, the same RSS.
+
+**Measured:** §12.1 (below).
+
+**Not done, known:**
+- A worker wedged inside a batch (a handler that never returns) is not detected by the pool (P2): the offload's
+  `deadline` gives up on its searches, but the slot stays busy. A* slices are bounded by their own clock.
+- `Movements`' per-node cost (its string-keyed block cache) is unchanged: the next gain for A* is there, not in block
+  lookups.
+- Unreachable logs are still searched again by every `mineBlock` call (docs/31 §11.9).
+- Gather with the workers (§12.1): a pending search is cancelled by every `block_updated` reset and restarts.
+- The bots keep their own worlds (P5).
+
+### 12.1 Measured (2026-11-01)
+
+The Ryzen 9 9950X3D of docs/31 §11.2, shared with other sessions' servers and benches all along: the numbers are
+indicative. `bench:load` on the dev server (port 25631), the runtime's 4 s login stagger, 60 s phases, N = 10 then 30.
+Each run on its own forest (`--center`) unless marked "after": gather cuts the reachable logs first, so a second run
+on a site gets those nobody can reach (c2 and c3 below: their gather measures the site, not the code).
+
+**Memory, a steady synthetic load** (offline: 30 searches kept in flight over a 17 × 17-column synthetic forest, a
+third of them unreachable, the pool's own 50 ms ticks, 60 s):
+
+| Workers | RSS growth, V8's default heap | with `READER_HEAP` (16 MB young, 512 MB old) | searches done |
+|---|---|---|---|
+| 1 | +612 MB | +227 MB | 599 |
+| 4 | +1 521 to +1 683 MB | +497 MB | 1 110 |
+| 8 | +2 676 MB | +707 MB | 1 678 |
+
+- Over time, 8 workers, sized heaps, 180 s: 1 181 MB at 10 s, 1 370 MB at 70 s, then 1 351–1 384 MB to the end.
+- Per worker: 26 MB after a forced GC; before it 156–324 MB used (335–442 MB committed) with V8's default limit
+  (4.3 GB here), 95–128 MB committed with `READER_HEAP`. Idle: 35 MB for a bare reader worker, 58 MB with the `path`
+  handler (its registry).
+
+**Live** (legs and logs in the 60 s phase; the main thread's ELU; loop p99; path timeouts and RSS in the N = 30
+gather phase). Every bot ran at 20 ticks/s in every phase (the slowest 19.6–20).
+
+| Run | Site | A* | Walk legs N = 10 / 30 | Gather logs N = 10 / 30 | ELU walk / gather (N = 30) | p99 ms | Timeouts | RSS MB |
+|---|---|---|---|---|---|---|---|---|
+| docs/31 §11 | (64, 4064) | main thread | 52 / 143 | 119 / 173 | 0.584 / 0.624 | 37 | | 2 700 |
+| a | (−2968, −64) | main thread | 46 / 143 | 81 / 167 | 0.615 / 0.664 | 57 | 30 | 2 498 |
+| a3 | (2840, −3160) | main thread | 57 / 160 | 109 / 199 | 0.548 / 0.651 | 53 | 46 | 2 604 |
+| a4 | (−5840, −128) | main thread | 36 / 132 | 44 / 30 | 0.542 / 0.666 | 176 | 18 | 2 704 |
+| b | (2904, 2840) | old pool, 4 workers | 24 / 92 | 59 / 65 | 0.269 / 0.322 | 17 | 70 | 4 029 |
+| f | (−192, −480) | old pool, 8 workers | 38 / 124 | 65 / 89 | 0.240 / 0.387 | 22 | 21 | 6 652 |
+| d1 | (3320, 352) | P4, first version, 1 worker | 32 / 83 | 25 / 28 | 0.242 / 0.328 | 19 | 87 | 2 207 |
+| e1 | (384, −2776) | P4, first version, 8 workers | 14 / 42 | 33 / 34 | 0.221 / 0.348 | 17 | 25 | 3 870 |
+| d2 | (−1152, 2200) | P4 + probe + `READER_HEAP`, 1 worker | 42 / 161 | 77 / 70 | 0.294 / 0.395 | 24 | 70 | 2 019 |
+| c2 | (−2968, −64), after a | the same, 4 workers | 34 / 116 | 30 / 86 | 0.283 / 0.414 | 24 | 74 | 2 208 |
+| e2 | (−4024, −3064) | the same, 8 workers | 41 / 137 | 65 / 89 | 0.305 / 0.435 | 22 | 79 | 2 450 |
+| c3 | (2840, −3160), after a3 | + scheduling, 4 workers | 49 / 132 | 19 / 22 | 0.269 / 0.380 | 21 | 183 | 2 045 |
+| **c4** | (6128, 256) | **as built**, 4 workers | **63 / 185** | **46 / 50** | **0.245 / 0.346** | **20** | 135 | **2 266** |
+
+"First version": elastic slices, no probe, V8's default heap. "Probe": the probe under the A* budget (as built, it has
+its own). "Scheduling": least attained service and the probes' own budget; the
+batch's tail headroom came after c3. A first run of c (4 workers, at (2840, −3160)) ended 50 s in, during the logins,
+with exit code 0 and nothing logged (no crash in the Windows event log). The five later runs with workers on, under an
+exit hook, all ended normally; it was not reproduced and its cause is unknown.
+
+What this shows:
+- **Memory is nearly flat with the worker count:** about 60 MB a worker live (2.0 / 2.2 / 2.45 GB at 1 / 4 / 8
+  workers, N = 30 gather), against ~240 MB a worker before the heaps were sized (2.2 → 3.9 GB at 1 → 8) and ~660 MB
+  for the old pool (4.0 → 6.65 GB at 4 → 8). With workers on, the process is smaller than with them off (2.5–2.7 GB):
+  the main thread no longer keeps the searches' garbage.
+- **Walking is at or above the main thread:** as built, 63 / 185 legs against 36–57 / 132–160 on three fresh forests
+  (docs/31 §11: 52 / 143), with the main thread's ELU at 0.25 instead of 0.54–0.62 and its loop p99 at 17–20 ms.
+- **Gathering is not shown to be as good, and is probably worse at 30 bots.** The site dominates: with workers off
+  the three fresh forests gave 44–109 logs at N = 10 and 30–199 at N = 30. With workers on (d2, e2, c4): 46–77 and
+  50–89, the medians 65 and 70 against the controls' 81 and 167. The searches that go to a worker in gather mostly
+  do not end well: at N = 30 in c4, 663 offloaded, 469 cancelled (447 `block_updated` resets), 194 answered of which
+  135 timed out; the probe answered 124. A search pending on a worker is reset by every block change next to the bot
+  and starts again from nothing, so gather's longer searches rarely finish. Not done: carry a pending search over a
+  `block_updated` reset when the goal is the same (the block change is in the store by its next slice), or let the
+  probe run longer.
+- **The live core tests pass:** `LIVE_ONLY=core npm run live-test` 7/7 with workers off and 7/7 with `LIVE_WORKERS=4`
+  (18 searches answered by the probe, 11 offloaded, 10 answered, 1 cancelled, no fallback).
+
+**Against "done when":** walk ≥ docs/31 §11, yes; gather ≥ docs/31 §11, not shown (above); the live core tests,
+yes; memory flat with the worker count, yes (~60 MB a worker). `workers.count` stays 0.

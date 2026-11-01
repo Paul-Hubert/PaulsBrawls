@@ -26,6 +26,8 @@ export interface JobContext<S = unknown> {
   inline: boolean;
   /** What is left of this batch's budget, in ms (may be negative). */
   budgetLeftMs(): number;
+  /** This job's fair share of what is left: budgetLeftMs() split evenly with the jobs after it in the batch (≥ 0). */
+  shareMs(): number;
 }
 
 /** What init() gets, once per thread, before any job. */
@@ -41,6 +43,8 @@ export interface JobHandlerModule {
   type: string;
   run(input: unknown, ctx: JobContext): unknown;
   init?(env: HandlerEnv): unknown;
+  /** An elastic type: each run takes ctx.shareMs(); batches are packed by this (its smallest useful run), in ms. */
+  elasticMinMs?: number;
 }
 
 export interface WireJob {
@@ -61,7 +65,8 @@ export interface WireError {
 
 export type WireResult =
   | { id: number; r: 'done'; value: unknown; ms: number }
-  | { id: number; r: 'continue'; ms: number }
+  /** progress: what the handler returned beside `continue` (absent when it returned none). */
+  | { id: number; r: 'continue'; ms: number; progress?: unknown }
   | { id: number; r: 'failed'; ms: number; error: WireError; lost?: boolean; unknownType?: boolean; clone?: boolean }
   | { id: number; r: 'notStarted'; held: boolean };
 
@@ -82,6 +87,7 @@ export declare function loadHandlers(
   env: HandlerEnv,
 ): Promise<{ handlers: Map<string, JobHandlerModule>; errors: Array<{ url: string; message: string }> }>;
 export declare function isContinue(v: unknown): v is { continue: unknown };
+export declare function elasticMinMs(h: JobHandlerModule | undefined): number | undefined;
 export declare function serializeError(e: unknown): WireError;
 export declare function runBatch(
   batch: { tick: number; budgetMs: number; jobs: WireJob[] },

@@ -116,13 +116,13 @@ async function main(): Promise<void> {
     await rcon.command('difficulty easy');
   }
 
-  // LIVE_PATH_WORKERS=N runs the same scenarios with the pathfinding worker pool (docs/32 D).
-  const pathfinding = { workers: Number(process.env.LIVE_PATH_WORKERS ?? 0) };
-  const cfg = parseConfig({ minecraft: { port: MC_PORT }, port: RUNTIME_PORT, dataDir: join(runDir, 'data'), loginStaggerMs: 1500, pathfinding }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN });
-  // LIVE_JOBS=N and LIVE_WORLD=1: the reader workers and the shared world (docs/37); with both, gather's mineBlock
-  // searches through a findBlocks job (P6).
-  cfg.workers.count = Number(process.env.LIVE_JOBS ?? cfg.workers.count);
+  // LIVE_WORKERS=N runs the same scenarios with N reader workers (workers.count, which turns the shared world on): the
+  // bots' A* (P4), gather's block searches (P6) and the archers' aim (P3) run there (docs/37). LIVE_JOBS=N and
+  // LIVE_PATH_WORKERS=N (docs/32 D's old pool) are older names for it; LIVE_WORLD=1 turns the shared world on alone.
+  const workers = { count: Number(process.env.LIVE_WORKERS ?? process.env.LIVE_JOBS ?? process.env.LIVE_PATH_WORKERS ?? 0) };
+  const cfg = parseConfig({ minecraft: { port: MC_PORT }, port: RUNTIME_PORT, dataDir: join(runDir, 'data'), loginStaggerMs: 1500, workers }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN });
   if (process.env.LIVE_WORLD === '1') cfg.world.enabled = true;
+  if (workers.count > 0) console.log(`reader workers: ${workers.count} (A*, block searches and aim on the workers, over the shared world)`);
   const rt = await start(cfg, { connectBots: true, installGuards: true });
   const { pool, runner } = rt.service.deps;
   runner.on('notice', (n: Notice) => {
@@ -305,7 +305,9 @@ async function main(): Promise<void> {
       await itemScenarios({ rcon, rt, mcPort: MC_PORT, setupWorld: SETUP_WORLD, notices, api, scenario, until, sleep, admin: PAUL });
     }
   } finally {
-    writeFileSync(join(runDir, 'result.json'), JSON.stringify({ results, notices }, null, 2));
+    const paths = rt.paths?.stats();
+    if (paths) console.log(`A* on the workers: ${paths.probed} done by the main-thread probe, ${paths.offloaded} offloaded, ${paths.answered} answered, ${paths.cancelled} cancelled, fallbacks ${JSON.stringify(paths.fallbacks)}`);
+    writeFileSync(join(runDir, 'result.json'), JSON.stringify({ results, notices, ...(paths ? { paths } : {}) }, null, 2));
     await rt.stop();
     rcon.close();
   }

@@ -20,20 +20,23 @@
 //
 // Long jobs answer { continue: state } and are resumed next tick on the same worker (their state stays there);
 // `affinity` keys pin related jobs to one worker. A job not answered by its deadlineTick rejects with JobLateError.
+// { continue: state, progress } also hands `progress` to the submitter's onProgress at the next apply step (P4: a
+// search's best path so far). An elastic type (batch.mjs: P4's A*) is packed by its declared smallest run and takes
+// its share of whatever is left of the budget.
 //
 // Fallbacks: no live worker (count 0, or every slot disabled after crashes) runs the same handler modules here,
 // imported on first need, with a smaller budget (inlineBudgetMs). A dead worker is restarted (at most
-// maxCrashesPerMinute a minute, then its slot is disabled, as pathworkers/client.ts); the jobs it had are queued again
-// once, then fail. A restarted worker needs no resync: the world and the entities are shared memory. What a dead
-// worker held there is released by this thread (its entity hold; its world reader, through world.release), since a
-// worker killed inside a batch never got to leave().
+// maxCrashesPerMinute a minute, then its slot is disabled); the jobs it had are queued again once, then fail. A
+// restarted worker needs no resync: the world and the entities are shared memory. What a dead worker held there is
+// released by this thread (its entity hold; its world reader, through world.release), since a worker killed inside a
+// batch never got to leave().
 
 import { Worker } from 'node:worker_threads';
 import { performance } from 'node:perf_hooks';
 import { setImmediate } from 'node:timers';
 
 import { logger } from '../logger';
-import { loadHandlers, runBatch, serializeError, type BatchEnv, type WireJob, type WireResult, type WorldReaderLike } from './batch.mjs';
+import { elasticMinMs, loadHandlers, runBatch, serializeError, type BatchEnv, type WireJob, type WireResult, type WorldReaderLike } from './batch.mjs';
 import { openEntities, releaseReader } from './entities.mjs';
 import { JobFailedError, JobLateError, type JobFailReason } from './errors';
 import { EntitySnapshot, type EntitySource, type SnapshotStats } from './snapshot';
@@ -75,6 +78,12 @@ export interface JobSpec<I = unknown> {
   transfer?: ArrayBuffer[];
   /** Cancels the job (its promise rejects with the signal's reason). */
   signal?: AbortSignal;
+  /**
+   * A long job's partial answers: called at the apply step of each tick after a slice that answered
+   * { continue, progress } (docs/37 P4: the best path so far). Not called once the job is settled or cancelled; a
+   * callback that throws is logged, the job goes on.
+   */
+  onProgress?: (progress: unknown) => void;
 }
 
 /** What useTickSource follows: a mineflayer bot (or anything emitting physicsTick). */
@@ -109,6 +118,8 @@ export interface JobPoolOptions {
   maxCrashesPerMinute?: number;
   /** Tests: another worker script. */
   workerUrl?: URL;
+  /** Each worker's V8 heap limits (node:worker_threads resourceLimits). */
+  resourceLimits?: { maxYoungGenerationSizeMb?: number; maxOldGenerationSizeMb?: number };
 }
 
 export interface JobTypeStats {
@@ -181,6 +192,7 @@ interface Job {
   transferred: boolean;
   signal?: AbortSignal;
   onAbort?: () => void;
+  onProgress?: (progress: unknown) => void;
   resolve(v: unknown): void;
   reject(e: unknown): void;
   submittedAt: number;
@@ -248,6 +260,8 @@ export class JobPool {
   private readonly inFlight = new Map<number, Job>();
   private arrived: Arrived[] = [];
   private readonly costs = new Map<string, number>();
+  /** Elastic types (batch.mjs) and their elasticMinMs: packed by that, not by their measured cost. */
+  private readonly elastic = new Map<string, number>();
   private readonly counters = new Map<string, TypeCounters>();
   private readonly affinities = new Map<string, { slot: number; refs: number }>();
   private readonly snapshot: EntitySnapshot;
@@ -329,6 +343,7 @@ export class JobPool {
         transfer: spec.transfer && spec.transfer.length > 0 ? spec.transfer : undefined,
         transferred: false,
         signal: spec.signal,
+        onProgress: spec.onProgress,
         resolve: resolve as (v: unknown) => void,
         reject,
         submittedAt: performance.now(),
@@ -355,6 +370,13 @@ export class JobPool {
   /** The number of the last tick. */
   get currentTick(): number {
     return this.tickNo;
+  }
+
+  /** Worker threads alive now (0: every job runs inline). Cheap, unlike stats(). */
+  workersAlive(): number {
+    let n = 0;
+    for (const s of this.slots) if (s.worker !== null && !s.disabled) n++;
+    return n;
   }
 
   /** Resolves when every worker that is not disabled has loaded its handlers (at once with no worker). */
@@ -459,7 +481,15 @@ export class JobPool {
         if (lost) return this.lose(job);
         job.home = a.slot ? a.slot.index : INLINE;
         job.resume = true;
+        // Queued first: a callback that cancels the job finds it in the queue (and its state is dropped).
         this.enqueue(job);
+        if (job.onProgress && Object.hasOwn(r, 'progress')) {
+          try {
+            job.onProgress(r.progress);
+          } catch (e) {
+            logger.warn('jobs', `a ${job.type} job's progress callback threw: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
+          }
+        }
         return;
       }
       case 'notStarted': {
@@ -524,7 +554,7 @@ export class JobPool {
         keep.push(job);
         continue;
       }
-      const est = this.costs.get(job.type) ?? DEFAULT_COST_MS;
+      const est = this.estimate(job.type);
       const pin = job.home >= 0 ? job.home : job.affinity !== undefined ? (this.affinities.get(job.affinity)?.slot ?? ANY) : ANY;
       let target: (typeof cands)[number] | undefined;
       if (pin >= 0) {
@@ -561,7 +591,7 @@ export class JobPool {
   private send(slot: Slot, jobs: Job[], tick: number): void {
     const transfer: ArrayBuffer[] = [];
     const wire: WireJob[] = jobs.map((j) => {
-      const est = this.costs.get(j.type) ?? DEFAULT_COST_MS;
+      const est = this.estimate(j.type);
       if (j.resume) return { id: j.id, type: j.type, resume: true, deadlineTick: j.deadlineTick, est };
       if (j.transfer) transfer.push(...j.transfer);
       return { id: j.id, type: j.type, input: j.input, transferred: j.transfer !== undefined, deadlineTick: j.deadlineTick, est };
@@ -618,7 +648,7 @@ export class JobPool {
         keep.push(job);
         continue;
       }
-      const est = this.costs.get(job.type) ?? DEFAULT_COST_MS;
+      const est = this.estimate(job.type);
       if (picked.length > 0 && load + est > this.inlineBudgetMs) {
         keep.push(job);
         continue;
@@ -640,7 +670,7 @@ export class JobPool {
     this.inlineBusy = true;
     const wire: WireJob[] = jobs.map((j) => {
       this.inFlight.set(j.id, j);
-      const est = this.costs.get(j.type) ?? DEFAULT_COST_MS;
+      const est = this.estimate(j.type);
       return j.resume
         ? { id: j.id, type: j.type, resume: true, deadlineTick: j.deadlineTick, est }
         : { id: j.id, type: j.type, input: j.input, deadlineTick: j.deadlineTick, est };
@@ -678,6 +708,10 @@ export class JobPool {
         const { handlers, errors } = await loadHandlers(this.handlerHrefs, { version: this.opts.version, world, inline: true, worker: -1 });
         for (const e of errors) logger.warn('jobs', `inline: handler ${e.url} not loaded: ${e.message}`);
         this.knownTypes ??= new Set(handlers.keys());
+        for (const [type, h] of handlers) {
+          const ms = elasticMinMs(h);
+          if (ms !== undefined) this.elastic.set(type, ms);
+        }
         const entities = openEntities(this.snapshot.handles, this.opts.workers);
         this.inline = {
           env: { handlers, held: new Map(), costs: new Map(), world, entities, version: this.opts.version, worker: -1, inline: true },
@@ -797,6 +831,7 @@ export class JobPool {
           version: this.opts.version,
           index: slot.index,
         },
+        ...(this.opts.resourceLimits ? { resourceLimits: this.opts.resourceLimits } : {}),
       });
     } catch (e) {
       logger.warn('jobs', `worker ${slot.index} cannot start: ${(e as Error).message}`);
@@ -821,6 +856,7 @@ export class JobPool {
     if (m.t === 'ready') {
       slot.ready = true;
       this.knownTypes ??= new Set(m.types);
+      for (const [type, ms] of Object.entries(m.elastic ?? {})) this.elastic.set(type, ms);
       for (const e of m.errors) logger.warn('jobs', `worker ${slot.index}: handler ${e.url} not loaded: ${e.message}`);
       this.checkReady();
       return;
@@ -908,6 +944,11 @@ export class JobPool {
       this.counters.set(type, c);
     }
     return c;
+  }
+
+  /** What one run of this type is expected to take: its elasticMinMs if elastic, else the running estimate. */
+  private estimate(type: string): number {
+    return this.elastic.get(type) ?? this.costs.get(type) ?? DEFAULT_COST_MS;
   }
 
   private observeCost(type: string, ms: number): void {
@@ -1026,7 +1067,7 @@ export class JobPool {
 }
 
 type WorkerMessage =
-  | { t: 'ready'; types: string[]; errors: Array<{ url: string; message: string }> }
+  | { t: 'ready'; types: string[]; errors: Array<{ url: string; message: string }>; elastic?: Record<string, number> }
   | { t: 'done'; tick: number; usedMs: number; results: WireResult[] };
 
 /** Queue order: higher priority, then earlier deadline, then earlier submit. */

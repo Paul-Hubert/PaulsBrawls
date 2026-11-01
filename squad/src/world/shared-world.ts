@@ -1,7 +1,7 @@
 // The shared world, main-thread side (docs/37 §2, phase P1): ONE copy of the chunks the bots receive, in
 // SharedArrayBuffers that every thread reads lock-free (reader.mjs), written by ONE writer thread (writer.mjs,
-// store.mjs). P1 feeds it from the bots' packets beside their own worlds; nothing reads it yet but `world.verify` and
-// the tests. P2-P5 build on it: reader workers (descriptor()), the aim solver and A* over it, then the bots' own reads.
+// store.mjs). P1 feeds it from the bots' packets beside their own worlds. The reader workers (descriptor()) read it:
+// A* since P4 (bots/pathworkers/offload.ts: dimensionOf, isLive, applied), the aim solver in P3, the bots in P5.
 //
 // What this side does (the writer decodes, this side only routes, and copies each payload once):
 //   • attach(bot) follows the bot's world packets (follow.ts: the same rules as the pathfinding workers' mirror).
@@ -156,6 +156,7 @@ export class SharedWorld extends EventEmitter {
   private seq = 0;
   private acked = 0;
   private settleWaiters: Array<() => void> = [];
+  private appliedWaiters: Array<{ seq: number; resolve: () => void }> = [];
   private writerStats: StoreStats | null = null;
   /** Counters of writers that died, so stats() keeps counting across restarts. */
   private past = { decoded: 0, skipped: 0, failed: 0, rejected: 0 };
@@ -216,7 +217,7 @@ export class SharedWorld extends EventEmitter {
   /**
    * The dimension an attached bot is in, as the store names it (its login's or last respawn's world name, e.g.
    * "minecraft:overworld"; mineflayer's bot.game.dimension is the dimension type, "overworld"). Null for a bot not
-   * attached here, or before its login. A job that reads the store for a bot needs it (docs/37 P3 aim, P6 findBlocks).
+   * attached here, or before its login. A job that reads the store for a bot needs it (docs/37 P3 aim, P4 A*, P6 findBlocks).
    */
   dimensionOf(bot: unknown): string | null {
     if (!bot || typeof bot !== 'object') return null;
@@ -401,6 +402,15 @@ export class SharedWorld extends EventEmitter {
   }
 
   private wakeSettled(): void {
+    if (this.appliedWaiters.length > 0) {
+      const up = this.state === 'up';
+      const still: Array<{ seq: number; resolve: () => void }> = [];
+      for (const w of this.appliedWaiters) {
+        if (up && this.acked < w.seq) still.push(w);
+        else w.resolve();
+      }
+      this.appliedWaiters = still;
+    }
     if (!this.isSettled() || this.settleWaiters.length === 0) return;
     const ws = this.settleWaiters;
     this.settleWaiters = [];
@@ -412,6 +422,28 @@ export class SharedWorld extends EventEmitter {
     if (this.flushScheduled) this.flush();
     if (this.isSettled()) return Promise.resolve();
     return new Promise((r) => this.settleWaiters.push(r));
+  }
+
+  /**
+   * Resolves once the writer has applied what the bots heard so far (later batches may still be on their way, unlike
+   * settle()). P4 submits a search after it: a block change heard just before is then in the store when the worker
+   * reads it. Resolves at once when the writer is disabled or stopped.
+   */
+  applied(): Promise<void> {
+    if (this.flushScheduled) this.flush();
+    if (this.state !== 'up' || this.acked >= this.seq) return Promise.resolve();
+    const seq = this.seq;
+    return new Promise((r) => this.appliedWaiters.push({ seq, resolve: r }));
+  }
+
+  /** Whether the writer has published this column and it is still live (readers see it), as this thread knows it. */
+  isLive(dim: string, chunkX: number, chunkZ: number): boolean {
+    return this.live.has(keyOf(dim, chunkX, chunkZ));
+  }
+
+  /** 'up', or 'disabled' (its writer died too often: every read is unknown), or 'stopped'. */
+  get writerState(): 'up' | 'disabled' | 'stopped' {
+    return this.state;
   }
 
   // -- readers ------------------------------------------------------------------------------------------------------

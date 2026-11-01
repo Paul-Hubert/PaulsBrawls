@@ -914,6 +914,8 @@ completely, so missed events cannot leave it wrong.
   - **An optional pathfinding worker pool** (`pathfinding.workers`, default 0): only A* moves to worker threads; the
     bots and scripts stay on the main thread, so O2 and O4 hold. Off by default: with the budget the main thread holds
     30 moving bots on the desktop, and the workers cost about 9 GB at 30 gathering bots.
+    Replaced by docs/37 P4: A* runs on the reader workers (`workers.count`, of which `pathfinding.workers` is an alias)
+    over the one shared copy of the world, so the workers no longer each keep their own.
   - **A lag monitor** (copied from Eden, owned here), `POST /api/metrics`, a `vitals` journal table (one row per minute,
     7 days) and `/bots status`. It warns at loop p99 > 250 ms or ELU > 0.9, not Eden's 1 s: bots are in slow motion
     well before.

@@ -5,8 +5,8 @@
 
 import { join } from 'node:path';
 
-import { applyPathfinding, jobWorkerCount, loadConfig, pathWorkerCount, type SquadConfig } from './config';
-import { PathWorkerPool } from './bots/pathworkers/client';
+import { applyPathfinding, jobWorkerCount, loadConfig, type SquadConfig } from './config';
+import { PathOffload } from './bots/pathworkers/offload';
 import { SharedWorld } from './world/shared-world';
 import { BotPool, skippedPackets, type BotPoolOptions } from './bots/pool';
 import { JobPool } from './jobs/pool';
@@ -37,12 +37,22 @@ import { Vitals } from './vitals/metrics';
  */
 const WORLD_MAX_READERS = 64;
 
+/**
+ * Each reader worker's V8 heap (docs/37 §10). A worker holds little: 26 MB after a GC (the registry, the Block
+ * templates, the code), at most 125 MB live with 30 searches on one worker. But A* makes garbage fast (a Move, a
+ * PathNode, keys and blocks per node), and against V8's default limit (4.3 GB on a 64 GB machine) each isolate let
+ * 150-350 MB of it pile up before collecting: under a steady load, 1 → 8 workers grew the process by 0.6 → 2.7 GB.
+ * With a heap sized to the job, each worker collects early. One that outgrows it dies (out of memory) and is restarted
+ * like any dead worker; its searches are retried, then fall back to the main thread.
+ */
+const READER_HEAP = { maxYoungGenerationSizeMb: 16, maxOldGenerationSizeMb: 512 };
+
 export interface Started {
   service: SquadService;
   http: SquadHttp;
   port: number;
-  /** The pathfinding worker pool, when pathfinding.workers > 0. */
-  pathWorkers?: PathWorkerPool;
+  /** A* on the reader workers (docs/37 P4), when workers.count > 0 and the shared world is on. */
+  paths?: PathOffload;
   /** The reader workers' job pool (docs/37), when workers.count > 0. */
   jobs?: JobPool;
   /** The shared world, when world.enabled (docs/37 P1). */
@@ -64,11 +74,6 @@ export async function start(
   const store = new CommandStore(join(cfg.dataDir, 'commands'), await loadStock());
   const leases = new LeaseManager(cfg.limits.maxLeaseDepth);
   const claims = new ClaimRegistry();
-  const workers = pathWorkerCount(cfg.pathfinding);
-  if (workers < cfg.pathfinding.workers) {
-    logger.warn('squad', `pathfinding.workers ${cfg.pathfinding.workers} capped to ${workers}: one core stays with the main thread`);
-  }
-  const pathWorkers = workers > 0 ? new PathWorkerPool({ workers, version: cfg.minecraft.version }) : undefined;
   const world = cfg.world.enabled
     ? new SharedWorld({
         version: cfg.minecraft.version,
@@ -78,23 +83,29 @@ export async function start(
         verify: cfg.world.verify,
       })
     : undefined;
+  // The job pool before the bot pool, which hands each bot's searches to it at spawn; it reads the pool's bots lazily.
+  const bots: { pool?: BotPool } = {};
+  const jobs = startJobs(cfg, () => bots.pool, roster, world);
+  const paths = jobs && world ? new PathOffload({ jobs, world }) : undefined;
+  if (jobs && !world) logger.warn('squad', 'world.enabled is false: the reader workers have no world to read, so A* stays on the main thread');
   const pool = new BotPool({
     host: cfg.minecraft.host,
     port: cfg.minecraft.port,
     version: cfg.minecraft.version,
     staggerMs: cfg.loginStaggerMs,
-    pathWorkers,
+    pathSearch: paths,
     world,
     ...opts.pool,
   });
-  const jobs = startJobs(cfg, pool, roster, world);
+  bots.pool = pool;
+  if (jobs) new LeaderTicks(pool, jobs);
   // docs/37 P6: mineBlock's block search becomes a findBlocks job when the workers and the shared world are both on.
   const dropBlockSearch = jobs && world ? useBlockSearch({ jobs, world }) : undefined;
   // The archers' aim (docs/37 P3): as jobs when the workers can read the world (both on), else inline per bot.
   configureAim({ ...cfg.aim, jobs: jobs && world ? jobs : null, world: jobs && world ? world : null });
   logger.info('squad', `aim: ${aimMode() === 'jobs' ? 'on the reader workers' : 'on the main thread'} (updates at ticks ${cfg.aim.schedule.join(', ')}, release at ${cfg.aim.drawTicks})`);
   const runner = new OrderRunner({ pool, roster, leases, claims, store, journal, limits: cfg.limits });
-  const vitals = new Vitals({ pool, journal, skipped: skippedPackets, loop, jobs });
+  const vitals = new Vitals({ pool, journal, skipped: skippedPackets, loop, jobs, paths });
   const service = new SquadService({ roster, pool, leases, claims, store, journal, runner, limits: cfg.limits, vitals });
   const http = new SquadHttp(service, { port: cfg.port, token: cfg.token });
 
@@ -122,21 +133,21 @@ export async function start(
       vitals.stop();
       pool.stop();
       dropBlockSearch?.();
+      paths?.stop();
       await jobs?.stop();
-      await pathWorkers?.stop();
       await world?.stop();
       await http.close();
       journal.close();
     })());
-  return { service, http, port, stop, pathWorkers, world, jobs };
+  return { service, http, port, stop, paths, world, jobs };
 }
 
 /**
- * The reader workers (docs/37 P2), only when workers.count > 0: off by default until a phase gives them real job
- * types. Their dispatcher ticks on one online bot's physics ticks (LeaderTicks); the entity snapshot merges every
- * online bot's entities, with the roster's owner groups as teams.
+ * The reader workers (docs/37 P2), only when workers.count > 0 (off by default). They run the bots' A* (P4). Their
+ * dispatcher ticks on one online bot's physics ticks (LeaderTicks, wired by the caller once the bot pool exists); the
+ * entity snapshot merges every online bot's entities, with the roster's owner groups as teams.
  */
-function startJobs(cfg: SquadConfig, pool: BotPool, roster: Roster, world: SharedWorld | undefined): JobPool | undefined {
+function startJobs(cfg: SquadConfig, botPool: () => BotPool | undefined, roster: Roster, world: SharedWorld | undefined): JobPool | undefined {
   const count = jobWorkerCount(cfg.workers);
   if (count < cfg.workers.count) {
     logger.warn('squad', `workers.count ${cfg.workers.count} capped to ${count}: one core stays with the main thread`);
@@ -148,10 +159,13 @@ function startJobs(cfg: SquadConfig, pool: BotPool, roster: Roster, world: Share
     tickBudgetMs: cfg.workers.tickBudgetMs,
     handlers: STOCK_HANDLERS,
     version: cfg.minecraft.version,
+    resourceLimits: READER_HEAP,
     // The workers read the shared world (docs/37 P1) when it is on; each one gets its own epoch slot.
     ...(world ? { world, worldModule: new URL('./world/reader.mjs', import.meta.url) } : {}),
     entities: {
       bots: function* () {
+        const pool = botPool();
+        if (!pool) return;
         for (const n of pool.names()) {
           const b = pool.bot(n);
           if (b) yield b as unknown as EntitySourceBot;
@@ -160,7 +174,6 @@ function startJobs(cfg: SquadConfig, pool: BotPool, roster: Roster, world: Share
       teamOf: (u) => teams.teamOf(u),
     },
   });
-  new LeaderTicks(pool, jobs);
   return jobs;
 }
 
