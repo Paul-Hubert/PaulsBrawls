@@ -64,7 +64,11 @@ export interface SquadConfig {
   token: string;
   dataDir: string;
   limits: Limits;
-  /** Milliseconds between two bot logins (I1: a burst trips the server's login throttle). */
+  /**
+   * Milliseconds between two bot logins (I1), default 100. Every bot receives its 313 chunk columns at login, so
+   * logins all at once stall the event loop (40 at once: up to 1.1 s, docs/36 §6). The Fabric server has no login
+   * throttle of its own: 40 logins in 6 s were all accepted.
+   */
   loginStaggerMs: number;
   pathfinding: PathfindingConfig;
 }
@@ -120,7 +124,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
     token,
     dataDir: resolve(baseDir, typeof o.dataDir === 'string' && o.dataDir ? o.dataDir : '.squad-data'),
     limits,
-    loginStaggerMs: num(o.loginStaggerMs, 4_000, 'loginStaggerMs'),
+    loginStaggerMs: num(o.loginStaggerMs, 100, 'loginStaggerMs'),
     pathfinding: { astarBudgetMs, workers },
   };
 }

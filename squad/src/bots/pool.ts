@@ -115,6 +115,8 @@ export class BotPool extends EventEmitter {
   private readonly createBot: CreateBot;
   private readonly queue: string[] = [];
   private draining = false;
+  /** When the last login started (Date.now()): the next one waits until staggerMs after it. */
+  private lastConnectAt = 0;
   private stopping = false;
   private readonly watchdog: ReturnType<typeof setInterval>;
 
@@ -217,18 +219,25 @@ export class BotPool extends EventEmitter {
     void this.drain();
   }
 
-  /** One login at a time, `staggerMs` apart (I1). */
+  /**
+   * One login at a time, at least `staggerMs` apart (I1), counted from the last connect whatever drain made it: a
+   * spawn arriving after the queue emptied (every /api/bots/spawn is one) used to connect at once, so a squad or a
+   * raid logged in all together (docs/36 §6).
+   */
   private async drain(): Promise<void> {
     if (this.draining) return;
     this.draining = true;
     try {
-      let first = true;
       while (this.queue.length > 0 && !this.stopping) {
-        if (!first) await new Promise((r) => setTimeout(r, this.opts.staggerMs));
-        first = false;
+        const wait = this.lastConnectAt + this.opts.staggerMs - Date.now();
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        if (this.stopping || this.queue.length === 0) break;
         const name = this.queue.shift() as string;
         const rec = this.records.get(name);
-        if (rec && rec.status === 'offline') this.connect(rec);
+        if (rec && rec.status === 'offline') {
+          this.lastConnectAt = Date.now();
+          this.connect(rec);
+        }
       }
     } finally {
       this.draining = false;

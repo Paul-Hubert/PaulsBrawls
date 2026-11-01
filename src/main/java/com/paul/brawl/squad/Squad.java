@@ -365,6 +365,24 @@ public final class Squad {
 
     // -- kits ---------------------------------------------------------------------------------------------------------
 
+    /** Kits go out one at a time, {@link SquadConfig#kitStaggerMs} apart. Server thread only. */
+    private static final SquadPacer kitPacer = new SquadPacer();
+
+    /**
+     * {@link #equip}, paced: at least {@link SquadConfig#kitStaggerMs} after the kit before it, whoever asked. Then
+     * {@code then} gets the French answer. Both run on the server thread; call it from there.
+     */
+    static void equipLater(MinecraftServer srv, String botName, SquadKits.Kit kit, Consumer<String> then) {
+        long wait = kitPacer.reserve(System.currentTimeMillis(), SquadConfig.INSTANCE.kitStaggerMs);
+        Runnable give = () -> then.accept(equip(srv, botName, kit));
+        if (wait <= 0) {
+            give.run();
+            return;
+        }
+        java.util.concurrent.CompletableFuture.delayedExecutor(wait, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .execute(() -> srv.execute(give));
+    }
+
     /**
      * Give a kit to an online bot (main thread): armor into the armor slots, the weapon into the main hand, the shield
      * into the off-hand, the rest into the inventory. What a slot held before goes into the inventory (dropped at

@@ -29,8 +29,14 @@ The mod reads `squad.properties` in the server's working directory (generated at
 | `claudeModel`, `claudeEffort` | Claude Code's defaults | |
 | `authorTimeoutSeconds`, `maxAuthoring` | 900, 2 | |
 | `joinGate`, `allowedBotAddresses` | true, loopback | a bot's name joining from elsewhere is kicked |
+| `kitStaggerMs` | 100 | ms between two kits given (`/bots squad spawn`, `/bots raid`, `/bots equip`): one at a time, like the logins; 0 = at once |
 
 The server must be in offline mode (bots have no Microsoft accounts). `/bots spawn` whitelists the bot.
+
+**Logins.** `squad.json`'s `loginStaggerMs` (default 100) spaces the bots' logins: one at a time, at least that many
+ms apart, whether they come from the boot, a spawn or a reconnect. Every login receives its chunks at once, so
+logins all together stall the runtime (40 at once: up to 1.1 s, docs/36 §6). At 100 ms, 40 logins still stalled it
+up to 1.6 s: each one decodes ~0.4 s of chunks, so a stall-free login needs ~0.4–0.5 s between bots (est.).
 
 **How many bots.** `squad.json`'s `limits.maxBots` (default 30, as in `squad.example.json`) caps the roster, every
 owner together. Twenty defenders against a 20-bot `/bots raid` need 40: set `"limits": { "maxBots": 40 }` (or more)
