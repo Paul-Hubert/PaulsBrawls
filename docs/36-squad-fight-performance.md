@@ -42,7 +42,7 @@
   1. **Every `Bot` object ever created stays in memory** (§5). `freshHawkEye` drops hawkEye from the require cache, but
      each fresh copy stays in the loading module's `module.children`, and each copy keeps its bot (`loadBot.bot`)
      with its whole world. RSS grew 1.1 GB per round; the repro keeps 20/20 bots. This hits production on every
-     reconnect, despawn + spawn and future D2 respawn.
+     reconnect, despawn + spawn and future D2 respawn. **Fixed** (§5.1): the repro keeps 0/20.
   2. **The login stagger does not apply to `/api/bots/spawn`** (§6). 40 bots logged in within 6 s, not 4 s apart,
      and the runtime's monitor saw loop stalls of 0.8–1.1 s. Any `/bots squad spawn … 10` or `/bots raid` logs in its
      bots at once.
@@ -222,19 +222,31 @@ round:
   - Node also pushes each new module onto the loading module's `module.children`, which nothing clears.
   - Each copy's `loadBot.js` holds `exports.bot`, the bot it was injected into. So the old `Bot`, its world and its
     listeners stay reachable.
-- **Repro, no server:** `node --expose-gc --import tsx bench/repro-hawkeye-leak.ts` (new) prints:
+  - A second link kept the first bot of the process: a module's first parent is kept for good (Node's
+    `module_first_parent` slot). The shared modules hawkEye pulls in (mineflayer, vec3, uuid, detect-collisions) stay
+    cached, and each keeps the copy that loaded it first, so the first copy and its bot (found in a heap snapshot).
+- **Repro, no server:** `node --expose-gc --import tsx bench/repro-hawkeye-leak.ts` (new) printed, before the fix:
 
   ```
   20/20 bots still reachable after GC; the loading module holds 20 children; arrayBuffers 322 MB (320 MB if all are kept)
   after clearing module.children: 2/20 reachable, arrayBuffers 34 MB
   ```
 
+  The 2/20 were bot 0 (the first-parent link) and bot 19, which the repro's own top-level loop kept. The repro now
+  makes its bots in a function and holds the loading modules weakly; on the old code it prints 20/20, then 1/20.
 - **Production:** a new `Bot` is made at every login: the first spawn, every reconnect (kick, deaf watchdog, server
   restart, backoff), every `/bots despawn` + `/bots spawn`, every `/bots squad despawn|spawn`, and D2's respawn once
   it lands. Each one leaks its predecessor. A long-running runtime grows by ~35 MB per login.
-- **Fix (not made here: `pool.ts`/`plugins.ts` are being edited by the docs/35 session):** after loading, take the new
-  module out of its parent's `children` (`module.children.splice`, or load it with a throwaway parent each time).
-  Check it with the repro: 0/20 reachable.
+- **Fixed** (`src/bots/plugins.ts`, `freshHawkEye`):
+  - each copy loads through a throwaway `createRequire`, whose module (the copy's parent, with its `children`) goes
+    with it;
+  - one copy is loaded before the first bot's and never given a bot, to be the shared modules' first parent.
+
+  A copy now lives as long as its bot, and each bot still has its own. The repro prints `0/20 bots still reachable
+  after GC; the loading modules still alive hold 1 children` (the primed copy) `; arrayBuffers 2 MB`.
+  `tests/plugins.test.ts` checks it under `npm test` (10 bots let go, none reachable; 10/10 on the old code, 1/10
+  with the throwaway parent only) and that a kept bot still aims after a GC. RSS across `bench:fight` rounds is not
+  measured yet (it needs the dev server).
 
 ### 5.2 auto-eat leaks two listeners when an eat times out
 
@@ -303,7 +315,7 @@ time is unchanged. Same three rounds.
 
 | # | Change | Where | Expected | Risk |
 |---|---|---|---|---|
-| 1 | **Fix the bot leak** (§5.1) | `src/bots/plugins.ts` `freshHawkEye` | −35 MB per login, forever. Not a CPU change, but a long-running production runtime grows without bound | none; the repro checks it |
+| 1 | ~~**Fix the bot leak** (§5.1)~~ done: a throwaway parent per copy, a primed first copy | `src/bots/plugins.ts` `freshHawkEye` | −35 MB per login, forever. Not a CPU change, but a long-running production runtime grows without bound | none; the repro and `tests/plugins.test.ts` check it |
 | 2 | **Raycast only the best of the 21 precision flights** (and the next one if it is blocked) | patch minecrafthawkeye `getPrecisionShot` | −25 to −28 % of busy in a fight (29 % → 1–3 %) | low: the chosen grade is the same unless the best flight is blocked |
 | 3 | **A cheap block lookup for the raycast**: state id → shapes from the registry, no `new Block`, or the docs/32 per-tick block cache | patch prismarine-world `raycast` or minecrafthawkeye `intercept.check` | most of the rest of 31 % (raycasts); also helps `bot.world.raycast` callers | medium: the matcher API gets a Block today |
 | 4 | **Warm-start the angle sweep** from the last tick's grade (±10° instead of all 179) | patch minecrafthawkeye `getFirstGradeAproax` | −10 % of busy | low |
