@@ -348,6 +348,24 @@ test('a block_updated reset: a pending search carries on when its path still hol
   await sleep(CARRY_WINDOW_MS + 50);
   await pumpUntil(rig, () => rig.paths.stats().cancelled === 1, 'the held search cancelled');
   assert.equal(rig.paths.stats().notCarried.late, 1);
+
+  // The same goal object, moved in place (GoalFollow's hasChanged() follows the entity): not carried, a new search
+  // for where the entity is now.
+  const item = { position: new Vec3(FAR.x + 0.5, FAR.y, FAR.z + 0.5) };
+  const follow = new goals.GoalFollow(item, 0);
+  const fp = params(follow, movements);
+  const fctx = bot.pathfinder.searchOffload(fp);
+  fctx.compute();
+  await pumpUntil(rig, () => pathStats(rig).continued > 3, 'the follow search running');
+  item.position = new Vec3(12.5, GROUND + 1, -9.5);
+  assert.equal(follow.hasChanged(), true);
+  bot.emit('path_reset', 'block_updated');
+  const next = bot.pathfinder.searchOffload(fp);
+  assert.notEqual(next, fctx, 'a new search');
+  assert.equal(rig.paths.stats().notCarried.goal, 1);
+  const fr = await rig.settle(next);
+  assert.equal(fr.status, 'success');
+  assert.deepEqual(coords(fr.path).at(-1), [12, GROUND + 1, -10], 'to where the entity is now');
 });
 
 test('a block_updated reset: a change that breaks a step of the path the bot holds ends the search; a new one is submitted', async () => {
