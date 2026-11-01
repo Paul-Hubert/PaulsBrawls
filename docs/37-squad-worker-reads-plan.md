@@ -368,7 +368,9 @@ its dispatch. P3's aim schedule must submit two ticks ahead (or P3 changes the a
   smoothing.
 - **The snapshot is published only while jobs are about** (a submit within the last 20 ticks), so an idle pool costs
   nothing. When both buffers are held (a reader still on the previous one), the writer skips that tick's publish
-  instead of waiting (`entities.skipped`).
+  instead of waiting (`entities.skipped`). *Since §14: only for a dispatch with a job queued whose handler reads
+  entities (`export const needsEntities = true`: the aim), and the writer follows each bot's entity events instead of
+  walking every bot's entities each write.*
 - **The inline fallback runs every job type**, not only aim and raycast, with its own budget (`inlineBudgetMs` 10 ms:
   the main thread also runs the bots), and its answers are applied at once.
 - **Added:** cancellation (`signal`), `transfer` (and `lostInput`), `answered` in the stats, the jobs' minute in the
@@ -658,7 +660,8 @@ LIVE_WORLD=1` (gather's search by job, no fallback).
 - **`SharedWorld.dimensionOf(bot)`** was added to P1's file: a job for a bot needs the store's name of its dimension.
 - **Fallbacks to the bot** (§10.3) where the plan had none: the store may not hold the bot's column yet.
 - **The entity snapshot** is published while any job is about, `findBlocks` included, though it reads no entity. A
-  per-type flag in the pool ("needs entities") would save its 70–140 ms a minute here; not done (the pool is P2's).
+  per-type flag in the pool ("needs entities") would save its 70–140 ms a minute here. *Done in §14: `findBlocks` and
+  `path` jobs publish nothing.*
 
 ### 10.6 Not done
 
@@ -808,7 +811,8 @@ this branch before P3 (hawkEye), run first. Runs in `squad/bench/.runs/` (gitign
   6 flights; a job 28–54 µs on a worker, the four workers using 0.01–0.03 ms of their 40 ms per tick. Jobs: latency
   p50 62–77 ms, p95 90–104 ms (submit → applied); 2–11 % of the job answers were late (the last aim kept; more in
   round 3), and 16–38 first answers per round fell back to an inline solve.
-- **(b) is not cheaper than (a) at this scale:** the aim leaves the main thread, but the job pool publishes the entity
+- **(b) is not cheaper than (a) at this scale** *(fixed in §14: the snapshot is written incrementally, and only for
+  aim jobs)*: the aim leaves the main thread, but the job pool publishes the entity
   snapshot every tick, merging every bot's entities (40 bots × ~60, up to ~120 with many arrows): 3.5 % of busy, more
   than the inline aim's 1.9 %. Before the defaults flip, the snapshot wants a cheaper writer (incremental, or the rows
   near the shooters only); P4/P6's jobs pay it anyway.
@@ -987,7 +991,9 @@ real shared world, job pool and `path` handler).
 - `Movements`' per-node cost (its string-keyed block cache) is unchanged: the next gain for A* is there, not in block
   lookups.
 - Unreachable logs are still searched again by every `mineBlock` call (docs/31 §11.9).
-- Gather with the workers (§12.1): a pending search is cancelled by every `block_updated` reset and restarts.
+- Gather with the workers (§12.1): a pending search is cancelled by every `block_updated` reset and restarts. *Since
+  §14 it is carried over the reset when its path still holds; gather with workers still mines fewer logs, for another
+  reason (§14.2).*
 - The bots keep their own worlds (P5).
 
 ### 12.1 Measured (2026-11-01)
@@ -1050,7 +1056,8 @@ What this shows:
   135 timed out; the probe answered 124. A search pending on a worker is reset by every block change next to the bot
   and starts again from nothing, so gather's longer searches rarely finish. Not done: carry a pending search over a
   `block_updated` reset when the goal is the same (the block change is in the store by its next slice), or let the
-  probe run longer.
+  probe run longer. *Carried since §14; it was not the main cause: with workers off, the main thread's A* budget makes
+  the plugin give a hard target up at once (§14.2).*
 - **The live core tests pass:** `LIVE_ONLY=core npm run live-test` 7/7 with workers off and 7/7 with `LIVE_WORKERS=4`
   (18 searches answered by the probe, 11 offloaded, 10 answered, 1 cancelled, no fallback).
 
