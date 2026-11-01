@@ -70,7 +70,7 @@ verified_at: 2026-10-30 (branch rework at 32e086a)
 |---|---|---|
 | Supervisor | `squad/src/supervisor.ts` | The parent process (`npm start`). It forks the runtime with `--import tsx`, expects an IPC heartbeat every second, kills the runtime after 10 s of silence (`HEARTBEAT_TIMEOUT_MS`, :15) and restarts it with backoff 1/2/5/10/30 s |
 | Runtime, main thread | `squad/src/main.ts` `start()` :35 | **Everything else**: every mineflayer bot (protocol decoding, physics ticks, the pathfinder's look-ahead, and A* unless the workers are on; plugins), every order's script, the leases, the HTTP + SSE + MCP server, the synchronous SQLite journal, the vitals sampler |
-| Reader workers (optional) | `squad/src/jobs/pool.ts` `JobPool`, `worker.mjs`; built in `main.ts` `startJobs` | **Off by default** (`workers.count` 0). When on: batches of read-only jobs under a per-tick CPU budget, ticked on one online bot's `physicsTick`; an entity snapshot in shared memory ([docs/37 §8](../../37-squad-worker-reads-plan.md)). Job types: the bots' A* (`path`, docs/37 P4), `findBlocks` (P6: mineflayer's `findBlocks` over the shared world, used by `mineBlock`), `aim` (P3) and the trivial `echo`. They replaced docs/32 D's pathfinding worker pool |
+| Reader workers (optional) | `squad/src/jobs/pool.ts` `JobPool`, `worker.mjs`; built in `main.ts` `startJobs` | **Off by default** (`workers.count` 0). When on: batches of read-only jobs under a per-tick CPU budget, ticked on one online bot's `physicsTick`; an entity snapshot in shared memory, written only for a dispatch with an aim job (a handler's `needsEntities`) and kept up from the bots' `entitySpawn`/`entityGone` events (`jobs/snapshot.ts`); short jobs share one worker's batch up to `PACK_MS` ([docs/37 §8, §14](../../37-squad-worker-reads-plan.md)). Job types: the bots' A* (`path`, docs/37 P4), `findBlocks` (P6: mineflayer's `findBlocks` over the shared world, used by `mineBlock`), `aim` (P3) and the trivial `echo`. They replaced docs/32 D's pathfinding worker pool |
 | Shared-world writer (optional) | `squad/src/world/shared-world.ts` `SharedWorld`, `writer.mjs`, `store.mjs`; built in `main.ts` when `world.enabled` | **Off by default.** One copy of the bots' chunks in SharedArrayBuffers, decoded by this thread and readable by any thread (`reader.mjs`). P1 of [docs/37](../../37-squad-worker-reads-plan.md) (§9 there is the as-built): read by `world.verify` and, with the reader workers on, by the `findBlocks` job (P6, §10 there). With `world.shared` (P5, §13 there) the bots read it too, and this thread is the only one that decodes a chunk |
 | Typecheck worker | `squad/src/script/typecheck-worker.mjs`, started by `check.ts` `typecheckWorker()` :156 | TypeScript `checkJs` for `check_script`/`submit_command`. First check about 5 s (it parses the library types), later ones 0.1–0.3 s; warmed 2 s after boot. Unref'd when idle |
 | The mod | `com.paul.brawl.squad` in the server JVM | `/bots` commands and the commander snapshot on the server thread; HTTP to the runtime is async; the SSE reader is a virtual thread (`squad-events`); authoring turns are virtual threads running `claude -p` (`ClaudeCodeClient`) |
@@ -126,13 +126,19 @@ their own copy of every chunk):
   partial paths, then its path as `Move` objects. Goals are serialized by class (`serialize.ts`; `GoalFollow` becomes
   a `GoalNear` snapshot and the main thread keeps `hasChanged`). The plugin's `path_reset`, `goal_updated`,
   `path_stop` and the bot's `end` cancel the job (its state on the worker is dropped); a newer search supersedes it.
+  A `block_updated` reset only holds it (`hold`, at most `CARRY_WINDOW_MS` 250): when the plugin plans again with the
+  same goal (serialized the same: a `GoalFollow` moved in place is a new goal) and Movements, from a node of the path
+  it was walking, the search is carried on (`carry`) if every step next to a block changed since it began is still
+  among the plugin's `getNeighbors` over the bot's world (`check`); every partial or final path from the worker is
+  checked the same way (a broken final one is searched again from the bot, twice at most, then `stale` on the main
+  thread). docs/37 §14.
 - **Fallbacks to the main-thread search** (the same search from the start, under `pathfinding.astarBudgetMs`),
   counted by reason in `stats()` (:296): `goal`, `movements` (cannot cross threads), `noDimension`, `noColumn` (the
   bot's column is not live in the store), `noWorld` (the writer disabled), `noWorker` (no live worker: the pool would
   run the job inline, where the plugin's own search is the better one), a failed job (`threw`, `workerDied`,
   `lostInput`, `clone`, `unknownType`, `unavailable`, `stopped`, `late`; the pool retries a job whose worker died
   once, on the restarted worker), and `deadline`: no sign of life for `thinkTimeout` + 2 s (`DEFAULT_GRACE_MS`
-  :149). `/api/metrics` shows them as `paths`.
+  :149), and `stale`. `/api/metrics` shows them as `paths` (with `carried`, `notCarried`, `stale`).
 
 **The bots on the shared world** (`world.shared`, docs/37 P5; the as-built and the measurements are docs/37 §13):
 - **How:** `bots/pool.ts` gives `createBot` `plugins: { pathfinder, blocks }` with `SharedWorld.blocksPlugin()`, which

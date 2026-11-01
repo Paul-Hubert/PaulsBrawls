@@ -45,6 +45,8 @@ export interface JobHandlerModule {
   init?(env: HandlerEnv): unknown;
   /** An elastic type: each run takes ctx.shareMs(); batches are packed by this (its smallest useful run), in ms. */
   elasticMinMs?: number;
+  /** It reads ctx.entities: the pool publishes the entity snapshot only for such jobs (docs/37 §14). */
+  needsEntities?: boolean;
 }
 
 export interface WireJob {
@@ -88,6 +90,7 @@ export declare function loadHandlers(
 ): Promise<{ handlers: Map<string, JobHandlerModule>; errors: Array<{ url: string; message: string }> }>;
 export declare function isContinue(v: unknown): v is { continue: unknown };
 export declare function elasticMinMs(h: JobHandlerModule | undefined): number | undefined;
+export declare function needsEntities(h: JobHandlerModule | undefined): boolean;
 export declare function serializeError(e: unknown): WireError;
 export declare function runBatch(
   batch: { tick: number; budgetMs: number; jobs: WireJob[] },

@@ -22,6 +22,8 @@ export interface PhaseResult {
   gather?: { logsMined: number; status: string; failures: number; failureExamples: string[] };
   deafTrips: number;
   skippedPackets: number;
+  /** Where the bots' time went, % of 100 ms samples per bot (load.ts runPhase). */
+  botTime?: { digging: number; moving: number; waiting: number; idle: number };
   profile?: string;
 }
 

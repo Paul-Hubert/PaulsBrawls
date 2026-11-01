@@ -9,6 +9,8 @@
 import { solveAim } from '../../aim/solve.mjs';
 
 export const type = 'aim';
+/** It reads the entity snapshot (the hitboxes in the way): the pool publishes it for these jobs. */
+export const needsEntities = true;
 
 export function run(input, ctx) {
   return solveAim(input, ctx.world, ctx.entities);

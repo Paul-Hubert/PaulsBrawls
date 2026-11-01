@@ -124,6 +124,44 @@ test('elastic: a job alone on a worker gets the whole budget; four at once share
   }
 });
 
+test('elastic: long jobs started one at a time spread over the workers (each goes where the fewest are held)', async () => {
+  const jobs = new JobPool({ workers: 4, handlers: [ELASTIC], ticks: 'manual', tickBudgetMs: 4 });
+  try {
+    await jobs.ready();
+    // One new search a tick, each lasting many ticks (its state stays on the worker it starts on).
+    const ps: Array<Promise<{ worker: number }>> = [];
+    for (let i = 0; i < 4; i++) {
+      ps.push(jobs.submit<{ worker: number }>({ type: 'elastic', input: { slices: 30 } }));
+      await jobs.tick();
+      await sleep(12);
+    }
+    await pump(jobs, Promise.all(ps), 400);
+    const workers = (await Promise.all(ps)).map((r) => r.worker).sort();
+    assert.deepEqual(workers, [0, 1, 2, 3], 'one on each worker');
+  } finally {
+    await jobs.stop();
+  }
+});
+
+test('elastic: a new job does not join a worker whose job has answered but is not applied yet (it looks idle)', async () => {
+  const jobs = new JobPool({ workers: 2, handlers: [ELASTIC], ticks: 'manual', tickBudgetMs: 4 });
+  try {
+    await jobs.ready();
+    const a = jobs.submit<{ worker: number }>({ type: 'elastic', input: { slices: 20 } });
+    await jobs.tick(); // a's first slice goes out
+    const end = Date.now() + 5_000;
+    while (jobs.stats().answered === 0 && Date.now() < end) await sleep(1);
+    assert.equal(jobs.stats().answered, 1, "a's slice is back, not applied: its worker is idle and holds nothing queued");
+    const b = jobs.submit<{ worker: number }>({ type: 'elastic', input: { slices: 20 } });
+    // A dispatch before the next apply (a worker's message can land between a tick's apply and its dispatch).
+    await (jobs as unknown as { dispatch(): Promise<void> }).dispatch();
+    await pump(jobs, Promise.all([a, b]), 400);
+    assert.notEqual((await a).worker, (await b).worker, 'b went to the other worker');
+  } finally {
+    await jobs.stop();
+  }
+});
+
 test('elastic: inline (no worker), the same shares of the inline budget', async () => {
   const jobs = new JobPool({ workers: 0, handlers: [ELASTIC], ticks: 'manual', inlineBudgetMs: 8 });
   try {

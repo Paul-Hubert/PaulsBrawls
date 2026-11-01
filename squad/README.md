@@ -66,12 +66,17 @@ one copy in shared memory. Job types: `path` (A*, P4), `findBlocks` (P6), `aim` 
 | `workers.tickBudgetMs` | 40 | each worker's CPU budget per 50 ms tick (above 0, at most 50). A worker stops its batch when it is spent; what it did not start goes back to the queue. Searches share it: one search alone on a worker computes up to 40 ms a tick |
 
 With `workers.count` > 0 the shared world is on too (`world.enabled` defaults to true then), the dispatcher ticks on
-one online bot's physics ticks (a self-correcting 50 ms timer when none is online), and it publishes a snapshot of
-every entity the bots know into shared memory. A search runs on the main thread as before when the workers cannot take
+one online bot's physics ticks (a self-correcting 50 ms timer when none is online), and, on the ticks it hands out an
+aim job, it publishes a snapshot of every entity the bots know into shared memory (kept up from the bots' entity
+events, not walked each tick). A search pending on a worker carries on over a block change next to the bot (the
+plugin's `block_updated` reset) when every step of its path near the changes still holds; any path a worker sends is
+checked the same way, and searched again if a change broke it (docs/37 §14). A search runs on the main thread as before when the workers cannot take
 it: an unknown goal class, exclusion areas, a subclassed `Movements`, a column the store does not hold yet, no live
 worker (every slot crashed 3 times in a minute), a failed job, or no sign of life for `thinkTimeout` + 2 s. `POST
 /api/metrics` shows the job pool (`jobs`) and the searches (`paths`: offloaded, answered, cancelled, fallbacks by
-reason).
+reason; `carried` over resets and `notCarried` by why; `stale` worker paths). Gather mines fewer logs with the workers
+than without (docs/37 §14.2): part of the main thread's lead comes from the plugin giving a hard target up at once
+when the A* budget is spent.
 **Shared world (optional, [docs/37](../docs/37-squad-worker-reads-plan.md) P1, P5).** `squad.json`'s `world` block
 builds one copy of the chunks the bots receive, in shared memory ([src/world/](src/world/)). One writer thread decodes
 it from the bots' packets, and any thread can read it lock-free. The reader workers read the store (A* since P4).
@@ -123,7 +128,7 @@ loop's p99 passes 250 ms or its ELU 0.9 (bots move in slow motion past that). `P
 searches by outcome, path resets and deaf trips, plus `text`, the French line `/bots status` shows. With the reader
 workers on, it also has `jobs`: `workers`, `alive`, `restarts`, `budgetMs`, `tick`, `tickSource` (`bot` or `timer`),
 `ticks`, `queue`, `queueMax`, `inFlight`, `answered`, `dispatchMs { mean, max }` (the dispatcher's own main-thread time
-per tick), `entities { count, published, skipped, overflow }`, `inline { loaded, budgetMs, batches, usedMs }`, per job
+per tick), `entities { count, published, skipped, overflow, writeMs, followed }` (the snapshot: written only for aim jobs; `writeMs` its main-thread time, `followed` the bots it follows), `inline { loaded, budgetMs, batches, usedMs }`, per job
 type `types.<type> { submitted, done, carried, continued, late, failed, inline, retried, cancelled, latencyMs { p50,
 p95 }, costMs }` and per worker `perWorker[] { index, alive, ready, disabled, restarts, batches, jobs, budgetMs { mean,
 max } }` (budget use in ms per tick); `text` then ends with « calculs : 3/4 workers, file 12, p95 75 ms, … ». One

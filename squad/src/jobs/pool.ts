@@ -7,10 +7,12 @@
 //  1. apply: the answers that came back since the last tick resolve (or reject) their promises, all at the start of
 //     the tick, not whenever a worker's message lands (the main thread's "apply" step: look, release, set a path);
 //  2. (after those promises' callbacks, on setImmediate, so a job they submit makes this tick) publish the entity
-//     snapshot (snapshot.ts) when jobs are about;
+//     snapshot (snapshot.ts) when a job of a type that reads it (its handler's needsEntities: the aim) is queued;
 //  3. dispatch: hand each idle worker a batch, in priority order (then deadline, then submit order), sized by a
 //     running estimate (EWMA) of each job type's cost so it fits the budget. The worker stops early if the budget runs
-//     out anyway (batch.mjs); what it did not start comes back and is queued again.
+//     out anyway (batch.mjs); what it did not start comes back and is queued again. Short jobs fill one batch up to
+//     PACK_MS before the next worker gets any (a message each way per batch is the main thread's cost); elastic ones
+//     (A*) go to the least-loaded worker.
 //
 // The tick source. The dispatcher follows a bot's physicsTick (useTickSource, fed by ticks.ts with one online bot),
 // so its ticks are the bots' ticks: mineflayer's physics keeps 20 ticks/s with its own catch-up, where a free-running
@@ -36,7 +38,7 @@ import { performance } from 'node:perf_hooks';
 import { setImmediate } from 'node:timers';
 
 import { logger } from '../logger';
-import { elasticMinMs, loadHandlers, runBatch, serializeError, type BatchEnv, type WireJob, type WireResult, type WorldReaderLike } from './batch.mjs';
+import { elasticMinMs, loadHandlers, needsEntities, runBatch, serializeError, type BatchEnv, type WireJob, type WireResult, type WorldReaderLike } from './batch.mjs';
 import { openEntities, releaseReader } from './entities.mjs';
 import { JobFailedError, JobLateError, type JobFailReason } from './errors';
 import { EntitySnapshot, type EntitySource, type SnapshotStats } from './snapshot';
@@ -52,9 +54,12 @@ export const DEFAULT_COST_MS = 0.5;
 /** The bot tick source counts as live while its last tick is this recent; then the timer takes over. */
 export const SOURCE_GRACE_MS = 75;
 const MAX_CATCHUP_TICKS = 4;
-/** The snapshot is published while a job was submitted within this many ticks (an idle pool publishes nothing). */
-const ACTIVE_TICKS = 20;
 const DEFAULT_MAX_CRASHES_PER_MINUTE = 3;
+/**
+ * Short jobs (not elastic) share one worker's batch until its estimated load reaches this, ms: in a fight, the aim's
+ * 10–30 updates a tick (~0.04 ms each) go out as one message, not one per worker (docs/37 §14).
+ */
+export const PACK_MS = 2;
 /** Latencies kept per type and window for the percentiles. */
 const LATENCY_SAMPLES = 2048;
 const COST_ALPHA = 0.2;
@@ -200,6 +205,8 @@ interface Job {
   home: number;
   /** Its state or input is held on `home`: it is sent as { resume: true }. */
   resume: boolean;
+  /** The slot its last batch went to (-1: none yet, or inline). */
+  sentTo: number;
   retries: number;
   settled: boolean;
 }
@@ -262,6 +269,8 @@ export class JobPool {
   private readonly costs = new Map<string, number>();
   /** Elastic types (batch.mjs) and their elasticMinMs: packed by that, not by their measured cost. */
   private readonly elastic = new Map<string, number>();
+  /** The types whose handlers read the entity snapshot (needsEntities): it is published only for them. */
+  private readonly entityTypes = new Set<string>();
   private readonly counters = new Map<string, TypeCounters>();
   private readonly affinities = new Map<string, { slot: number; refs: number }>();
   private readonly snapshot: EntitySnapshot;
@@ -273,7 +282,6 @@ export class JobPool {
   private knownTypes: Set<string> | null = null;
   private seq = 0;
   private tickNo = 0;
-  private activeUntil = -1;
   private stopped = false;
   private dispatching: Promise<void> | undefined;
   private pendingApplyMs = 0;
@@ -349,6 +357,7 @@ export class JobPool {
         submittedAt: performance.now(),
         home: ANY,
         resume: false,
+        sentTo: -1,
         retries: 0,
         settled: false,
       };
@@ -363,7 +372,6 @@ export class JobPool {
       }
       this.counter(type).submitted++;
       this.enqueue(job);
-      this.activeUntil = this.tickNo + ACTIVE_TICKS;
     });
   }
 
@@ -511,7 +519,7 @@ export class JobPool {
     if (this.stopped) return;
     const t0 = performance.now();
     const tick = this.tickNo;
-    if (this.opts.entities && tick <= this.activeUntil) {
+    if (this.opts.entities && this.wantsEntities()) {
       try {
         this.snapshot.write(tick, this.opts.entities);
       } catch (e) {
@@ -529,6 +537,17 @@ export class JobPool {
     this.endDispatch(t0);
   }
 
+  /**
+   * Whether a queued job reads the entity snapshot: it is then written for this dispatch (docs/37 §14). Paths and
+   * block searches read none, so gather and walking publish nothing. A worker pins the snapshot published last when it
+   * starts a batch, so a job dispatched now reads this one.
+   */
+  private wantsEntities(): boolean {
+    if (this.entityTypes.size === 0) return false;
+    for (const j of this.queue) if (this.entityTypes.has(j.type)) return true;
+    return false;
+  }
+
   private endDispatch(t0: number): void {
     const ms = this.pendingApplyMs + (performance.now() - t0);
     this.pendingApplyMs = 0;
@@ -544,6 +563,7 @@ export class JobPool {
     for (const s of this.slots) if (s.worker && s.ready && !s.busy && !s.disabled) cands.push({ slot: s, load: 0, jobs: [] });
     const keep: Job[] = [];
     let full = cands.length === 0;
+    let held: number[] | null = null;
     for (const job of this.queue) {
       // A worker's answer is applied next tick: a job due by this tick cannot make it.
       if (job.deadlineTick <= tick) {
@@ -565,9 +585,25 @@ export class JobPool {
           continue;
         }
       } else {
-        for (const c of cands) {
-          if (c.load > 0 && c.load + est > this.budgetMs) continue;
-          if (!target || c.load < target.load) target = c;
+        // A short job joins a batch that already goes out this tick while that one stays small (PACK_MS): one message
+        // there and one back instead of one per worker (the main thread pays for each). Elastic jobs (A*) spread.
+        const spread = this.elastic.has(job.type);
+        if (!spread && est <= PACK_MS) target = cands.find((c) => c.jobs.length > 0 && c.load + est <= PACK_MS);
+        if (!target) {
+          // A new elastic job (an A* search) stays on the worker it starts on for its whole life: it goes to the one
+          // holding the fewest jobs across ticks, else, with the loads of this tick tied at 0, every search started
+          // one at a time landed on the first idle worker (walking at 30 bots: one worker 29 ms a tick, three idle).
+          held ??= this.heldPerSlot();
+          for (const c of cands) {
+            if (c.load > 0 && c.load + est > this.budgetMs) continue;
+            if (!target) target = c;
+            else if (spread) {
+              const a = held[c.slot.index]!;
+              const b = held[target.slot.index]!;
+              if (a < b || (a === b && c.load < target.load)) target = c;
+            } else if (c.load < target.load) target = c;
+          }
+          if (target && spread) held[target.slot.index]!++;
         }
         if (!target) {
           // Strict priority: nothing lower goes before it.
@@ -586,6 +622,17 @@ export class JobPool {
     }
     this.queue = keep;
     for (const c of cands) if (c.jobs.length > 0) this.send(c.slot, c.jobs, tick);
+  }
+
+  /**
+   * The jobs each slot holds across ticks: queued with their state there, or sent to it and not applied yet (out in
+   * its batch, or answered since the last apply: the slot then looks idle with nothing of its own queued).
+   */
+  private heldPerSlot(): number[] {
+    const held = this.slots.map(() => 0);
+    for (const j of this.queue) if (j.home >= 0) held[j.home] = (held[j.home] ?? 0) + 1;
+    for (const j of this.inFlight.values()) if (j.sentTo >= 0 && !j.settled) held[j.sentTo] = (held[j.sentTo] ?? 0) + 1;
+    return held;
   }
 
   private send(slot: Slot, jobs: Job[], tick: number): void {
@@ -623,6 +670,7 @@ export class JobPool {
     }
     for (const j of jobs) {
       if (j.transfer) j.transferred = true;
+      j.sentTo = slot.index;
       this.inFlight.set(j.id, j);
     }
     slot.busy = true;
@@ -711,6 +759,7 @@ export class JobPool {
         for (const [type, h] of handlers) {
           const ms = elasticMinMs(h);
           if (ms !== undefined) this.elastic.set(type, ms);
+          if (needsEntities(h)) this.entityTypes.add(type);
         }
         const entities = openEntities(this.snapshot.handles, this.opts.workers);
         this.inline = {
@@ -857,6 +906,7 @@ export class JobPool {
       slot.ready = true;
       this.knownTypes ??= new Set(m.types);
       for (const [type, ms] of Object.entries(m.elastic ?? {})) this.elastic.set(type, ms);
+      for (const type of m.entities ?? []) this.entityTypes.add(type);
       for (const e of m.errors) logger.warn('jobs', `worker ${slot.index}: handler ${e.url} not loaded: ${e.message}`);
       this.checkReady();
       return;
@@ -1063,11 +1113,12 @@ export class JobPool {
     for (const j of pending) this.fail(j, new JobFailedError(j.type, 'stopped', 'the job pool stopped'));
     for (const r of this.readyWaiters) r();
     this.readyWaiters = [];
+    this.snapshot.close();
   }
 }
 
 type WorkerMessage =
-  | { t: 'ready'; types: string[]; errors: Array<{ url: string; message: string }>; elastic?: Record<string, number> }
+  | { t: 'ready'; types: string[]; errors: Array<{ url: string; message: string }>; elastic?: Record<string, number>; entities?: string[] }
   | { t: 'done'; tick: number; usedMs: number; results: WireResult[] };
 
 /** Queue order: higher priority, then earlier deadline, then earlier submit. */
