@@ -52,6 +52,15 @@ declare module 'mineflayer' {
     readonly tags: string[];
     readonly role: string | undefined;
   }
+  interface BotEvents {
+    /**
+     * Squad: this bot was hit in melee (a sword, a zombie's arm; not an arrow, a fireball or an explosion), whether its
+     * raised shield stopped the blow (`blocked`, no damage) or not. `attacker` is a live entity within 5 blocks; it may
+     * be a friend (check isFriend). Mineflayer's own `entityHurt` misses a hit the shield stopped.
+     * `bot.on('meleeHit', (attacker, { blocked }) => …)`.
+     */
+    meleeHit: (attacker: Entity, hit: { blocked: boolean }) => Promise<void> | void;
+  }
 }
 
 declare global {
@@ -327,6 +336,10 @@ declare global {
    * the line counts as a hit. Throws "no clear line of fire: …" when a block or a friend is in
    * the way (nothing fired; a friend gets ~1 s to step out first): step aside or move closer. A snapshot entity
    * (at.lookEntity) is only a position: shoot entityOf(bot, ref) to aim at the live one.
+   * A friend (isFriend) in the line of fire, whom the flat arc would hit (a shield wall in front of archers), is shot
+   * over at once: an arc above every friend in the way and onto the target (a shorter draw: slower, steeper and weaker;
+   * else a lob). When no arc passes over (or with a crossbow), it throws "… in the line of fire … (no clear line of
+   * fire? step aside)" without drawing.
    */
   function shoot(bot: SquadBot, target: Entity | Pos | null | undefined, opts?: { weapon?: 'bow' | 'crossbow' }): Promise<{ shot: true }>;
   /** Equip by id; "_sword" picks the best sword. */

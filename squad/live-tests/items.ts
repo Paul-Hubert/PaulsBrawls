@@ -323,7 +323,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
         }
       });
 
-    await clean('items: mur-de-boucliers (runtime): a wall across yaw 90, re-formed across yaw 0 by a second click, a husk fought at the line', async () => {
+    await clean('items: mur-de-boucliers (runtime): a wall across yaw 90, re-formed across yaw 0 by a second click; a husk that only stands there is left alone, one that attacks is hit back until dead', async () => {
       // Looking west at the block 6 west of the captain: the wall runs along z at x = A.x − 5.5.
       const first = await trigger('mur-de-boucliers', shieldClick(90, block(A.x - 6, A.z)));
       if (!first.ok || first.started !== true) throw new Error(`first click: ${first.text}`);
@@ -337,25 +337,45 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
         throw new Error(`second click not delivered to #${id}: ${JSON.stringify(second)}`);
       }
       const south = await checkWall('x', A.z + 6.5, A.x + 0.5, 0, 'yaw 0');
-      // A husk 2 blocks in front of the wall (within `reach` 4 of the slots), more than STUCK_MS (10 s) after the
-      // guards reached their slots: fought at the slot, then each guard is back on its slot exactly. (Its stuck timer
-      // used to run from the first walk, so it came back to a loose goal and stood up to 2.5 blocks off: docs/29 §16.)
-      await sleep(11_000);
-      await rcon.command(`summon husk ${A.x + 0.5} ${A.y + 1} ${A.z + 8.5} {PersistenceRequired:1b,NoAI:1b,Tags:["${TAG}"]}`);
-      const huskGone = async (): Promise<boolean> => !/passed/i.test(await rcon.command(`execute if entity @e[type=minecraft:husk,tag=${TAG}]`));
-      await until(huskGone, 30_000, 'the guards killing the husk in front of the wall');
-      const after = await checkWall('x', A.z + 6.5, A.x + 0.5, 0, 'after the fight');
-      const slotsSouth = [-0.5, 0.5, 1.5].map((dx) => ({ x: A.x + dx, z: A.z + 6.5 }));
-      const off = GUARDS.map((g) => Math.min(...slotsSouth.map((s) => hdist(pos(g)!, s))));
-      if (off.some((d) => d > 0.8)) throw new Error(`after the fight a guard holds off its slot (${off.map((d) => d.toFixed(2)).join(', ')} blocks): ${after}`);
+      // A husk that never attacks (NoAI) 1.5 blocks in front of the wall: nobody goes after it, every shield stays up.
       const order = runner.get(id)!;
+      await rcon.command(`summon husk ${A.x + 0.5} ${A.y + 1} ${A.z + 8} {PersistenceRequired:1b,NoAI:1b,Tags:["${TAG}"]}`);
+      for (let t = 0; t < 10; t++) {
+        await sleep(300);
+        const down = GUARDS.filter((g) => !shieldUp(g));
+        if (down.length) throw new Error(`a shield went down for a husk that does not attack: ${down.join(', ')}; ${await wallEvidence()}`);
+      }
+      await rcon.command(`kill @e[type=minecraft:husk,tag=${TAG}]`);
+      // One that attacks, 2 blocks in front, more than STUCK_MS (10 s) after the guards reached their slots: each blow
+      // on a shield is answered once (meleeHit from entity status 29 and the husk's swing), until it is dead; then
+      // each guard is back on its slot exactly. (Its stuck timer used to run from the first walk, so it came back to a
+      // loose goal and stood up to 2.5 blocks off: docs/29 §16.)
+      await sleep(11_000);
+      const logs0 = order.report.logs.length;
+      await rcon.command(`summon husk ${A.x + 0.5} ${A.y + 1} ${A.z + 8.5} {PersistenceRequired:1b,Tags:["${TAG}"]}`);
+      const huskGone = async (): Promise<boolean> => !/passed/i.test(await rcon.command(`execute if entity @e[type=minecraft:husk,tag=${TAG}]`));
+      await until(huskGone, 60_000, 'the guards hitting the attacking husk back until it dies');
+      const blows = order.report.logs.slice(logs0).filter((l) => /hit back at husk/.test(l));
+      if (blows.length === 0) throw new Error(`the husk died but no guard hit back: ${order.report.logs.slice(logs0).join(' | ')}`);
+      const slotsSouth = [-0.5, 0.5, 1.5].map((dx) => ({ x: A.x + dx, z: A.z + 6.5 }));
+      const off = (): number[] => GUARDS.map((g) => Math.min(...slotsSouth.map((s) => hdist(pos(g)!, s))));
+      // A sword's sweep knocks the striker's neighbours (the knockback comes before the damage the friendly-fire hook
+      // cancels): one can stand a block off when the husk dies, and walks back.
+      const bumped = Math.max(...off());
+      try {
+        await until(() => off().every((d) => d <= 0.8), 8_000, 'every guard back on its slot');
+      } catch (e) {
+        throw new Error(`${(e as Error).message}: ${off().map((d) => d.toFixed(2)).join(', ')} blocks off; ${await wallEvidence()}`);
+      }
+      const after = await checkWall('x', A.z + 6.5, A.x + 0.5, 0, 'after the fight');
       const stop = await trigger('mur-de-boucliers', snap(0, { trigger: use('shield') }), true);
       if (!stop.ok || stop.stopped !== true) throw new Error(`stop: ${stop.text}`);
       // Leaving the order lowers the shield (the abort sequence's deactivateItem).
       await until(() => GUARDS.every((g) => !shieldUp(g)), 5_000, 'the shields lowered after the stop');
       return (
         `#${id} (${describeTriggers(order)}); ${POCKET}'s shield equipped from the inventory into the off-hand; ` +
-        `west: ${west} | south: ${south} | husk 2 blocks in front killed, back in line: ${after} | stopped: "${stop.text}", shields down`
+        `west: ${west} | south: ${south} | a NoAI husk left alone, shields up | an attacking husk killed by ${blows.length} blow(s) back ` +
+        `(${[...new Set(blows.map((l) => l.split(':')[0]))].join(', ')}; farthest off a slot at its death ${bumped.toFixed(2)}), back in line: ${after} | stopped: "${stop.text}", shields down`
       );
     });
 
@@ -781,6 +801,47 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       const line = await evidence();
       await api('/api/orders/stop', { by: CAPTAIN, target: `#${r.orderId}` });
       return `#${r.orderId}: ${line}`;
+    });
+
+    await clean('items: ligne-archers behind a mur-de-boucliers: the archers, 2 blocks behind the guards, shoot over them and kill a husk 6 blocks beyond the wall', async () => {
+      // The wall along x at z = A.z + 6.5 facing south, the archers' line 2 blocks behind it (back=2): each archer has
+      // a guard right in front of it. Before, the flat arc went into the guards' backs (hawkEye checks blocks only).
+      const wall = await trigger('mur-de-boucliers', shieldClick(0, block(A.x, A.z + 6)));
+      if (!wall.ok || wall.started !== true) throw new Error(`wall: ${wall.text}`);
+      await checkWall('x', A.z + 6.5, A.x + 0.5, 0, 'the wall');
+      const r = await api('/api/orders/trigger', { by: CAPTAIN, command: 'ligne-archers', tokens: ['back=2'], filters: [], snap: snap(0, { heldItem: 'arrow', lookBlock: block(A.x, A.z + 6), trigger: use('arrow') }) });
+      if (!r.ok || r.started !== true) throw new Error(`line: ${r.text}`);
+      await until(() => onLine(ARCHERS, 'x', A.z + 4.5, A.x + 0.5), 40_000, 'the archers 2 blocks behind the wall');
+      const slots = ARCHERS.map((a) => pos(a)!.clone());
+      const before = ARCHERS.map(arrows);
+      const line = runner.get(String(r.orderId))!;
+      // Each arrow's launch speed (blocks per tick) from its spawn packet, as the captain sees it: the draw the server
+      // counted (BowItem: pull × 3), against the one shoot asked for.
+      const speeds: number[] = [];
+      const onSpawn = (e: { name?: string; position: Vec3; velocity: Vec3 }): void => {
+        if (e.name === 'arrow' && slots.some((s) => hdist(e.position, s) < 2)) speeds.push(Math.round(e.velocity.norm() * 100) / 100);
+      };
+      cap().on('entitySpawn', onSpawn as never);
+      await rcon.command(`summon husk ${A.x + 0.5} ${A.y + 1} ${A.z + 12.5} {PersistenceRequired:1b,NoAI:1b,Tags:["${TAG}"]}`);
+      const huskGone = async (): Promise<boolean> => !/passed/i.test(await rcon.command(`execute if entity @e[type=minecraft:husk,tag=${TAG}]`));
+      const histogram = (): string => {
+        const n = new Map<number, number>();
+        for (const s of speeds) n.set(s, (n.get(s) ?? 0) + 1);
+        return [...n].sort((a, b) => a[0] - b[0]).map(([s, c]) => `${s}×${c}`).join(' ');
+      };
+      try {
+        await until(huskGone, 60_000, 'the archers killing the husk over the wall');
+      } catch (e) {
+        throw new Error(`${(e as Error).message}: arrows used ${ARCHERS.map((a, i) => before[i]! - arrows(a)).join(', ')}; speeds ${histogram()}; ${line.report.logs.slice(-6).join(' | ')}`);
+      } finally {
+        cap().off('entitySpawn', onSpawn as never);
+      }
+      const used = ARCHERS.map((a, i) => before[i]! - arrows(a));
+      const moved = ARCHERS.map((a, i) => hdist(pos(a)!, slots[i]!));
+      if (moved.some((d) => d > 1)) throw new Error(`an archer left its slot to shoot (${moved.map((d) => d.toFixed(1)).join(', ')}): ${line.report.logs.slice(-6).join(' | ')}`);
+      if (!GUARDS.every(shieldUp)) throw new Error(`a guard lowered its shield: ${await wallEvidence()}`);
+      const sidesteps = line.report.logs.filter((l) => /no clear line of fire/.test(l)).length;
+      return `husk 6 beyond the wall killed; arrows ${used.join(', ')}; launch speeds ${histogram()}; archers on their slots (${moved.map((d) => d.toFixed(1)).join(', ')}); "no clear line of fire" ${sidesteps}; ${await wallEvidence()}`;
     });
 
     await clean('items: a reclaimed guard comes back and works: defend → wall reclaims the guards → stop → they follow again', async () => {

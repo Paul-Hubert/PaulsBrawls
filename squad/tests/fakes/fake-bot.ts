@@ -272,6 +272,12 @@ export class FakeBot extends EventEmitter {
   async lookAt(): Promise<void> {
     this.calls.push('lookAt');
   }
+  /** Mineflayer's single blow (no pvp plugin): the entities hit, in order. */
+  readonly hits: unknown[] = [];
+  attack(e: unknown): void {
+    this.calls.push('attack');
+    this.hits.push(e);
+  }
   blockAt(p: Vec3): FakeBlock | null {
     return this.world ? this.world(p) : null;
   }

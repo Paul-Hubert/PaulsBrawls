@@ -1,10 +1,11 @@
 // Stock command: the guards line up across the commander's view where they point, face along the view and raise
 // their shields once in place. Any item can carry it (/bots orders bind mur-de-boucliers), a shield, a bow, a stick,
 // or none (/bots order): a click only says WHERE (pointedTarget: an arrow's hit, else the crosshair's creature or
-// block); too far (`distance`) or the sky, the wall forms a few blocks ahead. A hostile mob, or a player who is not on
-// our team, coming within `reach` of a guard's slot is fought, leashed to the slot; the guard then goes back and
-// raises its shield again. Each later click re-forms the wall where the commander now points, without stopping the
-// order (it listens: ctx.commander.on('trigger')); a bow's arrow-release does not move it, its hit does.
+// block); too far (`distance`) or the sky, the wall forms a few blocks ahead. A guard holds its shield up and does not
+// go after anyone: hit in melee (the shield stopped the blow or not; bot.on('meleeHit')), it hits back once, a step
+// toward the attacker first when out of arm's reach (not past `reach` from its slot), then raises its shield again.
+// Arrows and explosions are only blocked. Each later click re-forms the wall where the commander now points, without
+// stopping the order (it listens: ctx.commander.on('trigger')); a bow's arrow-release does not move it, its hit does.
 //
 // Slots go to the bots in their order along the line (left to right as the commander sees it), so no two paths
 // cross; that assignment holds for one formation and is redone when the wall moves or a new guard joins. A guard
@@ -19,7 +20,7 @@ export const manifest = {
     properties: {
       distance: { type: 'integer', minimum: 4, maximum: 64, default: 24, description: 'au-delà, le mur se forme quelques blocs devant moi' },
       spacing: { type: 'number', minimum: 1, maximum: 3, default: 1, description: 'écart entre deux gardes' },
-      reach: { type: 'integer', minimum: 1, maximum: 12, default: 4, description: 'distance à laquelle un garde quitte le mur pour frapper' },
+      reach: { type: 'integer', minimum: 1, maximum: 12, default: 4, description: "jusqu'où, depuis sa place, un garde frappé avance pour rendre le coup" },
     },
   },
   roles: { guards: { select: { hasItem: 'shield' }, min: 1, take: 'reclaim' } },
@@ -34,6 +35,14 @@ const AHEAD = 5;
 const ARRIVED = 0.8;
 /** A slot not reached in this long gets a looser goal (something stands there, or no path ends on it). */
 const STUCK_MS = 10_000;
+/** Arm's reach for the blow back: from the eyes to the attacker's hitbox (the server allows 3, plus 1 of slack). */
+const STRIKE_REACH = 3;
+/** How long a guard steps toward an attacker out of arm's reach before it gives up the blow. */
+const STEP_MS = 1_500;
+/** A hit not answered within this long is forgotten (the guard was busy walking or eating). */
+const ANSWER_MS = 2_000;
+/** The eyes of a standing player above its feet. */
+const EYES = 1.62;
 
 export default async function (squad, args, ctx) {
   // First: every later click re-forms the wall instead of restarting the order.
@@ -94,10 +103,43 @@ export default async function (squad, args, ctx) {
     wall.slots = new Map(sorted.map((b, i) => [b.username, slots[i]]));
   }
 
-  /** A foe near `from`: a hostile mob, or a player not on our team who is not a spectator (nobody can hit one). */
-  const foeNear = (bot, from) =>
-    nearestHostile(bot, reach, { from }) ??
-    nearestEntity(bot, (e) => e.type === 'player' && !!e.username && !isFriend(e) && bot.players[e.username]?.gamemode !== 3, reach, { from });
+  /** The last melee hit each guard took and has not answered yet: the attacker, when. */
+  const struck = new Map();
+
+  /** Within arm's reach: the guard's eyes to the attacker's hitbox. */
+  const canStrike = (bot, e) => {
+    const eye = bot.entity.position.offset(0, EYES, 0);
+    const w = (e.width ?? 0.6) / 2;
+    const h = e.height ?? 1.8;
+    const gap = (v, lo, hi) => Math.max(lo - v, 0, v - hi);
+    return Math.hypot(gap(eye.x, e.position.x - w, e.position.x + w), gap(eye.y, e.position.y, e.position.y + h), gap(eye.z, e.position.z - w, e.position.z + w)) <= STRIKE_REACH;
+  };
+  const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+
+  /**
+   * One blow back at whoever hit the guard: shield down, a step toward them when out of arm's reach (for STEP_MS, never
+   * past `reach` from the slot, ended by a new formation), the blow. The guard's loop then raises the shield again (and
+   * walks back to the slot first when the step took it off).
+   */
+  const strikeBack = async (bot, foe, slot) => {
+    if (!foe.isValid || flat(foe.position, slot) > reach + STRIKE_REACH) return;
+    await raiseShield(bot, false);
+    if (!canStrike(bot, foe)) {
+      const v = wall.v;
+      const end = Date.now() + STEP_MS;
+      bot.pathfinder.setGoal(new goals.GoalFollow(foe, 1), true);
+      while (!canStrike(bot, foe) && foe.isValid && wall.v === v && Date.now() < end && flat(bot.entity.position, slot) <= reach) await squad.sleep(50);
+      bot.pathfinder.setGoal(null);
+      if (!foe.isValid || !canStrike(bot, foe)) return;
+    }
+    if (!/_sword$|_axe$/.test(bot.heldItem?.name ?? '')) {
+      const weapon = bot.inventory.items().find((i) => /_sword$|_axe$/.test(i.name));
+      if (weapon) await bot.equip(weapon, 'hand');
+    }
+    await bot.lookAt(foe.position.offset(0, (foe.height ?? 1.8) * 0.8, 0), true);
+    bot.attack(foe);
+    ctx.log(`${bot.username}: hit back at ${foe.username ?? foe.name ?? '?'}`);
+  };
 
   /** Where each guard is heading: the slot's key, the goal set for it, since when, loose or exact, reached once. */
   const heading = new Map();
@@ -131,20 +173,20 @@ export default async function (squad, args, ctx) {
     return Math.hypot(p.x - slot.x, p.z - slot.z) <= near && Math.abs(p.y - slot.y) <= 2;
   };
 
-  /** One look of one guard: fight a foe at its slot, else walk to the slot, else hold it with the shield up. */
+  /** One look of one guard: hit back once if it was hit, else walk to the slot, else hold it with the shield up. */
   const guard = async (bot) => {
     const slot = wall.slots.get(bot.username);
     if (!slot) {
       await squad.sleep(LOOK_MS); // until a formation gives it a slot
       return;
     }
-    const v = wall.v;
-    const foe = foeNear(bot, slot);
-    if (foe) {
-      await raiseShield(bot, false);
-      // Leashed to its slot; a new formation ends the fight at once.
-      await attack(bot, foe, { timeoutMs: 15000, leash: { center: () => wall.slots.get(bot.username) ?? slot, radius: reach + 1 }, until: () => wall.v !== v });
-      return;
+    const hit = struck.get(bot.username);
+    if (hit) {
+      struck.delete(bot.username);
+      if (Date.now() - hit.at <= ANSWER_MS) {
+        await strikeBack(bot, hit.attacker, slot);
+        return;
+      }
     }
     if (!arrived(bot, slot)) {
       await raiseShield(bot, false);
@@ -164,6 +206,10 @@ export default async function (squad, args, ctx) {
   const launch = (bot) => {
     const token = {};
     crew.set(bot.username, token);
+    // The runtime's event: who hit this bot in melee, the shield's blocks included. Removed when the bot leaves.
+    bot.on('meleeHit', (attacker) => {
+      if (!isFriend(attacker)) struck.set(bot.username, { attacker, at: Date.now() });
+    });
     squad
       .parallel(bot, async (b) => {
         while (!squad.stopped && crew.get(b.username) === token) {

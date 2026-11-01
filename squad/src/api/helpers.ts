@@ -1220,10 +1220,15 @@ function arrowHeightAt(elevationDeg: number, d: number, speed: number): { y: num
 /**
  * The bow's aim to hit `to` from a bot standing at `from` (feet), in the commander's convention: yaw and pitch in
  * Minecraft degrees (pitch negative = up). The low arc: the smallest elevation whose flight passes through the point
- * (simulated tick by tick, ARROW); out of range, the elevation that gets nearest. `error` is how far above (+) or
- * below the point the arrow passes, `ticks` its flight time.
+ * (simulated tick by tick, ARROW); `arc: 'high'`, the largest (a lob). Out of range, the elevation that gets nearest.
+ * `error` is how far above (+) or below the point the arrow passes, `ticks` its flight time.
  */
-export function bowAim(from: PosLike, to: PosLike, speed: number = ARROW.speed): { yaw: number; pitch: number; error: number; ticks: number } {
+export function bowAim(
+  from: PosLike,
+  to: PosLike,
+  speed: number = ARROW.speed,
+  arc: 'low' | 'high' = 'low',
+): { yaw: number; pitch: number; error: number; ticks: number } {
   const f = toVec3(from, 'bowAim from');
   const t = toVec3(to, 'bowAim to');
   const dx = t.x - f.x;
@@ -1240,20 +1245,38 @@ export function bowAim(from: PosLike, to: PosLike, speed: number = ARROW.speed):
     const r = arrowHeightAt(e, d, speed);
     return { yaw, pitch: snap(-e), error: r ? r.y - dy : -Infinity, ticks: r ? r.ticks : Infinity };
   };
-  // The miss rises with the elevation up to the longest-range angle, then falls: the low arc is its first root.
-  let lo = -89;
-  if (miss(lo) >= 0) return result(lo);
-  for (let e = -88; e <= 89; e++) {
-    if (miss(e) >= 0) {
-      let hi = e;
-      for (let i = 0; i < 40; i++) {
-        const mid = (lo + hi) / 2;
-        if (miss(mid) >= 0) hi = mid;
-        else lo = mid;
+  // The miss rises with the elevation up to the longest-range angle, then falls: the low arc is its first root, the
+  // high arc its last.
+  if (arc === 'high') {
+    let above = 89;
+    if (miss(above) >= 0) return result(above);
+    for (let e = 88; e >= -89; e--) {
+      if (miss(e) >= 0) {
+        let at = e;
+        for (let i = 0; i < 40; i++) {
+          const mid = (at + above) / 2;
+          if (miss(mid) >= 0) at = mid;
+          else above = mid;
+        }
+        return result(at);
       }
-      return result(hi);
+      above = e;
     }
-    lo = e;
+  } else {
+    let lo = -89;
+    if (miss(lo) >= 0) return result(lo);
+    for (let e = -88; e <= 89; e++) {
+      if (miss(e) >= 0) {
+        let hi = e;
+        for (let i = 0; i < 40; i++) {
+          const mid = (lo + hi) / 2;
+          if (miss(mid) >= 0) hi = mid;
+          else lo = mid;
+        }
+        return result(hi);
+      }
+      lo = e;
+    }
   }
   // Out of range: the elevation that carries farthest at the point's height, falling short by `error` (negative).
   let best = 0;
