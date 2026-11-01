@@ -277,7 +277,7 @@ public final class SquadCommand {
         if (kit.isEmpty()) return reply(src, "[Bots] Kit inconnu : " + kitName + " (" + String.join(", ", SquadKits.NAMES) + ").");
         Optional<String> name = Squad.botNames().stream().filter(n -> n.equalsIgnoreCase(bot)).findFirst();
         if (name.isEmpty()) return reply(src, "[Bots] " + bot + " n'est pas un bot de la squad (/bots list all).");
-        reply(src, Squad.equip(src.getServer(), name.get(), kit.get()));
+        Squad.equipLater(src.getServer(), name.get(), kit.get(), answer -> reply(src, answer));
         JsonObject body = base(src);
         body.addProperty("name", name.get());
         body.add("changes", array(SquadKits.tagChanges(kit.get())));

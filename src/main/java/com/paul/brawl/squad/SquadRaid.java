@@ -171,19 +171,23 @@ final class SquadRaid {
         if (raid.waiting.isEmpty()) settleThenLaunch(raid);
     }
 
-    /** A raider joined and stands at its place: its kit, its role tag; the raid starts once the last one is there. */
+    /**
+     * A raider joined and stands at its place: its kit (paced, kitStaggerMs), its role tag; the raid starts once the
+     * last one has its kit.
+     */
     private static void arrived(Pending raid, ServerPlayerEntity bot, Raider r) {
         String name = bot.getName().getString();
-        LOGGER.info("Raider {} arrived at {} {} {}: {}", name, Math.round(r.at().x()), Math.round(r.at().y()), Math.round(r.at().z()),
-            Squad.equip(raid.src.getServer(), name, r.kit()));
-        JsonObject body = SquadCommand.base(raid.src);
-        body.addProperty("name", name);
-        body.add("changes", SquadCommand.array(SquadKits.tagChanges(r.kit())));
-        Squad.client().post("/api/bots/tag", body).thenAccept(res -> {
-            if (!SquadAuthoring.ok(res)) LOGGER.warn("Raider {}: tag {} refused: {}", name, r.kit().name(), SquadNotice.fromJson(res).text());
+        Squad.equipLater(raid.src.getServer(), name, r.kit(), answer -> {
+            LOGGER.info("Raider {} arrived at {} {} {}: {}", name, Math.round(r.at().x()), Math.round(r.at().y()), Math.round(r.at().z()), answer);
+            JsonObject body = SquadCommand.base(raid.src);
+            body.addProperty("name", name);
+            body.add("changes", SquadCommand.array(SquadKits.tagChanges(r.kit())));
+            Squad.client().post("/api/bots/tag", body).thenAccept(res -> {
+                if (!SquadAuthoring.ok(res)) LOGGER.warn("Raider {}: tag {} refused: {}", name, r.kit().name(), SquadNotice.fromJson(res).text());
+            });
+            raid.waiting.remove(name.toLowerCase(Locale.ROOT));
+            if (raid.waiting.isEmpty() && !raid.spawning) settleThenLaunch(raid);
         });
-        raid.waiting.remove(name.toLowerCase(Locale.ROOT));
-        if (raid.waiting.isEmpty() && !raid.spawning) settleThenLaunch(raid);
     }
 
     private static void settleThenLaunch(Pending raid) {

@@ -140,17 +140,19 @@ final class SquadSpawn {
         if (!m.spawned.isEmpty() && m.arrived.get() >= m.spawned.size()) ready(m);
     }
 
-    /** A recruit joined and stands at its place: its kit and its role tag. */
+    /** A recruit joined and stands at its place: its kit (paced, kitStaggerMs) and its role tag; ready once all have theirs. */
     private static void arrived(Muster m, ServerPlayerEntity bot) {
         String name = bot.getName().getString();
-        LOGGER.info("Squad bot {} arrived: {}", name, Squad.equip(m.src.getServer(), name, m.kit));
-        JsonObject body = SquadCommand.base(m.src);
-        body.addProperty("name", name);
-        body.add("changes", SquadCommand.array(SquadKits.tagChanges(m.kit)));
-        Squad.client().post("/api/bots/tag", body).thenAccept(res -> {
-            if (!SquadAuthoring.ok(res)) LOGGER.warn("Squad bot {}: tag {} refused: {}", name, m.kit.name(), SquadNotice.fromJson(res).text());
+        Squad.equipLater(m.src.getServer(), name, m.kit, answer -> {
+            LOGGER.info("Squad bot {} arrived: {}", name, answer);
+            JsonObject body = SquadCommand.base(m.src);
+            body.addProperty("name", name);
+            body.add("changes", SquadCommand.array(SquadKits.tagChanges(m.kit)));
+            Squad.client().post("/api/bots/tag", body).thenAccept(res -> {
+                if (!SquadAuthoring.ok(res)) LOGGER.warn("Squad bot {}: tag {} refused: {}", name, m.kit.name(), SquadNotice.fromJson(res).text());
+            });
+            if (m.arrived.incrementAndGet() >= m.spawned.size() && !m.spawning) ready(m);
         });
-        if (m.arrived.incrementAndGet() >= m.spawned.size() && !m.spawning) ready(m);
     }
 
     private static void ready(Muster m) {

@@ -55,6 +55,11 @@ public final class SquadConfig {
     /** A join under a bot's name from any other address is kicked (offline mode trusts names). */
     public boolean joinGate = true;
     public String allowedBotAddresses = "127.0.0.1,::1,0:0:0:0:0:0:0:1";
+    /**
+     * Milliseconds between two kits given ({@code /bots squad spawn}, {@code /bots raid}, {@code /bots equip}): the
+     * kits go out one at a time, like the runtime's logins ({@code loginStaggerMs}). 0 gives them at once.
+     */
+    public int kitStaggerMs = 100;
 
     SquadConfig(Path path) {
         this.path = path;
@@ -99,6 +104,7 @@ public final class SquadConfig {
         p.setProperty("maxAuthoring", Integer.toString(maxAuthoring));
         p.setProperty("joinGate", Boolean.toString(joinGate));
         p.setProperty("allowedBotAddresses", allowedBotAddresses);
+        p.setProperty("kitStaggerMs", Integer.toString(kitStaggerMs));
         try (var out = Files.newOutputStream(path)) {
             p.store(out, "Squad: player-owned bots (/bots) — docs/29");
         } catch (IOException e) {
@@ -131,12 +137,14 @@ public final class SquadConfig {
         maxAuthoring = parseInt(p.getProperty("maxAuthoring"), maxAuthoring);
         joinGate = Boolean.parseBoolean(p.getProperty("joinGate", Boolean.toString(joinGate)).trim());
         allowedBotAddresses = p.getProperty("allowedBotAddresses", allowedBotAddresses).trim();
+        kitStaggerMs = Math.max(0, parseInt(p.getProperty("kitStaggerMs"), kitStaggerMs));
     }
 
     public String describe() {
         return "SquadConfig{enabled=" + enabled + ", url=" + url + ", token=" + (effectiveToken().isBlank() ? "unset" : "set")
             + ", agent=" + agentKind + (opencode() ? " " + agentUrl : " " + claudeBin + " in " + claudeDir)
-            + ", authorTimeout=" + authorTimeoutSeconds + "s, maxAuthoring=" + maxAuthoring + ", joinGate=" + joinGate + "}";
+            + ", authorTimeout=" + authorTimeoutSeconds + "s, maxAuthoring=" + maxAuthoring + ", joinGate=" + joinGate
+            + ", kitStagger=" + kitStaggerMs + "ms}";
     }
 
     private static int parseInt(String s, int fallback) {
