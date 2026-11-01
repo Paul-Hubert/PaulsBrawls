@@ -70,6 +70,9 @@ export interface StateTables {
   blockId(stateId: number): number;
 }
 
+/** The tables over their buffers (reader.mjs exports the class; aim/inline.ts builds them for a bot's own world). */
+export declare const StateTables: { new (tables: StateTableBuffers): StateTables };
+
 export interface WorldReader {
   /** State id at a block position, or -1 when no LIVE column holds it (unknown, not loaded, or cached-stale). Inside a live column, above or below the world it is 0 (air). */
   stateId(dim: string, x: number, y: number, z: number): number;

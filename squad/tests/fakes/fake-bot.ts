@@ -2,7 +2,9 @@
 // surface): an event emitter with a position, an inventory (with the off-hand slot 45), plugin objects whose long
 // calls can be held open and are rejected by the abort sequence (as pathfinder's goto is by stop/setGoal(null)), and
 // a `calls` recorder. Optional: a block world (`world`, e.g. flatWorld()) and `autoWalk`, which makes a positional
-// pathfinder goal arrive (the bot stands on the goal block, the goal is cleared as a reached goal is).
+// pathfinder goal arrive (the bot stands on the goal block, the goal is cleared as a reached goal is), and `archer()`:
+// physics ticks (fast, in bursts, as mineflayer catches up) and a bow that fires when released after a draw (one
+// arrow leaves the inventory, the release is recorded with the look it flew at).
 
 import { EventEmitter } from 'node:events';
 
@@ -55,6 +57,15 @@ export class FakeBot extends EventEmitter {
   private pending = new Set<(e: Error) => void>();
   /** When true, pathfinder.goto/collect hang until aborted (to test reclaim mid-action). */
   hang = false;
+  /** The hotbar slot held (mineflayer's quickBarSlot). */
+  quickBarSlot = 0;
+  /** archer(): physics ticks emitted so far, and the bow drawn since that tick (null: not drawn). */
+  ticks = 0;
+  drawnAt: number | null = null;
+  /** archer(): every release of a drawn bow, with the look it flew at and how many ticks it was drawn. */
+  readonly releases: Array<{ yaw: number; pitch: number; drawnTicks: number; fired: boolean }> = [];
+  private bowFires = false;
+  private ticker: ReturnType<typeof setInterval> | undefined;
 
   readonly inventory = {
     items: (): FakeItem[] => [...this.items],
@@ -112,10 +123,6 @@ export class FakeBot extends EventEmitter {
       this.calls.push('collectBlock.cancelTask');
       this.rejectPending('collect cancelled');
     },
-  };
-  readonly hawkEye = {
-    oneShot: () => void this.calls.push('hawkEye.oneShot'),
-    stop: () => void this.calls.push('hawkEye.stop'),
   };
 
   constructor(username = 'Bot', opts: { position?: Vec3; items?: FakeItem[] } = {}) {
@@ -185,10 +192,52 @@ export class FakeBot extends EventEmitter {
   deactivateItem(): void {
     this.calls.push('deactivateItem');
     this.usingHeldItem = false;
+    if (this.bowFires && this.drawnAt !== null && this.heldItem?.name === 'bow') {
+      const drawnTicks = this.ticks - this.drawnAt;
+      const arrows = this.items.find((i) => i.name === 'arrow');
+      const fired = !!arrows && arrows.count > 0;
+      if (fired) this.items = this.items.map((i) => (i === arrows ? { ...i, count: i.count - 1 } : i)).filter((i) => i.count > 0);
+      this.releases.push({ yaw: this.entity.yaw, pitch: this.entity.pitch, drawnTicks, fired });
+    }
+    this.drawnAt = null;
   }
   activateItem(offHand = false): void {
     this.calls.push(offHand ? 'activateItem(offHand)' : 'activateItem');
     this.usingHeldItem = true;
+    if (!offHand && this.bowFires && this.heldItem?.name === 'bow') this.drawnAt = this.ticks;
+  }
+  /** A hotbar switch: the server drops an item in use (a drawn bow is put down unfired). */
+  setQuickBarSlot(slot: number): void {
+    this.calls.push(`setQuickBarSlot(${slot})`);
+    this.quickBarSlot = slot;
+    this.usingHeldItem = false;
+    this.drawnAt = null;
+  }
+  /**
+   * Shoot like a real bot: physics ticks every `tickMs` (emitted in bursts per timer callback, as mineflayer catches
+   * up, so a 24-tick draw takes ~50 ms at 2 ms; 0: none, the test ticks), and a released bow fires one arrow.
+   */
+  archer(opts: { tickMs?: number } = {}): this {
+    this.bowFires = true;
+    const tickMs = opts.tickMs ?? 2;
+    // 0: no ticker, the test emits physicsTick itself.
+    if (this.ticker || tickMs === 0) return this;
+    let last = Date.now();
+    this.ticker = setInterval(() => {
+      const now = Date.now();
+      const n = Math.min(20, Math.max(1, Math.floor((now - last) / tickMs)));
+      last = now;
+      for (let i = 0; i < n; i++) {
+        this.ticks++;
+        this.emit('physicsTick');
+      }
+    }, tickMs);
+    this.ticker.unref();
+    return this;
+  }
+  stopTicks(): void {
+    if (this.ticker) clearInterval(this.ticker);
+    this.ticker = undefined;
   }
   /** Mineflayer's look: radians, its own convention (faceYaw converts). */
   async look(yaw: number, pitch: number, force?: boolean): Promise<void> {

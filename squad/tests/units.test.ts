@@ -142,7 +142,7 @@ test('the abort sequence runs in order and restores the default movements', asyn
   b.currentWindow = { id: 1 };
   await abortActiveTasks(b as never, 'default-movements');
   assert.deepEqual(b.calls, [
-    'collectBlock.cancelTask', 'pvp.stop', 'hawkEye.stop', 'pathfinder.stop', 'pathfinder.setGoal(null)',
+    'collectBlock.cancelTask', 'pvp.stop', 'pathfinder.stop', 'pathfinder.setGoal(null)',
     'stopDigging', 'deactivateItem', 'clearControlStates', 'closeWindow', 'pathfinder.setMovements',
   ]);
   assert.equal(b.pathfinder.movements, 'default-movements');

@@ -15,7 +15,6 @@ and only overrides a setting when an experiment flag asks for it.
 | `npm run bench:callees -- <file.cpuprofile> fn …` | where a function's time goes: its total time split by its direct callees (`emit` is see-through, so `tickPhysics` shows the physicsTick listeners, `emitPacket` the packet handlers) | a profile |
 | `npm run bench:report -- <run1> <run2> …` | repeated runs merged: mean and spread per (N, phase) | two or more runs |
 | `npm run bench:compare -- bench/.runs` | every `exp-*` and `control-*` run at N = 10, side by side per phase | experiment runs |
-| `node --expose-gc --import tsx bench/repro-hawkeye-leak.ts` | docs/36 §5.1: every bot hawkEye was loaded on stays reachable after GC (exit 1 while the leak is there) | nothing |
 | `npm run bench:repro-tasks-spin` | the `gather` freeze of docs/31 §2.6 on the fakes (`FIND_MS=20` by default) | nothing |
 
 Results go to `bench/.runs/<timestamp>-<label>/` (gitignored): `results.json`, `summary.md`, `profiles/`.
@@ -68,7 +67,7 @@ npm run bench:load -- --ns 10,30 --profile 10,30 --label profiled
 | Flag | What it changes |
 |---|---|
 | `--tick-timeout 40`, `--think-timeout 2000`, `--search-radius 128` | the pathfinder settings of `hardening.ts` (10 ms, 5 s, 64) |
-| `--plugins none` / `--plugins -autoEat,-hawkEye` | load no plugin, or skip some (a no-op plugin in their place) |
+| `--plugins none` / `--plugins -autoEat,-pvp` | load no plugin, or skip some (a no-op plugin in their place) |
 | `--view normal` | the bots' view distance (`short` = 8 chunks; R8 rules out `tiny`) |
 | `--movements canDig=false,allowSprinting=false` | overrides on the runtime's Movements object (it is restored after every order, so they hold) |
 | `--astar-budget 0` / `--astar-budget 10` | the runtime's own A* budget (`pathfinding.astarBudgetMs`, the patched `AStar.setBudget`; it was a prototype here; without the flag the runtime's default, 20 ms, applies, so `0` is the no-budget control of docs/31): all bots together get at most that many ms of A* per 50 ms window; a search that finds the window spent waits (its waiting does not count against `thinkTimeout`) |
@@ -134,9 +133,14 @@ npm run bench:fight -- --blue "raid radius=24" --label mirror            # both 
     A* / physics / look-ahead / decode, helper calls, ticks/s and entities per bot;
   - **the fight:** who died when, killed by whom and how (the server log's death messages), friendly kills (0 with
     the mod), the orders' results and their most frequent log lines.
-- **Experiment** (bench-only): `--hawkeye-every 4` runs hawkEye's aim (`getGrades`, a trajectory search with
-  raycasts on every physics tick of a drawing archer) on one tick in four; the bow still turns every tick to the last
-  aim (docs/36 §7).
+  - **the shots** (`summary.md` § Shots): the ELU at full strength (seconds with more than 30 bots alive), arrow kills
+    per shot, failed shots (every HelperError of `shoot`), friendly kills, the winner;
+  - **the aim** (§ Aim, `aimStats` of `src/aim/draw.ts`): draws, releases, refusals, holds, put-downs, solves inline
+    or as jobs, late and failed jobs, flights per solve, the inline solve's µs, the lead's error (smoothed, one-tick, no
+    lead); with `--jobs`, the `aim` jobs' latency and the workers' budget use. The profile's causes start with
+    "aim".
+- `--jobs N --world`: the reader workers and the shared world (docs/37), so the archers' aim runs as jobs. Without
+  both, it is solved on the main thread (the defaults). `--hawkeye-every` (docs/36 §7) refuses: hawkEye is gone.
 - Results go to `bench/.runs/<timestamp>-<label>/`: `results.json`, `summary.md`, `profiles/*.cpuprofile`. A profiled
   round is slower (the profiler's sampling), so compare timings between unprofiled rounds. The analysis of the first
   runs: [docs/36](../../docs/36-squad-fight-performance.md).

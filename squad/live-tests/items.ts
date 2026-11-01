@@ -11,7 +11,8 @@
 //   • the runtime alone: the test posts /api/orders/trigger with a snapshot it writes (what the mod would send);
 //   • through the mod: the captain types /bots orders bind, looks and right-clicks or shoots, and the dev server's
 //     mod sends the triggers. Those need the dev mod talking to this runtime: dev/squad.properties with
-//     url=http://127.0.0.1:8779 and token=live-test-token, and LIVE_RUNTIME_PORT=8779. Otherwise they are skipped.
+//     url=http://127.0.0.1:8779 and token=live-test-token, and LIVE_RUNTIME_PORT=8779 (another port: set it in both, and
+//     LIVE_MOD_PORT to it). Otherwise they are skipped.
 
 import { createHash } from 'node:crypto';
 
@@ -40,7 +41,7 @@ export interface LiveKit {
 }
 
 /** The port dev/squad.properties points the dev mod at. */
-export const MOD_RUNTIME_PORT = 8779;
+export const MOD_RUNTIME_PORT = Number(process.env.LIVE_MOD_PORT ?? 8779);
 
 /** The UUID an offline-mode server gives a player: UUID v3 of MD5("OfflinePlayer:" + name). */
 export function offlineUuid(name: string): string {

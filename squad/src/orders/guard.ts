@@ -14,7 +14,7 @@ export const REAL = Symbol.for('squad.realBot');
 export const ORDER = Symbol.for('squad.order');
 
 /** Plugin objects whose methods act on the body (they are guarded like the bot's own methods). */
-export const PLUGIN_NAMESPACES = new Set(['pathfinder', 'pvp', 'collectBlock', 'tool', 'hawkEye', 'autoEat', 'armorManager']);
+export const PLUGIN_NAMESPACES = new Set(['pathfinder', 'pvp', 'collectBlock', 'tool', 'autoEat', 'armorManager']);
 
 const LISTEN = new Set(['on', 'addListener', 'once', 'prependListener', 'prependOnceListener']);
 const UNLISTEN = new Set(['off', 'removeListener']);

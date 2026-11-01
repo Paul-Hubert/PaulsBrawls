@@ -247,6 +247,8 @@ round:
   `tests/plugins.test.ts` checks it under `npm test` (10 bots let go, none reachable; 10/10 on the old code, 1/10
   with the throwaway parent only) and that a kept bot still aims after a GC. RSS across `bench:fight` rounds is not
   measured yet (it needs the dev server).
+- **Retired with hawkEye (docs/37 P3):** nothing loads minecrafthawkeye any more, so `freshHawkEye`,
+  `bench/repro-hawkeye-leak.ts` and `tests/plugins.test.ts` are gone.
 
 ### 5.2 auto-eat leaks two listeners when an eat times out
 
@@ -316,15 +318,16 @@ time is unchanged. Same three rounds.
 | # | Change | Where | Expected | Risk |
 |---|---|---|---|---|
 | 1 | ~~**Fix the bot leak** (§5.1)~~ done: a throwaway parent per copy, a primed first copy | `src/bots/plugins.ts` `freshHawkEye` | −35 MB per login, forever. Not a CPU change, but a long-running production runtime grows without bound | none; the repro and `tests/plugins.test.ts` check it |
-| 2 | **Raycast only the best of the 21 precision flights** (and the next one if it is blocked) | patch minecrafthawkeye `getPrecisionShot` | −25 to −28 % of busy in a fight (29 % → 1–3 %) | low: the chosen grade is the same unless the best flight is blocked |
-| 3 | **A cheap block lookup for the raycast**: state id → shapes from the registry, no `new Block`, or the docs/32 per-tick block cache | patch prismarine-world `raycast` or minecrafthawkeye `intercept.check` | most of the rest of 31 % (raycasts); also helps `bot.world.raycast` callers | medium: the matcher API gets a Block today |
-| 4 | **Warm-start the angle sweep** from the last tick's grade (±10° instead of all 179) | patch minecrafthawkeye `getFirstGradeAproax` | −10 % of busy | low |
-| 5 | **Aim every tick only near the release** (§7) | patch minecrafthawkeye `getGrades`/`autoCalc` (or our wrapper) | measured −35 % ELU at 1 in 4 everywhere; less with 2–4 if they land | accuracy: measure with `bench:fight` |
+| 2 | ~~**Raycast only the best of the 21 precision flights**~~ superseded by [docs/37](37-squad-worker-reads-plan.md) P3: hawkEye is gone, Squad's solver flies one checked flight per answer | ~~patch minecrafthawkeye `getPrecisionShot`~~ | | |
+| 3 | ~~**A cheap block lookup for the raycast**~~ superseded by docs/37 P3: the solver's voxel walk reads state ids and the per-state collision boxes (the shared world's, or a bot's own world through the same tables), no `Block` | ~~patch prismarine-world `raycast`~~ | | |
+| 4 | ~~**Warm-start the angle sweep**~~ superseded by docs/37 P3: the pitch is a root search warm-started from the draw's last answer (closed-form flights, 5–6 per answer) | ~~patch `getFirstGradeAproax`~~ | | |
+| 5 | ~~**Aim every tick only near the release**~~ superseded by docs/37 P3: 10 answers per draw (`aim.schedule`), the look turned smoothly between them | ~~patch `getGrades`/`autoCalc`~~ | | |
 | 6 | ~~**Stagger every login** (§6)~~ done: 100 ms, kits 100 ms | `src/bots/pool.ts` `drain`, `SquadPacer` | fewer bots logging in at the same instant | none |
 | 7 | **auto-eat's listener leak** (§5.2) | patch-package on mineflayer-auto-eat | small | none |
 
 - **Doing 2–4 together should take a fight from ~0.6 to ~0.3 ELU at full strength** on this desktop (est.). That
-  would make a 20 v 20 fight fit on the docs/31 laptop.
+  would make a 20 v 20 fight fit on the docs/31 laptop. **Rows 2–5 were superseded by docs/37 P3** (Squad's own aim,
+  measured in docs/37 §10).
 - **Squad's own code** (2.5 %) and the packet layer (26 %, spread over many handlers) are not where a fight's time
   goes.
 - **A gameplay note, not a performance one:** `defend` loses to `raid` 3/3 with identical armies, because its archers
@@ -351,11 +354,11 @@ time is unchanged. Same three rounds.
 ./gradlew runDevServer
 cd squad
 npm run bench:fight -- --rounds 3 --label baseline              # idle 20 s, then 3 rounds (round 1 profiled)
-npm run bench:fight -- --rounds 3 --hawkeye-every 4 --label hawk4
+npm run bench:fight -- --rounds 3 --hawkeye-every 4 --label hawk4   # before docs/37 P3 (hawkEye is gone: it refuses now)
 npm run bench:profiles -- bench/.runs/<run>/profiles            # self time, total time, Squad's frames
 npm run bench:callees -- bench/.runs/<run>/profiles/fight-r1.cpuprofile tickPhysics getMasterGrade tryGrade raycast
 npm run bench:callers -- bench/.runs/<run>/profiles/fight-r1.cpuprofile fromStateId
-node --expose-gc --import tsx bench/repro-hawkeye-leak.ts       # §5.1
+node --expose-gc --import tsx bench/repro-hawkeye-leak.ts       # §5.1, before docs/37 P3 (retired with hawkEye)
 ```
 
 The two runs of this doc are in the worktree: `squad/bench/.runs/2026-11-01T07-35-49-957Z-10v10/` and

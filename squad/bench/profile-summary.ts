@@ -27,6 +27,8 @@ interface Profile {
  * does with each packet (chunk loading, entity updates).
  */
 const CAUSES: Array<[string, (pkg: string, n: ProfileNode) => boolean]> = [
+  // The archers' aim, first: hawkEye's (before docs/37 P3), or Squad's solver and draw (src/aim/, the aim job).
+  ['aim (hawkEye; since P3 src/aim/)', (pkg, n) => pkg === 'minecrafthawkeye' || /[\\/]src[\\/]aim[\\/]|[\\/]jobs[\\/]handlers[\\/]aim\.mjs$/.test(n.callFrame.url)],
   ['pathfinder: A* search', (pkg, n) => pkg === 'mineflayer-pathfinder' && /astar\.js|movements\.js/.test(n.callFrame.url)],
   ['pathfinder: look-ahead and path execution', (pkg) => pkg === 'mineflayer-pathfinder'],
   ['plugins (pvp, collectblock, tool, auto-eat, armor, hawkEye)', (pkg) => /^(mineflayer-pvp|mineflayer-collectblock|mineflayer-tool|mineflayer-auto-eat|mineflayer-armor-manager|minecrafthawkeye)$/.test(pkg)],

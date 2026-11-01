@@ -13,6 +13,7 @@ import { JobPool } from './jobs/pool';
 import { STOCK_HANDLERS } from './jobs/handlers/index';
 import { TeamIds } from './jobs/teams';
 import { LeaderTicks } from './jobs/ticks';
+import { aimMode, configureAim } from './aim/draw';
 import type { EntitySourceBot } from './jobs/snapshot';
 import { Journal } from './journal/journal';
 import { LeaseManager } from './leases';
@@ -86,6 +87,9 @@ export async function start(
     ...opts.pool,
   });
   const jobs = startJobs(cfg, pool, roster, world);
+  // The archers' aim (docs/37 P3): as jobs when the workers can read the world (both on), else inline per bot.
+  configureAim({ ...cfg.aim, jobs: jobs && world ? jobs : null, world: jobs && world ? world : null });
+  logger.info('squad', `aim: ${aimMode() === 'jobs' ? 'on the reader workers' : 'on the main thread'} (updates at ticks ${cfg.aim.schedule.join(', ')}, release at ${cfg.aim.drawTicks})`);
   const runner = new OrderRunner({ pool, roster, leases, claims, store, journal, limits: cfg.limits });
   const vitals = new Vitals({ pool, journal, skipped: skippedPackets, loop, jobs });
   const service = new SquadService({ roster, pool, leases, claims, store, journal, runner, limits: cfg.limits, vitals });

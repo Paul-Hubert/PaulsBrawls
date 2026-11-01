@@ -3,8 +3,8 @@
 > Plan, 2026-11-01. It follows the measurements of [docs/36](36-squad-fight-performance.md) and Paul's decisions of
 > the same day. Every expected number is an estimate from docs/36's profiles and is re-measured after each phase with
 > `bench:fight` and `bench:load`. **Built so far: P0** (the hawkEye leak), **P1** (the shared world, off by default; as
-> built in §9) and **P2** (the job queue, dispatcher and reader workers, off by default; as built in §8). The rest is a
-> plan.
+> built in §9), **P2** (the job queue, dispatcher and reader workers, off by default; as built in §8) and **P3** (Squad's
+> own aim, hawkEye removed; as built in §10). The rest is a plan.
 
 ## 0. Owner decisions (Paul, 2026-11-01)
 
@@ -210,7 +210,7 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 | **P0** | S | ~~**Fix the hawkEye leak now**~~ done (docs/36 §5.1: `freshHawkEye` loads each copy through a throwaway parent, and a primed copy with no bot is the shared modules' first parent). Merge `squad-fight-bench` (bench, stagger, kits) once the docs/35 session has landed | `bench/repro-hawkeye-leak.ts` prints 0/20 (done; `tests/plugins.test.ts` checks it in `npm test`); RSS flat across `bench:fight` rounds (not measured yet) |
 | **P1** ✅ | L | The shared world: pages, sections, index, epochs, cache, per-state tables, the writer thread, fed from the bots' packets beside today's worlds (nothing reads it yet) | **Done 2026-11-01** (§9): 19 tests on fakes (`tests/world.test.ts`); the live probe (`live-tests/probe-world.ts`), three runs, each comparing 184.6 M blocks of 1 878 held columns twice: 0 mismatches |
 | **P2** ✅ | M | The job queue, dispatcher and reader workers (budget, priorities, deadlines, carry-over, affinity, fallbacks, metrics), with a test job type | **Done 2026-11-01** (§8): `tests/jobs.test.ts` (budget respected, priorities, `late`, a worker killed mid-batch, …); `/api/metrics` shows `jobs`. Off by default (`workers.count` 0) until P3 |
-| **P3** | M | Raycast (blocks + hitboxes), LOS and the aim solver as jobs; `shoot` on the schedule with turning; hawkEye removed | `bench:fight`: full-strength ELU ≤ 0.35 (from 0.60–0.66); arrow kills per shot ≥ 3.2 %; failed shots ≤ 5 %; friendly hits 0. Live items tests (`tir`, `ligne-archers`, `defend`) pass |
+| **P3** ✅ | M | Raycast (blocks + hitboxes), LOS and the aim solver as jobs; `shoot` on the schedule with turning; hawkEye removed | **Done 2026-11-01** (§10): the aim from 42 % of the main thread to 1–2 %; full-strength ELU 0.34–0.36 inline (today's baseline 0.65–0.70); kills per shot 3.5–5.2 %; friendly 0; failed shots 19–32 % (not met: friends in the line, D5's check, §10.7); live items tests pass. The `raycast`/`los` job types are not built (nothing calls them) |
 | **P4** | M | A* on the reader workers over the shared world (Movements reads per-state tables); the old per-worker mirror retired | `bench:load` walk / gather at 10 and 30 bots: legs and logs per minute ≥ docs/31 §11; live core tests pass; process memory flat with the worker count |
 | **P5** | L | The bots read the one copy: a patched mineflayer blocks plugin sends chunks to the writer; `bot.world` is a shared store-backed world (prismarine-world's sync API, `blockUpdate`/`chunkColumnLoad`/`chunkColumnUnload` per bot, block entities on the main thread). Behind `world.shared` (default off until it passes) | `bench:fight` and `bench:load`: ~30–40 MB less per bot; 40 logins with no stall over 250 ms; every live test passes with `world.shared: true` |
 | **P6** | S | `findBlocks` as a job (gather's search) | `bench:load` gather unchanged or better, no main-thread freeze in the docs/31 §2.6 case |
@@ -488,3 +488,210 @@ sessions, so indicative):
 - the store in `/api/metrics` and the vitals (P2 adds the metrics);
 - `world.shared` (P5);
 - nothing reads the store but `verify` and the tests.
+
+## 10. P3 as built (2026-11-01)
+
+Squad aims its archers itself; hawkEye left the plugin set. **The defaults are unchanged** (`workers.count` 0,
+`world.enabled` false): every aim is then solved on the main thread over the bot's own world. With both on, each update
+is an `aim` job on the reader workers.
+
+### 10.1 Files
+
+| File | What |
+|---|---|
+| `squad/src/aim/arrow.mjs` (+ `.d.mts`) | The 1.21.1 arrow: constants, the launch with the shooter's movement, the flight in closed form (`heightAt`) |
+| `squad/src/aim/solve.mjs` (+ `.d.mts`) | The solver: the lead, the pitch, the checked flight, what is hit first. Plain JS: the workers and the main thread run the same file |
+| `squad/src/jobs/handlers/aim.mjs` | The `aim` job type (one line pushed onto `STOCK_HANDLERS` in `handlers/index.ts`) |
+| `squad/src/aim/inline.ts` | The main thread's reader over one bot's own world (prismarine-world's `getColumn` + the shared world's per-state tables, built once per version), and its `entities` in the snapshot's row layout |
+| `squad/src/aim/draw.ts` | One draw on the schedule: the clock, the requests (jobs or inline), the turn, the hold, the target's velocity, `aimStats()` |
+| `squad/src/api/helpers.ts` `shoot` | Checks, lets a meal finish, equips, `drawShot`, the errors (the contract is unchanged) |
+| `config.ts` `aim`, `main.ts` | `aim.schedule`, `aim.drawTicks`; `configureAim` with the pool and the world when both exist |
+| removed | hawkEye from `bots/plugins.ts` (`freshHawkEye`), the guard's plugin namespaces, the abort sequence and `reference/squad.d.ts`; `bench/repro-hawkeye-leak.ts` and `tests/plugins.test.ts` (P0's leak: nothing loads hawkEye any more); `bench:fight --hawkeye-every` refuses |
+
+Small changes elsewhere: `SharedWorld.dimensionOf(bot)` (the store's dimension name for a bot, P1's file);
+`reader.d.mts` declares the `StateTables` class `reader.mjs` exports (types only); `bench/profile-summary.ts` has an
+"aim" cause first; `bench:fight` has `--jobs N --world` and a Shots and an Aim section; `FakeBot.archer()` (physics
+ticks, a bow that fires). **No change to the job pool.** `minecrafthawkeye` stays in `package.json`: removing it needs
+an `npm install`, which this worktree must not run (`tests/aim.test.ts` compares the pitch with its equations while it
+is installed, and skips that test when it is not).
+
+### 10.2 The arrow (read from the 1.21.1 server: javap of Loom's yarn-mapped jar)
+
+- **Start:** the eyes − 0.1 (`PersistentProjectileEntity(type, owner, …)`: `owner.getEyeY() - 0.1F`).
+- **Bow:** `BowItem.shoot` → `ProjectileEntity.setVelocity(shooter, pitch, yaw, 0, pull × 3.0F, 1.0F)`: the unit view
+  vector × 3 at full draw, plus `shooter.getMovement()`, its y dropped on the ground. For a player that is
+  `ServerPlayerEntity.movement`, the position delta of its last move packet (`ServerPlayNetworkHandler.onPlayerMove`):
+  0 for a bot that stands and turns, its per-tick move when it walks. The solver is given the bot's last tick's move.
+- **Crossbow:** `CrossbowItem.shoot` → `setVelocity(x, y, z, 3.15F, 1.0F)` along the view: no shooter movement.
+- **Spread:** both add `triangle(0, 0.0172275)` per component before the speed (about ±0.5°): nothing can aim for it.
+- **Per tick** (`PersistentProjectileEntity.tick`): the segment p → p + v is checked, blocks first (`World.raycast`
+  against collision shapes, only the voxels the segment visits), then entities up to the block hit
+  (`ProjectileUtil.getEntityCollision`: each hitbox grown by 0.3F, the nearest entry wins; a box the segment starts in
+  is not hit); then p += v, v × 0.99F (0.6F touching water), v.y − 0.05.
+- **Release:** the bow's release (`block_dig` 5) carries no rotation, so the server uses the last look packet. In 1.21.1
+  `use_item` carries one: the crossbow's fire takes it from the packet.
+
+### 10.3 The solver (`aim/solve.mjs`)
+
+- **The lead:** the aim point is the target's centre where it will be when the arrow gets there: `lead` (ticks from the
+  sample to the release, plus one for the server) plus the flight, by fixed-point iteration (2–3 rounds, each
+  warm-started). Horizontal only (a jump would be led into the sky). A point (a volley) is not led.
+- **The pitch:** the root of the vertical miss at the aim point's distance. A flight is the closed form of the game's
+  per-tick motion (`heightAt`: the positions after whole ticks, linear within a tick; equal to stepping tick by tick to
+  1e-9). Warm start: secant steps from the draw's last answer, on that arc's side of the peak (1–3 flights). Cold: up
+  from the straight line, the bracket doubling until the arrow passes above, then regula falsi (Illinois). The
+  shooter's drift is cancelled across the line and added along it (`launch`).
+- **One checked flight,** tick by tick: each segment walked voxel by voxel (Amanatides–Woo) against each state's boxes
+  (`boxStart` / `boxCount` / `boxData`), then slab tests against the snapshot's creatures near the flight (kinds 1–8:
+  players, mobs, the armor stand; items, orbs and arrows are not in the way) and the target's box at its led position.
+  The first thing hit: the target, or another enemy (a player of another team, any mob), is a hit; a friend (the input's
+  `friends`, the order's isFriend players, or the shooter's team in the snapshot's `team` column), a block, or an armor
+  stand blocks. Unknown blocks (-1) count as air, and are counted (`unknown`).
+- **Arcs:** the low arc first; the high arc when a block (or an armor stand) stops the low one. A friend in the low
+  arc's line blocks (§3), unless `aim.overFriends` (off) lets the high arc go over it. Both blocked: the low arc's
+  answer, not clear, with `other` saying what the high arc met.
+- **Cost:** about 6 flights per answer in the fights (most warm-started; 17–19 with `overFriends`, whose high arcs are
+  searched cold), 50–65 µs p50 inline through prismarine-world and 36 µs on a worker over the shared world, against
+  hawkEye's 380+ flights and ~640 µs on every tick of every drawing archer (docs/36 §3.3).
+
+### 10.4 The job API
+
+- `jobs.submit({ type: 'aim', input: AimInput, priority: 100 + k, deadlineTick: jobs.currentTick + 2 })`, k being the
+  update's draw tick: later updates first, all above the default priority 0 of the paths and searches to come. The
+  answer is an `AimSolution`. Types in `aim/solve.d.mts`.
+- **`AimInput`:** `dim` (the store's name, `SharedWorld.dimensionOf`), `speed`, `from` (the arrow's start at the release),
+  `vel` (the shooter's movement the launch adds), `shooter` (its id, never hit), `team` (0: read from the shooter's
+  snapshot row), `friends` (entity ids), `target` (`{ id, x, y, z, vx, vz, width, height }`, or a point without id),
+  `lead`, `warm` (`{ pitch, arc, ticks }` of the last answer), `overFriends`, `mobs` (`'neutral'` makes mobs obstacles; `shoot` never
+  sets it).
+- **`AimSolution`:** `yaw`, `pitch` (mineflayer's radians, for `bot.look`), `arc`, `ticks` (to what is hit), `hit`
+  (`target` / `enemy` / `friend` / `block` / `entity` / `none`), `clear`, `at`, `entity`, `block`, `aim` (the led point),
+  `unknown`, `flights`, `outOfRange`, `other` (what the other arc met, when both were flown).
+
+### 10.5 `shoot` on the schedule (`aim/draw.ts`)
+
+- **The clock** is the bot's own `physicsTick` (a 50 ms fallback when it stops). The loop runs after the tick's position
+  packet, so a look set at tick t goes out with tick t + 1's packet.
+- **Update 0 before the draw** (a job: submitted at once, waited for up to 4 ticks, else solved inline). A wall on both
+  arcs: « no clear line of fire » at once, nothing drawn. A friend in the line: drawn anyway (friends move).
+- **Tick 0:** `use_item`. auto-eat is paused until the release (a meal would take the hand and drop the draw), and
+  `shoot` lets a meal in progress finish (≤ 3.5 s) before it takes the hand back.
+- **Updates** on the ticks of `aim.schedule` (`[0, 10, 11, 12, 13, 14, 20, 21, 22, 23]`): a job is submitted two ticks
+  before its tick (an answer comes at most two pool ticks after its submit, §8.4) and taken on its tick (an early one
+  waits); inline, an update is solved on its tick. An answer that misses its window (up to the next update's tick), or
+  is `late`, keeps the last aim.
+- **Turning:** every tick the look is interpolated (the yaw the short way) from where it was when the newest answer was
+  taken to that answer, arriving exactly on the next update's tick (the release after update 23). `bot.look(…, true)`:
+  the packet carries the yaw exactly, with no per-tick turn limit.
+- **The release** on tick `aim.drawTicks` (24), after the packet that carried update 23's look. A blocked answer then is
+  held, asked again every tick, up to `HOLD_TICKS` (20): released one tick after a clear answer is taken, else put down
+  unfired (a hotbar switch away and back makes the server drop the use: no arrow) with « no clear line of fire: a
+  friend is in the way (…), … (put down unfired) ». A target that dies mid-draw is shot at the last aim.
+- **The contract is unchanged:** `{ shot: true }` when the arrow count drops; « no clear line of fire » when blocked (the
+  commands step aside); `BotLeftError` / `OrderStoppedError` pass through (the guarded bot's calls throw them); volleys
+  at a point keep `bowAim`'s low arc (the solver's point mode is the same root, tested equal). New messages: « the
+  target is gone … put down unfired » (it died with the line blocked), « the draw was interrupted (… in hand) ».
+- **The target's velocity:** a least-squares slope over its positions of the last 800 ms (up to 16, one per tick), kept
+  per entity object across shots, capped at 0.6 blocks a tick, reset by a jump over 4 blocks. Not the snapshot's
+  one-tick velocity: the server sends a player's position every 2 ticks and a mob's every 3, so a one-tick velocity
+  reads 0, 0, 3v. Other entities are tested where the snapshot has them, not led.
+- **Crossbow:** charged for 27 ticks (25 + 2), released (loaded), fired on tick 29 by `use_item` at the final look; the
+  late updates move with the fire tick. A crossbow loaded by a draw that did not fire fires on the next draw's
+  schedule. Not run live (no kit or stock command uses one).
+
+### 10.6 Measured
+
+`bench:fight --port 8793 --rounds 3` (10 guards + 10 archers a side, blue `defend`, red `raid`; round 1 profiled, so
+slower), on this branch's dev server (port 25621), the same machine state within an hour; the Ryzen 9 9950X3D was
+shared with other agents' servers and builds, so compare these runs with each other, not with docs/36. The baseline is
+this branch before P3 (hawkEye), run first. Runs in `squad/bench/.runs/` (gitignored): `…-base-hawkeye`,
+`…-p3-final-inline` (a), `…-p3-final-jobs4-world` (b, `--jobs 4 --world`).
+
+| rounds 1 / 2 / 3 | baseline (hawkEye) | (a) workers off: inline | (b) 4 workers + shared world: jobs |
+|---|---|---|---|
+| **full-strength ELU** (seconds with > 30 alive) | 0.70 / 0.69 / 0.65 | **0.36 / 0.34 / 0.35** | **0.36 / 0.41 / 0.35** |
+| round ELU | 0.42 / 0.47 / 0.43 | 0.19 / 0.26 / 0.24 | 0.22 / 0.23 / 0.23 |
+| shots (`shoot` calls) | 690 / 624 / 662 | 552 / 365 / 488 | 451 / 449 / 409 |
+| **arrow kills per shot** | 3.2 / 3.7 / 3.3 % | **4.0 / 5.2 / 3.5 %** | **5.1 / 3.8 / 4.6 %** |
+| arrow kills per arrow released | 3.4 / 3.9 / 3.5 % | 5.2 / 6.7 / 5.1 % | 6.8 / 5.2 / 6.1 % |
+| **failed shots** (any HelperError) | 3.9 / 3.5 / 4.2 % | **21.6 / 19.2 / 31.8 %** | **27.7 / 26.3 / 22 %** |
+| ↳ a friend in the way after the hold | — (shot into the friend) | 13 / 13 / 24 % | 16 / 16 / 12 % |
+| ↳ the target gone (blocked last aim, or before the draw) | | 5 / 5 / 4 % | 6 / 7 / 7 % |
+| ↳ no arrow left the bow (the server fired nothing) | 3.9 / 3.5 / 4.2 % | 1.6 / 0.5 / 1.8 % | 4 / 1.8 / 1.2 % |
+| ↳ a meal took the hand | | 1.4 / 0.8 / 1.6 % | 1.6 / 1.8 / 1 % |
+| **friendly kills** | 0 | **0** | **0** |
+| winner | red ×3 | red ×3 | red ×3 |
+| **the aim's share of busy** (round 1's profile, cause "aim") | **42.2 %** | **1.9 %** | **1.1 %**, plus the job pool's dispatch 4.4 % (of which the entity snapshot's write 3.5 %) |
+| entities per bot / packets per second per bot (> 30 alive) | 122 / 1 150 | 59 / 600 | 58 / 570 |
+
+- **The aim went from 42 % of the main thread to 1–2 %.** An inline answer costs 50–65 µs p50 (110–135 µs p95), about
+  6 flights; a job 28–54 µs on a worker, the four workers using 0.01–0.03 ms of their 40 ms per tick. Jobs: latency
+  p50 62–77 ms, p95 90–104 ms (submit → applied); 2–11 % of the job answers were late (the last aim kept; more in
+  round 3), and 16–38 first answers per round fell back to an inline solve.
+- **(b) is not cheaper than (a) at this scale:** the aim leaves the main thread, but the job pool publishes the entity
+  snapshot every tick, merging every bot's entities (40 bots × ~60, up to ~120 with many arrows): 3.5 % of busy, more
+  than the inline aim's 1.9 %. Before the defaults flip, the snapshot wants a cheaper writer (incremental, or the rows
+  near the shooters only); P4/P6's jobs pay it anyway.
+- **What is left is packets.** At full strength packet handling is 45–60 % of busy; it grows with the arrows in the air
+  (each bot tracks each arrow): the same aim with `aim.overFriends` (more arrows, on 4–5 s lobs) ran at 0.41–0.45.
+- **Accuracy:** more kills per shot and per arrow than hawkEye. The failed shots are mostly refusals: a friend (most
+  often another archer: `raid`'s second row of archers stands behind the first, `defend`'s archers on a ring) stays in
+  the line after the 1 s hold; hawkEye fired those arrows into the friend (wasted: the mod cancels the damage). The
+  docs/36 "failed" (no arrow left the bow) is down from 3.5–4.2 % to 0.5–4 %.
+- **The lead** (blocks, p50 / p95: where the target was when the arrow got there, against each estimate at the release):
+  least-squares 0.63–0.92 / 2.4–3.3; one-tick (the snapshot's) 0.58–1.1 / 3.0–4.1; no lead 0.44–0.98 / 2.2–3.4. The
+  smoothing beats the one-tick velocity in the tails; in these fights (players fighting, turning often) no lead is as
+  good. Steady walkers (a marching raid, mobs) are what the lead is for; it is kept.
+
+Variants (inline unless said), for the choices of §10.7:
+
+| rounds 1 / 2 / 3 | full-strength ELU | failed shots | arrow kills per shot | high-arc shots |
+|---|---|---|---|---|
+| `p3-inline` (first build: a friend refused at once, no meal pause) | 0.39 / 0.33 / 0.30 | 81 / 75 / 76 % | 0.9 / 2.0 / 1.5 % | 0 |
+| `p3-inline-2` (a friend held then refused, no meal pause) | 0.36 / 0.32 / 0.31 | 32 / 36 / 35 % | 5.2 / 3.7 / 4.0 % | 0 |
+| `p3-inline-3` (the high arc over friends, meal pause: `aim.overFriends`) | 0.45 / 0.41 / 0.43 | 7 / 9 / 4.5 % | 3.4 / 3.2 / 4.0 % | 310 / 353 / 169 |
+| `p3-jobs4-world` (jobs, over friends; round 1 only: round 2 hit a Windows `EPERM` renaming the roster file) | 0.49 | 14 % | 3.3 % | 291 |
+
+### 10.7 Deviations from §3, and what is not done
+
+1. **A friend in the line is not refused at once.** §3 has a friend block the shot (« no clear line of fire », the
+   command steps aside), and so it does, but after the draw: a friend-blocked first answer is drawn anyway, and a line
+   still blocked at the release is held up to 20 ticks (asked again every tick) before the bow is put down unfired.
+   Friends move: in the fights 40–60 % of the held draws found a clear line and were released. The stock formations put
+   archers behind archers (`raid`'s two rows of archers, `defend`'s ring of 6), and in the fights the friend in the
+   way was mostly another archer: 12–24 % of the shots end refused that way (§10.6). `aim.overFriends` (off) lobs over
+   the friend on the high arc instead, as over a wall: measured, about half the shots then go high, failed shots fall
+   to 4.5–9 %, but the kills per arrow fall (3.3–4.1 % against 5.1–6.8 %) and the arrows in the air (4–5 s each) raise
+   the packet load (full-strength ELU +0.1). Fixing the formations (staggered rows, a 1-block sidestep for a friend)
+   is the commands' side, not done here.
+2. **The release can be later than tick 24:** only while held (above), or by a burst of catch-up ticks.
+3. **A target that dies mid-draw is shot at the last aim** (as hawkEye's `stop()` did), rather than put down: the
+   arrow can still find someone in the crowd, and the shot is not a failure. With a blocked last aim, it is put down.
+4. **auto-eat** is paused for the draw (`disableAuto` / `enableAuto`, R3's rule for multi-step sequences), and `shoot`
+   lets a meal finish before it takes the hand (≤ 3.5 s). Found in the first run: 30 % of the draws were dropped by a
+   meal starting mid-draw. auto-eat 5 also leaves `isEating` stuck at true after a failed equip (`eat()` throws
+   without resetting it), so only a change of the held item counts as an interruption.
+5. **The target's velocity is smoothed on the main thread** (least squares, per entity, across shots), not taken from
+   the snapshot. Measured at the release against where the target really was when the arrow arrived (§10.6): the
+   one-tick velocity was the worst at p95; in these fights (players fighting, turning often) the smoothed lead and
+   no lead at all were about even. Other entities are not led.
+6. **The aim runs as jobs only with both `workers.count` > 0 and `world.enabled`:** without the shared world a worker
+   sees no block, so the aim is solved inline over the bot's own world instead.
+7. **Not built:** the `raycast` and `los` job types of §2.5 (nothing calls them yet; `solve.mjs`'s `walk`/`entry` are the
+   pieces); water drag in the pitch search (only the checked flight applies it); Quick Charge on crossbows.
+8. **"Done when"** (§4), against today's baseline on the same machine (full-strength ELU 0.65–0.70; docs/36 had
+   0.60–0.66):
+   - full-strength ELU ≤ 0.35: (a) 0.36 / 0.34 / 0.35 (round 1 profiled), (b) 0.36 / 0.41 / 0.35: about met, from
+     0.65–0.70. What is left is packet handling, which grows with the arrows in the air;
+   - arrow kills per shot ≥ 3.2 %: met, 3.5–5.2 %;
+   - failed shots ≤ 5 %: **not met**, 19–32 %: mostly D5's own check (a friend in the line, after the 1 s hold) and
+     targets that died with a blocked line. With `aim.overFriends` 4.5–9 %, at fewer kills per arrow and +0.1 ELU;
+   - friendly kills 0: met.
+9. **Live:** `LIVE_ONLY=items` on this branch's dev server, through the mod (`LIVE_RUNTIME_PORT=8793`, and the new
+   `LIVE_MOD_PORT=8793`: `items.ts` had the mod's port fixed at 8779, so the mod scenarios were skipped on any other
+   port): 11/11 passed, among them `tir`'s volley of 3 each on the ground and the husk the captain shot (« Cible
+   abattue (husk) : 6 flèches. »), `ligne-archers`, and `epee` with archers.
+10. **The tests:** `tests/aim.test.ts` (19), the shoot tests of `helpers.test.ts` and `defend.test.ts` rewritten for
+   the real draw (FakeBot's `archer()`), the stock commands' tests record their targets through `tests/fakes/shots.ts`
+   (the real `shoot` still runs). Two stock-test layouts were moved (`item-orders.test.ts`): archers standing one
+   behind the other in the line of fire now stop each other's arrows, as they should.

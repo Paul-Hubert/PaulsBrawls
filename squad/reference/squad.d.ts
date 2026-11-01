@@ -24,8 +24,8 @@
 //    }
 //
 //  Rules of the dialect:
-//    • Each bot is a REAL mineflayer bot (pathfinder, pvp, collectBlock, tool, autoEat, armorManager and hawkEye
-//      loaded). Prefer the helpers below: they are proven, claim their targets and throw errors with evidence.
+//    • Each bot is a REAL mineflayer bot (pathfinder, pvp, collectBlock, tool, autoEat and armorManager loaded).
+//      Prefer the helpers below: they are proven, claim their targets and throw errors with evidence.
 //    • A bot leaving the order (reclaimed by another order, released, dead, disconnected) makes calls on it throw
 //      BotLeftError. squad.parallel and squad.tasks handle that for you; a bare loop over squad.bots must catch it.
 //    • Long-running commands loop on `while (!squad.stopped) { …; await squad.sleep(ms) }` and declare
@@ -43,7 +43,6 @@ import type {} from 'mineflayer-pvp';
 import type {} from 'mineflayer-collectblock';
 import type {} from 'mineflayer-tool';
 import type {} from 'mineflayer-auto-eat';
-import type {} from 'minecrafthawkeye';
 
 declare module 'mineflayer' {
   interface Bot {
@@ -323,9 +322,10 @@ declare global {
   ): Promise<{ killed: boolean; brokeOff?: 'leash' | 'until' }>;
   /**
    * One aimed bow (or crossbow) shot at an entity, or at a position (a volley on the ground: `shoot(bot, point)`);
-   * needs the weapon and arrows. Resolves as soon as the arrow has left (~1.25 s for a bow); when hawkEye finds no
-   * trajectory, it aims by hand (a position: the bow's angle from the arrow's flight) (up to ~3 s). Throws "no arrow
-   * left the bow … (no clear line of fire? …)" when nothing was fired: step aside or move closer. A snapshot entity
+   * needs the weapon and arrows. Resolves as soon as the arrow has left (~1.3 s for a bow). It leads a moving target,
+   * and checks the line of fire against blocks and every creature: over a wall on a high arc if it must; an enemy in
+   * the line counts as a hit. Throws "no clear line of fire: …" when a block or a friend is in
+   * the way (nothing fired; a friend gets ~1 s to step out first): step aside or move closer. A snapshot entity
    * (at.lookEntity) is only a position: shoot entityOf(bot, ref) to aim at the live one.
    */
   function shoot(bot: SquadBot, target: Entity | Pos | null | undefined, opts?: { weapon?: 'bow' | 'crossbow' }): Promise<{ shot: true }>;

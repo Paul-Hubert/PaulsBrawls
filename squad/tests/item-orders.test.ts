@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 
 import { Vec3 } from 'vec3';
 
-import { mineflayerYaw } from '../src/api/helpers';
+import { mineflayerYaw, toVec3 } from '../src/api/helpers';
 import { GoalFollowOffset } from '../src/bots/follow-goal';
 import type { Order } from '../src/orders/order';
 import { loadStock } from '../src/stock';
@@ -17,8 +17,19 @@ import { EMPTY_SNAPSHOT, type Snapshot } from '../src/types';
 import { flatWorld, type FakeBot, type FakeItem } from './fakes/fake-bot';
 import { harness, PAUL, tick, until } from './fakes/harness';
 import { holdEventLoopPerTest } from './fakes/keep-alive';
+import { recordShots } from './fakes/shots';
 
 holdEventLoopPerTest();
+
+/**
+ * What each archer shoots at, by name (the test's current field): the real shoot runs. A point is kept as hawkEye was
+ * handed it, { position, isValid: true }; an entity as itself.
+ */
+const aims = new Map<string, unknown[]>();
+recordShots((name, t) => {
+  const live = !!t && typeof t === 'object' && 'isValid' in t && !!(t as { position?: unknown }).position;
+  aims.get(name)?.push(live ? t : { position: toVec3(t as never), isValid: true });
+});
 
 const stock = await loadStock();
 
@@ -39,13 +50,14 @@ const BOW: FakeItem[] = [{ name: 'bow', count: 1 }, { name: 'arrow', count: 64 }
 
 /** Paul at (0.5, 64, 0.5) on flat ground; his bots see the same entities (by network id) and walk to their goals. */
 function field() {
+  aims.clear();
   const h = harness({ stock });
   const commander = { id: 1, type: 'player', username: 'Paul', name: 'player', position: new Vec3(0.5, 64, 0.5), isValid: true, height: 1.8 };
   const world: Record<string, unknown> = { 1: commander };
   const players: Record<string, { entity: unknown }> = { Paul: { entity: commander } };
   const shots = new Map<FakeBot, unknown[]>();
   let id = 10;
-  /** A bot of Paul's standing on the block (x, 63, z). Archers shoot at once: an arrow leaves 20 ms after hawkEye is told. */
+  /** A bot of Paul's standing on the block (x, 63, z). An archer's shot takes its 24 (fast, fake) ticks. */
   const add = (name: string, x: number, z: number, items: FakeItem[]): FakeBot => {
     const b = h.bot(name, [PAUL], items);
     b.entity.position = new Vec3(x + 0.5, 64, z + 0.5);
@@ -56,12 +68,10 @@ function field() {
     b.players = players;
     b.world = flatWorld(63);
     b.autoWalk = true;
-    shots.set(b, []);
-    b.hawkEye.oneShot = ((t: unknown) => {
-      shots.get(b)!.push(t);
-      const left = (b.inventory.items().find((i) => i.name === 'arrow')?.count ?? 1) - 1;
-      setTimeout(() => b.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: left }]), 20);
-    }) as never;
+    const list: unknown[] = [];
+    shots.set(b, list);
+    aims.set(name, list);
+    if (items.some((i) => i.name === 'bow')) b.archer();
     return b;
   };
   const spawn = (m: Mob): Mob => {
@@ -292,7 +302,8 @@ test('ligne-archers: past 8 archers, two ranks 2 blocks apart', async () => {
 
 test('tir from any item: the creature nearest the block pointed at (within `near`) is shot; farther than that, the volley goes on the block', async () => {
   const f = field();
-  const archers = [f.add('Archer0', 0, 0, BOW), f.add('Archer1', 2, 0, BOW)];
+  // Side by side, not one behind the other: an archer in front of another, in its line of fire, would stop its arrows.
+  const archers = [f.add('Archer0', 0, 0, BOW), f.add('Archer1', 2, 3, BOW)];
   // A stick's right-click at the block (10, 63, 0): the zombie 2.8 blocks from its top is the target.
   const z = f.spawn(zombie(12.5, 2.5));
   await f.click('tir', f.snap({ yaw: -90, lookBlock: { x: 10, y: 63, z: 0, name: 'stone' }, trigger: { kind: 'use', item: 'stick' } }));
@@ -315,7 +326,8 @@ test('tir from any item: the creature nearest the block pointed at (within `near
 
 test('tir: an arrow in the ground sends a volley, `volley` arrows per archer spread over the disc, from where they stand', async () => {
   const f = field();
-  const archers = [0, 2, 4].map((x, i) => f.add(`Archer${i}`, x, 0, BOW));
+  // A file across the line of fire (one beside another, not one in front of another: it would stop its arrows).
+  const archers = [0, -3, -6].map((z, i) => f.add(`Archer${i}`, 0, z, BOW));
   const hit = { x: 20.5, y: 64.05, z: 10.5 };
   const r = await f.click('tir', f.snap({ yaw: -60, trigger: { kind: 'arrow-hit', item: 'bow', hit: { position: hit } } }), ['volley=3', 'spread=3']);
   assert.ok(r.ok && 'started' in r && r.started, r.text);

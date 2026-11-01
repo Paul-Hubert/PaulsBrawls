@@ -406,6 +406,15 @@ export class SharedWorld extends EventEmitter {
 
   // -- readers ------------------------------------------------------------------------------------------------------
 
+  /**
+   * The dimension the store files this bot's columns under (the name from its login or last respawn), or null for a
+   * bot it does not follow. A reader asks it to read where the bot is (docs/37 P3: the aim jobs).
+   */
+  dimensionOf(bot: unknown): string | null {
+    if (!bot || typeof bot !== 'object') return null;
+    return this.holders.get(bot)?.dim ?? null;
+  }
+
   /** A descriptor with its own epoch slot, for one reader thread (workerData). release() gives the slot back. */
   descriptor(): WorldDescriptor {
     const i = this.slots.indexOf(0);

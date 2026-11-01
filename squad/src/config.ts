@@ -89,6 +89,29 @@ export interface WorldConfig {
 
 export const DEFAULT_WORLD: WorldConfig = { enabled: false, cacheSeconds: 60, cacheColumns: 2_000, verify: false };
 
+/**
+ * The archers' aim (docs/37 §3, D5; src/aim/): when, in a bow's draw, the aim solver is asked again. The look turns
+ * smoothly between two answers and arrives at each on the next update's tick.
+ */
+export interface AimConfig {
+  /**
+   * The draw ticks whose aim is solved anew (Paul, 2026-11-01): the start, 500 ms in, the middle four, the four
+   * before the release. Integers from 0, increasing, below drawTicks; the first must be 0.
+   */
+  schedule: number[];
+  /** The bow's release tick, from the start of the draw (24: 1.2 s; a bow reaches full power after 20 server ticks). */
+  drawTicks: number;
+  /**
+   * A friend in the low arc's line: try the high arc over it (true), or count the line blocked (false, docs/37 §3:
+   * the draw waits for the friend to step out, then « no clear line of fire »). Measured in docs/37 §10.6.
+   */
+  overFriends: boolean;
+}
+
+export const DEFAULT_AIM: AimConfig = { schedule: [0, 10, 11, 12, 13, 14, 20, 21, 22, 23], drawTicks: 24, overFriends: false };
+/** Below this the arrow leaves before full power (20 server ticks), with a tick of margin. */
+export const MIN_DRAW_TICKS = 21;
+
 export interface SquadConfig {
   minecraft: { host: string; port: number; version: string };
   /** Loopback port of the control API, the SSE stream and the MCP server. */
@@ -105,6 +128,7 @@ export interface SquadConfig {
   pathfinding: PathfindingConfig;
   workers: WorkersConfig;
   world: WorldConfig;
+  aim: AimConfig;
 }
 
 export const DEFAULT_LIMITS: Limits = {
@@ -169,6 +193,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
     verify: bool(worldRaw.verify, DEFAULT_WORLD.verify, 'world.verify'),
   };
   if (!Number.isInteger(world.cacheColumns)) throw new ConfigError(`squad.json: world.cacheColumns must be an integer, got ${world.cacheColumns}`);
+  const aim = parseAim((o.aim ?? {}) as Record<string, unknown>);
   return {
     minecraft: { host, port, version: typeof mc.version === 'string' ? mc.version : '1.21.1' },
     port: num(o.port, 8772, 'port'),
@@ -179,7 +204,27 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
     pathfinding: { astarBudgetMs, workers },
     workers: { count, tickBudgetMs },
     world,
+    aim,
   };
+}
+
+function parseAim(raw: Record<string, unknown>): AimConfig {
+  const drawTicks = num(raw.drawTicks, DEFAULT_AIM.drawTicks, 'aim.drawTicks');
+  if (!Number.isInteger(drawTicks) || drawTicks < MIN_DRAW_TICKS || drawTicks > 100) {
+    throw new ConfigError(`squad.json: aim.drawTicks must be an integer from ${MIN_DRAW_TICKS} (a full draw) to 100, got ${drawTicks}`);
+  }
+  const overFriends = bool(raw.overFriends, DEFAULT_AIM.overFriends, 'aim.overFriends');
+  if (raw.schedule === undefined || raw.schedule === null) return { schedule: [...DEFAULT_AIM.schedule], drawTicks, overFriends };
+  const s = raw.schedule;
+  const ok =
+    Array.isArray(s) &&
+    s.length > 0 &&
+    s[0] === 0 &&
+    s.every((k, i) => Number.isInteger(k) && (k as number) >= 0 && (k as number) < drawTicks && (i === 0 || (k as number) > (s[i - 1] as number)));
+  if (!ok) {
+    throw new ConfigError(`squad.json: aim.schedule must be increasing integer ticks from 0, each below aim.drawTicks (${drawTicks}), got ${JSON.stringify(s)}`);
+  }
+  return { schedule: [...(s as number[])], drawTicks, overFriends };
 }
 
 /**

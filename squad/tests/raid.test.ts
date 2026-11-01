@@ -15,6 +15,7 @@ import { EMPTY_SNAPSHOT } from '../src/types';
 import type { FakeBot } from './fakes/fake-bot';
 import { ALICE, harness, PAUL, tick, until } from './fakes/harness';
 import { holdEventLoopPerTest } from './fakes/keep-alive';
+import { recordShots } from './fakes/shots';
 
 holdEventLoopPerTest();
 
@@ -142,14 +143,9 @@ test('raid: the leader steps toward the point; the others hold distinct slots be
 
 test('raid: it fights the other army on the way (two guards per enemy at most, archers shoot), never itself', async () => {
   const s = battlefield(4, 2);
-  const shots: unknown[] = [];
-  for (const a of s.archers) {
-    a.hawkEye.oneShot = ((t: unknown) => {
-      shots.push(t);
-      const left = a.inventory.items().find((i) => i.name === 'arrow')!.count - 1;
-      setTimeout(() => a.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: left }]), 30);
-    }) as never;
-  }
+  const log = recordShots();
+  const shots = log.all;
+  for (const a of s.archers) a.archer();
   s.foe('Paul', 100);
   const e1 = s.foe('PaulGuard1', 10, 3);
   const e2 = s.foe('PaulGuard2', 10, -3);
@@ -161,6 +157,8 @@ test('raid: it fights the other army on the way (two guards per enemy at most, a
   assert.ok(shots.every((t) => !raiderEntities.has(t as never)), 'no arrow at a raider');
   assert.ok(s.guards.every((g) => !raiderEntities.has(g.pvp.target as never)));
   await s.h.runner.stopAll();
+  log.restore();
+  for (const a of s.archers) a.stopTicks();
 });
 
 test('raid: at the point it hunts the nearest enemy, then ends after `quiet` seconds without one', async () => {
