@@ -1063,3 +1063,130 @@ What this shows:
 
 **Against "done when":** walk ≥ docs/31 §11, yes; gather ≥ docs/31 §11, not shown (above); the live core tests,
 yes; memory flat with the worker count, yes (~60 MB a worker). `workers.count` stays 0.
+
+## 14. Tuning (2026-11-01)
+
+Two results with workers on were not better than with them off: the fight's main-thread cost (§11.6: the entity
+snapshot) and gather's logs (§12.1). Both were worked on; the first is fixed, the second is not, and §14.2 says why.
+Same machine as before (the Ryzen 9 9950X3D, shared with another agent's server), this worktree's dev server (port
+25661), each comparison taken close together.
+
+### 14.1 The entity snapshot (fixed)
+
+- **Published only for jobs that read it.** A handler module that reads `ctx.entities` exports `needsEntities = true`
+  (the aim; `batch.mjs` `needsEntities`). The workers list those types in their `ready` message, the inline fallback
+  reads them from its handlers, and the pool writes the snapshot only for a dispatch with such a job queued
+  (`pool.ts` `wantsEntities`). `path`, `findBlocks` and `echo` jobs publish nothing (P6's 70–140 ms a minute in
+  gather: gone). A job of another type that reads `ctx.entities` sees whatever was published last.
+- **Written incrementally.** The cost was the walk over every bot's `entities` at every write (40 bots × ~60
+  dictionary entries). The writer now follows each bot: one walk when it first sees the bot, then mineflayer's
+  `entitySpawn` / `entityGone` / `end`; a write walks the merged entities, one per id. The bot that gives a row is
+  checked to still hold that entity object (a login empties `bot.entities` without events), and each followed bot is
+  walked again once every `RESCAN_WRITES` (100) writes, a few bots a write, for an entity mineflayer made without a
+  spawn event. Bots without events (test fakes) are walked at every write as before. The rows are the same:
+  `tests/jobs.test.ts` drives both writers through 400 ticks of a seeded random fight (spawns, deaths, arrows, a bot
+  leaving and one joining, a login, an entity without a spawn event) and compares every row. `SnapshotStats` gains
+  `writeMs` and `followed`.
+- **Short jobs packed.** A non-elastic job joins a batch already going out this tick while its estimated load stays
+  under `PACK_MS` (2 ms), so the aim's 10–30 updates a tick go out as one message and come back as one, not one per
+  worker. Elastic jobs (A*) still go to the least-loaded worker.
+
+Measured offline (scratch benchmarks, not committed): a write at 40 bots × 70 entities (arrows churning) took 0.15 ms
+(p50) walking, 0.009 ms followed (mean 0.010 with the rescans). Twelve aim-sized jobs a tick, 20 ticks a second,
+4 workers: the main thread busy 75 ms in 10 s with the jobs spread over the workers, 72 ms packed (30 jobs a tick:
+108 → 99 ms). A job costs the main thread ~16–20 µs (submit, the copy both ways, apply), an inline solve 50–65 µs.
+
+**The fight** (`bench:fight --port 8801 --rounds 3`; round 1 profiled; off = the defaults, the aim inline; on =
+`--jobs 4 --world`):
+
+| rounds 1 / 2 / 3 | off (inline aim) | on (4 workers + shared world) |
+|---|---|---|
+| full-strength ELU (> 30 alive) | 0.414 / 0.361 / 0.372 | 0.392 / 0.352 / 0.338 |
+| round ELU | 0.224 / 0.178 / 0.189 | 0.216 / 0.108 / 0.214 |
+| shots | 684 / 643 / 745 | 741 / 442 / 610 |
+| failed shots | 9.4 / 11 / 9.8 % | 11.2 / 8.4 / 9.5 % |
+| arrow kills per shot | 2.8 / 3.1 / 3.1 % | 3.1 / 1.8 / 3.4 % |
+| friendly kills | 0 | 0 |
+| winner | red / blue / red | red / draw / red |
+| round 1 profile: the aim (`src/aim/`) | 369 ms (2.8 % of busy) | 121 ms (0.9 %) |
+| round 1 profile: the job pool's dispatch | — | 178 ms (1.3 %), of which the snapshot 152 ms (1.1 %) |
+| round 1 profile: Squad's other frames (the pool, the shared world's feed, the commands) | 379 ms | 642 ms |
+| main-thread busy, round 1 | 13.2 s in 75 s | 13.8 s in 82 s |
+
+- **The aim with the workers costs the main thread no more than inline:** the aim plus what the workers add to
+  Squad's frames, 121 + (642 − 379) = 384 ms for 741 shots (0.52 ms a shot), against 369 ms for 684 shots inline
+  (0.54 ms); the full-strength ELU is lower in all three rounds. The snapshot's write went from 347 ms in 58 s (P3,
+  §11.6: 6.0 ms a second, 3.5 % of busy) to 152 ms in 82 s (1.85 ms a second, 1.1 %): less than the offline ratio,
+  because arrows come and go all the time in a fight (each a spawn and a gone for every bot).
+- **The fight numbers are the same** within the rounds' spread: kills per shot 2.8–3.4 %, failed shots 8–11 %,
+  friendly kills 0. The aim jobs: 1.4 / 14 / 6.8 % answered late (the last aim kept; P3 had 2–11 %), latency p50
+  70–76 ms. Round 2 of the on run was a draw: at 31 s the commands called `attack` 87 573 times in one second (a
+  2.9 s stall), then both armies stood idle until the 240 s limit. That is a loop on `attack` in the commands, not
+  the pool (no aim job was out); it did not happen in the other five rounds and is not chased here.
+
+### 14.2 Gather: searches carried over block changes; still fewer logs (not fixed)
+
+**The fix** (`bots/pathworkers/offload.ts`): a `block_updated` reset of a search pending on a worker no longer cancels
+it. The plugin plans again on the next tick; when it does with the same goal (serialized the same: `GoalFollow`'s
+`hasChanged()` moves the goal object in place) and Movements, from a node of the path it was walking (found as the
+plugin's `pathFromPlayer` finds it), the search carries on if every step of that path next to a block changed since
+it began is still a step the plugin's own `Movements.getNeighbors` takes, over the bot's world now (a step whose
+blocks to break changed takes the fresh `Move`). The worker's later slices read the change in the store. Every path a
+worker sends is checked the same way when it arrives: a partial one is cut before a broken step; a final one is
+searched again from where the bot stands (twice at most, then on the main thread: `stale`). So no path the bot is
+given goes through a block changed since it was searched. Counters: `paths.carried`, `notCarried` by why (`broken`,
+`moved`, `goal`, `final`, `changes`, `ended`, `late`), `stale { partial, final }`. Tests in
+`tests/pathworkers.test.ts`: a pending search survives an unrelated change (the same answer, one job), is ended by a
+change that breaks the step it holds (a new search, around the change), a final path broken on its way back is
+searched again, a moved `GoalFollow` is not carried, a reset with no new plan ends after `CARRY_WINDOW_MS`.
+
+**How it was measured.** A gather run cuts its forest, so the site decides more than the code (§12.1: 44–109 logs on
+three fresh forests with the same code). `npm run bench:site -- save x,z` copies the box around a site (128 × 128 ×
+61 blocks) to a store 20 000 blocks east with one `/clone`; `restore x,z` puts it back and kills the dropped items.
+Every run below starts on its site restored to the same pristine forest. Two runs with workers off on one restored
+site: 210 and 209 logs.
+
+**N = 30, the first gather phase after the logins, 60 s, each run on its site restored:**
+
+| Site C (−5872, −2160) | logs | path timeouts | ELU |
+|---|---|---|---|
+| off (twice) | 210, 209 | 43, 41 | 0.65, 0.68 |
+| on, the first carry | 120 | 100 | 0.43 |
+| on, `--no-carry` (cancelled on every reset, as before) | 137 | 66 | 0.34 |
+| on, block searches on the bots (`--no-block-jobs`): only A* on the workers | 123 | 93 | 0.39 |
+| on, A* on the main thread (`--no-path-jobs`): only the block searches on the workers | 204 | 34 | 0.65 |
+
+| Site E (−6064, 5936) | logs | path timeouts |
+|---|---|---|
+| off | 241, 234 | 39, 37 |
+| on, before the moved-goal check | 115 | 80 |
+| on, as built | 161, 142 | 82, 83 |
+| on, `--think-timeout 10000` | 112 | 63 |
+| on, `--think-timeout 2000` | 168 | 153 |
+| a prototype in both modes: `mineBlock` digs a log already in reach without walking (not kept) | off 261, on 160 | 50, 96 |
+| off, `--astar-budget 0` (no budget: the main thread saturates, ELU 0.99) | 76 | 37 |
+
+What this shows:
+- **It is A* on the workers**, not the block searches: with only the block searches on the workers, gather is the
+  same as off (204 against 209–210); with only A* there, it is 40 % down (123).
+- **The searches the workers fail are hopeless ones**, not slow ones. Cross-checked live (a debug build, not kept):
+  each worker timeout's search was run again on the main thread with 1 s to itself (6 300–7 100 nodes): 18 of 19
+  still had no path (in a 400 ms check, 72 of 75). Per node, a worker and the main thread cost about the same in this
+  forest (110–180 µs against 140 µs). The carry is not the cause either way (carried 120–161, not carried 137).
+- **What the main thread has is a give-up.** Under its A* budget (20 ms of A* per 50 ms for all bots), a search that
+  finds the window spent answers its start as the best node: an empty partial path, which the plugin's `goto()` takes
+  for "arrived" (docs/32 D found it: every `goTo` ended at once). Counted at N = 30 with workers off: **2 361 empty
+  partial paths a minute** (of 16 812 path updates); with workers, none, since the offload hands out the start node,
+  never an empty path. So with workers off a collect whose search is refused its first slice gives its target up at
+  once (`collectblock` digs from where the bot stands, a dropped log's pickup ends), where with workers a hard target
+  is searched until `thinkTimeout`: 66–100 timeouts a minute against 34–50, about 5 s of a bot each. That give-up
+  suits a forest, where most hard targets are hopeless (a log no gap in the leaves shows, a drop in the canopy). A
+  shorter `thinkTimeout` gives targets up sooner but helps little (168 logs at 2 s; 112 at 10 s), and digging what is
+  in reach helps both modes alike.
+- **The main thread's ELU is half:** 0.33–0.43 with the workers, 0.65–0.68 without.
+
+**Not met:** gather logs with workers on ≥ off. The offload's paths are now never stale, and a search keeps its work
+over the block changes that do not touch its path, but the gap is the main thread's accidental give-up, which the
+offload must not copy (an empty path ends every `goTo`, walking included). Closing it is gather's side: give hard
+targets up sooner on purpose (a short `thinkTimeout` for `collect`'s searches only, or skipping a log whose search
+runs past some hundreds of nodes, as docs/31 §11.9 asks), then compare again.
