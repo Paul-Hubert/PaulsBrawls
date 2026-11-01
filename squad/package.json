@@ -18,6 +18,7 @@
     "check": "npm run lint && npm run typecheck && npm test",
     "bench:load": "tsx bench/load.ts",
     "bench:micro": "tsx bench/micro.ts",
+    "bench:jobs": "tsx bench/jobs.ts",
     "bench:profiles": "tsx bench/profile-summary.ts",
     "bench:fight": "tsx bench/fight.ts",
     "bench:report": "tsx bench/report.ts",

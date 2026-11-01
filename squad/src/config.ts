@@ -57,6 +57,22 @@ export const MAX_ASTAR_BUDGET_MS = 50;
 /** A sane ceiling on pathfinding workers (each one is a thread with its own copy of the registry, ~50 MB). */
 export const MAX_PATH_WORKERS = 16;
 
+/**
+ * The reader workers (docs/37 §2.5, src/jobs/): the read-only calculations (aim, raycasts, line of sight, A*, block
+ * searches, as docs/37's later phases add them) run there in batches, each worker with a CPU budget per 50 ms tick.
+ */
+export interface WorkersConfig {
+  /** Reader worker threads. 0 = off (the default in P2: no job type needs them yet). */
+  count: number;
+  /** Each worker's CPU budget per 50 ms tick, ms (Paul, 2026-11-01: 40). */
+  tickBudgetMs: number;
+}
+
+export const DEFAULT_WORKER_TICK_BUDGET_MS = 40;
+/** A budget above the 50 ms tick could never be spent. */
+export const MAX_WORKER_TICK_BUDGET_MS = 50;
+export const MAX_JOB_WORKERS = 16;
+
 export interface SquadConfig {
   minecraft: { host: string; port: number; version: string };
   /** Loopback port of the control API, the SSE stream and the MCP server. */
@@ -71,6 +87,7 @@ export interface SquadConfig {
    */
   loginStaggerMs: number;
   pathfinding: PathfindingConfig;
+  workers: WorkersConfig;
 }
 
 export const DEFAULT_LIMITS: Limits = {
@@ -118,6 +135,15 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
   if (!Number.isInteger(workers) || workers > MAX_PATH_WORKERS) {
     throw new ConfigError(`squad.json: pathfinding.workers must be an integer from 0 to ${MAX_PATH_WORKERS}, got ${workers}`);
   }
+  const workersRaw = (o.workers ?? {}) as Record<string, unknown>;
+  const count = num(workersRaw.count, 0, 'workers.count');
+  if (!Number.isInteger(count) || count > MAX_JOB_WORKERS) {
+    throw new ConfigError(`squad.json: workers.count must be an integer from 0 to ${MAX_JOB_WORKERS}, got ${count}`);
+  }
+  const tickBudgetMs = num(workersRaw.tickBudgetMs, DEFAULT_WORKER_TICK_BUDGET_MS, 'workers.tickBudgetMs');
+  if (tickBudgetMs <= 0 || tickBudgetMs > MAX_WORKER_TICK_BUDGET_MS) {
+    throw new ConfigError(`squad.json: workers.tickBudgetMs is per 50 ms tick, so above 0 and at most 50, got ${tickBudgetMs}`);
+  }
   return {
     minecraft: { host, port, version: typeof mc.version === 'string' ? mc.version : '1.21.1' },
     port: num(o.port, 8772, 'port'),
@@ -126,6 +152,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
     limits,
     loginStaggerMs: num(o.loginStaggerMs, 100, 'loginStaggerMs'),
     pathfinding: { astarBudgetMs, workers },
+    workers: { count, tickBudgetMs },
   };
 }
 
@@ -148,6 +175,11 @@ export function applyPathfinding(p: PathfindingConfig): void {
  */
 export function pathWorkerCount(p: PathfindingConfig, cores = availableParallelism()): number {
   return Math.max(0, Math.min(p.workers, cores - 1));
+}
+
+/** The reader workers this machine gets: as pathWorkerCount, at most one per core other than the main thread's. */
+export function jobWorkerCount(w: WorkersConfig, cores = availableParallelism()): number {
+  return Math.max(0, Math.min(w.count, cores - 1));
 }
 
 export function loadConfig(path: string): SquadConfig {

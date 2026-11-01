@@ -32,6 +32,11 @@ export default tseslint.config(
     },
   },
   {
+    // The reader workers' plain-JS side (docs/37: worker, batch runner, entity snapshot, job handlers).
+    files: ['src/jobs/**/*.mjs'],
+    languageOptions: { globals: { structuredClone: 'readonly' } },
+  },
+  {
     // The command API reference types what plain-JS commands receive (`args` is whatever the manifest declares).
     files: ['reference/**/*.d.ts'],
     rules: { '@typescript-eslint/no-explicit-any': 'off' },

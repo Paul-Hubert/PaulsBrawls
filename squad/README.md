@@ -59,11 +59,32 @@ before. Turn it on when the main thread is the limit (a slower PC, more bots): w
 main-thread ELU of 0.2-0.34 instead of 0.44-0.62 (two sites, so rough), but the process grew to about 9 GB at 30 gathering bots
 (docs/31 §11.6).
 
+**Reader workers (docs/37, P2: built, off).** The job pool of [src/jobs/](src/jobs/): read-only calculations (aim,
+raycasts, line of sight, A*, block searches, as the later phases of
+[docs/37](../docs/37-squad-worker-reads-plan.md) add them) run on worker threads, in batches, each worker with a CPU
+budget per 50 ms tick. P2 ships only the framework and a trivial `echo` job type, so it stays off:
+
+| Key in `squad.json` | Default | |
+|---|---|---|
+| `workers.count` | 0 (off) | reader worker threads, an integer up to 16, capped at the cores minus one. Independent of `pathfinding.workers` (P4 merges them) |
+| `workers.tickBudgetMs` | 40 | each worker's CPU budget per 50 ms tick (above 0, at most 50). A worker stops its batch when it is spent; what it did not start goes back to the queue |
+
+With `workers.count` > 0 the dispatcher ticks on one online bot's physics ticks (a self-correcting 50 ms timer when
+none is online), publishes a snapshot of every entity the bots know into shared memory, and runs the jobs on the main
+thread when no worker is alive (every slot crashed 3 times in a minute).
+
 **Watching the load.** The runtime samples its event loop every 10 s and logs one warning a minute at most when the
 loop's p99 passes 250 ms or its ELU 0.9 (bots move in slow motion past that). `POST /api/metrics` returns the last
 10 s: `loop { p50, p99, max }`, `elu`, `cpuPct`, `rssMb`, `heapMb`, `skippedPackets`, and per bot `ticksPerSec`, path
-searches by outcome, path resets and deaf trips, plus `text`, the French line `/bots status` shows. One summary row
-per minute goes to the `vitals` table of `.squad-data/squad.db` (kept 7 days).
+searches by outcome, path resets and deaf trips, plus `text`, the French line `/bots status` shows. With the reader
+workers on, it also has `jobs`: `workers`, `alive`, `restarts`, `budgetMs`, `tick`, `tickSource` (`bot` or `timer`),
+`ticks`, `queue`, `queueMax`, `inFlight`, `answered`, `dispatchMs { mean, max }` (the dispatcher's own main-thread time
+per tick), `entities { count, published, skipped, overflow }`, `inline { loaded, budgetMs, batches, usedMs }`, per job
+type `types.<type> { submitted, done, carried, continued, late, failed, inline, retried, cancelled, latencyMs { p50,
+p95 }, costMs }` and per worker `perWorker[] { index, alive, ready, disabled, restarts, batches, jobs, budgetMs { mean,
+max } }` (budget use in ms per tick); `text` then ends with « calculs : 3/4 workers, file 12, p95 75 ms, … ». One
+summary row per minute goes to the `vitals` table of `.squad-data/squad.db` (kept 7 days), with the jobs' minute in
+`data.jobs`.
 
 ## In game
 
@@ -132,6 +153,7 @@ on `POST /api/orders/check` (bind) and `POST /api/orders/trigger` (each click; `
 ```powershell
 npm run check       # lint + tsc + node:test (fakes only, no Minecraft)
 npm run bench:load  # the load benchmark (bench/README.md; never against production)
+npm run bench:jobs  # the job pool's own overhead: latency, dispatch cost, the entity snapshot (no server)
 npm run live-test   # real bots on the dev server (dev/, ./gradlew runDevServer); ports and RCON password read from its server.properties
 $env:LIVE_PATH_WORKERS='4'; npm run live-test   # the same scenarios with 4 pathfinding workers
 $env:SERVER_PROPERTIES='../run/server.properties'; npm run live-test   # the production server (run/; world left as is)
