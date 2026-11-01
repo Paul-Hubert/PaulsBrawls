@@ -1,23 +1,22 @@
 // The stock `defend` after a live fight of 20 bots against zombie waves: guards chased the zombie nearest to
 // THEMSELVES far from the player, all piled on the same creature, stood in the same block between threats, and
 // archers waited a fixed 1.5 s per shot. Plus the helpers it is built on (commander-relative search, the attack
-// leash, follow offsets and their fallback while the slot is in the air (a commander on a ladder), the shot that returns when the arrow leaves) and hawkEye's per-bot copy.
+// leash, follow offsets and their fallback while the slot is in the air (a commander on a ladder), the shot that returns when the arrow leaves).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
 
 import { Vec3 } from 'vec3';
 
 import { attack, follow, FOLLOW_KEEP_MS, nearestEntity, nearestHostile, shoot } from '../src/api/helpers';
 import { GoalFollowOffset, slotStandable } from '../src/bots/follow-goal';
-import { freshHawkEye } from '../src/bots/plugins';
 import { serializeGoal } from '../src/bots/pathworkers/serialize';
 import type { Order } from '../src/orders/order';
 import { loadStock } from '../src/stock';
 import { FakeBot } from './fakes/fake-bot';
 import { harness, PAUL, tick, until } from './fakes/harness';
 import { holdEventLoopPerTest } from './fakes/keep-alive';
+import { recordShots } from './fakes/shots';
 
 holdEventLoopPerTest();
 
@@ -161,33 +160,19 @@ test('follow: while nobody could stand at the slot (the commander on a ladder), 
   await tick(FOLLOW_KEEP_MS + 100);
 });
 
-test('shoot: returns as soon as the arrow has left, without the manual shot', async () => {
-  const b = new FakeBot('Archer', { items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] });
-  b.hawkEye.oneShot = () => {
-    b.calls.push('hawkEye.oneShot');
-    setTimeout(() => b.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: 9 }]), 120);
-  };
-  const t0 = Date.now();
-  assert.deepEqual(await shoot(b as never, zombie(10) as never), { shot: true });
-  const took = Date.now() - t0;
-  assert.ok(took < 400, `returned ${took} ms after the shot, not after a fixed wait`);
-  assert.ok(!b.calls.includes('activateItem'), 'no manual shot');
-});
-
-test('hawkEye: each bot gets its own copy (the module kept ONE bot and target for the whole process)', () => {
-  const mk = () => Object.assign(new EventEmitter(), { deactivateItem: () => undefined, activateItem: () => undefined }) as EventEmitter & { hawkEye?: { oneShot: (t: unknown) => void; stop: () => void } };
-  const a = mk();
-  const b = mk();
-  freshHawkEye()(a as never);
-  freshHawkEye()(b as never);
-  const target = { position: new Vec3(5, 64, 0), isValid: true };
-  a.hawkEye!.oneShot(target);
-  assert.ok(a.listenerCount('physicsTick') > 0, 'the bot told to shoot is the one that aims');
-  assert.equal(b.listenerCount('physicsTick'), 0, 'the bot loaded last is left alone');
-  b.hawkEye!.stop();
-  assert.ok(a.listenerCount('physicsTick') > 0, "another bot's stop does not stop it");
-  a.hawkEye!.stop();
-  assert.equal(a.listenerCount('physicsTick'), 0);
+test('shoot: returns as soon as the arrow has left: one draw, one release from tick 24', async () => {
+  const b = new FakeBot('Archer', { items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] }).archer();
+  try {
+    const t0 = Date.now();
+    assert.deepEqual(await shoot(b as never, zombie(10) as never), { shot: true });
+    const took = Date.now() - t0;
+    assert.ok(took < 1_000, `returned ${took} ms after the shot (24 fake ticks), not after a fixed wait`);
+    assert.equal(b.calls.filter((c) => c === 'activateItem').length, 1);
+    // Tick 24, or the first tick after it when the fake's ticks come in a burst (as mineflayer's catch-up).
+    assert.ok(b.releases.length === 1 && b.releases[0]!.fired && b.releases[0]!.drawnTicks >= 24, JSON.stringify(b.releases));
+  } finally {
+    b.stopTicks();
+  }
 });
 
 // -- the stock command on FakeBots --------------------------------------------------------------------------------
@@ -281,14 +266,12 @@ test('defend: between threats every bot holds its own slot (guards on a ring of 
 
 test('defend: archers spread their fire, shoot only inside the circle, and re-aim right after a shot', async () => {
   const s = squad([], [[0, 3], [0, -3]]);
+  const log = recordShots();
   const shots = new Map<FakeBot, unknown[]>();
   for (const a of s.archers) {
-    shots.set(a, []);
-    a.hawkEye.oneShot = ((t: unknown) => {
-      shots.get(a)!.push(t);
-      const left = a.inventory.items().find((i) => i.name === 'arrow')!.count - 1;
-      setTimeout(() => a.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: left }]), 30);
-    }) as never;
+    a.archer();
+    log.byBot.set(a.username, []);
+    shots.set(a, log.byBot.get(a.username)!);
   }
   const x = s.spawn(zombie(8));
   const y = s.spawn(zombie(-8));
@@ -300,4 +283,6 @@ test('defend: archers spread their fire, shoot only inside the circle, and re-ai
   assert.ok([...shots.values()].flat().every((t) => t === x || t === y), 'nothing shot outside the circle');
   assert.ok(![...shots.values()].flat().includes(out));
   await s.h.runner.stopAll();
+  log.restore();
+  for (const b of s.archers) b.stopTicks();
 });

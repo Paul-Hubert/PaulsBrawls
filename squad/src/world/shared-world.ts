@@ -216,7 +216,7 @@ export class SharedWorld extends EventEmitter {
   /**
    * The dimension an attached bot is in, as the store names it (its login's or last respawn's world name, e.g.
    * "minecraft:overworld"; mineflayer's bot.game.dimension is the dimension type, "overworld"). Null for a bot not
-   * attached here, or before its login (docs/37 P6: a job that reads the store for a bot needs it).
+   * attached here, or before its login. A job that reads the store for a bot needs it (docs/37 P3 aim, P6 findBlocks).
    */
   dimensionOf(bot: unknown): string | null {
     if (!bot || typeof bot !== 'object') return null;

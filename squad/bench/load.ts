@@ -12,7 +12,7 @@
 // Options: --ns, --phases idle,follow,walk,gather, --seconds 60, --label, --profile 10,30 (a CPU profile per phase at
 // those N), --stagger <ms> (default: the runtime's 4000), --center x,z (default: the nearest forest to spawn),
 // --no-pregen; experiments (bench-only, the runtime's defaults stay as they are): --tick-timeout, --think-timeout,
-// --search-radius, --plugins all|none|-autoEat,-hawkEye…, --view short|normal|tiny|<chunks>, --movements canDig=false,…,
+// --search-radius, --plugins all|none|-autoEat,-pvp…, --view short|normal|tiny|<chunks>, --movements canDig=false,…,
 // --astar-budget <ms per 50 ms> (the runtime's pathfinding.astarBudgetMs), --workers <N> (the runtime's
 // pathfinding.workers, the pathfinding worker pool), --jobs <N> (workers.count, the reader workers), --world
 // (world.enabled, the shared world; with --jobs, mineBlock's search runs as a findBlocks job, docs/37 P6),
@@ -160,7 +160,7 @@ function createBot(req: SpawnRequest): Bot {
 
 const noop = (): void => undefined;
 function pluginOverrides(): Partial<PluginSet> {
-  const all: Array<keyof PluginSet> = ['pvp', 'armorManager', 'tool', 'collectBlock', 'hawkEye', 'autoEat'];
+  const all: Array<keyof PluginSet> = ['pvp', 'armorManager', 'tool', 'collectBlock', 'autoEat'];
   if (VARIANT.plugins === 'all') return {};
   if (VARIANT.plugins === 'none') return Object.fromEntries(all.map((k) => [k, noop]));
   const off = VARIANT.plugins.split(',').filter((s) => s.startsWith('-')).map((s) => s.slice(1));

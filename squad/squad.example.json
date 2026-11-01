@@ -11,5 +11,6 @@
     "maxTrialsPerTurn": 3
   },
   "pathfinding": { "astarBudgetMs": 20, "workers": 0 },
-  "workers": { "count": 0, "tickBudgetMs": 40 }
+  "workers": { "count": 0, "tickBudgetMs": 40 },
+  "aim": { "schedule": [0, 10, 11, 12, 13, 14, 20, 21, 22, 23], "drawTicks": 24, "overFriends": false }
 }

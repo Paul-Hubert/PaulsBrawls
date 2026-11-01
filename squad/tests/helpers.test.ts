@@ -1,6 +1,7 @@
 // Helpers against the failures the production server showed (docs/29 §16), and the formation helpers of orders bound
-// to items (docs/29 §5.4): the yaw convention, line slots, the ground, facing, the shield, shots at a position and the
-// arrow's ballistics, snapshot entities, and where the commander points (pointedTarget).
+// to items (docs/29 §5.4): the yaw convention, line slots, the ground, facing, the shield, shots (the release, a position
+// on bowAim's arc; the aim itself is tests/aim.test.ts), the arrow's ballistics, snapshot entities, and where the
+// commander points (pointedTarget).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,7 +10,6 @@ import { createRequire } from 'node:module';
 import { Vec3 } from 'vec3';
 
 import {
-  aimOvershoot,
   ARROW,
   bowAim,
   entityOf,
@@ -21,7 +21,6 @@ import {
   mineflayerPitch,
   mineflayerYaw,
   OFF_HAND_SLOT,
-  POINT_REACH,
   pointedTarget,
   raiseShield,
   SHIELD_REASSERT_MS,
@@ -53,18 +52,25 @@ test('goTo: when every fallback fails, the error says where from and where to', 
   await assert.rejects(goTo(b as never, [4, 80, 2]), (e: unknown) => e instanceof HelperError && /No path to the goal! — toward \(4, 80, 2\) from \(0, 80, 0\)/.test((e as Error).message));
 });
 
-test('shoot: when hawkEye fires nothing, a manual shot is tried, and a shot that uses no arrow is an error', { timeout: 20_000 }, async () => {
-  const target = { name: 'husk', position: new Vec3(10, 80, 0), height: 1.95, isValid: true };
-  const b = new FakeBot('Archer', { items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] });
-  b.deactivateItem = () => {
-    b.calls.push('deactivateItem');
-    b.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: 9 }]); // the manual shot released an arrow
-  };
-  await shoot(b as never, target as never);
-  assert.ok(b.calls.includes('hawkEye.oneShot') && b.calls.includes('activateItem'));
-
-  const c = new FakeBot('Archer2', { items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] });
-  await assert.rejects(shoot(c as never, target as never), /no arrow left the bow at husk \(10, 80, 0\)/);
+test('shoot: the release fires an arrow and the shot returns at once; a release that uses no arrow is an error', { timeout: 20_000 }, async () => {
+  const target = { id: 5, name: 'husk', position: new Vec3(10, 80, 0), height: 1.95, isValid: true };
+  const b = new FakeBot('Archer', { position: new Vec3(0, 80, 0), items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] }).archer();
+  try {
+    assert.deepEqual(await shoot(b as never, target as never), { shot: true });
+    assert.equal(b.releases.length, 1);
+    assert.ok(b.releases[0]!.fired && b.releases[0]!.drawnTicks >= 24, `drawn ${b.releases[0]!.drawnTicks} ticks`);
+    assert.equal(b.calls.filter((c) => c === 'activateItem').length, 1, 'one draw');
+  } finally {
+    b.stopTicks();
+  }
+  // The server saw no draw (the release fires nothing): « no arrow left the bow ».
+  const c = new FakeBot('Archer2', { items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] }).archer();
+  c.deactivateItem = () => void c.calls.push('deactivateItem');
+  try {
+    await assert.rejects(shoot(c as never, target as never), /no arrow left the bow at husk \(10, 80, 0\)/);
+  } finally {
+    c.stopTicks();
+  }
 });
 
 // -- formations and aiming (docs/29 §5.4) ----------------------------------------------------------------------
@@ -212,83 +218,27 @@ test('bowAim: the low arc whose flight passes within a block of the point (3 blo
   assert.ok(far.error < 0 && far.pitch < -30 && far.pitch > -50, `the longest shot: pitch ${far.pitch}`);
 });
 
-test('shoot at a position: hawkEye gets { position, isValid: true }; the shot returns when the arrow has left', async () => {
-  const b = new FakeBot('Archer', { items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] });
-  const targets: unknown[] = [];
-  b.hawkEye.oneShot = ((t: unknown) => {
-    targets.push(t);
-    const left = b.inventory.items().find((i) => i.name === 'arrow')!.count - 1;
-    setTimeout(() => b.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: left }]), 30);
-  }) as never;
-  assert.deepEqual(await shoot(b as never, new Vec3(12.3, 64, -4)), { shot: true });
-  assert.equal(targets.length, 1);
-  const t = targets[0] as { position: Vec3; isValid: boolean };
-  assert.deepEqual([xyz(t.position), t.isValid, 'type' in t], [[12.3, 64, -4], true, false], 'a point to hawkEye: no `type`');
-  assert.ok(!b.calls.includes('activateItem'), 'no manual shot');
-  // An array is a position too, and so is a snapshot entity (no isValid: its position at the click).
-  await shoot(b as never, [1, 64, 1]);
-  assert.deepEqual(xyz((targets[1] as { position: Vec3 }).position), [1, 64, 1]);
-  await shoot(b as never, { name: 'zombie', type: 'mob', position: new Vec3(5, 64, 5) } as never);
-  assert.deepEqual(xyz((targets[2] as { position: Vec3 }).position), [5, 64, 5]);
-});
-
-test('shoot at a position: with no hawkEye trajectory, the bow is aimed by the ballistics and the shot made by hand', { timeout: 20_000 }, async () => {
-  const b = new FakeBot('Archer', { position: new Vec3(0.5, 64, 0.5), items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] });
-  const asked: unknown[] = [];
-  Object.assign(b.hawkEye, { getMasterGrade: (t: unknown) => void asked.push(t) });
-  b.deactivateItem = () => {
-    b.calls.push('deactivateItem');
-    b.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: 9 }]);
-  };
-  const point = new Vec3(-30.5, 63, 18);
-  await shoot(b as never, point);
-  assert.equal(asked.length, 1, 'hawkEye was asked for a trajectory');
-  assert.ok(!b.calls.includes('hawkEye.oneShot'), 'and not told to shoot without one');
-  const look = b.calls.findIndex((c) => c.startsWith('look('));
-  assert.ok(look >= 0 && look < b.calls.indexOf('activateItem') && b.calls.indexOf('activateItem') < b.calls.indexOf('deactivateItem'), b.calls.join(' '));
-  // Back to the commander's convention from mineflayer's radians: the flight passes within a block of the point.
-  const yaw = ((Math.PI - b.entity.yaw) * 180) / Math.PI;
-  const pitch = (-b.entity.pitch * 180) / Math.PI;
-  assert.ok(closestApproach(b.entity.position, yaw, pitch, point) < 1, `yaw ${yaw} pitch ${pitch}`);
-
-  const c = new FakeBot('Archer2', { items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] });
-  Object.assign(c.hawkEye, { getMasterGrade: () => undefined });
-  await assert.rejects(shoot(c as never, point), /no arrow left the bow at \(-30, 63, 18\) .*no clear line of fire/);
-});
-
-test('shoot at a position: a hawkEye arc that would fly past the point is not used; one that lands on it is', { timeout: 20_000 }, async () => {
-  // The grades minecrafthawkeye's getMasterGrade gave for a point on flat ground 9 blocks away (+1°, its nearest pass
-  // 1.6 blocks above the point: it lands 27 blocks out) and 15 blocks away (−4.3°: it lands 14 out). Live, such an arc
-  // put a volley's arrow 18 blocks past its point.
+test('shoot at a position: the low arc through it (bowAim), not led; arrays and snapshot refs are positions', { timeout: 20_000 }, async () => {
   const from = new Vec3(0.5, 64, 0.5);
-  assert.ok(aimOvershoot(from, new Vec3(9.5, 64, 0.5), 1) > 15, 'the +1° arc at 9 blocks overshoots');
-  assert.ok(Math.abs(aimOvershoot(from, new Vec3(15.5, 64, 0.5), -4.3)) <= POINT_REACH, 'the −4.3° arc at 15 blocks lands');
-  const archer = (grade: number) => {
-    const b = new FakeBot('Archer', { position: from.clone(), items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] });
-    Object.assign(b.hawkEye, { getMasterGrade: () => ({ grade, nearestDistance: 1.6 }) });
-    const release = () => b.setItems([{ name: 'bow', count: 1 }, { name: 'arrow', count: 9 }]);
-    b.hawkEye.oneShot = (() => {
-      b.calls.push('hawkEye.oneShot');
-      setTimeout(release, 20);
-    }) as never;
-    b.deactivateItem = () => {
-      b.calls.push('deactivateItem');
-      release();
-    };
-    return b;
-  };
-  const near = new Vec3(9.5, 64, 0.5);
-  const over = archer(1);
-  await shoot(over as never, near);
-  assert.ok(!over.calls.includes('hawkEye.oneShot'), `the overshooting arc is not fired: ${over.calls.join(' ')}`);
-  assert.ok(over.calls.includes('activateItem') && over.calls.includes('deactivateItem'), 'a hand shot instead');
-  const yaw = ((Math.PI - over.entity.yaw) * 180) / Math.PI;
-  const pitch = (-over.entity.pitch * 180) / Math.PI;
-  assert.ok(closestApproach(over.entity.position, yaw, pitch, near) < 1, `aimed by bowAim onto the point (yaw ${yaw}, pitch ${pitch})`);
-
-  const good = archer(bowAim(from, near).pitch * -1);
-  await shoot(good as never, near);
-  assert.ok(good.calls.includes('hawkEye.oneShot') && !good.calls.includes('activateItem'), `an arc that lands is hawkEye's: ${good.calls.join(' ')}`);
+  const b = new FakeBot('Archer', { position: from.clone(), items: [{ name: 'bow', count: 1 }, { name: 'arrow', count: 10 }] }).archer();
+  try {
+    const point = new Vec3(-30.5, 63, 18);
+    assert.deepEqual(await shoot(b as never, point), { shot: true });
+    // Back to the commander's convention from mineflayer's radians: the flight at the release passes through the point.
+    const r = b.releases[0]!;
+    const yaw = ((Math.PI - r.yaw) * 180) / Math.PI;
+    const pitch = (-r.pitch * 180) / Math.PI;
+    assert.ok(closestApproach(from, yaw, pitch, point) < 0.5, `yaw ${yaw} pitch ${pitch}`);
+    assert.ok(Math.abs(pitch - bowAim(from, point).pitch) < 0.2, `bowAim's pitch: ${pitch} vs ${bowAim(from, point).pitch}`);
+    // An array is a position too, and so is a snapshot entity (no isValid: its position at the click).
+    await shoot(b as never, [1, 64, 12]);
+    await shoot(b as never, { name: 'zombie', type: 'mob', position: new Vec3(5, 64, 15) } as never);
+    assert.equal(b.releases.length, 3);
+    const last = b.releases[2]!;
+    assert.ok(closestApproach(from, ((Math.PI - last.yaw) * 180) / Math.PI, (-last.pitch * 180) / Math.PI, new Vec3(5, 64, 15)) < 0.5, 'at the ref');
+  } finally {
+    b.stopTicks();
+  }
 });
 
 test('entityOf: by network id, else a player by name, else the nearest of that name near the snapshot position', () => {

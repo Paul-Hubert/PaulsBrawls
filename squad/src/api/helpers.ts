@@ -23,6 +23,9 @@ import { GoalFollowOffset, slotStandable, type FollowOffset } from '../bots/foll
 import { orderOf, unwrap } from '../orders/guard';
 import { HelperError, isBotLeft, isStopped } from './errors';
 import { findBlockPositions } from './block-search';
+import { CROSSBOW_SPEED as AIM_CROSSBOW_SPEED } from '../aim/arrow.mjs';
+import { drawShot, type DrawEnd } from '../aim/draw';
+import type { AimSolution } from '../aim/solve.mjs';
 
 const { goals } = pathfinderPkg;
 
@@ -833,39 +836,45 @@ export async function killMob(bot: Bot, mobName: string, timeout = 300): Promise
   return r;
 }
 
-/** How long `shoot` waits for hawkEye's arrow: its draw is 1.2 s (bow), plus a tick or two for the inventory update. */
-export const SHOT_WAIT_MS = { bow: 1_450, crossbow: 1_900 } as const;
+/** After the release, how long `shoot` waits for the arrow count to drop (the server's set_slot: a tick or two). */
+export const ARROW_WAIT_MS = 500;
 /** How often `shoot` looks at the arrow count while it waits. */
 export const SHOT_POLL_MS = 50;
-/**
- * `bot.look(…, true)` only sets the bot's yaw/pitch: the look packet goes out with the next physics tick (50 ms). A
- * release sent at once flew at the old aim, so a hand-aimed release waits this long after the look.
- */
-export const LOOK_SETTLE_MS = 60;
-/**
- * hawkEye's arc for a position is kept only when, flown by our own model (ARROW), it comes down within this many blocks
- * (horizontally) of the point; otherwise bowAim aims the shot.
- */
-export const POINT_REACH = 1;
+/** At most this long, `shoot` lets auto-eat finish a meal before it takes the hand back (its eatingTimeout is 3 s). */
+export const EAT_WAIT_MS = 3_500;
 /** A crossbow's arrow leaves at 3.15 blocks per tick (CrossbowItem), a full-draw bow's at 3. */
-export const CROSSBOW_SPEED = 3.15;
+export const CROSSBOW_SPEED = AIM_CROSSBOW_SPEED;
 
 /** A live entity (prismarine-entity always has `isValid`), as opposed to a position, a block or a snapshot ref. */
 function isLiveEntity(t: unknown): t is Entity {
   return !!t && typeof t === 'object' && !Array.isArray(t) && 'isValid' in t && !!(t as { position?: unknown }).position;
 }
 
+/** What stopped a shot, for the error (a friend's name, the block). */
+function inTheWay(bot: Bot, sol: AimSolution): string {
+  const at = sol.at ? fmt(sol.at) : '(?)';
+  if (sol.hit === 'friend' || sol.hit === 'entity') {
+    const e = (bot.entities as Record<string, Entity | undefined> | undefined)?.[sol.entity];
+    const name = e?.username ?? e?.name ?? `entity ${sol.entity}`;
+    return sol.hit === 'friend' ? `a friend is in the way (${name} at ${at})` : `${name} is in the way at ${at}`;
+  }
+  const block = (bot.registry as { blocksByStateId?: Record<number, { name?: string }> } | undefined)?.blocksByStateId?.[sol.block]?.name ?? 'a block';
+  return `${block} is in the way at ${at}${sol.other ? ` (the ${sol.other.arc} arc too)` : ''}`;
+}
+
 /**
- * Shoot once with a bow (or crossbow) at an entity, or at a position (a volley on the ground): aims with hawkEye
- * (gravity, and an entity's motion), equips the weapon, needs arrows. Resolves as soon as an arrow has left (the
- * arrow count drops: ~1.25 s for a bow), so an archer can pick its next target at once.
+ * Shoot once with a bow (or crossbow) at an entity, or at a position (a volley on the ground): equips the weapon,
+ * needs arrows. Resolves as soon as an arrow has left (the arrow count drops: ~1.25 s for a bow), so an archer can
+ * pick its next target at once.
  *
- * A position goes to hawkEye as `{ position, isValid: true }` (a target without `type` is a point to it). hawkEye's
- * block check raycasts every step of its arc, so a point on the ground can count as blocked: when it has no
- * trajectory for a position (`getMasterGrade`), the bow's pitch comes from the arrow's ballistics (bowAim) and the
- * shot is made by hand. Its trajectory for a position is also refused when it would not land on the point (POINT_REACH):
- * hawkEye accepts an arc passing up to 4 blocks from its target. A snapshot ref (`at.lookEntity`) is a position here:
- * pass `entityOf(bot, ref)` for the live one.
+ * The aim is Squad's own (aim/, docs/37 §3): solved before the draw and again on the ticks of `aim.schedule`, the
+ * look turning smoothly between the answers, the release on tick `aim.drawTicks` (24). It leads an entity along its
+ * velocity and checks the line of fire against blocks and every creature's hitbox: the low arc, else the high arc
+ * over a wall. A block, a friend (the order's isFriend players, the bots of the same owners) or both arcs blocked:
+ * « no clear line of fire », and nothing is fired (a drawn bow is put down unfired), so the command can step aside.
+ * An enemy in the line counts as a hit. A position is not led (bowAim's low arc through it) and counts as reached
+ * when the arrow comes down at it. A snapshot ref (`at.lookEntity`) is a position here: pass `entityOf(bot, ref)`
+ * for the live one.
  */
 export async function shoot(bot: Bot, target: Entity | PosLike | null | undefined, opts: { weapon?: 'bow' | 'crossbow' } = {}): Promise<{ shot: true }> {
   const label = `shoot(${who(bot)})`;
@@ -886,61 +895,26 @@ export async function shoot(bot: Bot, target: Entity | PosLike | null | undefine
     while (!gone() && Date.now() < deadline) await sleepMs(Math.min(SHOT_POLL_MS, Math.max(1, deadline - Date.now())));
     return gone();
   };
-  type HawkTarget = Entity | { position: Vec3; isValid: true };
-  const hawk = (bot as unknown as {
-    hawkEye?: { oneShot?: (t: HawkTarget, w: string) => void; stop?: () => void; getMasterGrade?: (t: HawkTarget, speed: Vec3, w: string) => unknown };
-  }).hawkEye;
-  const hawkTarget: HawkTarget = entity ?? { position: point as Vec3, isValid: true };
-  const speed = weapon === 'crossbow' ? CROSSBOW_SPEED : ARROW.speed;
-  /** Whether hawkEye has a trajectory that hits: always tried for an entity (it moves); asked first for a position. */
-  const hawkCanAim = (): boolean => {
-    if (entity || !hawk?.getMasterGrade) return true;
-    try {
-      const g = hawk.getMasterGrade(hawkTarget, new Vec3(0, 0, 0), weapon) as { grade?: unknown } | null | undefined;
-      if (!g) return false;
-      // hawkEye accepts an arc whose nearest pass is within 4 blocks of its target. For a point on the ground that
-      // arc flies over it and on: at 6 to 10 blocks it lands 2 to 3 times as far (a volley's arrow lay 18 blocks past
-      // its point, found live). Kept only when our own flight of its elevation comes down on the point.
-      return typeof g.grade === 'number' && Math.abs(aimOvershoot(bot.entity.position, point as Vec3, g.grade, speed)) <= POINT_REACH;
-    } catch (e) {
-      passControl(e);
-      return false;
-    }
-  };
-  const aim = async (): Promise<void> => {
-    if (entity) {
-      // A manual aim: a little above the target, for the drop over the distance.
-      const d = bot.entity.position.distanceTo(entity.position);
-      await bot.lookAt(entity.position.offset(0, (entity.height ?? 1.8) * 0.8 + d * 0.02, 0), true);
-      return;
-    }
-    const a = bowAim(bot.entity.position, point as Vec3, speed);
-    await bot.look(mineflayerYaw(a.yaw), mineflayerPitch(a.pitch), true);
-  };
+  let end: DrawEnd;
   try {
-    if (bot.heldItem?.name !== weapon) await bot.equip(item, 'hand');
-    // hawkEye aims for gravity and the target's motion, but when it finds no clear trajectory it silently fires
-    // nothing and keeps the bow drawn (found live: an archer "shot" for a minute through leaves without using an
-    // arrow, docs/29 §16).
-    if (hawk?.oneShot && hawkCanAim()) {
-      hawk.oneShot(hawkTarget, weapon);
-      if (await waitArrow(SHOT_WAIT_MS[weapon])) return { shot: true };
-      // Still drawn with no trajectory: aim by hand, then stop it (stopping releases the drawn bow, at our aim).
-      await aim();
-      await sleepMs(LOOK_SETTLE_MS);
-      hawk.stop?.();
-      if (await waitArrow(300)) return { shot: true };
+    if (bot.heldItem?.name !== weapon) {
+      // auto-eat is eating: let it finish. Taking the hand back would cancel the meal, and the meal would drop the draw.
+      const ae = (bot as unknown as { autoEat?: { isEating?: boolean } }).autoEat;
+      const food = (): boolean => !!bot.heldItem && !!(bot.registry as { foodsByName?: Record<string, unknown> } | undefined)?.foodsByName?.[bot.heldItem.name];
+      for (let waited = 0; ae?.isEating && food() && waited < EAT_WAIT_MS; waited += SHOT_POLL_MS) await sleepMs(SHOT_POLL_MS);
+      await bot.equip(item, 'hand');
     }
-    // A manual shot: aim, draw, release.
-    await aim();
-    bot.activateItem();
-    await sleepMs(1_100);
-    bot.deactivateItem();
-    await waitArrow(500);
+    end = await drawShot(bot, { entity, point }, { weapon });
+    if (end.kind === 'released') await waitArrow(ARROW_WAIT_MS);
   } catch (e) {
     passControl(e);
     throw new HelperError(`${label}: ${(e as Error).message} at ${what}`);
   }
+  if (end.kind === 'blocked') {
+    throw new HelperError(`${label}: no clear line of fire: ${inTheWay(bot, end.sol)}, shooting at ${what} from ${fmt(bot.entity.position)}${end.drawn ? ' (put down unfired)' : ''}`);
+  }
+  if (end.kind === 'gone') throw new HelperError(`${label}: the target is gone (dead or out of sight), put down unfired: ${what}`);
+  if (end.kind === 'lowered') throw new HelperError(`${label}: the draw was interrupted (${end.held ?? 'nothing'} in hand: auto-eat?) at ${what}`);
   if (!gone()) {
     throw new HelperError(`${label}: no arrow left the bow at ${what} from ${fmt(bot.entity.position)} (no clear line of fire? move closer or into the open)`);
   }
@@ -1292,16 +1266,6 @@ export function bowAim(from: PosLike, to: PosLike, speed: number = ARROW.speed):
     }
   }
   return { yaw, pitch: snap(-best), error: bestReach - d, ticks: Infinity };
-}
-
-/**
- * How far past `to` (horizontally, blocks; negative = short) an arrow shot from a bot standing at `from` (feet) at
- * `elevationDeg` (degrees, + = up, as hawkEye's grade) comes down through the point's height (ARROW's flight).
- */
-export function aimOvershoot(from: PosLike, to: PosLike, elevationDeg: number, speed: number = ARROW.speed): number {
-  const f = toVec3(from, 'aimOvershoot from');
-  const t = toVec3(to, 'aimOvershoot to');
-  return arrowReach(elevationDeg, t.y - (f.y + ARROW.eye), speed) - Math.hypot(t.x - f.x, t.z - f.z);
 }
 
 /** How far (horizontally) the arrow gets before it comes down through the height `dy` (relative to where it left). */

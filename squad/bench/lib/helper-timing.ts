@@ -146,7 +146,8 @@ export function readHelperStats(): HelperRow[] {
     const a: Stat = all.get(helper) ?? { calls: 0, ends: new Map(), wallMs: [], syncMs: 0, syncMaxMs: 0 };
     a.calls += s.calls;
     for (const [k, v] of s.ends) a.ends.set(k, (a.ends.get(k) ?? 0) + v);
-    a.wallMs.push(...s.wallMs);
+    // Not a spread: a helper called 100 000+ times in a round overflows the call stack (found in a P3 run).
+    for (const v of s.wallMs) a.wallMs.push(v);
     a.syncMs += s.syncMs;
     a.syncMaxMs = Math.max(a.syncMaxMs, s.syncMaxMs);
     all.set(helper, a);

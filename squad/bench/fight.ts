@@ -36,10 +36,14 @@
 // round is), --sampling-us 1000, --gap 40 (blocks between the two front rows), --blue "defend radius=24",
 // --red "raid radius=24" (command and tokens; a raid without x= goes for the other army's position), --arena x,z
 // (default 1400,1000, the floor at y 100), --stagger <ms> (default the runtime's 4000), --port 8779, --no-mod,
-// --difficulty hard (production's), --dead disconnect|respawn, --workers <N>, --astar-budget <ms>, --label.
-// Experiment (bench-only): --hawkeye-every N runs hawkEye's aim (getGrades, a full trajectory search with raycasts,
-// on every physics tick of a drawing archer) on one tick in N; the bow is still turned every tick, to the last aim. SERVER_PROPERTIES overrides the
-// server (default ../dev/server.properties); the production server is refused.
+// --difficulty hard (production's), --dead disconnect|respawn, --workers <N> (pathfinding.workers), --astar-budget <ms>,
+// --jobs <N> (workers.count: the reader workers, docs/37), --world (world.enabled: the shared world; with --jobs the
+// archers' aim runs as jobs on the workers), --over-friends (aim.overFriends: the high arc over a friend in the line),
+// --label. SERVER_PROPERTIES overrides the server (default
+// ../dev/server.properties); the production server is refused.
+// The archers' aim (docs/37 P3, src/aim/) is recorded per round (aimStats): draws, refusals, solves, flights per
+// solve, the lead's error; and the shots: arrow kills per shot, failed shots, the ELU at full strength (> 30 alive).
+// (--hawkeye-every, docs/36 §7's experiment, is gone with hawkEye.)
 
 import './lib/instrument'; // first: it wraps prismarine-physics before mineflayer loads it
 
@@ -54,6 +58,8 @@ import type { Bot } from 'mineflayer';
 
 import { parseConfig, DEFAULT_LIMITS } from '../src/config';
 import { start, type Started } from '../src/main';
+import { aimMode, aimStats, type AimStats } from '../src/aim/draw';
+import type { JobStats } from '../src/jobs/pool';
 import { logger } from '../src/logger';
 import type { Player } from '../src/roster';
 import { EMPTY_SNAPSHOT, type Snapshot } from '../src/types';
@@ -95,8 +101,13 @@ const DEAD = (opt('dead') ?? 'disconnect') as 'disconnect' | 'respawn';
 if (!['disconnect', 'respawn'].includes(DEAD)) throw new Error(`--dead ${DEAD}: disconnect or respawn`);
 const WORKERS = Number(opt('workers') ?? 0);
 const ASTAR_BUDGET = opt('astar-budget') === undefined ? undefined : Number(opt('astar-budget'));
+const JOBS = Number(opt('jobs') ?? 0);
+const WORLD = flag('world');
+const OVER_FRIENDS = flag('over-friends');
 const LABEL = opt('label') ?? 'fight';
-const HAWKEYE_EVERY = Math.max(1, Number(opt('hawkeye-every') ?? 1));
+if (opt('hawkeye-every') !== undefined) {
+  throw new Error('--hawkeye-every: hawkEye is gone (docs/37 P3: the archers aim with src/aim/); there is nothing to throttle');
+}
 /** The token dev/squad.properties gives the dev mod for the live tests' runtime (dev/README.md). */
 const TOKEN = 'live-test-token';
 
@@ -265,6 +276,10 @@ interface RoundResult {
   helpers: HelperRow[];
   orders: OrderSummary[];
   timeline: TimelineRow[];
+  /** The archers' aim (src/aim/draw.ts) over the round. */
+  aim: AimStats;
+  /** The reader workers' job pool over the round (--jobs). */
+  jobs?: JobStats;
 }
 
 const runDir = join(here, '.runs', `${new Date().toISOString().replace(/[:.]/g, '-')}-${LABEL}`);
@@ -305,6 +320,9 @@ async function main(): Promise<void> {
       ...(STAGGER === undefined ? {} : { loginStaggerMs: STAGGER }),
       limits: { ...DEFAULT_LIMITS, maxBots: 64 },
       pathfinding: { ...(ASTAR_BUDGET === undefined ? {} : { astarBudgetMs: ASTAR_BUDGET }), workers: WORKERS },
+      workers: { count: JOBS },
+      world: { enabled: WORLD },
+      aim: { overFriends: OVER_FRIENDS },
     },
     { PAULSBRAWLS_SQUAD_TOKEN: TOKEN },
   );
@@ -312,10 +330,7 @@ async function main(): Promise<void> {
   instrumentHelpers((bot) => SIDE_OF.get(bot) ?? 'other');
   const { pool } = rt.service.deps;
   const meters = new BotMeters();
-  pool.on('online', (name: string, bot: Bot) => {
-    meters.attach(name, bot);
-    throttleHawkEye(bot);
-  });
+  pool.on('online', (name: string, bot: Bot) => meters.attach(name, bot));
 
   const env = {
     label: LABEL,
@@ -330,7 +345,10 @@ async function main(): Promise<void> {
     pathfinding: cfg.pathfinding,
     difficulty: DIFFICULTY,
     dead: DEAD,
-    hawkeyeEvery: HAWKEYE_EVERY,
+    jobs: rt.jobs ? rt.jobs.stats().workers : 0,
+    world: !!rt.world,
+    aim: aimMode(),
+    overFriends: OVER_FRIENDS,
     node: process.version,
     cpu: cpus()[0]?.model,
     logicalCpus: cpus().length,
@@ -367,32 +385,6 @@ async function main(): Promise<void> {
   }
   log(`done: ${runDir}`);
   process.exit(0);
-}
-
-type Listener = (...a: unknown[]) => unknown;
-
-/**
- * --hawkeye-every N: hawkEye registers `getGrades` on physicsTick for every shot (and removes it after); wrap it so it
- * runs on the first tick and then one tick in N. Its autoCalc still looks along the last aim every tick.
- */
-function throttleHawkEye(bot: Bot): void {
-  if (HAWKEYE_EVERY <= 1) return;
-  const e = bot as unknown as { on: (ev: string, fn: Listener) => unknown; addListener: (ev: string, fn: Listener) => unknown; removeListener: (ev: string, fn: Listener) => unknown; off: (ev: string, fn: Listener) => unknown };
-  const on = e.on.bind(bot);
-  const off = e.removeListener.bind(bot);
-  const wrapped = new WeakMap<Listener, Listener>();
-  const wrap = (ev: string, fn: Listener): Listener => {
-    if (ev !== 'physicsTick' || fn.name !== 'getGrades') return fn;
-    let n = 0;
-    const w: Listener = function (this: unknown, ...a: unknown[]) {
-      if (n++ % HAWKEYE_EVERY === 0) return fn.apply(this, a);
-      return undefined;
-    };
-    wrapped.set(fn, w);
-    return w;
-  };
-  e.on = e.addListener = (ev, fn) => on(ev, wrap(ev, fn));
-  e.removeListener = e.off = (ev, fn) => off(ev, wrapped.get(fn) ?? fn);
 }
 
 /** The dev mod connects to this runtime's event stream when dev/squad.properties points at it (friendly fire). */
@@ -625,6 +617,8 @@ async function fightRound(rt: Started, rcon: Rcon, meters: BotMeters, pid: numbe
   const probe = new ProcessProbe();
   meters.reset();
   resetHelperStats();
+  aimStats(true);
+  rt.jobs?.stats(true);
 
   const dead = new Map<string, Death>();
   const t0 = performance.now();
@@ -750,6 +744,8 @@ async function fightRound(rt: Started, rcon: Rcon, meters: BotMeters, pid: numbe
   const perBot = NAMES.map((n) => (tickTotal.get(n) ?? 0) / Math.max(1, dead.get(n)?.t ?? seconds));
   bots.ticksPerSec = { min: r1(Math.min(...perBot, 20)), mean: r1(perBot.reduce((a, b) => a + b, 0) / Math.max(1, perBot.length)) };
   const helpers = readHelperStats();
+  const aim = aimStats(true);
+  const jobs = rt.jobs?.stats(true);
   const survivors = { blue: alive('blue').length, red: alive('red').length };
   const hpLeft = { blue: timeline.at(-1)?.hp.blue ?? 0, red: timeline.at(-1)?.hp.red ?? 0 };
 
@@ -802,7 +798,7 @@ async function fightRound(rt: Started, rcon: Rcon, meters: BotMeters, pid: numbe
     if (ks && ks === d.side) friendly++;
   }
   const winner: RoundResult['winner'] = survivors.blue > survivors.red ? 'blue' : survivors.red > survivors.blue ? 'red' : 'draw';
-  return { round, profiled, ...(profile ? { profile } : {}), seconds, ended, winner, survivors, hpLeft, deaths, kills: { byHow, bySide, friendly }, process: proc, bots, server, helpers, orders, timeline };
+  return { round, profiled, ...(profile ? { profile } : {}), seconds, ended, winner, survivors, hpLeft, deaths, kills: { byHow, bySide, friendly }, process: proc, bots, server, helpers, orders, timeline, aim, ...(jobs ? { jobs } : {}) };
 }
 
 // -- reporting --------------------------------------------------------------------------------------------------
@@ -826,7 +822,7 @@ function summaryMd(o: { env: Record<string, unknown> & { armies: { guards: numbe
     `# Fight benchmark — ${e.label as string} (${e.at as string})`,
     '',
     `${e.armies.guards} guards + ${e.armies.archers} archers a side. Blue « ${e.armies.blue} », red « ${e.armies.red} ». ` +
-      `${(e.hawkeyeEvery as number) > 1 ? `**Experiment: hawkEye aims one tick in ${e.hawkeyeEvery as number}.** ` : ''}` +
+      `Aim: ${String(e.aim ?? 'hawkEye')}${e.jobs ? ` (${e.jobs as number} reader workers${e.world ? ', shared world' : ''})` : e.world ? ' (shared world)' : ''}. ` +
       `Friendly-fire rule: ${e.friendlyFireRule ? 'on (the dev mod is connected)' : 'OFF (--no-mod)'}. Node ${e.node as string}, ${e.cpu as string} (${e.logicalCpus as number} threads), pathfinding ${JSON.stringify(e.pathfinding)}.`,
     '',
   ];
@@ -843,6 +839,24 @@ function summaryMd(o: { env: Record<string, unknown> & { armies: { guards: numbe
     L.push(
       `| round ${r.round}${r.profiled ? ' (profiled)' : ''} | ${r.seconds} | ${r.ended} | ${r.survivors.blue}/${r.survivors.red} | ${r.deaths.length} (${k.melee ?? 0}/${k.arrow ?? 0}/${other}) | ${r.kills.friendly} | ${p.elu} | ${p.loop.p50}/${p.loop.p99}/${p.loop.max} | ${p.cpuPct} | ${r.bots.ticksPerSec.min}/${r.bots.ticksPerSec.mean} | ${p.share.astar} | ${p.share.physics} | ${p.share.lookahead} | ${r1(p.share.decode + p.share.inflate)} | ${r.server.tick?.mean ?? '?'}/${r.server.tick?.p95 ?? '?'} | ${r.server.keepUp.count} | ${p.rssMaxMb} |`,
     );
+  }
+  L.push('', '## Shots', '', '| round | full-strength ELU (> 30 alive) | round ELU | shots | failed | arrow kills / shot | friendly kills | winner |', '|---|---|---|---|---|---|---|---|');
+  for (const r of o.rounds) {
+    const s = shotSummary(r);
+    L.push(`| ${r.round} | ${s.fullElu ?? '?'} (${s.fullRows} s) | ${r.process.elu} | ${s.shots} | ${s.failed} (${s.failedPct} %) | ${s.arrowKills} (${s.killsPerShotPct} %) | ${r.kills.friendly} | ${r.winner} |`);
+  }
+  L.push('', '## Aim (src/aim/)', '', '| round | mode | shots / draws / released | refused friend / block / entity | put down blocked / gone | lowered | high arc | solves inline / jobs | late / failed / first fallback | flights per solve | inline µs p50 / p95 | lead error p50 / p95 (blocks): smoothed; one-tick; none |', '|' + '---|'.repeat(12));
+  for (const r of o.rounds) {
+    const a = r.aim;
+    if (!a) continue;
+    const le = (k: 'smoothed' | 'oneTick' | 'none'): string => `${a.leadError[k].p50 ?? '?'} / ${a.leadError[k].p95 ?? '?'}`;
+    L.push(
+      `| ${r.round} | ${a.mode} | ${a.shots} / ${a.draws} / ${a.released} | ${a.refused.friend} / ${a.refused.block} / ${a.refused.entity} | ${a.cancelled.blocked} / ${a.cancelled.gone} | ${a.lowered} | ${a.highArc} | ${a.solves.inline} / ${a.solves.jobs} | ${a.solves.late} / ${a.solves.failed} / ${a.solves.firstFallback} | ${a.flightsPerSolve ?? '?'} | ${a.inlineUs.p50 ?? '?'} / ${a.inlineUs.p95 ?? '?'} | ${le('smoothed')}; ${le('oneTick')}; ${le('none')} (n ${a.leadError.smoothed.n}) |`,
+    );
+  }
+  for (const r of o.rounds) {
+    const t = r.jobs?.types?.aim;
+    if (t) L.push('', `Round ${r.round} aim jobs: ${t.submitted} submitted, ${t.done} done, ${t.late} late, ${t.failed} failed, ${t.carried} carried; latency p50 / p95 ${t.latencyMs.p50} / ${t.latencyMs.p95} ms; cost ${t.costMs} ms; the workers' budget use ${(r.jobs?.perWorker ?? []).map((w) => w.budgetMs.mean).join(' / ')} ms per tick.`);
   }
   L.push('');
   for (const r of o.rounds) {
@@ -883,6 +897,35 @@ function summaryMd(o: { env: Record<string, unknown> & { armies: { guards: numbe
     }
   }
   return L.join('\n');
+}
+
+/** A round's shots, as docs/36 and docs/37 compare them. */
+export function shotSummary(r: Pick<RoundResult, 'helpers' | 'timeline' | 'kills'>): {
+  fullElu: number | null;
+  fullRows: number;
+  shots: number;
+  failed: number;
+  failedPct: number;
+  arrowKills: number;
+  killsPerShotPct: number;
+} {
+  const full = r.timeline.filter((t) => t.alive.blue + t.alive.red > 30);
+  const h = r.helpers.find((x) => x.group === 'all' && x.helper === 'shoot');
+  const shots = h?.calls ?? 0;
+  // Failed: a HelperError (no clear line of fire, no arrow left, the target gone…), not a bot or an order ending.
+  const failed = Object.entries(h?.ends ?? {})
+    .filter(([k]) => k.startsWith('HelperError'))
+    .reduce((n, [, v]) => n + v, 0);
+  const arrowKills = r.kills.byHow.arrow ?? 0;
+  return {
+    fullElu: full.length ? Math.round((full.reduce((n, t) => n + t.elu, 0) / full.length) * 1000) / 1000 : null,
+    fullRows: full.length,
+    shots,
+    failed,
+    failedPct: shots ? r1((failed / shots) * 100) : 0,
+    arrowKills,
+    killsPerShotPct: shots ? r1((arrowKills / shots) * 100) : 0,
+  };
 }
 
 const isMain = process.argv[1] && /[\\/]fight\.ts$/.test(process.argv[1]);

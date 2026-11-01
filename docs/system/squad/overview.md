@@ -157,7 +157,7 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
 
 | Area | Files | What it does |
 |---|---|---|
-| Bots | `bots/pool.ts`, `plugins.ts`, `hardening.ts`, `protocol.ts` | Dynamic pool, logins 4 s apart, reconnect with backoff, version pinned to 1.21.1, `viewDistance: 'short'`. Plugins: pathfinder, pvp, armor-manager, tool, collectblock, hawkEye (one copy of the module per bot: it keeps its bot and target in module variables, `freshHawkEye`; a copy goes with its bot, docs/36 §5.1), auto-eat. Pathfinder bounded (searchRadius 64, thinkTimeout 5 s, `hardening.ts`), its library patched and its A* budgeted (above). Per-bot vitals counters. Protocol hardening, below |
+| Bots | `bots/pool.ts`, `plugins.ts`, `hardening.ts`, `protocol.ts` | Dynamic pool, logins 4 s apart, reconnect with backoff, version pinned to 1.21.1, `viewDistance: 'short'`. Plugins: pathfinder, pvp, armor-manager, tool, collectblock, auto-eat (hawkEye, which aimed the bows, is gone since docs/37 P3: `shoot` aims with `aim/`). Pathfinder bounded (searchRadius 64, thinkTimeout 5 s, `hardening.ts`), its library patched and its A* budgeted (above). Per-bot vitals counters. Protocol hardening, below |
 | Roster | `roster.ts` | Bots, owners, tags in `.squad-data/roster.json`; the runtime is its only writer |
 | Leases | `leases.ts` | A lease stack per bot (depth 4). `plan` :84 grants idle bots first, then busy ones for `take: 'reclaim'` roles, all or nothing. `apply` :106 runs the old order's cleanup before reuse. `release` :130 hands a bot back to the live order below |
 | Orders | `orders/runner.ts`, `order.ts`, `guard.ts`, `claims.ts` | `start` :141 (tracked per binding, below) → `launch` :147 resolves, compiles (once per version) and runs. Each script gets a **lease-guarded Proxy** of each bot (`guardBot` :81): calls check the lease, listeners and timers are tracked, chat is rate-limited, `quit` is refused. Every leave and every end runs the R4/R5 abort sequence. Claims are shared across orders. `trigger` :208: a bound item's click delivers to, restarts, starts or stops the player's order of that command (below) |
@@ -260,20 +260,29 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
   (`autoEat.isEating`): auto-eat lowers the shield itself (`deactivateItem` before eating), and the next call raises it
   again. A bot leaving an order lowers it (the abort sequence's `deactivateItem`).
 - `shoot(bot, target)`: an entity (anything with `isValid`, as prismarine-entity's are) or a position (a Vec3,
-  `[x, y, z]`, a block, a snapshot ref). A position goes to hawkEye as `{ position, isValid: true }`: hawkEye takes a
-  target without `type` for a point (`isEntity` is `"type" in e`), aims at it with no height offset, and derives its
-  velocity from the position history, not from a field. hawkEye is asked first (`getMasterGrade`): its block check
-  raycasts every step of the arc (`bot.world.raycast`), so a point on the ground can count as blocked. Its arc is also
-  refused unless, flown by our own model (`aimOvershoot`), it comes down within `POINT_REACH` (1 block) of the point:
-  hawkEye accepts an arc whose nearest pass is within 4 blocks of its target, and for a point on the ground 6–10 blocks
-  away that arc flies over it and lands 2–3 times as far (found live, docs/29 §16). Without a trajectory that lands,
-  the bow is aimed by `bowAim` (exported, not a global): the arrow's flight tick by tick, as
-  `PersistentProjectileEntity` moves it (from the eyes − 0.1, 3 blocks per tick at full draw, a crossbow's 3.15
-  (`CROSSBOW_SPEED`); move, then × 0.99, then
-  y − 0.05), the low arc (the first elevation whose flight passes through the point, refined by bisection), and out of
-  range the elevation that carries farthest. A hand-aimed release now waits 60 ms after the look (`LOOK_SETTLE_MS`):
-  `bot.look(…, true)` only sets the yaw and pitch, the look packet goes out with the next physics tick, and a release
-  sent at once (as the entity path did after hawkEye gave up) flew at the old aim.
+  `[x, y, z]`, a block, a snapshot ref). Squad's own aim since docs/37 P3 (`aim/`; hawkEye is gone):
+  - **The arrow** (`aim/arrow.mjs`), read from the 1.21.1 server: from the eyes − 0.1; a full bow 3 blocks per tick plus
+    the shooter's last move (y dropped on the ground), a crossbow 3.15 and no shooter move; per tick the segment is
+    checked (blocks, then hitboxes grown by 0.3), then move, × 0.99 (0.6 in water), y − 0.05.
+  - **The solver** (`aim/solve.mjs`, the same code as the `aim` job of the reader workers or inline on the main thread):
+    leads an entity's centre to where it will be at the release plus the flight; the pitch is a root of the vertical
+    miss, in closed form, warm-started from the draw's last answer; then one checked flight tick by tick: an
+    Amanatides–Woo voxel walk against each state's collision boxes and slab tests against every creature of the
+    entity snapshot. The first thing hit decides: the target or another enemy is a hit, a friend (the order's isFriend
+    players, the bots of the same owners) or a block blocks; unknown blocks count as air. The low arc first, the high
+    arc when a wall blocks it (over a friend too with `aim.overFriends`, off by default). A position is not led: the low arc through it (`bowAim`'s, which stays
+    exported), reached when the arrow comes down within 1.5 blocks of it.
+  - **The draw** (`aim/draw.ts`): update 0 before the draw (a wall on both arcs: « no clear line of fire » at once,
+    nothing drawn; a friend in the line: drawn anyway), then the draw (`use_item`); updates on the ticks of `aim.schedule` (`[0, 10, 11, 12, 13, 14, 20, 21, 22,
+    23]`), each asked two ticks ahead when it is a job; every tick the look is interpolated to the newest answer,
+    arriving on the next update's tick; the release (`block_dig` 5) on tick `aim.drawTicks` (24), after the packet that
+    carried the last look. A late answer keeps the last aim. A blocked line at the release is held up to 20 ticks,
+    asked again every tick, then the bow is put down unfired (a hotbar switch away and back) and the shot refused.
+    A target that dies mid-draw is shot at the last aim. auto-eat is paused for the draw, and `shoot` lets a meal
+    finish before it takes the hand.
+  - The target's velocity is a least-squares slope over its last positions (the server sends a player's every 2 ticks
+    and a mob's every 3, so a one-tick velocity reads 0, 0, 3v). `aimStats()` counts draws, refusals, holds, solves
+    and the lead's error (`bench:fight` prints them).
 - `entityOf(bot, ref)`: by `id` in `bot.entities`, else a player by `username`, else the nearest entity of that `name`
   within 4 blocks of the ref's position, the last only for a ref without an id: the id is the same for every client,
   so a ref whose id the bot lacks is dead or out of its sight, and another zombie next to where it stood is not it.
@@ -518,20 +527,23 @@ clicks and sends each one; it decides nothing about what a click does.
 
 ## Tests
 
-- **`squad/`:** `npm run check` = lint + tsc + 230 `node:test` tests on fakes (2026-11-01; compile, leases, guard, orders and
+- **`squad/`:** `npm run check` = lint + tsc + 244 `node:test` tests on fakes (compile, leases, guard, orders and
   reclaim, check/typecheck of the stock commands, HTTP + the real MCP client, supervisor wedge, protocol hardening,
   helpers, agent config drift, `follow`, the `gather` freeze, the `findBlocks` job against mineflayer's own search on
   real chunk data and `mineBlock` with and without it (`find-blocks.test.ts`), one test per dependency patch, the vitals, the worker
   pool: same path as the main thread on a synthetic world, the mirror's refcounts, every fallback, a clean stop;
-  `defend`: commander-relative threats, the leash, two guards per target, distinct slots, quick shots, a hawkEye
-  copy per bot, the slot fallback; friends (`raid.test.ts`: the team only, kept up to date; a guard attacks another
+  `defend`: commander-relative threats, the leash, two guards per target, distinct slots, quick shots, the slot
+  fallback; the aim (`aim.test.ts`: the arrow against hand-computed ticks and hawkEye's equations, a still and a
+  moving target, the shooter's own movement, the high arc over a wall and over a friend, friends and enemies in the
+  line, unknown blocks, the warm start, the schedule's ticks, the turn, the release on tick 24, a late answer, the
+  hold and the put-down, a dead target, auto-eat, the inline path over a bot's own world, the `aim` job on a real
+  reader worker and on the pool's inline fallback, the config); friends (`raid.test.ts`: the team only, kept up to date; a guard attacks another
   owner's bot) and `raid` (the march formation, two guards per enemy, archers' fire, the hunt and the end); ladders on a synthetic world: each pathfinder patch, the workers' same paths;
   bound items (`triggers.test.ts`: delivery without restart, the slot, restart, start, stop, starts in flight, the
   report's cap, a throwing listener, `ctx.run`, the reference typecheck, the check route, the snapshot sanitizer); the
   formation helpers (`helpers.test.ts`: `lookDir`/`lineSlots` at yaw 0/90/180/−90 and ranks, `groundAt` on a synthetic
-  column, `faceYaw` against mineflayer's conversions, `raiseShield`, `shoot` at a position through hawkEye and through
-  the ballistics checked by an independent flight, a hawkEye arc that would fly past the point refused, `bowAim`,
-  `entityOf`); the four item commands
+  column, `faceYaw` against mineflayer's conversions, `raiseShield`, `shoot` (the release, « no arrow left the bow », a
+  position on `bowAim`'s arc checked by an independent flight), `bowAim`, `entityOf`); the four item commands
   (`item-orders.test.ts`: the wall along z facing west, shields raised on arrival, a click re-forming it, a guard
   fighting at its slot, a guard pushed off its slot long after the wall formed going back to the exact slot; `epee`'s
   target with two guards on it and the anchor rings; the archer line `back` blocks short, front threats first, two
@@ -600,12 +612,10 @@ clicks and sends each one; it decides nothing about what a click does.
   - **Not measured:** the laptop with the client running (the production case), more than 30 bots.
   - **Squad's own code** (the guard proxy, journal, loop budget) is under 0.5% of the busy time.
 - **The reworked `defend` and the friendly-fire hook** (2026-10-31) have not been in a real fight on a server, nor
-  has the per-bot hawkEye copy been checked as such. Live so far: guards holding their ring around the commander (the
+  has the aim of docs/37 P3 beyond `bench:fight` and the live items tests. Live so far: guards holding their ring around the commander (the
   bound-item scenarios), and one archer shooting a husk (the core reclaim scenario).
 - **The formation helpers and the four item commands** passed live on the dev server (above). Still not verified
-  live: a shield held up for minutes through mob noise (the live walls held for seconds), which aim made the live
-  volleys (hawkEye or the ballistic fallback; neither is logged) and how often hawkEye's block check refuses a point on
-  the ground, `groundAt` on anything but a flat floor (slabs, snow layers, water), and fights against mobs that move
+  live: a shield held up for minutes through mob noise (the live walls held for seconds), `groundAt` on anything but a flat floor (slabs, snow layers, water), and fights against mobs that move
   (every live husk had NoAI). The any-item reading passed live too (above); not live: a crossbow, `ligne-archers` from a
   bow, a friend pointed at.
 - **The mod side of bound items** passed live on the dev server (above). Still not run on a server: multishot (a

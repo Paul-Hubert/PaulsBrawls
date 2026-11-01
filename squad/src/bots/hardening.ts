@@ -1,5 +1,5 @@
 // The v1 hardening corpus, copied from Eden (R1–R10) and widened for Squad: the abort sequence now also stops
-// digging, lowers a drawn bow, stops hawkEye, releases every control state and puts the runtime's default
+// digging, lowers a drawn bow, releases every control state and puts the runtime's default
 // movements back (a script's own Movements object may hold a guarded bot that has since lost its lease).
 // Written over a narrowed seam so the FakeBot drives it in tests.
 
@@ -20,7 +20,6 @@ export interface AbortableBot {
     tickTimeout?: number;
     searchRadius?: number;
   };
-  hawkEye?: { stop?: () => void };
   stopDigging?: () => void;
   deactivateItem?: () => void;
   clearControlStates?: () => void;
@@ -55,7 +54,7 @@ export function defaultMovements(bot: Bot): unknown {
  * driving the bot, so every stop/reclaim/timeout path runs this exact order. Each step is guarded on its own so a
  * missing or throwing plugin never breaks the chain.
  *   1. collectblock: clear targets, cancel its task;
- *   2. pvp.stop(), hawkEye.stop();
+ *   2. pvp.stop();
  *   3. pathfinder stop() THEN setGoal(null) (a lone stop() silently cancels the NEXT goal, R4);
  *   4. stop digging, lower a drawn bow / raised shield, release all controls;
  *   5. close any stray window (R1);
@@ -75,7 +74,6 @@ export async function abortActiveTasks(bot: AbortableBot, movements?: unknown): 
     if (Array.isArray(bot.collectBlock?.targets)) bot.collectBlock.targets.length = 0;
   });
   await step(() => bot.pvp?.stop?.());
-  await step(() => bot.hawkEye?.stop?.());
   await step(() => {
     bot.pathfinder?.stop?.();
     bot.pathfinder?.setGoal?.(null); // ORDER: stop() then setGoal(null), R4

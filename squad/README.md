@@ -62,7 +62,7 @@ main-thread ELU of 0.2-0.34 instead of 0.44-0.62 (two sites, so rough), but the 
 **Reader workers (docs/37, P2: built, off).** The job pool of [src/jobs/](src/jobs/): read-only calculations (aim,
 raycasts, line of sight, A*, block searches, as the later phases of
 [docs/37](../docs/37-squad-worker-reads-plan.md) add them) run on worker threads, in batches, each worker with a CPU
-budget per 50 ms tick. P2 ships only the framework and a trivial `echo` job type, so it stays off:
+budget per 50 ms tick. Job types so far: `echo` (P2's trivial one) and `aim` (P3, below); off by default:
 
 | Key in `squad.json` | Default | |
 |---|---|---|
@@ -93,6 +93,21 @@ instead of mineflayer's 15 ms on the main thread ([src/api/block-search.ts](src/
 set. A search the store cannot answer for that bot (not logged in, its column not in the store yet, the job failed or
 waited more than 5 s) runs on the bot as before. `findBlock` stays synchronous on the bot's own world. With either key
 off (the defaults), every search is `bot.findBlocks`, as before.
+
+**The archers' aim ([docs/37](../docs/37-squad-worker-reads-plan.md) P3, [src/aim/](src/aim/)).** `shoot` aims
+with Squad's own solver (hawkEye is gone): Minecraft 1.21.1's arrow, the target led along its velocity, the line of
+fire checked against blocks and every creature's hitbox (an enemy in the line counts as a hit; a friend blocks, and
+the draw waits up to 1 s for it to step out before « no clear line of fire »), the low arc first, the high arc over a
+wall. Solved again on the draw ticks of `aim.schedule`, the look
+turning smoothly between the answers, the release on tick `aim.drawTicks`. With `workers.count` > 0 **and**
+`world.enabled`, each update is an `aim` job on the reader workers (they see blocks only through the shared world);
+otherwise it is solved on the main thread over the bot's own world (~50–70 µs a solve).
+
+| Key in `squad.json` | Default | |
+|---|---|---|
+| `aim.schedule` | `[0, 10, 11, 12, 13, 14, 20, 21, 22, 23]` | the draw ticks whose aim is solved anew: the start, 500 ms in, the middle four, the four before the release. Increasing integers from 0, each below `aim.drawTicks` |
+| `aim.drawTicks` | 24 | the bow's release tick (1.2 s; at least 21: a bow reaches full power after 20 server ticks) |
+| `aim.overFriends` | `false` | `true`: a friend in the line is lobbed over on the high arc instead (fewer refused shots, but fewer kills per arrow and more arrows in the air: docs/37 §11.6) |
 
 **Watching the load.** The runtime samples its event loop every 10 s and logs one warning a minute at most when the
 loop's p99 passes 250 ms or its ELU 0.9 (bots move in slow motion past that). `POST /api/metrics` returns the last
@@ -197,4 +212,5 @@ token=live-test-token
 ```
 
 Then run with `LIVE_RUNTIME_PORT=8779`, and make sure `PAULSBRAWLS_SQUAD_TOKEN` is not set (it overrides the token on
-both sides). Without them those scenarios are skipped. Set `enabled=false` in `dev/squad.properties` afterwards.
+both sides). Without them those scenarios are skipped. Another port (a dev server of one's own): the same port in
+`dev/squad.properties`, `LIVE_RUNTIME_PORT` and `LIVE_MOD_PORT`. Set `enabled=false` in `dev/squad.properties` afterwards.

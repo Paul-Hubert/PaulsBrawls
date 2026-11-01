@@ -4,3 +4,5 @@
 export const STOCK_HANDLERS: URL[] = [new URL('./echo.mjs', import.meta.url)];
 // P6: mineflayer's findBlocks over the shared world (mineBlock's search, api/block-search.ts).
 STOCK_HANDLERS.push(new URL('./find-blocks.mjs', import.meta.url));
+// docs/37 P3: one aim update of a drawing archer (aim/solve.mjs), submitted by aim/draw.ts.
+STOCK_HANDLERS.push(new URL('./aim.mjs', import.meta.url));
