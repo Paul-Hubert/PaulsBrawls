@@ -371,6 +371,20 @@ its dispatch. P3's aim schedule must submit two ticks ahead (or P3 changes the a
 - **`/bots status`:** the runtime's `text` gets « calculs : 3/4 workers, file 12, p95 75 ms, 2 en retard, … » when the
   pool is on; the mod's own short line (`SquadStatusFormat`) is unchanged.
 
+### 8.6 Added in P4 (the A* job needed them)
+
+All backward compatible: a handler that uses none of them runs exactly as before.
+- **Progress:** `JobSpec.onProgress?(progress)`. A handler that answers `{ continue: state, progress }` hands `progress`
+  (structured-cloned) to it at the next tick's apply step, after the job is queued again, so a callback that cancels the
+  job finds it queued and its state is dropped. Never called once the job is settled; a callback that throws is
+  logged. A progress the worker cannot copy is dropped, not the job. The `continue` `WireResult` carries `progress?`.
+- **Elastic types:** a handler module may `export const elasticMinMs = 2`. The pool packs it into batches by that, not
+  by its measured cost (the EWMA, still kept for the stats), and `ctx.shareMs()` (in every job's `ctx`) gives a run its
+  fair share: what is left of the batch's budget, split evenly with the jobs after it. A search alone on a worker
+  computes up to the whole 40 ms; ten share it. A worker lists its elastic types in its `ready` message
+  (`elastic: { type: ms }`); the inline fallback reads them from its own handlers.
+- **`jobs.workersAlive()`:** a cheap count of the live workers (`stats()` sorts latencies).
+
 ## 9. P1 as built (2026-11-01)
 
 **Files** (`squad/src/world/`; the `.mjs` run in any thread without a loader, each with a `.d.mts`, which TypeScript

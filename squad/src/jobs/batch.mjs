@@ -10,6 +10,13 @@
 // spent or the job's estimated cost (the main thread's running estimate, or this thread's own once it has run that
 // type) would overrun it: the jobs not started go back to the queue. A handler that runs long can read
 // ctx.budgetLeftMs() and return { continue: state }: it is resumed next tick on the same thread with ctx.state.
+// { continue: state, progress } also hands `progress` (structured-cloned) to the submitter's onProgress, at the next
+// tick's apply step: a long job's partial answer (P4: the best path so far, so a bot starts walking).
+//
+// An ELASTIC job type (`export const elasticMinMs = 2`, P4's A*) takes whatever its share of the budget is: each run
+// computes for ctx.shareMs() (what is left of the budget, split evenly with the jobs after it in this batch), so one
+// search alone on a worker gets the whole budget and ten share it. It is packed into batches by elasticMinMs, its
+// smallest useful run, not by its measured cost (which is whatever share it got).
 //
 // Async handlers are allowed but discouraged: the batch awaits them, so the time they wait counts against the
 // budget, nothing else runs on this thread's batch meanwhile, and no answer of the batch goes back until it settles.
@@ -64,7 +71,7 @@ function isThenable(v) {
  * to run them. `env` = { handlers, held (Map id → { input, state }), costs (Map type → ms), world, entities,
  * version, worker, inline }.
  *
- * Results, one per job: { id, r: 'done', value, ms } | { id, r: 'continue', ms } | { id, r: 'failed', error, ms }
+ * Results, one per job: { id, r: 'done', value, ms } | { id, r: 'continue', ms, progress? } | { id, r: 'failed', error, ms }
  * | { id, r: 'notStarted', held } (held: its input stays here, because it was transferred and the main thread has
  * no copy).
  */
@@ -82,7 +89,7 @@ export async function runBatch(batch, env) {
       const j = jobs[i];
       if (i > 0) {
         const elapsed = performance.now() - start;
-        const est = Math.max(j.est ?? 0, env.costs.get(j.type) ?? 0);
+        const est = elasticMinMs(env.handlers.get(j.type)) ?? Math.max(j.est ?? 0, env.costs.get(j.type) ?? 0);
         if (elapsed >= budget || elapsed + est > budget) break;
       }
       let entry = j.resume ? env.held.get(j.id) : undefined;
@@ -97,6 +104,7 @@ export async function runBatch(batch, env) {
         results.push({ id: j.id, r: 'failed', ms: 0, error: { message: `no handler for job type ${j.type}`, name: 'Error' }, unknownType: true });
         continue;
       }
+      const after = jobs.length - i - 1;
       const ctx = {
         world: env.world ?? null,
         entities: env.entities ?? null,
@@ -107,6 +115,7 @@ export async function runBatch(batch, env) {
         worker: env.worker,
         inline: env.inline,
         budgetLeftMs,
+        shareMs: () => Math.max(0, budgetLeftMs()) / (1 + after),
       };
       const t0 = performance.now();
       try {
@@ -117,7 +126,9 @@ export async function runBatch(batch, env) {
         if (isContinue(v)) {
           entry.state = v.continue;
           env.held.set(j.id, entry);
-          results.push({ id: j.id, r: 'continue', ms });
+          // { continue, progress }: the progress goes to the submitter's onProgress (a long job's partial answer).
+          if (Object.hasOwn(v, 'progress')) results.push({ id: j.id, r: 'continue', ms, progress: v.progress });
+          else results.push({ id: j.id, r: 'continue', ms });
         } else {
           env.held.delete(j.id);
           results.push({ id: j.id, r: 'done', value: v, ms });
@@ -140,6 +151,12 @@ export async function runBatch(batch, env) {
     env.world?.leave();
   }
   return { results, usedMs: performance.now() - start };
+}
+
+/** A handler's elasticMinMs (a positive number), or undefined: not an elastic type. */
+export function elasticMinMs(h) {
+  const v = h?.elasticMinMs;
+  return typeof v === 'number' && v > 0 ? v : undefined;
 }
 
 function observe(costs, type, ms) {
