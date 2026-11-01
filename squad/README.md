@@ -107,7 +107,7 @@ otherwise it is solved on the main thread over the bot's own world (~50–70 µs
 |---|---|---|
 | `aim.schedule` | `[0, 10, 11, 12, 13, 14, 20, 21, 22, 23]` | the draw ticks whose aim is solved anew: the start, 500 ms in, the middle four, the four before the release. Increasing integers from 0, each below `aim.drawTicks` |
 | `aim.drawTicks` | 24 | the bow's release tick (1.2 s; at least 21: a bow reaches full power after 20 server ticks) |
-| `aim.overFriends` | `false` | `true`: a friend in the line is lobbed over on the high arc instead (fewer refused shots, but fewer kills per arrow and more arrows in the air: docs/37 §11.6) |
+| `aim.overFriends` | `true` | a friend in the line is lobbed over on the high arc (docs/37 D6). `false`: a friend blocks the shot, so more shots are refused (19–32 % in a 20 v 20 fight) but each arrow kills more often and fewer arrows are in the air (docs/37 §11.6) |
 
 **Watching the load.** The runtime samples its event loop every 10 s and logs one warning a minute at most when the
 loop's p99 passes 250 ms or its ELU 0.9 (bots move in slow motion past that). `POST /api/metrics` returns the last

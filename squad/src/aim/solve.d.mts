@@ -38,7 +38,7 @@ export interface AimInput {
   lead: number;
   /** The previous answer of this draw: the search starts there. */
   warm?: { pitch: number; arc: 'low' | 'high'; ticks: number } | null;
-  /** Try the high arc over a friend in the line too, as over a wall (aim.overFriends; default false: blocked). */
+  /** Try the high arc over a friend in the line too, as over a wall (aim.overFriends, on by default, docs/37 D6). Absent here: a friend blocks. */
   overFriends?: boolean;
   /** 'neutral': a mob in the line blocks the shot instead of counting as a hit (default 'enemy'). */
   mobs?: 'enemy' | 'neutral';

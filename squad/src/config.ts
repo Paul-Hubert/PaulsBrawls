@@ -108,7 +108,8 @@ export interface AimConfig {
   overFriends: boolean;
 }
 
-export const DEFAULT_AIM: AimConfig = { schedule: [0, 10, 11, 12, 13, 14, 20, 21, 22, 23], drawTicks: 24, overFriends: false };
+/** overFriends on: archers lob over a friend in the line (docs/37 D6, Paul 2026-11-01). */
+export const DEFAULT_AIM: AimConfig = { schedule: [0, 10, 11, 12, 13, 14, 20, 21, 22, 23], drawTicks: 24, overFriends: true };
 /** Below this the arrow leaves before full power (20 server ticks), with a tick of margin. */
 export const MIN_DRAW_TICKS = 21;
 

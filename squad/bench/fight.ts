@@ -38,7 +38,7 @@
 // (default 1400,1000, the floor at y 100), --stagger <ms> (default the runtime's 4000), --port 8779, --no-mod,
 // --difficulty hard (production's), --dead disconnect|respawn, --workers <N> (pathfinding.workers), --astar-budget <ms>,
 // --jobs <N> (workers.count: the reader workers, docs/37), --world (world.enabled: the shared world; with --jobs the
-// archers' aim runs as jobs on the workers), --over-friends (aim.overFriends: the high arc over a friend in the line),
+// archers' aim runs as jobs on the workers), --no-over-friends (aim.overFriends off: a friend in the line blocks the shot; on by default, docs/37 D6),
 // --label. SERVER_PROPERTIES overrides the server (default
 // ../dev/server.properties); the production server is refused.
 // The archers' aim (docs/37 P3, src/aim/) is recorded per round (aimStats): draws, refusals, solves, flights per
@@ -103,7 +103,7 @@ const WORKERS = Number(opt('workers') ?? 0);
 const ASTAR_BUDGET = opt('astar-budget') === undefined ? undefined : Number(opt('astar-budget'));
 const JOBS = Number(opt('jobs') ?? 0);
 const WORLD = flag('world');
-const OVER_FRIENDS = flag('over-friends');
+const OVER_FRIENDS = !flag('no-over-friends');
 const LABEL = opt('label') ?? 'fight';
 if (opt('hawkeye-every') !== undefined) {
   throw new Error('--hawkeye-every: hawkEye is gone (docs/37 P3: the archers aim with src/aim/); there is nothing to throttle');

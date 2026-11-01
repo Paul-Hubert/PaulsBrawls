@@ -270,7 +270,7 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
     Amanatides–Woo voxel walk against each state's collision boxes and slab tests against every creature of the
     entity snapshot. The first thing hit decides: the target or another enemy is a hit, a friend (the order's isFriend
     players, the bots of the same owners) or a block blocks; unknown blocks count as air. The low arc first, the high
-    arc when a wall blocks it (over a friend too with `aim.overFriends`, off by default). A position is not led: the low arc through it (`bowAim`'s, which stays
+    arc when a wall blocks it (over a friend too with `aim.overFriends`, on by default, docs/37 D6). A position is not led: the low arc through it (`bowAim`'s, which stays
     exported), reached when the arrow comes down within 1.5 blocks of it.
   - **The draw** (`aim/draw.ts`): update 0 before the draw (a wall on both arcs: « no clear line of fire » at once,
     nothing drawn; a friend in the line: drawn anyway), then the draw (`use_item`); updates on the ticks of `aim.schedule` (`[0, 10, 11, 12, 13, 14, 20, 21, 22,

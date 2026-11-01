@@ -610,8 +610,8 @@ for (const workers of [1, 0]) {
 test('config: aim.schedule, aim.drawTicks and aim.overFriends, defaulted and checked', async () => {
   const { parseConfig } = await import('../src/config');
   const env = { PAULSBRAWLS_SQUAD_TOKEN: 't' };
-  assert.deepEqual(parseConfig({}, env).aim, { schedule: [0, 10, 11, 12, 13, 14, 20, 21, 22, 23], drawTicks: 24, overFriends: false });
-  assert.deepEqual(parseConfig({ aim: { schedule: [0, 12, 22], drawTicks: 30, overFriends: true } }, env).aim, { schedule: [0, 12, 22], drawTicks: 30, overFriends: true });
+  assert.deepEqual(parseConfig({}, env).aim, { schedule: [0, 10, 11, 12, 13, 14, 20, 21, 22, 23], drawTicks: 24, overFriends: true });
+  assert.deepEqual(parseConfig({ aim: { schedule: [0, 12, 22], drawTicks: 30, overFriends: false } }, env).aim, { schedule: [0, 12, 22], drawTicks: 30, overFriends: false });
   assert.throws(() => parseConfig({ aim: { overFriends: 'yes' } }, env), /aim.overFriends must be true or false/);
   assert.throws(() => parseConfig({ aim: { schedule: [10, 20] } }, env), /aim.schedule must be increasing integer ticks from 0/);
   assert.throws(() => parseConfig({ aim: { schedule: [0, 20, 12] } }, env), /aim.schedule/);

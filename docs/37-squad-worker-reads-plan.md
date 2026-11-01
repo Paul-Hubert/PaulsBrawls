@@ -22,6 +22,9 @@
   start, once 500 ms in, the middle 4 ticks and the 4 ticks before the release. In between, the bow **turns smoothly**
   to arrive at each new aim exactly on its tick. Its line of fire is checked against blocks **and every player's
   hitbox**.
+- **D6** (Paul, after P3's measurements, §11.6). **Archers lob over a friend in the line:** `aim.overFriends` is on by
+  default, so the high arc goes over a friend as over a wall. Measured: refused shots 4.5–9 % instead of 19–32 %, at
+  fewer kills per arrow (3.2–4.0 % instead of 3.5–5.2 %) and about +0.1 ELU, from more arrows in the air on 4–5 s lobs.
 
 ## 1. Where we start (docs/36)
 
@@ -703,7 +706,7 @@ is installed, and skips that test when it is not).
   `friends`, the order's isFriend players, or the shooter's team in the snapshot's `team` column), a block, or an armor
   stand blocks. Unknown blocks (-1) count as air, and are counted (`unknown`).
 - **Arcs:** the low arc first; the high arc when a block (or an armor stand) stops the low one. A friend in the low
-  arc's line blocks (§3), unless `aim.overFriends` (off) lets the high arc go over it. Both blocked: the low arc's
+  arc's line blocks (§3), unless `aim.overFriends` (on by default since D6) lets the high arc go over it. Both blocked: the low arc's
   answer, not clear, with `other` saying what the high arc met.
 - **Cost:** about 6 flights per answer in the fights (most warm-started; 17–19 with `overFriends`, whose high arcs are
   searched cold), 50–65 µs p50 inline through prismarine-world and 36 µs on a worker over the shared world, against
@@ -814,7 +817,7 @@ Variants (inline unless said), for the choices of §11.7:
    still blocked at the release is held up to 20 ticks (asked again every tick) before the bow is put down unfired.
    Friends move: in the fights 40–60 % of the held draws found a clear line and were released. The stock formations put
    archers behind archers (`raid`'s two rows of archers, `defend`'s ring of 6), and in the fights the friend in the
-   way was mostly another archer: 12–24 % of the shots end refused that way (§11.6). `aim.overFriends` (off) lobs over
+   way was mostly another archer: 12–24 % of the shots end refused that way (§11.6). `aim.overFriends` (on by default since D6) lobs over
    the friend on the high arc instead, as over a wall: measured, about half the shots then go high, failed shots fall
    to 4.5–9 %, but the kills per arrow fall (3.3–4.1 % against 5.1–6.8 %) and the arrows in the air (4–5 s each) raise
    the packet load (full-strength ELU +0.1). Fixing the formations (staggered rows, a 1-block sidestep for a friend)
