@@ -72,6 +72,19 @@ budget per 50 ms tick. P2 ships only the framework and a trivial `echo` job type
 With `workers.count` > 0 the dispatcher ticks on one online bot's physics ticks (a self-correcting 50 ms timer when
 none is online), publishes a snapshot of every entity the bots know into shared memory, and runs the jobs on the main
 thread when no worker is alive (every slot crashed 3 times in a minute).
+**Shared world (optional, [docs/37](../docs/37-squad-worker-reads-plan.md) P1).** `squad.json`'s `world` block
+builds one copy of the chunks the bots receive, in shared memory ([src/world/](src/world/)). One writer thread decodes
+it from the bots' packets, and any thread can read it lock-free. The bots keep their own worlds: in P1 nothing reads
+the store but `verify`. Later phases (aim, A* and the bots' own reads on worker threads) turn it on.
+
+| Key in `squad.json` | Default | |
+|---|---|---|
+| `world.enabled` | `false` | build the store (a writer thread, ~70 MB for 850 columns) |
+| `world.cacheSeconds` | 60 | a column no bot holds any more is kept this long, unreadable, in case a bot receives it again (no decode then) |
+| `world.cacheColumns` | 2000 | at most this many such columns, oldest dropped first |
+| `world.verify` | `false` | once a second, compare 256 random blocks of the store with the bots' own worlds and log mismatches (debug) |
+
+`npx tsx live-tests/probe-world.ts` (dev server only) checks it block for block against six real bots.
 
 **Watching the load.** The runtime samples its event loop every 10 s and logs one warning a minute at most when the
 loop's p99 passes 250 ms or its ELU 0.9 (bots move in slow motion past that). `POST /api/metrics` returns the last

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 
 import { applyPathfinding, jobWorkerCount, loadConfig, pathWorkerCount, type SquadConfig } from './config';
 import { PathWorkerPool } from './bots/pathworkers/client';
+import { SharedWorld } from './world/shared-world';
 import { BotPool, skippedPackets, type BotPoolOptions } from './bots/pool';
 import { JobPool } from './jobs/pool';
 import { STOCK_HANDLERS } from './jobs/handlers/index';
@@ -28,6 +29,12 @@ import { errorMessage, isBotLeft, isStopped } from './api/errors';
 import { LoopMonitor } from './vitals/lag-monitor';
 import { Vitals } from './vitals/metrics';
 
+/**
+ * Reader epoch slots of the shared world: the main thread's own, and one per reader worker P2 starts (each a
+ * SharedWorld.descriptor()). An idle slot costs 4 bytes and one Atomics.load per writer batch.
+ */
+const WORLD_MAX_READERS = 64;
+
 export interface Started {
   service: SquadService;
   http: SquadHttp;
@@ -36,6 +43,8 @@ export interface Started {
   pathWorkers?: PathWorkerPool;
   /** The reader workers' job pool (docs/37), when workers.count > 0. */
   jobs?: JobPool;
+  /** The shared world, when world.enabled (docs/37 P1). */
+  world?: SharedWorld;
   stop(): Promise<void>;
 }
 
@@ -58,15 +67,25 @@ export async function start(
     logger.warn('squad', `pathfinding.workers ${cfg.pathfinding.workers} capped to ${workers}: one core stays with the main thread`);
   }
   const pathWorkers = workers > 0 ? new PathWorkerPool({ workers, version: cfg.minecraft.version }) : undefined;
+  const world = cfg.world.enabled
+    ? new SharedWorld({
+        version: cfg.minecraft.version,
+        cacheSeconds: cfg.world.cacheSeconds,
+        cacheColumns: cfg.world.cacheColumns,
+        maxReaders: WORLD_MAX_READERS,
+        verify: cfg.world.verify,
+      })
+    : undefined;
   const pool = new BotPool({
     host: cfg.minecraft.host,
     port: cfg.minecraft.port,
     version: cfg.minecraft.version,
     staggerMs: cfg.loginStaggerMs,
     pathWorkers,
+    world,
     ...opts.pool,
   });
-  const jobs = startJobs(cfg, pool, roster);
+  const jobs = startJobs(cfg, pool, roster, world);
   const runner = new OrderRunner({ pool, roster, leases, claims, store, journal, limits: cfg.limits });
   const vitals = new Vitals({ pool, journal, skipped: skippedPackets, loop, jobs });
   const service = new SquadService({ roster, pool, leases, claims, store, journal, runner, limits: cfg.limits, vitals });
@@ -97,10 +116,11 @@ export async function start(
       pool.stop();
       await jobs?.stop();
       await pathWorkers?.stop();
+      await world?.stop();
       await http.close();
       journal.close();
     })());
-  return { service, http, port, stop, pathWorkers, jobs };
+  return { service, http, port, stop, pathWorkers, world, jobs };
 }
 
 /**
@@ -108,7 +128,7 @@ export async function start(
  * types. Their dispatcher ticks on one online bot's physics ticks (LeaderTicks); the entity snapshot merges every
  * online bot's entities, with the roster's owner groups as teams.
  */
-function startJobs(cfg: SquadConfig, pool: BotPool, roster: Roster): JobPool | undefined {
+function startJobs(cfg: SquadConfig, pool: BotPool, roster: Roster, world: SharedWorld | undefined): JobPool | undefined {
   const count = jobWorkerCount(cfg.workers);
   if (count < cfg.workers.count) {
     logger.warn('squad', `workers.count ${cfg.workers.count} capped to ${count}: one core stays with the main thread`);
@@ -120,6 +140,8 @@ function startJobs(cfg: SquadConfig, pool: BotPool, roster: Roster): JobPool | u
     tickBudgetMs: cfg.workers.tickBudgetMs,
     handlers: STOCK_HANDLERS,
     version: cfg.minecraft.version,
+    // The workers read the shared world (docs/37 P1) when it is on; each one gets its own epoch slot.
+    ...(world ? { world, worldModule: new URL('./world/reader.mjs', import.meta.url) } : {}),
     entities: {
       bots: function* () {
         for (const n of pool.names()) {
