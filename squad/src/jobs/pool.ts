@@ -205,6 +205,8 @@ interface Job {
   home: number;
   /** Its state or input is held on `home`: it is sent as { resume: true }. */
   resume: boolean;
+  /** The slot its last batch went to (-1: none yet, or inline). */
+  sentTo: number;
   retries: number;
   settled: boolean;
 }
@@ -355,6 +357,7 @@ export class JobPool {
         submittedAt: performance.now(),
         home: ANY,
         resume: false,
+        sentTo: -1,
         retries: 0,
         settled: false,
       };
@@ -560,6 +563,7 @@ export class JobPool {
     for (const s of this.slots) if (s.worker && s.ready && !s.busy && !s.disabled) cands.push({ slot: s, load: 0, jobs: [] });
     const keep: Job[] = [];
     let full = cands.length === 0;
+    let held: number[] | null = null;
     for (const job of this.queue) {
       // A worker's answer is applied next tick: a job due by this tick cannot make it.
       if (job.deadlineTick <= tick) {
@@ -583,12 +587,23 @@ export class JobPool {
       } else {
         // A short job joins a batch that already goes out this tick while that one stays small (PACK_MS): one message
         // there and one back instead of one per worker (the main thread pays for each). Elastic jobs (A*) spread.
-        if (!this.elastic.has(job.type) && est <= PACK_MS) target = cands.find((c) => c.jobs.length > 0 && c.load + est <= PACK_MS);
+        const spread = this.elastic.has(job.type);
+        if (!spread && est <= PACK_MS) target = cands.find((c) => c.jobs.length > 0 && c.load + est <= PACK_MS);
         if (!target) {
+          // A new elastic job (an A* search) stays on the worker it starts on for its whole life: it goes to the one
+          // holding the fewest jobs across ticks, else, with the loads of this tick tied at 0, every search started
+          // one at a time landed on the first idle worker (walking at 30 bots: one worker 29 ms a tick, three idle).
+          held ??= this.heldPerSlot();
           for (const c of cands) {
             if (c.load > 0 && c.load + est > this.budgetMs) continue;
-            if (!target || c.load < target.load) target = c;
+            if (!target) target = c;
+            else if (spread) {
+              const a = held[c.slot.index]!;
+              const b = held[target.slot.index]!;
+              if (a < b || (a === b && c.load < target.load)) target = c;
+            } else if (c.load < target.load) target = c;
           }
+          if (target && spread) held[target.slot.index]!++;
         }
         if (!target) {
           // Strict priority: nothing lower goes before it.
@@ -607,6 +622,17 @@ export class JobPool {
     }
     this.queue = keep;
     for (const c of cands) if (c.jobs.length > 0) this.send(c.slot, c.jobs, tick);
+  }
+
+  /**
+   * The jobs each slot holds across ticks: queued with their state there, or sent to it and not applied yet (out in
+   * its batch, or answered since the last apply: the slot then looks idle with nothing of its own queued).
+   */
+  private heldPerSlot(): number[] {
+    const held = this.slots.map(() => 0);
+    for (const j of this.queue) if (j.home >= 0) held[j.home] = (held[j.home] ?? 0) + 1;
+    for (const j of this.inFlight.values()) if (j.sentTo >= 0 && !j.settled) held[j.sentTo] = (held[j.sentTo] ?? 0) + 1;
+    return held;
   }
 
   private send(slot: Slot, jobs: Job[], tick: number): void {
@@ -644,6 +670,7 @@ export class JobPool {
     }
     for (const j of jobs) {
       if (j.transfer) j.transferred = true;
+      j.sentTo = slot.index;
       this.inFlight.set(j.id, j);
     }
     slot.busy = true;
