@@ -598,6 +598,8 @@ export async function drawShot(bot: Bot, at: { entity: AimEntity | null; point: 
       turn = { y0: real.entity.yaw, p0: real.entity.pitch, y1: sol.yaw, p1: sol.pitch, a: t, b: t >= plan.release ? t + 1 : nextUpdate(plan, t) };
     };
     lookAlong(bot, turn, 1);
+    /** The turn and draw tick of the look set last: it goes out with the next tick's packet, and the release flies at it. */
+    let sent = { turn, at: 1 };
     for (;;) {
       await clock.next();
       const t = clock.n - drawStart;
@@ -631,7 +633,17 @@ export async function drawShot(bot: Bot, at: { entity: AimEntity | null; point: 
       adopt(t, false);
       if (t >= plan.release) {
         const cur = answers.get(applied)!;
-        if (cur.clear && t >= turn.b) break;
+        if (cur.clear) {
+          // Release only once the look the last packet carried is this answer's, exactly. A late event loop runs
+          // several physics ticks at once (clock.next() can skip ticks): the last look set may then still be one of the
+          // turn's in-between ones, and the arrow flew there (found by a flaky test, docs/37 §11). Set the final look
+          // and release on a later tick instead.
+          if (t >= turn.b && sent.turn === turn && sent.at >= turn.b) break;
+          const at = t >= turn.b ? turn.b : t + 1;
+          lookAlong(bot, turn, at);
+          sent = { turn, at };
+          continue;
+        }
         if (lost && !cur.clear) {
           counters.cancelled.gone++;
           if (weapon === 'crossbow' && charged) loaded.add(real);
@@ -659,6 +671,7 @@ export async function drawShot(bot: Bot, at: { entity: AimEntity | null; point: 
         }
       }
       lookAlong(bot, turn, t + 1);
+      sent = { turn, at: t + 1 };
     }
 
     // The release, at the look the last packet carried.

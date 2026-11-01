@@ -379,6 +379,46 @@ test('draw: update 0 before the draw, the others two ticks ahead of their tick, 
   }
 });
 
+test('draw: ticks that come in a burst at the release (a late event loop) still fly at a final aim, never mid-turn', async () => {
+  const s = bench();
+  const answerAll = (): void => {
+    for (const x of s.submits) if (x.k > 0 && !(x as { done?: boolean }).done) {
+      (x as { done?: boolean }).done = true;
+      x.resolve(answer(x.k));
+    }
+  };
+  try {
+    const shot = shoot(s.b as never, target() as never);
+    await new Promise((r) => setImmediate(r));
+    s.submits[0]!.resolve(answer(0));
+    while (s.drawTick() < 16) {
+      await s.tick();
+      answerAll();
+    }
+    // Eight physics ticks in one timer callback, as mineflayer catches up after a stall: the draw, mid-way through the
+    // turn from update 14 to 20, next sees tick 24 (the release).
+    for (let i = 0; i < 8; i++) {
+      s.jobs.currentTick++;
+      s.b.ticks++;
+      s.b.emit('physicsTick');
+    }
+    await new Promise((r) => setImmediate(r));
+    for (let i = 0; i < 10 && s.b.releases.length === 0; i++) {
+      answerAll();
+      await s.tick();
+    }
+    assert.deepEqual(await shot, { shot: true });
+    const r = s.b.releases[0]!;
+    // The release's look is exactly one answer's (k × 0.01), not a value interpolated between two of them.
+    const k = Math.round(r.yaw / 0.01);
+    assert.ok(Math.abs(r.yaw - 0.01 * k) < 1e-9 && k >= 14, `flies at update ${k}'s yaw exactly: ${r.yaw}`);
+    assert.ok(r.drawnTicks >= DEFAULT_AIM.drawTicks, `released at full draw (${r.drawnTicks} ticks)`);
+    aimStats(true);
+  } finally {
+    configureAim({ jobs: null, world: null, fallbackTicks: true });
+  }
+});
+
 test('draw: a late answer keeps the last aim (the release is still on tick 24)', async () => {
   const s = bench();
   try {
