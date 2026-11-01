@@ -576,6 +576,9 @@ export class OffloadedSearch {
     this.held = false;
     if (this.dropped || this.local || this.deadReason) return 'ended';
     if (p.goal !== this.params.goal || p.movements !== this.params.movements) return 'goal';
+    // The same object is not always the same goal: GoalFollow's hasChanged() moves it in place (to where the entity is
+    // now), and a reset of an empty path emits nothing. The worker searches for the snapshot it was sent.
+    if (JSON.stringify(serializeGoal(p.goal, this.bot.world)) !== JSON.stringify(this.wire.goal)) return 'goal';
     if (this.final && this.final.status !== 'success') return 'final';
     if (this.overflow) return 'changes';
     const path = this.finalPath ?? this.partial ?? [];
