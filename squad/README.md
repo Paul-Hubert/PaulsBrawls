@@ -54,7 +54,8 @@ applies them too. To change a patch: edit the file in `node_modules`, then `npx 
 **Reader workers (optional, [docs/37](../docs/37-squad-worker-reads-plan.md)).** The job pool of [src/jobs/](src/jobs/):
 read-only calculations run on worker threads, in batches, each worker with a CPU budget per 50 ms tick. Since P4 the
 bots' **A* searches** run there, over the shared world below (a search first gets 3 ms on the main thread: most of
-gather's end there and are answered at once, the long ones move to a worker). The bots, their physics, the look-ahead and the
+gather's end there and are answered at once, the long ones move to a worker). A worker costs ~60 MB: its heap is
+sized (16 MB young, 512 MB old), or A*'s garbage grew it by hundreds of MB. The bots, their physics, the look-ahead and the
 scripts stay on the main thread. This replaced docs/32 D's pathfinding worker pool, whose workers each parsed their
 own copy of every chunk (about 9 GB at 14 workers and 30 gathering bots, docs/31 §11.6): now every worker reads the
 one copy in shared memory. Off by default:

@@ -85,17 +85,19 @@ start, `main.ts` :42 and :49):
 | `world.enabled` | **true when `workers.count` > 0**, else false (`parseConfig`) | The shared world the workers read. An explicit `false` with workers on keeps A* on the main thread (`main.ts` warns) |
 
 Why these defaults (measured on a desktop, [docs/31 §11](../../31-squad-performance-review.md)): the budget was better
-than none in every moving phase at 10–30 bots; with it, the main thread was not saturated at 30 moving bots, and the
-workers cost about 9 GB of RSS at 30 gathering bots and did less gather work.
+than none in every moving phase at 10–30 bots; with it, the main thread was not saturated at 30 moving bots, and
+docs/32 D's workers cost about 9 GB of RSS at 30 gathering bots and did less gather work. A* on the reader workers
+(docs/37 P4) costs ~60 MB a worker, walks as well or better and cuts the main thread's ELU about 2×, but was not shown
+to gather as well at 30 bots ([docs/37 §10.1](../../37-squad-worker-reads-plan.md)): `workers.count` stays 0.
 
 **A* on the reader workers** (docs/37 P4; it replaced docs/32 D's pathfinding worker pool, whose workers each parsed
 their own copy of every chunk):
 - **What moves:** only the pathfinder plugin's own planning, through the `bot.pathfinder.searchOffload` hook the patch
-  adds (`bots/pathworkers/offload.ts` `install` :150, installed at spawn by `bots/pool.ts` `withPathSearch` :325). A
+  adds (`bots/pathworkers/offload.ts` `install` :174, installed at spawn by `bots/pool.ts` `withPathSearch` :325). A
   caller's synchronous `getPathTo` stays on the main thread. The bots, physics, look-ahead and scripts stay there too,
   so O2 (the real bot) and O4 (instant reclaim) hold.
 - **The probe:** a search that can cross first runs on the main thread for at most 3 ms (`DEFAULT_PROBE_MS`, the
-  plugin's own A* under the A* budget). Most of gather's searches end there and are answered at once; the others move
+  plugin's own A*; all probes together at most 10 ms per 50 ms window, `PROBE_BUDGET_MS`). Most of gather's searches end there and are answered at once; the others move
   to a worker, and the bot walks the probe's best path meanwhile. Without it, gather's searches were reset by nearby
   block changes before a worker could answer (docs/37 §10).
 - **The world:** the shared world of docs/37 P1, which follows every bot's packets from its first one (`pool.ts` :282).
@@ -104,25 +106,29 @@ their own copy of every chunk):
 - **The job:** one search is one `path` job (`jobs/handlers/path.mjs`): mineflayer-pathfinder's own `AStar`,
   `Movements` and goals over a stand-in bot (blocks from the store; inventory, effects and the Movements' settings
   from a snapshot sent with the job, `serialize.ts`), run in slices, one per tick, each slice its share of the
-  worker's `workers.tickBudgetMs` (an elastic job type: `elasticMinMs` 2 ms, `path.mjs` :39; a search alone takes up
-  to 40 ms a tick, ten share it). The search's state stays on its worker (the pool pins a continued job). Each slice
-  answers `progress` (the pool's `onProgress`): the chunks it entered, and the best partial path on the first slice
-  and then at most every 250 ms (`PROGRESS_MS` :43). Ticks where its worker had no budget left for it do not count
-  against `thinkTimeout` (`run` :64), as the main-thread A* budget's waits do not.
+  worker's `workers.tickBudgetMs` (an elastic job type: `elasticMinMs` 2 ms, `path.mjs` :40; a search alone takes up
+  to 40 ms a tick, ten share it; one that has computed 50 ms keeps a quarter of its share when others follow it; the
+  batch's last slice leaves up to 5 ms unused, or the worker misses the next dispatch). The search's state stays on
+  its worker (the pool pins a continued job). Each slice answers `progress` (the pool's `onProgress`): the chunks it
+  entered, and the best partial path on the first slice and then at most every 250 ms (`PROGRESS_MS`). Ticks where its worker had no budget left for it do not count
+  against `thinkTimeout` (`run` :80), as the main-thread A* budget's waits do not.
+- **Memory:** each reader worker's V8 heap is sized (`main.ts` `READER_HEAP`: young 16 MB, old 512 MB). A worker
+  holds ~26 MB after a GC; without the cap each isolate let A*'s garbage grow to 335–442 MB against V8's default
+  limit. Measured live at 30 gathering bots: 2.0 / 2.2 / 2.45 GB of RSS with 1 / 4 / 8 workers (docs/37 §10.1).
 - **Blocks:** `world/blocks.mjs` `BlockTemplates` :22: one prismarine `Block` per state id, built once, specialised by
   position (`at` :42: `Object.create(template)` + position); `StoreWorld` :54 is prismarine-world's sync
   `getBlock`/`raycast` over the store (for look-at and place goals). No biome, light or block entity.
-- **On the main thread** (`OffloadedSearch`, `offload.ts` :265): the start node until the worker reports, then its
+- **On the main thread** (`OffloadedSearch`, `offload.ts` :311): the start node until the worker reports, then its
   partial paths, then its path as `Move` objects. Goals are serialized by class (`serialize.ts`; `GoalFollow` becomes
   a `GoalNear` snapshot and the main thread keeps `hasChanged`). The plugin's `path_reset`, `goal_updated`,
   `path_stop` and the bot's `end` cancel the job (its state on the worker is dropped); a newer search supersedes it.
 - **Fallbacks to the main-thread search** (the same search from the start, under `pathfinding.astarBudgetMs`),
-  counted by reason in `stats()` (:250): `goal`, `movements` (cannot cross threads), `noDimension`, `noColumn` (the
+  counted by reason in `stats()` (:296): `goal`, `movements` (cannot cross threads), `noDimension`, `noColumn` (the
   bot's column is not live in the store), `noWorld` (the writer disabled), `noWorker` (no live worker: the pool would
   run the job inline, where the plugin's own search is the better one), a failed job (`threw`, `workerDied`,
   `lostInput`, `clone`, `unknownType`, `unavailable`, `stopped`, `late`; the pool retries a job whose worker died
   once, on the restarted worker), and `deadline`: no sign of life for `thinkTimeout` + 2 s (`DEFAULT_GRACE_MS`
-  :133). `/api/metrics` shows them as `paths`.
+  :149). `/api/metrics` shows them as `paths`.
 
 ## Patched dependencies (`squad/patches/`, docs/32 B)
 

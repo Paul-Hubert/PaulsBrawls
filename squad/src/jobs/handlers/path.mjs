@@ -7,11 +7,12 @@
 // state (the AStar, its Movements, the stand-in bot) stays on this worker (the pool pins a continued job to it). The
 // type is elastic (batch.mjs): a slice takes its share of what is left of the worker's budget this tick
 // (workers.tickBudgetMs, 40 ms), so a search alone on a worker computes up to 40 ms a tick and ten searches share
-// it; the pool packs them by elasticMinMs. The bot's tickTimeout (10 ms in Squad) is a main-thread setting, which
-// keeps a search from holding up the bots' event loop: on a worker it does not apply. Each slice also answers `progress` (the pool's progress channel,
-// pool.ts): the chunks the search entered since the last slice, and, on the first slice and then at most every
-// PROGRESS_MS, the best partial path, so the bot starts walking before the search ends. bots/pathworkers/offload.ts is
-// the main-thread side.
+// it; the pool packs them by elasticMinMs. A search that has already computed 50 ms keeps a quarter of its share
+// when others follow it in the batch (least attained service: the short ones end first). The bot's tickTimeout (10
+// ms in Squad) is a main-thread setting, which keeps a search from holding up the bots' event loop: on a worker it does
+// not apply. Each slice also answers `progress` (the pool's progress channel, pool.ts): the chunks the search entered
+// since the last slice, and, on the first slice and then at most every PROGRESS_MS, the best partial path, so the bot
+// starts walking before the search ends. bots/pathworkers/offload.ts is the main-thread side.
 //
 // thinkTimeout is wall time from the first slice, as on the main thread, except the ticks this search did not get a
 // slice because its worker's budget went to other jobs: those do not count, as the time a search waits for the main
@@ -39,6 +40,21 @@ const TICK_MS = 50;
 export const elasticMinMs = 2;
 /** A slice never computes less than this, even when the batch's budget is (nearly) spent. */
 const MIN_SLICE_MS = 0.5;
+/**
+ * A search that has computed this long gives up most of its share (keeps OLD_SHARE of it) to the jobs after it in
+ * the batch, the newer searches: least attained service, so the short searches end first and the exhaustive ones
+ * (gather's unreachable logs: 13 000–20 000 nodes, half a second of compute) do not crowd them out. Alone, it still
+ * takes the whole budget.
+ */
+const OLD_AFTER_MS = 50;
+const OLD_SHARE = 0.25;
+/**
+ * The last job of a batch would take all that is left, so the batch would run the whole budget (40 of 50 ms). The
+ * dispatcher follows a bot's physics ticks, 31–62 ms apart on Windows (15.6 ms timers): a worker still busy at the
+ * next dispatch skips that tick. Measured: every worker at exactly 20 ms a tick, half its budget. The last slice
+ * leaves this much unused (at most a quarter of its share).
+ */
+const TAIL_MS = 5;
 /** The best partial path goes back on the first slice, then at most this often (when it changed). */
 export const PROGRESS_MS = 250;
 
@@ -79,9 +95,15 @@ export function run(input, ctx) {
     s.seen = version;
     s.bot.emit('blockUpdate');
   }
-  const r = s.astar.computeSlice(Math.max(MIN_SLICE_MS, ctx.shareMs()));
+  const share = ctx.shareMs();
+  // A share below what is left means jobs follow in this batch: an old search leaves them most of it.
+  const last = share >= ctx.budgetLeftMs();
+  const old = s.used >= OLD_AFTER_MS && !last;
+  const t0 = performance.now();
+  const r = s.astar.computeSlice(Math.max(MIN_SLICE_MS, old ? share * OLD_SHARE : last ? share - Math.min(TAIL_MS, share / 4) : share));
   s.lastTick = ctx.tick;
   s.lastEnd = performance.now();
+  s.used += s.lastEnd - t0;
   const chunks = newChunks(s);
   if (r.status !== 'partial') {
     return { status: r.status, cost: r.cost, time: r.time, visitedNodes: r.visitedNodes, generatedNodes: r.generatedNodes, path: r.path, chunks };
@@ -109,6 +131,8 @@ function begin(input, reader) {
   movements.blocks = new Map();
   movements.blocksClock = -1;
   movements.entityIntersections = input.entityIntersections ?? {};
+  // No entity in the way: every getNumEntitiesAt is 0, without the "x,y,z" string it builds per call (2–6 a neighbour).
+  if (Object.keys(movements.entityIntersections).length === 0) movements.getNumEntitiesAt = noEntities;
   movements.exclusionAreasStep = [];
   movements.exclusionAreasBreak = [];
   movements.exclusionAreasPlace = [];
@@ -119,6 +143,8 @@ function begin(input, reader) {
     astar: new env.AStar(start, movements, goal, input.timeout, input.tickTimeout, input.searchRadius),
     bot,
     seen: -1,
+    /** Compute time so far, ms. */
+    used: 0,
     lastTick: 0,
     lastEnd: 0,
     /** visitedChunks already reported. */
@@ -126,6 +152,10 @@ function begin(input, reader) {
     sentBest: null,
     sentAt: 0,
   };
+}
+
+function noEntities() {
+  return 0;
 }
 
 /** The chunks the search entered since the last report (a Set iterates in insertion order). */
@@ -154,7 +184,8 @@ function standIn(world, input, bounds) {
     entity: { effects },
     entities: {},
     inventory: { items: () => items },
-    blockAt: (pos) => world.getBlock(pos),
+    // Movements.getBlock passes a new Vec3 per lookup and keeps only the block: it can be the block's own position.
+    blockAt: (pos) => world.blockAtOwned(pos),
     pathfinder: {
       // index.js's own bestHarvestTool, over the snapshot of the inventory.
       bestHarvestTool(block) {

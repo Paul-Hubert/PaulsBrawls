@@ -35,6 +35,16 @@ import { Vitals } from './vitals/metrics';
  */
 const WORLD_MAX_READERS = 64;
 
+/**
+ * Each reader worker's V8 heap (docs/37 §10). A worker holds little: 26 MB after a GC (the registry, the Block
+ * templates, the code), at most 125 MB live with 30 searches on one worker. But A* makes garbage fast (a Move, a
+ * PathNode, keys and blocks per node), and against V8's default limit (4.3 GB on a 64 GB machine) each isolate let
+ * 150-350 MB of it pile up before collecting: under a steady load, 1 → 8 workers grew the process by 0.6 → 2.7 GB.
+ * With a heap sized to the job, each worker collects early. One that outgrows it dies (out of memory) and is restarted
+ * like any dead worker; its searches are retried, then fall back to the main thread.
+ */
+const READER_HEAP = { maxYoungGenerationSizeMb: 16, maxOldGenerationSizeMb: 512 };
+
 export interface Started {
   service: SquadService;
   http: SquadHttp;
@@ -141,6 +151,7 @@ function startJobs(cfg: SquadConfig, botPool: () => BotPool | undefined, roster:
     tickBudgetMs: cfg.workers.tickBudgetMs,
     handlers: STOCK_HANDLERS,
     version: cfg.minecraft.version,
+    resourceLimits: READER_HEAP,
     // The workers read the shared world (docs/37 P1) when it is on; each one gets its own epoch slot.
     ...(world ? { world, worldModule: new URL('./world/reader.mjs', import.meta.url) } : {}),
     entities: {

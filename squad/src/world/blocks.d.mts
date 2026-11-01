@@ -36,5 +36,7 @@ export class StoreWorld {
   stateIdAt(x: number, y: number, z: number): number;
   getBlockStateId(pos: Vec): number | undefined;
   getBlock(pos: Vec): BlockLike | null;
+  /** getBlock that keeps `pos` (a fresh Vec3 the caller drops) as the block's position at integer coordinates. */
+  blockAtOwned(pos: Vec): BlockLike | null;
   raycast(from: Vec, direction: Vec, range: number, matcher?: ((block: BlockLike, iter: unknown) => boolean) | null): BlockLike | null;
 }

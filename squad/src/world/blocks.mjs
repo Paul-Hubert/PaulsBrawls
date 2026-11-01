@@ -81,6 +81,19 @@ export class StoreWorld {
     return s < 0 ? null : this.templates.at(s, new Vec3(x, y, z));
   }
 
+  /**
+   * getBlock for a caller that hands over a fresh Vec3 it will not use again (Movements.getBlock builds one per
+   * lookup): at integer coordinates it becomes the block's position, so a lookup allocates one Vec3, not two.
+   */
+  blockAtOwned(pos) {
+    const x = pos.x;
+    const y = pos.y;
+    const z = pos.z;
+    if (!Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(z)) return this.getBlock(pos);
+    const s = this.stateIdAt(x, y, z);
+    return s < 0 ? null : this.templates.at(s, pos);
+  }
+
   /** prismarine-world's raycast (worldsync.js), line for line, over this store: the same blocks, faces and points. */
   raycast(from, direction, range, matcher = null) {
     const iter = new RaycastIterator(from, direction, range);

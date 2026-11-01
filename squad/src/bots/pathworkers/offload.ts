@@ -16,9 +16,11 @@
 // and meanwhile the plugin resets the search on every block change next to the bot (path_reset 'block_updated'). In
 // gather those come all the time (logs cut, leaves decaying, the neighbours chopping): searches were cancelled before
 // they could answer, again and again (docs/37 §10). Most of those searches are short (on the main thread, gather's plan
-// time is 0.7 ms at the median). So a search first runs here, the plugin's own A* under the A* budget, for at most
-// probeMs (3): done by then, it is answered at once, as before; not done, it goes to a worker, and the probe's best
-// partial path is what the bot walks until the worker reports.
+// time is 0.7 ms at the median). So a search first runs here, the plugin's own A*, for at most probeMs (3): done by
+// then, it is answered at once, as before; not done, it goes to a worker, and the probe's best partial path is what
+// the bot walks until the worker reports. The probes have their own budget, PROBE_BUDGET_MS of main-thread A* per 50 ms
+// window for all bots together (past it a search goes straight to a worker), not the A* budget's: that one splits its
+// window evenly between the bots searching, ~0.7 ms each at 30 bots, which left most probes too short to finish.
 //
 // Fallbacks to the main-thread search (the same search from the start, under the A* budget of
 // pathfinding.astarBudgetMs), counted by reason in stats():
@@ -55,6 +57,8 @@ interface AStarResult {
 }
 interface AStarLike {
   compute(): AStarResult;
+  /** patches/: one slice of at most `ms`, outside the A* budget. */
+  computeSlice(ms: number): AStarResult;
   visitedChunks: Set<string>;
 }
 const AStar = require('mineflayer-pathfinder/lib/astar') as new (
@@ -145,6 +149,9 @@ interface PathProgress {
 const DEFAULT_GRACE_MS = 2_000;
 /** A search runs this long on the main thread before it moves to a worker (see the header). */
 export const DEFAULT_PROBE_MS = 3;
+/** All probes together compute at most this long per PROBE_WINDOW_MS. */
+export const PROBE_BUDGET_MS = 10;
+const PROBE_WINDOW_MS = 50;
 /** At most one warning per reason this often (a dead worker fails every search of its batch). */
 const WARN_EVERY_MS = 10_000;
 
@@ -152,6 +159,7 @@ export class PathOffload {
   private readonly current = new WeakMap<object, OffloadedSearch>();
   private readonly graceMs: number;
   private readonly probeMs: number;
+  private probeWindow = { start: -Infinity, spent: 0 };
   private stopped = false;
   private readonly counters = { probed: 0, offloaded: 0, answered: 0, cancelled: 0, partials: 0, inFlight: 0 };
   private readonly fallbacks: Record<string, number> = {};
@@ -185,9 +193,12 @@ export class PathOffload {
     if (!world.isLive(dim, p.start.x >> 4, p.start.z >> 4)) return this.fallback('noColumn');
     this.cancel(bot); // one search per bot: the new one supersedes the old
     let head: unknown[] = [];
-    if (this.probeMs > 0) {
-      const local = new AStar(p.start, p.movements, p.goal, p.timeout, this.probeMs, p.searchRadius);
-      const r = local.compute();
+    const probeMs = this.probeSlice();
+    if (probeMs > 0) {
+      const local = new AStar(p.start, p.movements, p.goal, p.timeout, p.tickTimeout, p.searchRadius);
+      const t0 = performance.now();
+      const r = local.computeSlice(probeMs);
+      this.probeWindow.spent += performance.now() - t0;
       if (r.status !== 'partial') {
         this.counters.probed++;
         return new ProbedSearch(local, r);
@@ -212,6 +223,15 @@ export class PathOffload {
     this.counters.inFlight++;
     void this.run(search, input);
     return search;
+  }
+
+  /** How long this search may probe: probeMs, or what is left of the probes' window (0: straight to a worker). */
+  private probeSlice(): number {
+    if (this.probeMs <= 0) return 0;
+    const now = performance.now();
+    if (now - this.probeWindow.start >= PROBE_WINDOW_MS) this.probeWindow = { start: now, spent: 0 };
+    const left = PROBE_BUDGET_MS - this.probeWindow.spent;
+    return left < 0.5 ? 0 : Math.min(this.probeMs, left);
   }
 
   private async run(search: OffloadedSearch, input: unknown): Promise<void> {

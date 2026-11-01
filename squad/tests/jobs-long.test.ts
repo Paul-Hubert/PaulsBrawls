@@ -2,7 +2,7 @@
 // progress } on each slice; the submitter's onProgress gets each progress at the next tick's apply step, in order, on
 // a worker and inline. A callback that cancels the job stops it there; one that throws is logged and the job goes on;
 // a progress that cannot be copied off its worker is dropped, not the job. Elastic types: packed by their declared
-// smallest run, each run takes its share of what is left of the budget.
+// smallest run, each run takes its share of what is left of the budget. And the workers' heap limits (resourceLimits).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,6 +15,7 @@ holdEventLoopPerTest(60_000);
 const PROGRESS = new URL('./fixtures/jobs/progress.mjs', import.meta.url);
 const SLICES = new URL('./fixtures/jobs/slices.mjs', import.meta.url);
 const ELASTIC = new URL('./fixtures/jobs/elastic.mjs', import.meta.url);
+const HEAP_LIMIT = new URL('./fixtures/jobs/heap-limit.mjs', import.meta.url);
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 async function pump(jobs: JobPool, p: Promise<unknown>, maxTicks = 200): Promise<void> {
@@ -134,6 +135,19 @@ test('elastic: inline (no worker), the same shares of the inline budget', async 
       assert.equal(r.worker, -1);
       for (const share of r.shares) assert.ok(share > 2 && share < 6, `one of two inline: ${share} ms of 8`);
     }
+  } finally {
+    await jobs.stop();
+  }
+});
+
+test('resourceLimits: the workers get the heap they are given (main.ts sizes it for A*, docs/37 §10)', async () => {
+  const jobs = new JobPool({ workers: 1, handlers: [HEAP_LIMIT], ticks: 'manual', resourceLimits: { maxYoungGenerationSizeMb: 16, maxOldGenerationSizeMb: 128 } });
+  try {
+    await jobs.ready();
+    const p = jobs.submit<number>({ type: 'heap-limit', input: null });
+    await pump(jobs, p);
+    const mb = await p;
+    assert.ok(mb >= 128 && mb < 256, `a heap of about 128 + 16 MB (${mb} MB), not V8's default of several GB`);
   } finally {
     await jobs.stop();
   }

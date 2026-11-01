@@ -118,6 +118,8 @@ export interface JobPoolOptions {
   maxCrashesPerMinute?: number;
   /** Tests: another worker script. */
   workerUrl?: URL;
+  /** Each worker's V8 heap limits (node:worker_threads resourceLimits). */
+  resourceLimits?: { maxYoungGenerationSizeMb?: number; maxOldGenerationSizeMb?: number };
 }
 
 export interface JobTypeStats {
@@ -829,6 +831,7 @@ export class JobPool {
           version: this.opts.version,
           index: slot.index,
         },
+        ...(this.opts.resourceLimits ? { resourceLimits: this.opts.resourceLimits } : {}),
       });
     } catch (e) {
       logger.warn('jobs', `worker ${slot.index} cannot start: ${(e as Error).message}`);
