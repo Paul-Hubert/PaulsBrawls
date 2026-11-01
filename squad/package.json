@@ -22,6 +22,7 @@
     "bench:find-blocks": "tsx bench/find-blocks.ts",
     "bench:profiles": "tsx bench/profile-summary.ts",
     "bench:fight": "tsx bench/fight.ts",
+    "bench:site": "tsx bench/site.ts",
     "bench:report": "tsx bench/report.ts",
     "bench:compare": "tsx bench/compare.ts",
     "bench:callers": "tsx bench/callers.ts",

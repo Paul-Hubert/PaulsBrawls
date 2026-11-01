@@ -38,7 +38,7 @@ import { loadPlugins, pathfinder, type PluginSet } from '../src/bots/plugins';
 import { keepDecodersAlive, RECIPES_AS_BYTES } from '../src/bots/protocol';
 import type { SpawnRequest } from '../src/bots/pool';
 import { logger } from '../src/logger';
-import { blockSearchStats } from '../src/api/block-search';
+import { blockSearchStats, useBlockSearch } from '../src/api/block-search';
 import type { Player } from '../src/roster';
 import { EMPTY_SNAPSHOT, type Snapshot } from '../src/types';
 import { Rcon } from '../live-tests/rcon';
@@ -81,6 +81,12 @@ const VARIANT = {
   /** world.enabled without workers (with workers it is on by default, docs/37 P4). */
   world: flag('world'),
   thinkOnCompute: flag('think-on-compute'),
+  /** A* on the workers: a block_updated reset cancels a pending search (docs/37 P4) instead of carrying it over (§14). */
+  noCarry: flag('no-carry'),
+  /** With workers: A* on the main thread (the offload stopped), gather's block searches still jobs. */
+  noPathJobs: flag('no-path-jobs'),
+  /** With workers: gather's block searches on the bots (bot.findBlocks), A* still on the workers. */
+  noBlockJobs: flag('no-block-jobs'),
   lookaheadCap: Number(opt('lookahead-cap') ?? 0),
   lookaheadMemo: Number(opt('lookahead-memo') ?? 0),
   lookaheadBlockCache: flag('lookahead-blockcache'),
@@ -208,6 +214,11 @@ async function main(): Promise<void> {
     { PAULSBRAWLS_SQUAD_TOKEN: TOKEN },
   );
   const rt = await start(cfg, { connectBots: true, installGuards: true, pool: { createBot, setup } });
+  // Experiment: a block_updated reset cancels a search on the workers, as before docs/37 §14.
+  if (VARIANT.noCarry && rt.paths) (rt.paths as unknown as { carry: boolean }).carry = false;
+  // Experiments: one of the two kinds of jobs gather makes back on the main thread.
+  if (VARIANT.noPathJobs) rt.paths?.stop();
+  if (VARIANT.noBlockJobs) useBlockSearch(null as unknown as Parameters<typeof useBlockSearch>[0]);
   keepDecodersAlive(() => skippedPackets++);
   const { pool, store } = rt.service.deps;
   const meters = new BotMeters();
@@ -270,6 +281,7 @@ async function main(): Promise<void> {
           r.world = w && { columnsLive: w.columnsLive, sections: w.sections, mb: worldMb };
           log(
             `paths: ${d.probed} done by the probe, ${d.offloaded} offloaded, ${d.answered} answered, ${d.cancelled} cancelled, ${d.partials} partial paths, fallbacks ${JSON.stringify(d.fallbacks)}; ` +
+              `carried over ${d.carried} block_updated resets, not ${JSON.stringify(d.notCarried)}, stale paths ${d.stale.partial} partial / ${d.stale.final} final; ` +
               `workers ${j.alive}/${j.workers} alive, restarts ${j.restarts}, path slice ${pt?.costMs ?? '-'} ms, latency p50/p95 ${pt?.latencyMs.p50 ?? '-'}/${pt?.latencyMs.p95 ?? '-'} ms, ` +
               `budget used ${j.perWorker.map((x) => x.budgetMs.mean).join('/')} ms per tick; world ${w?.columnsLive ?? '-'} columns, ${worldMb ?? '-'} MB`,
           );
@@ -303,8 +315,11 @@ async function main(): Promise<void> {
 /** One phase's searches: the offload's counters since the previous phase (inFlight as it is now). */
 function diffPaths(now: PathOffloadStats, prev: PathOffloadStats | null): PathOffloadStats {
   if (!prev) return now;
-  const fallbacks: Record<string, number> = {};
-  for (const [k, v] of Object.entries(now.fallbacks)) if (v - (prev.fallbacks[k] ?? 0) > 0) fallbacks[k] = v - (prev.fallbacks[k] ?? 0);
+  const sub = (a: Record<string, number>, b: Record<string, number>): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(a)) if (v - (b[k] ?? 0) > 0) out[k] = v - (b[k] ?? 0);
+    return out;
+  };
   return {
     probed: now.probed - prev.probed,
     offloaded: now.offloaded - prev.offloaded,
@@ -312,7 +327,10 @@ function diffPaths(now: PathOffloadStats, prev: PathOffloadStats | null): PathOf
     cancelled: now.cancelled - prev.cancelled,
     partials: now.partials - prev.partials,
     inFlight: now.inFlight,
-    fallbacks,
+    fallbacks: sub(now.fallbacks, prev.fallbacks),
+    carried: now.carried - prev.carried,
+    notCarried: sub(now.notCarried, prev.notCarried),
+    stale: { partial: now.stale.partial - prev.stale.partial, final: now.stale.final - prev.stale.final },
   };
 }
 
@@ -515,11 +533,29 @@ async function runPhase(rt: Started, rcon: Rcon, meters: BotMeters, n: number, p
     await order(OWNER, 'gather', ['_log', '1024'], names);
   }
 
+  // Where the bots' time goes (gather, walk): sampled every 100 ms, per bot. digging: a dig in progress; moving: a goal
+  // and the bot moved since the last sample; waiting: a goal, standing still (for a path, or stuck); idle: no goal.
+  const time = { digging: 0, moving: 0, waiting: 0, idle: 0 };
+  const last = new Map<string, { x: number; z: number }>();
+  const sampler = setInterval(() => {
+    for (const b of names) {
+      const bot = pool.bot(b) as (Bot & { targetDigBlock?: unknown }) | undefined;
+      const pos = bot?.entity?.position;
+      if (!bot || !pos) continue;
+      const prev = last.get(b);
+      last.set(b, { x: pos.x, z: pos.z });
+      if (bot.targetDigBlock) time.digging++;
+      else if (!bot.pathfinder?.goal) time.idle++;
+      else if (prev && Math.hypot(pos.x - prev.x, pos.z - prev.z) > 0.05) time.moving++;
+      else time.waiting++;
+    }
+  }, 100);
   const end = Date.now() + SECONDS * 1000;
   while (Date.now() < end) {
     await watch.poll();
     await sleep(Math.min(1_000, Math.max(0, end - Date.now())));
   }
+  clearInterval(sampler);
   const proc = probe.stop();
   const server = await watch.end(proc.seconds);
   const bots = n > 0 ? meters.read(names, proc.seconds) : null;
@@ -531,7 +567,11 @@ async function runPhase(rt: Started, rcon: Rcon, meters: BotMeters, n: number, p
     session.disconnect();
   }
 
-  const result: PhaseResult = { n, phase, process: proc, bots, server, deafTrips: takeDeaf(), skippedPackets: takeSkipped(), ...(profile ? { profile } : {}) };
+  const samples = time.digging + time.moving + time.waiting + time.idle;
+  const share = (v: number): number => (samples ? Math.round((v / samples) * 1000) / 10 : 0);
+  const botTime = { digging: share(time.digging), moving: share(time.moving), waiting: share(time.waiting), idle: share(time.idle) };
+  if (phase === 'gather' || phase === 'walk') log(`bot time (% of bot-samples): digging ${botTime.digging}, moving ${botTime.moving}, waiting ${botTime.waiting} (a goal, standing), idle ${botTime.idle} (no goal)`);
+  const result: PhaseResult = { n, phase, process: proc, bots, server, deafTrips: takeDeaf(), skippedPackets: takeSkipped(), botTime, ...(profile ? { profile } : {}) };
   if (phase === 'walk' || phase === 'follow') {
     result.walk = { legs: { ...walk.legs }, legMs: dist(walk.legMs), blocksPerLeg: dist(walk.legBlocks), examples: [...walk.examples] };
   }

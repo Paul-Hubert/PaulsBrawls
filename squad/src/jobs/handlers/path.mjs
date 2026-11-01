@@ -20,7 +20,8 @@
 //
 // The input (offload.ts, built with serialize.ts): { dim, start: { x, y, z, remainingBlocks }, goal (WireGoal),
 // timeout, tickTimeout, searchRadius, settings (the bot's Movements, as data), entityIntersections, items, effects }.
-// The answer: { status, cost, time, visitedNodes, generatedNodes, path (Moves as plain data), chunks }; status
+// The answer: { status, cost, time, visitedNodes, generatedNodes, path (Moves as plain data), chunks, computeMs (the
+// slices' compute time) }; status
 // 'inline' (run on the main thread: the plugin's own search does that better) or 'noWorld' (this thread has no shared
 // world) means "not searched here".
 
@@ -106,7 +107,7 @@ export function run(input, ctx) {
   s.used += s.lastEnd - t0;
   const chunks = newChunks(s);
   if (r.status !== 'partial') {
-    return { status: r.status, cost: r.cost, time: r.time, visitedNodes: r.visitedNodes, generatedNodes: r.generatedNodes, path: r.path, chunks };
+    return { status: r.status, cost: r.cost, time: r.time, visitedNodes: r.visitedNodes, generatedNodes: r.generatedNodes, path: r.path, chunks, computeMs: s.used };
   }
   const progress = { chunks };
   const best = s.astar.bestNode;

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 
-import { type SearchParams } from '../src/bots/pathworkers/offload';
+import { CARRY_WINDOW_MS, type SearchParams } from '../src/bots/pathworkers/offload';
 import { movementSettings, serializeGoal } from '../src/bots/pathworkers/serialize';
 import { BotPool } from '../src/bots/pool';
 import { BlockTemplates, StoreWorld } from '../src/world/blocks.mjs';
@@ -35,6 +35,7 @@ const goals = require('mineflayer-pathfinder/lib/goals') as any;
 const { pathfinder: injectPathfinder } = require('mineflayer-pathfinder') as { pathfinder: (bot: any) => void };
 
 const STONE = registry.blocksByName.stone.defaultState as number;
+const DIRT = registry.blocksByName.dirt.defaultState as number;
 const GROUND = 63;
 const SILENT_WORKER = new URL('./fixtures/silent-path-worker.mjs', import.meta.url);
 const BURN = new URL('./fixtures/jobs/burn.mjs', import.meta.url);
@@ -301,6 +302,107 @@ test('cancellation: a search the plugin drops is cancelled in the pool (its stat
   assert.deepEqual(coords(r.path), coords(local.path));
   await pumpUntil(rig, () => rig.paths.stats().cancelled === 2, 'the superseded one cancelled');
   assert.deepEqual(rig.paths.stats().fallbacks, {}, 'a dropped search is not run on the main thread');
+});
+
+/** A block change as a bot hears it: its own world, the store (the packet), and mineflayer's blockUpdate event. */
+function changeBlock(bot: any, pos: any, state: number): void {
+  const before = bot.world.getBlock(pos);
+  bot._client.emit('block_change', { location: pos, type: state });
+  bot.world.setBlockStateId(pos, state);
+  bot.emit('blockUpdate', before, bot.world.getBlock(pos));
+}
+
+test('a block_updated reset: a pending search carries on when its path still holds (the change is not on it)', async () => {
+  const rig = await newRig({ tickBudgetMs: 1 });
+  const { bot } = await attached(rig);
+  const goal = new goals.GoalBlock(FAR.x, FAR.y, FAR.z);
+  const movements = movementsFor(bot, false);
+  const local = mainThread(params(goal, movementsFor(bot, false)));
+  const p = params(goal, movements);
+  const ctx = bot.pathfinder.searchOffload(p);
+  ctx.compute();
+  await pumpUntil(rig, () => pathStats(rig).continued > 1, 'the search running on the worker');
+  // The floor beside the start turns from stone to dirt: a change of block type, so the plugin resets, then plans
+  // again, the same goal and Movements, from the same node. The first step is checked again (it holds), and the
+  // worker's search runs on (dirt is stone to it).
+  changeBlock(bot, new Vec3(-1, GROUND, -1), DIRT);
+  bot.emit('path_reset', 'block_updated');
+  const again = bot.pathfinder.searchOffload({ ...p, start: new Move(0, GROUND + 1, 0, 0, 0) });
+  assert.equal(again, ctx, 'the same search, carried over');
+  const r = await rig.settle(again);
+  assert.equal(r.status, 'success');
+  assert.deepEqual(coords(r.path), coords(local.path), 'the answer of the search that was never restarted');
+  const s = rig.paths.stats();
+  assert.equal(s.carried, 1);
+  assert.equal(s.offloaded, 1, 'never submitted again');
+  assert.equal(s.cancelled, 0);
+  assert.equal(pathStats(rig).cancelled, 0, 'its job ran on');
+  assert.deepEqual(s.notCarried, {});
+  assert.deepEqual(s.fallbacks, {});
+
+  // A reset the plugin does not follow with a new plan (the goal was reached on the way): the held search is
+  // cancelled after CARRY_WINDOW_MS.
+  const held = bot.pathfinder.searchOffload(params(goal, movements));
+  held.compute();
+  bot.emit('path_reset', 'block_updated');
+  await sleep(CARRY_WINDOW_MS + 50);
+  await pumpUntil(rig, () => rig.paths.stats().cancelled === 1, 'the held search cancelled');
+  assert.equal(rig.paths.stats().notCarried.late, 1);
+});
+
+test('a block_updated reset: a change that breaks a step of the path the bot holds ends the search; a new one is submitted', async () => {
+  const rig = await newRig({ tickBudgetMs: 1 });
+  const { bot } = await attached(rig);
+  const goal = new goals.GoalBlock(FAR.x, FAR.y, FAR.z);
+  const movements = movementsFor(bot, false);
+  const p = params(goal, movements);
+  const ctx = bot.pathfinder.searchOffload(p);
+  // Until the worker's first partial path.
+  let r = ctx.compute();
+  await pumpUntil(rig, () => {
+    r = ctx.compute();
+    return r.path.length > 1;
+  }, 'a partial path from the worker');
+  const step = r.path[0];
+  // A wall on its first step (feet and head): that step no longer holds.
+  changeBlock(bot, new Vec3(step.x, step.y, step.z), STONE);
+  changeBlock(bot, new Vec3(step.x, step.y + 1, step.z), STONE);
+  bot.emit('path_reset', 'block_updated');
+  const again = bot.pathfinder.searchOffload({ ...p, start: new Move(0, GROUND + 1, 0, 0, 0) });
+  assert.notEqual(again, ctx, 'a new search');
+  assert.equal(rig.paths.stats().notCarried.broken, 1);
+  const done = await rig.settle(again);
+  assert.equal(done.status, 'success');
+  assert.ok(!coords(done.path).some(([x, y, z]) => x === step.x && y === step.y && z === step.z), 'around the new wall');
+  await pumpUntil(rig, () => rig.paths.stats().cancelled === 1, 'the old one cancelled');
+  assert.equal(rig.paths.stats().carried, 0);
+});
+
+test("a final path a block change broke while it was on its way is searched again, from where the bot stands", async () => {
+  // One slice of the whole budget answers it: the answer is on its way back when the change comes.
+  const rig = await newRig();
+  const { bot } = await attached(rig);
+  const goal = new goals.GoalBlock(12, GROUND + 1, -10);
+  const movements = movementsFor(bot, false);
+  const local = mainThread(params(goal, movementsFor(bot, false)));
+  const mid = local.path[Math.floor(local.path.length / 2)];
+  const ctx = bot.pathfinder.searchOffload(params(goal, movements));
+  ctx.compute();
+  await rig.jobs.tick(); // dispatched
+  await until(() => rig.jobs.stats().answered > 0, 5_000, 'the answer computed, not applied yet');
+  // The middle of its path is walled off now, in the bot's world and the store.
+  changeBlock(bot, new Vec3(mid.x, mid.y, mid.z), STONE);
+  changeBlock(bot, new Vec3(mid.x, mid.y + 1, mid.z), STONE);
+  const r = await rig.settle(ctx);
+  assert.equal(r.status, 'success');
+  assert.ok(!coords(r.path).some(([x, y, z]) => x === mid.x && y === mid.y && z === mid.z), 'the answer goes around the change');
+  const s = rig.paths.stats();
+  assert.equal(s.stale.final, 1, 'the first answer was stale');
+  assert.equal(pathStats(rig).submitted, 2, 'searched again');
+  assert.deepEqual(s.fallbacks, {});
+  // The new answer is right for the world as it is.
+  const now = mainThread(params(goal, movementsFor(bot, false)));
+  assert.deepEqual(coords(r.path), coords(now.path));
 });
 
 test('a worker search that exceeds thinkTimeout answers timeout, like the main thread', async () => {
