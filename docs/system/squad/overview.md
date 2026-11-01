@@ -3,7 +3,7 @@ id: squad.overview
 title: Squad — player-owned Mineflayer bots ordered by LLM-written commands (as built)
 system: squad
 summary: What runs today for /bots — the Node runtime in squad/ (processes, threads incl. the optional pathfinding workers, bots, leases, orders, the command dialect, authoring over MCP, storage, HTTP API, the patched dependencies, the lag monitor, /api/metrics and the vitals journal) and the mod's thin front in com.paul.brawl.squad (incl. /bots status) — with the live results on the production server, the protocol hardening, and what is still unverified.
-tags: [squad, bots, mineflayer, orders, leases, reclaim, authoring, mcp, squad-author, claude-code, kits, 8772, production, performance, patch-package, lag-monitor, metrics, vitals, pathfinding-workers, astar-budget]
+tags: [squad, bots, mineflayer, orders, leases, reclaim, authoring, mcp, squad-author, claude-code, kits, 8772, production, performance, patch-package, lag-monitor, metrics, vitals, pathfinding-workers, astar-budget, reader-workers, jobs]
 sources:
   - docs/29-squad-design.md
   - docs/31-squad-performance-review.md
@@ -15,6 +15,11 @@ sources:
   - squad/src/bots/pathworkers/client.ts
   - squad/src/bots/pathworkers/worker.mjs
   - squad/src/bots/pathworkers/serialize.ts
+  - squad/src/jobs/pool.ts
+  - squad/src/jobs/worker.mjs
+  - squad/src/jobs/batch.mjs
+  - squad/src/jobs/entities.mjs
+  - squad/src/jobs/snapshot.ts
   - squad/src/config.ts
   - squad/src/vitals/lag-monitor.ts
   - squad/src/vitals/metrics.ts
@@ -62,6 +67,7 @@ verified_at: 2026-10-30 (branch rework at 32e086a)
 | Supervisor | `squad/src/supervisor.ts` | The parent process (`npm start`). It forks the runtime with `--import tsx`, expects an IPC heartbeat every second, kills the runtime after 10 s of silence (`HEARTBEAT_TIMEOUT_MS`, :15) and restarts it with backoff 1/2/5/10/30 s |
 | Runtime, main thread | `squad/src/main.ts` `start()` :35 | **Everything else**: every mineflayer bot (protocol decoding, physics ticks, the pathfinder's look-ahead, and A* unless the workers are on; plugins), every order's script, the leases, the HTTP + SSE + MCP server, the synchronous SQLite journal, the vitals sampler |
 | Pathfinding workers (optional) | `squad/src/bots/pathworkers/client.ts` `PathWorkerPool` :113, `worker.mjs`; built in `main.ts` :53 | **Off by default** (`pathfinding.workers` 0). When on: the bots' own A* searches, over a mirror of the world. Details below |
+| Reader workers (optional) | `squad/src/jobs/pool.ts` `JobPool`, `worker.mjs`; built in `main.ts` `startJobs` | **Off by default** (`workers.count` 0), and no real job type yet (docs/37 P2: the framework and an `echo` type). When on: batches of read-only jobs under a per-tick CPU budget, ticked on one online bot's `physicsTick`; an entity snapshot in shared memory. [docs/37 §8](../../37-squad-worker-reads-plan.md) |
 | Typecheck worker | `squad/src/script/typecheck-worker.mjs`, started by `check.ts` `typecheckWorker()` :156 | TypeScript `checkJs` for `check_script`/`submit_command`. First check about 5 s (it parses the library types), later ones 0.1–0.3 s; warmed 2 s after boot. Unref'd when idle |
 | The mod | `com.paul.brawl.squad` in the server JVM | `/bots` commands and the commander snapshot on the server thread; HTTP to the runtime is async; the SSE reader is a virtual thread (`squad-events`); authoring turns are virtual threads running `claude -p` (`ClaudeCodeClient`) |
 
@@ -75,6 +81,7 @@ start, `main.ts` :42 and :49):
 |---|---|---|
 | `pathfinding.astarBudgetMs` | **20** (`DEFAULT_ASTAR_BUDGET_MS`, `config.ts` :53); 0 = off, at most 50 (:55) | All A* searches together spend at most this many ms per 50 ms window (the patched `AStar.setBudget`, applied by `applyPathfinding` :133, which throws if the patches are missing). A search that finds the window spent waits with its best partial path; the wait does not count against `thinkTimeout` |
 | `pathfinding.workers` | **0** (off); an integer up to 16 (`MAX_PATH_WORKERS` :58) | Pathfinding worker threads, capped at the cores minus one (`pathWorkerCount` :145; `main.ts` :51 warns when it caps) |
+| `workers.count`, `workers.tickBudgetMs` | **0** (off), **40** ms (`config.ts` `WorkersConfig`) | The reader workers of docs/37 (an integer up to 16, capped at the cores minus one by `jobWorkerCount`; a budget above 0 and at most 50 ms per 50 ms tick). Independent of `pathfinding.workers` until docs/37 P4 |
 
 Why these defaults (measured on a desktop, [docs/31 §11](../../31-squad-performance-review.md)): the budget was better
 than none in every moving phase at 10–30 bots; with it, the main thread was not saturated at 30 moving bots, and the
@@ -132,7 +139,10 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
 - **`POST /api/metrics`** (`http/server.ts` :132, `service.ts` :78) returns the last complete window (the window so far,
   `complete: false`, in the first 10 s): `{ ok, text, window: { seconds, endedAt, complete }, loop: { p50, p99, max },
   elu, cpuPct, rssMb, heapMb, skippedPackets, bots: [{ name, status, ticksPerSec, path: { success, noPath, timeout,
-  other }, resets, deafTrips }] }` (`Metrics` :52). `text` is the French line for players.
+  other }, resets, deafTrips }] }` (`Metrics` :52). `text` is the French line for players. With the reader workers
+  on, a `jobs` object too (`JobStats` in `jobs/pool.ts`: per job type submitted, done, carried, late, failed, inline,
+  latency p50/p95; per worker its budget use; the queue; the dispatcher's own time per tick), summed per minute into
+  the journal row's `data.jobs`, and `text` ends with « calculs : … ».
 - **The journal's `vitals` table** (`journal/journal.ts` :71): one row per minute (time-weighted ELU, worst p99, the
   slowest bot, counts summed, details as JSON in `data`), written by `saveVitals` (:146), which deletes rows older than
   7 days (`VITALS_KEEP_MS` :46). Never the hot stream (R44).
@@ -589,6 +599,8 @@ clicks and sends each one; it decides nothing about what a click does.
   arrival teleport and kit, the start as `Envahisseur`, a real 20-vs-20 fight, 40 bots on one runtime). A raider that
   dies respawns idle (it leaves its order, docs/29 §4) and does not rejoin the raid; one that arrives after the
   timeout is equipped but stays idle.
+- **The reader workers (docs/37 P2):** only on fakes (`tests/jobs.test.ts`) and `bench:jobs`; no job type uses them
+  yet, so they are off.
 - **`/bots status` in game:** only its JUnit test ran. **The worker pool's stats** are not in `/api/metrics` or the
   vitals.
 - **The worker pool on production:** only the dev server and the bench ran it (live test 5/5 with 4 and 14 workers).

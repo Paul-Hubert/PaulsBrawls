@@ -1,8 +1,9 @@
 # 37 — Squad: read-only work on worker threads, one shared copy of the world (plan)
 
-> Plan, 2026-11-01. Nothing here is built yet. It follows the measurements of [docs/36](36-squad-fight-performance.md)
-> and Paul's decisions of the same day. Every expected number is an estimate from docs/36's profiles and is
-> re-measured after each phase with `bench:fight` and `bench:load`.
+> Plan, 2026-11-01. It follows the measurements of [docs/36](36-squad-fight-performance.md) and Paul's decisions of
+> the same day. Every expected number is an estimate from docs/36's profiles and is re-measured after each phase with
+> `bench:fight` and `bench:load`. **Built so far: P2** (the job queue, dispatcher and reader workers, off by default;
+> as built in §8). The rest is a plan.
 
 ## 0. Owner decisions (Paul, 2026-11-01)
 
@@ -207,7 +208,7 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 |---|---|---|---|
 | **P0** | S | ~~**Fix the hawkEye leak now**~~ done (docs/36 §5.1: `freshHawkEye` loads each copy through a throwaway parent, and a primed copy with no bot is the shared modules' first parent). Merge `squad-fight-bench` (bench, stagger, kits) once the docs/35 session has landed | `bench/repro-hawkeye-leak.ts` prints 0/20 (done; `tests/plugins.test.ts` checks it in `npm test`); RSS flat across `bench:fight` rounds (not measured yet) |
 | **P1** | L | The shared world: pages, sections, index, epochs, cache, per-state tables, the writer thread, fed from the bots' packets beside today's worlds (nothing reads it yet) | Unit tests on fakes (publish, tombstone, epoch reuse, cache states, dedup). A live parity probe: for every block of every column held, the store's state id = `bot.world.getBlockStateId` |
-| **P2** | M | The job queue, dispatcher and reader workers (budget, priorities, deadlines, carry-over, affinity, fallbacks, metrics), with a test job type | Unit tests (budget respected, priorities, `late`, a worker killed mid-batch); `/api/metrics` shows the queue |
+| **P2** ✅ | M | The job queue, dispatcher and reader workers (budget, priorities, deadlines, carry-over, affinity, fallbacks, metrics), with a test job type | **Done 2026-11-01** (§8): `tests/jobs.test.ts` (budget respected, priorities, `late`, a worker killed mid-batch, …); `/api/metrics` shows `jobs`. Off by default (`workers.count` 0) until P3 |
 | **P3** | M | Raycast (blocks + hitboxes), LOS and the aim solver as jobs; `shoot` on the schedule with turning; hawkEye removed | `bench:fight`: full-strength ELU ≤ 0.35 (from 0.60–0.66); arrow kills per shot ≥ 3.2 %; failed shots ≤ 5 %; friendly hits 0. Live items tests (`tir`, `ligne-archers`, `defend`) pass |
 | **P4** | M | A* on the reader workers over the shared world (Movements reads per-state tables); the old per-worker mirror retired | `bench:load` walk / gather at 10 and 30 bots: legs and logs per minute ≥ docs/31 §11; live core tests pass; process memory flat with the worker count |
 | **P5** | L | The bots read the one copy: a patched mineflayer blocks plugin sends chunks to the writer; `bot.world` is a shared store-backed world (prismarine-world's sync API, `blockUpdate`/`chunkColumnLoad`/`chunkColumnUnload` per bot, block entities on the main thread). Behind `world.shared` (default off until it passes) | `bench:fight` and `bench:load`: ~30–40 MB less per bot; 40 logins with no stall over 250 ms; every live test passes with `world.shared: true` |
@@ -248,3 +249,121 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 - **40 logins:** the stall falls from up to 1.6 s to under 250 ms, because each column is decoded once, on the writer
   (P5).
 - **The workers' memory** no longer grows with their count (P4).
+
+## 8. P2 as built (2026-11-01)
+
+The framework only: no real job type yet (the stock `echo` and the tests' handlers), and **off by default**
+(`workers.count` 0: `main.ts` builds no pool, so production is unchanged). P3, P4 and P6 add their handler modules to
+`squad/src/jobs/handlers/index.ts` (`STOCK_HANDLERS`).
+
+### 8.1 Files (`squad/src/jobs/`)
+
+| File | What |
+|---|---|
+| `pool.ts` | `JobPool`, main thread: queue, the tick (apply → publish → dispatch), slots, crash policy, inline fallback, stats |
+| `worker.mjs` | The reader worker entry (plain JS, no loader) |
+| `batch.mjs` (+ `.d.mts`) | `runBatch` (the budget loop, `continue`, errors) and `loadHandlers`, shared by the worker and the inline fallback |
+| `entities.mjs` (+ `.d.mts`) | The entity snapshot's shared-memory layout and protocol: buffers, holds, publish, the reader |
+| `snapshot.ts` | `EntitySnapshot`, the main-thread writer (dedup across bots, velocity, teams) |
+| `teams.ts` | `TeamIds`: team numbers from the roster's owner groups |
+| `ticks.ts` | `LeaderTicks`: the dispatcher follows one online bot's `physicsTick` |
+| `errors.ts` | `JobLateError`, `JobFailedError` |
+| `handlers/echo.mjs`, `handlers/index.ts` | The trivial job type; the list `main.ts` loads |
+
+Tests: `squad/tests/jobs.test.ts` (24 tests) with the handlers and a stub world module in `squad/tests/fixtures/jobs/`.
+Overhead: `npm run bench:jobs` (`squad/bench/jobs.ts`).
+
+### 8.2 The API
+
+```ts
+new JobPool({ workers, handlers: URL[], tickBudgetMs? = 40, inlineBudgetMs? = 10, version?,
+              world?: { descriptor(): unknown; release?(d: unknown): void }, worldModule?: URL,
+              entities?: { bots(): Iterable<{ entity?, entities? }>; teamOf(username): number },
+              entityCapacity? = 4096, ticks?: 'auto' | 'manual', maxCrashesPerMinute? = 3 })
+jobs.submit<T>({ type, input, priority? = 0, deadlineTick?, affinity?, transfer?: ArrayBuffer[], signal?: AbortSignal }): Promise<T>
+jobs.tick(): Promise<void>            // one tick by hand (ticks: 'manual'); resolves after its dispatch
+jobs.useTickSource(bot | null)        // follow a bot's physicsTick (LeaderTicks does it in main.ts)
+jobs.currentTick, jobs.ready(), jobs.stats(reset?), jobs.stop(), jobs.killWorker(i) (tests)
+```
+
+- **Order:** higher `priority` first, then the earlier `deadlineTick`, then the earlier submit.
+- **`deadlineTick`** is the last tick at whose apply step the answer is still wanted. A worker's answer is applied at
+  the tick after its dispatch, so a queued job whose deadline is ≤ the dispatch tick is late at once, and an answer that
+  comes back after its deadline is late too: the promise rejects with `JobLateError { type, deadlineTick, tick }`.
+- **`JobFailedError { type, reason, message, remoteStack?, remoteName? }`**, `reason` one of `threw` (the handler's
+  message and stack), `workerDied` (its worker died twice under it), `lostInput` (a transferred input died with its
+  worker), `unknownType`, `clone`, `unavailable` (no worker and the inline fallback cannot load), `stopped`.
+- **A handler module:** `export const type = '…'; export function run(input, ctx) { … }`, optionally
+  `export function init({ version, world, inline, worker })` (once per thread). `run` returns the answer, or
+  `{ continue: state }` to be resumed next tick on the same worker with `ctx.state` (so an answer cannot be an object
+  with a `continue` key).
+- **`ctx`** = `{ world, entities, tick, deadlineTick, state, version, worker (slot index, -1 inline), inline,
+  budgetLeftMs() }`. `world` is `openWorld(descriptor)` of `worldModule` (P1's reader; null without one); every batch
+  is bracketed by `world.enter()` / `world.leave()` and pins the entity snapshot.
+- **The budget** is wall time from the batch's start. Before each job but the first, the worker stops if the budget is
+  spent or the job's estimated cost would overrun it; the jobs not started go back to the queue in their place
+  (`carried`). The estimate is an EWMA of each type's run time (α 0.2), kept by the main thread (it sizes the batches)
+  and by each worker. A handler that runs long checks `ctx.budgetLeftMs()`; nothing preempts it.
+- **Async handlers** are allowed, not advised: the batch awaits them, their wait counts against the budget, and no
+  answer of that batch goes back until they settle.
+- **Affinity:** jobs with the same `affinity` key go to the same worker while one of them is queued or running; a
+  continued job is pinned to the worker that holds its state.
+- **`transfer`:** the buffers move to the worker. A job carried over keeps its input on that worker (it is pinned
+  there); if that worker dies, the job fails (`lostInput`) instead of being queued again.
+- **Entity snapshot reader** (`ctx.entities`, any thread): `count`, `tick`, `epoch`, `writtenAt`, `get(id)` (binary
+  search, sorted by id), `each(fn)` (return false to stop), `data` (the raw `Float64Array` for hot loops:
+  `data[HEADER_LENGTH + i * STRIDE + COL.X]`). A row: `{ id, type (registry entity id, -1), kind (KINDS index of
+  mineflayer's entity.type: 1 player, 2 hostile, 9 projectile…), x, y, z, vx, vy, vz (blocks per tick), width, height,
+  team }`.
+
+### 8.3 The tick source
+
+The dispatcher ticks on **one online bot's `physicsTick`** (`LeaderTicks`: the first bot online; the next one when it
+goes). mineflayer's physics keeps 20 ticks a second with its own catch-up, so the job ticks are the bots' ticks and
+do not drift. Each bot runs its own physics timer, so the bots are not in phase with each other; following one keeps
+the rate, not a common phase. When no bot ticks for 75 ms (`SOURCE_GRACE_MS`), a **self-correcting timer** takes over:
+each tick aims at start + n × 50 ms, so Windows' 15.6 ms timer quantum makes single ticks late but never drifts
+(catch-up at most 4 ticks, then it re-anchors, like mineflayer). Ticks within one macrotask (mineflayer's catch-up
+bursts) share one dispatch. The publish and dispatch run on `setImmediate` after the apply step, so a job submitted
+by an answer's callback makes the same tick.
+
+### 8.4 Measured (`npm run bench:jobs`, Ryzen 9 9950X3D, 4 workers)
+
+| | p50 | p95 |
+|---|---|---|
+| Submit → resolve of a trivial job, the pool's own 50 ms ticks, submitted at a random point of the tick | 63–77 ms | 93 ms |
+| The same, no worker (inline: the answer is applied at its dispatch) | 16 ms | 47 ms |
+| Round trip when ticking as fast as possible (dispatch → worker → applied) | 0.026 ms | 0.075 ms |
+| Dispatcher main-thread time, a tick with 0 / 100 / 1 000 jobs queued (dispatch) | 0.001 / 0.12 / 0.58 ms | 0.002 / 0.18 / 0.73 ms |
+| The next tick, applying 0 / 100 / 1 000 answers | 0.001 / 0.04 / 0.23 ms | 0.001 / 0.07 / 0.34 ms |
+| An idle pool's tick | 0.004 ms (mean) | |
+| Entity snapshot write, 40 bots × 100 entities (880 rows) | 0.28 ms | 0.40 ms |
+
+So a job submitted between ticks waits for the next dispatch (0–50 ms) and its answer for the tick after (50 ms): an
+answer is there **two ticks** after a submit at the latest, one tick after a submit made in the leader's tick before
+its dispatch. P3's aim schedule must submit two ticks ahead (or P3 changes the apply point).
+
+### 8.5 Where it differs from §2.4–2.5
+
+- **`workers.count` defaults to 0** (off), not cores − 2: no job type needs it yet. `pathfinding.workers` is untouched
+  (P4 merges them); until then each pool caps itself at cores − 1 on its own.
+- **Teams:** a row's `team` is the owner group (bots joined through any shared owner, a superset of every order's
+  `isFriend`), and **owner players carry their team's number too**, since `isFriend` counts them as friends; other
+  players and mobs are 0. A `kind` column was added (projectiles and items must not block a raycast).
+- **Velocity** is the move between the last two snapshots the entity was in, per tick (0 when first seen or after a
+  gap of more than 4 ticks). It inherits the packets' jitter against the tick; P3 should check whether its lead needs
+  smoothing.
+- **The snapshot is published only while jobs are about** (a submit within the last 20 ticks), so an idle pool costs
+  nothing. When both buffers are held (a reader still on the previous one), the writer skips that tick's publish
+  instead of waiting (`entities.skipped`).
+- **The inline fallback runs every job type**, not only aim and raycast, with its own budget (`inlineBudgetMs` 10 ms:
+  the main thread also runs the bots), and its answers are applied at once.
+- **Added:** cancellation (`signal`), `transfer` (and `lostInput`), `answered` in the stats, the jobs' minute in the
+  vitals journal (`data.jobs`).
+- **A dead worker's shared memory:** a worker killed inside a batch never calls `world.leave()` or unpins the entity
+  snapshot. The pool clears its entity hold itself, and calls `world.release(descriptor)` when P1's `SharedWorld` has
+  it. **P1 needs that (or an equivalent):** otherwise a dead reader's epoch holds back the reuse of freed memory for
+  good.
+- **`/bots status`:** the runtime's `text` gets « calculs : 3/4 workers, file 12, p95 75 ms, 2 en retard, … » when the
+  pool is on; the mod's own short line (`SquadStatusFormat`) is unchanged.
+

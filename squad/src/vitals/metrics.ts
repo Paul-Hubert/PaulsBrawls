@@ -9,8 +9,12 @@
 // It warns once a minute at most when the loop is overloaded (p99 > 250 ms or ELU > 0.9: Eden's 1 s threshold is
 // too late, bots are in slow motion well before), and writes one row per minute to the journal (never the hot
 // stream, R44).
+//
+// With the reader workers on (workers.count > 0, docs/37 P2), each window also carries the job pool's window: per job
+// type submitted, done, carried, late, failed, inline, latency p50/p95, and each worker's budget use.
 
 import type { BotMeterReading } from '../bots/pool';
+import type { JobStats } from '../jobs/pool';
 import type { VitalsRow } from '../journal/journal';
 import { logger } from '../logger';
 import { LoopMonitor, r1, type LoopWindow } from './lag-monitor';
@@ -38,6 +42,11 @@ export interface LoopSource {
   stop(): void;
 }
 
+/** The job pool's side, narrowed. */
+export interface JobStatsSource {
+  stats(reset: boolean): JobStats;
+}
+
 export interface BotMetrics {
   name: string;
   status: BotMeterReading['status'];
@@ -63,6 +72,8 @@ export interface Metrics {
   /** Undecodable server packets skipped in the window, all bots together. */
   skippedPackets: number;
   bots: BotMetrics[];
+  /** The job pool's window (docs/37 P2), when the reader workers are on. */
+  jobs?: JobStats;
 }
 
 export interface VitalsOptions {
@@ -71,6 +82,8 @@ export interface VitalsOptions {
   /** The process-wide skipped-packet count since boot (pool.ts `skippedPackets`). */
   skipped?: () => number;
   loop?: LoopSource;
+  /** The job pool (workers.count > 0). */
+  jobs?: JobStatsSource;
   now?: () => number;
 }
 
@@ -90,6 +103,16 @@ interface Minute {
   deafTrips: number;
   skippedPackets: number;
   windows: number;
+  jobs: MinuteJobs | null;
+}
+
+/** The job pool's minute, summed for the journal. */
+interface MinuteJobs {
+  types: Record<string, { submitted: number; done: number; carried: number; late: number; failed: number; inline: number; p95: number | null }>;
+  /** The longest batch of any worker, ms. */
+  budgetMaxMs: number;
+  queueMax: number;
+  restarts: number;
 }
 
 export class Vitals {
@@ -155,6 +178,7 @@ export class Vitals {
       skippedPackets: skipped,
       bots,
     };
+    if (this.opts.jobs) m.jobs = this.opts.jobs.stats(reset);
     m.text = statusText(m);
     return m;
   }
@@ -196,6 +220,7 @@ export class Vitals {
       a.deafTrips += b.deafTrips;
     }
     a.skippedPackets += m.skippedPackets;
+    if (m.jobs) addJobs(a, m.jobs);
     a.windows++;
     const now = this.now();
     if (now - a.start < MINUTE_MS) return;
@@ -213,7 +238,15 @@ export class Vitals {
         heapMb: m.heapMb,
         bots: online(m.bots),
         minTicksPerSec: a.minTps,
-        data: { windows: a.windows, slowest: a.slowest, path: a.path, resets: a.resets, deafTrips: a.deafTrips, skippedPackets: a.skippedPackets },
+        data: {
+          windows: a.windows,
+          slowest: a.slowest,
+          path: a.path,
+          resets: a.resets,
+          deafTrips: a.deafTrips,
+          skippedPackets: a.skippedPackets,
+          ...(a.jobs ? { jobs: a.jobs } : {}),
+        },
       });
     } catch (e) {
       logger.warn('vitals', `could not journal the minute's vitals: ${(e as Error).message}`);
@@ -238,7 +271,25 @@ function emptyMinute(start: number): Minute {
     deafTrips: 0,
     skippedPackets: 0,
     windows: 0,
+    jobs: null,
   };
+}
+
+function addJobs(a: Minute, j: JobStats): void {
+  const mj = (a.jobs ??= { types: {}, budgetMaxMs: 0, queueMax: 0, restarts: 0 });
+  for (const [type, t] of Object.entries(j.types)) {
+    const s = (mj.types[type] ??= { submitted: 0, done: 0, carried: 0, late: 0, failed: 0, inline: 0, p95: null });
+    s.submitted += t.submitted;
+    s.done += t.done;
+    s.carried += t.carried;
+    s.late += t.late;
+    s.failed += t.failed;
+    s.inline += t.inline;
+    if (t.latencyMs.p95 !== null) s.p95 = Math.max(s.p95 ?? 0, t.latencyMs.p95);
+  }
+  for (const w of j.perWorker) mj.budgetMaxMs = Math.max(mj.budgetMaxMs, w.budgetMs.max);
+  mj.queueMax = Math.max(mj.queueMax, j.queueMax);
+  mj.restarts = j.restarts;
 }
 
 function botMetrics(b: BotMeterReading, windowSec: number, now: number): BotMetrics {
@@ -286,6 +337,25 @@ export function statusText(m: Omit<Metrics, 'text'>): string {
   return (
     `[Bots] Charge du runtime (${span}) : ELU ${fr(m.elu, 2)} · boucle p99 ${Math.round(m.loop.p99)} ms (max ${Math.round(m.loop.max)}) · ` +
     `CPU ${Math.round(m.cpuPct)} % · RAM ${m.rssMb} Mo · ${bots}` +
+    (m.jobs ? ` · ${jobsText(m.jobs)}` : '') +
     (overloaded(m) ? ' — surchargé : les bots ralentissent.' : '.')
+  );
+}
+
+/** « calculs : 3/4 workers, file 12, p95 75 ms, 2 en retard, 5 sur le thread principal » (the parts that apply). */
+export function jobsText(j: JobStats): string {
+  let p95: number | null = null;
+  let late = 0;
+  let inline = 0;
+  for (const t of Object.values(j.types)) {
+    if (t.latencyMs.p95 !== null) p95 = Math.max(p95 ?? 0, t.latencyMs.p95);
+    late += t.late;
+    inline += t.inline;
+  }
+  return (
+    `calculs : ${j.alive}/${j.workers} worker${j.workers > 1 ? 's' : ''}, file ${j.queue}` +
+    (p95 !== null ? `, p95 ${Math.round(p95)} ms` : '') +
+    (late > 0 ? `, ${late} en retard` : '') +
+    (inline > 0 ? `, ${inline} sur le thread principal` : '')
   );
 }
