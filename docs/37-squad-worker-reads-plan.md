@@ -3,8 +3,8 @@
 > Plan, 2026-11-01. It follows the measurements of [docs/36](36-squad-fight-performance.md) and Paul's decisions of
 > the same day. Every expected number is an estimate from docs/36's profiles and is re-measured after each phase with
 > `bench:fight` and `bench:load`. **Built so far: P0** (the hawkEye leak), **P1** (the shared world, off by default; as
-> built in §9) and **P2** (the job queue, dispatcher and reader workers, off by default; as built in §8). The rest is a
-> plan.
+> built in §9), **P2** (the job queue, dispatcher and reader workers, off by default; as built in §8) and **P6** (gather's
+> block search as a `findBlocks` job, off by default; as built in §10). The rest is a plan.
 
 ## 0. Owner decisions (Paul, 2026-11-01)
 
@@ -213,7 +213,7 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 | **P3** | M | Raycast (blocks + hitboxes), LOS and the aim solver as jobs; `shoot` on the schedule with turning; hawkEye removed | `bench:fight`: full-strength ELU ≤ 0.35 (from 0.60–0.66); arrow kills per shot ≥ 3.2 %; failed shots ≤ 5 %; friendly hits 0. Live items tests (`tir`, `ligne-archers`, `defend`) pass |
 | **P4** | M | A* on the reader workers over the shared world (Movements reads per-state tables); the old per-worker mirror retired | `bench:load` walk / gather at 10 and 30 bots: legs and logs per minute ≥ docs/31 §11; live core tests pass; process memory flat with the worker count |
 | **P5** | L | The bots read the one copy: a patched mineflayer blocks plugin sends chunks to the writer; `bot.world` is a shared store-backed world (prismarine-world's sync API, `blockUpdate`/`chunkColumnLoad`/`chunkColumnUnload` per bot, block entities on the main thread). Behind `world.shared` (default off until it passes) | `bench:fight` and `bench:load`: ~30–40 MB less per bot; 40 logins with no stall over 250 ms; every live test passes with `world.shared: true` |
-| **P6** | S | `findBlocks` as a job (gather's search) | `bench:load` gather unchanged or better, no main-thread freeze in the docs/31 §2.6 case |
+| **P6** ✅ | S | `findBlocks` as a job (gather's search) | **Done 2026-11-01** (§10), off by default (it needs `workers.count` > 0 and `world.enabled`): mineflayer's answer, position for position, on real chunk data (`tests/find-blocks.test.ts`); 0.1 ms on the store against 15 ms in mineflayer. `bench:load` gather at N = 10: logs unchanged within two sites' noise (96 off / 100 on, first runs), block searches on the main thread 0.65–1.0 s a minute → 0; the §2.6 case (no reachable log): the main thread blocked 1 225–1 340 ms at the order's start (ten searches back to back) → 15–65 ms at most, no search on the main thread |
 
 **Order:** P0 → P1 → P2 → P3 (the 45 %) → P4 → P5 → P6.
 - **P1 and P2 are new files,** clear of the docs/35 session's edits.
@@ -488,3 +488,157 @@ sessions, so indicative):
 - the store in `/api/metrics` and the vitals (P2 adds the metrics);
 - `world.shared` (P5);
 - nothing reads the store but `verify` and the tests.
+
+## 10. P6 as built (2026-11-01)
+
+Gather's block search (`mineBlock`'s) is a `findBlocks` job on the reader workers, over the shared world. It is **off by
+default**: it needs both `workers.count` > 0 and `world.enabled`, and with either off nothing changes (every search is
+`bot.findBlocks` on the main thread, as before).
+
+### 10.1 Files
+
+| File | What |
+|---|---|
+| `squad/src/world/find-blocks.mjs` (+ `.d.mts`) | mineflayer's `findBlocks` over the store: the section walk, the match tables, a resumable search. Any thread |
+| `squad/src/jobs/handlers/find-blocks.mjs` | The `findBlocks` job type (added to `STOCK_HANDLERS`), with the match tables cached per thread |
+| `squad/src/api/block-search.ts` | Main thread: `findBlockPositions` (the job, or the bot), `useBlockSearch`, `blockSearchStats` |
+| `squad/src/api/helpers.ts` | `mineBlock` awaits `findBlockPositions` instead of calling `bot.findBlocks` |
+| `squad/src/main.ts` | `useBlockSearch({ jobs, world })` when both exist; undone in `stop()` |
+| `squad/src/world/shared-world.ts` | + `dimensionOf(bot)`: the store's name of the bot's dimension |
+| `squad/tests/find-blocks.test.ts`, `tests/fakes/terrain.ts` | 11 tests, on real prismarine-chunk columns through mineflayer's own blocks plugin |
+| `squad/bench/find-blocks.ts` (`npm run bench:find-blocks`) | mineflayer's search against the store's, and the job's latency, no server |
+| `squad/bench/load.ts`, `profile-summary.ts` | `--jobs N --world`; per phase `block searches: …` and `jobs (last 10 s): …`; a profile cause `block searches (mineflayer findBlocks)` |
+| `squad/live-tests/run.ts` | `LIVE_JOBS=N LIVE_WORLD=1`; the gather scenario reports where its searches ran |
+
+### 10.2 The job type
+
+```ts
+jobs.submit({ type: 'findBlocks', input: { dim, x, y, z, maxDistance? = 16, count? = 1, blocks?, names?, states? } })
+  // → { positions: [x0, y0, z0, x1, …], hits, sections, scanned, unknown, slices }
+```
+
+- **`dim`** is the store's name of the dimension (`SharedWorld.dimensionOf(bot)`, e.g. `minecraft:overworld`: the
+  login's world name, where mineflayer's `bot.game.dimension` is the type, `overworld`). `x, y, z` is the point, floored.
+- **Matching** is data only: block ids (the registry's), block names (with or without `minecraft:`), state ids, any mix.
+  Each query becomes a match table, a byte per state id (64 KB, all of Uint16), built in 0.1 ms and kept per thread
+  (32 queries). A matcher function cannot cross to a worker, so R76 (a matcher run on palette blocks whose position is
+  null) does not arise.
+- **The answer is mineflayer's**, position for position and in its order (`blocks.js` `findBlocks`), quirks included:
+  - sections in prismarine-world's `OctahedronIterator` order around the point's section, out to
+    `ceil((maxDistance + 8) / 16)` (the iterator is copied on integers; a test checks it point for point);
+  - in a section, blocks in x, y, z order; a block counts when it matches and is within `maxDistance` of the point;
+  - the walk stops after the first section of the layer after the one where it reached `count`, then sorts by
+    distance (stable) and keeps `count`. So "nearest first" is mineflayer's, by whole layers of sections.
+  - On a live server the store can trail a bot's own world by a few ms (the writer decodes, only a column's primary
+    holder forwards its changes, §9), so an answer may name a block just cut: `mineBlock` checks each one with
+    `bot.blockAt` before mining it, as it always did.
+- **Skipping:** a section entirely farther than `maxDistance` is not read; an all-air section (ref 0) or a one-state
+  section (ref `-state`) is decided once from its state; a stored section is read as 4 096 `Uint16`s against the match
+  table (3.3 µs). mineflayer skips a section only when its palette has no match, and a one-state section has no
+  `palette` in prismarine-chunk 1.18+ (`SingleValueContainer`), so it builds a `Block` for every block of every all-air
+  section in range. **No per-section summary:** a whole 48-block walk with no hit reads 69 sections, 0.26 ms; a summary
+  could save at most that, against a writer change for every block change.
+- **Unknown columns** (never received, unloaded, or cached: no bot holds them) have no blocks, as an unloaded column has
+  none for mineflayer; another dimension has none.
+- **Budget:** the search walks sections until `ctx.budgetLeftMs()` falls under 0.05 ms (at least one section per step),
+  then answers `{ continue }` and goes on next tick from the same place. A 48-block search takes 0.1–0.3 ms, so only
+  far larger ones continue.
+
+### 10.3 What uses it, and when
+
+- **`mineBlock` only** (async; so `gather`), through `findBlockPositions(bot, ids, maxDistance, count)`. With a
+  backend (`main.ts`: a job pool and a shared world) it submits a job at priority 0 (the pool's default; §2.5 puts
+  aim and raycasts above block searches) with a deadline of 100 ticks (5 s). The helper's contract and its errors are
+  unchanged.
+- **It falls back to `bot.findBlocks`, for that call,** when the store cannot answer for the bot: no dimension (not
+  attached, not logged in), the bot's own column not live in the store (just logged in or teleported, before the writer
+  published it; the writer disabled after crashes), the job failed (no worker and no inline fallback, the pool stopping)
+  or was late. A failure is logged at most once a minute. `blockSearchStats()` counts the jobs, the fallbacks by why,
+  and the jobs' submit → positions latency.
+- **`findBlock` stays synchronous on the bot's own world.** The script API returns a `Block` at once, and a worker's
+  answer comes one or two ticks later (§8.4).
+
+### 10.4 Measured
+
+**`npm run bench:find-blocks`** (no server; 9 × 9 forest columns of real chunk data; both on the main thread, so they
+compare; the Ryzen 9 9950X3D shared with other sessions):
+
+| Search | mineflayer `findBlocks` p50 / p95 | the store's p50 / p95 | sections walked / read |
+|---|---|---|---|
+| gather's: every `_log` within 48, count 64 | 15.3 / 16.4 ms | 0.10 / 0.13 ms | 26 / 17 |
+| `oak_log` within 32, count 1 | 0.75 / 5.3 ms | 0.005 / 0.033 ms | 1 / 1 |
+| `iron_ore` within 16, count 8 | 10.9 / 12.1 ms | 0.042 / 0.064 ms | 26 / 8 |
+| nothing there, within 48 (the whole walk) | 36.8 / 38.9 ms | 0.26 / 0.30 ms | 129 / 69 |
+
+As a job (4 workers, the pool's own 50 ms ticks): submit → positions p50 62 ms, p95 93 ms; 0.19 ms of worker time.
+
+**`bench:load` gather, N = 10, 60 s, dev server** (off = the defaults; on = `--jobs 4 --world`). Each pair ran on one
+site, so its second run cut a forest the first had thinned: site A off first, site B on first. All four were profiled
+(1 ms sampling). "Longest stall" is the longest stretch of the main thread without an idle sample, from the profile:
+the bench's loop histogram, in these runs, missed the first one, which came in the macrotask that started the order,
+before the histogram's first tick (fixed since, below).
+
+| | A off (1st) | A on (2nd) | B on (1st) | B off (2nd) |
+|---|---|---|---|---|
+| logs in 60 s | 96 | 55 | 100 | 97 |
+| ELU | 0.50 | 0.506 | 0.586 | 0.523 |
+| loop p99 / max (ms) | 12.4 / 81 | 10.4 / 29.9 | 15.3 / 31.4 | 11.2 / 127 |
+| longest stalls (ms) | 314 (the start), 85, 85 | 67, 65, 55 | 85, 76, 65 | 402 (the start), 140, 139 |
+| main-thread busy | 27.4 s | 27.3 s | 32.7 s | 28.8 s |
+| block searches on the main thread | 654 ms (28 searches, 23 ms each) | 0 | 0 | 1 022 ms (25, 41 ms each) |
+| added by the job path: the pool's tick (dispatch, entity snapshot) / the shared world's feed | — | 140 / ~95 ms | 220 / ~120 ms | — |
+| searches by job; job latency p50 / p95 | — | 20 | 27; 67 / 105 ms | — |
+
+- **Gather is unchanged** within what two sites can show: the first run on each site mined 96 (off) and 100 (on) logs,
+  the second 55 (on, site A) and 97 (off, site B). Site A's second run met a thinned forest (99 paths found, against
+  134). ELU and busy time are A* (61–71 % of busy) and the look-ahead (20 % in B's first run, on a fresh forest), not
+  the search.
+- **The search leaves the main thread:** 0.65–1.0 s of main thread a minute at N = 10 (2.4–3.5 % of busy) goes to 0,
+  and so do its stalls. One mineflayer search is 23–41 ms of synchronous work, and the order's start runs the ten
+  bots' first searches back to back (314–402 ms).
+- **What the job path costs the main thread:** the pool's tick, mostly the entity snapshot (published while jobs are
+  about, §8.5: 71–138 ms a minute, and `findBlocks` reads no entity), and P1's feed of the shared world (follow, copy,
+  flush). Net, about 0.4–0.7 s a minute less.
+
+**The docs/31 §2.6 case: logs in sight, none reachable** (N = 10 on a desert under 12 oak logs set floating at y 90 over
+RCON, 60 s, profiled). Every `mineBlock` sees the logs and fails them one by one on "no path" (73–74 path timeouts a
+minute in both runs; 0 logs). Off, the order's start blocked the main thread for **1 340 ms** (10 searches of
+~120 ms: with only 12 logs, `count` 64 is never reached, so each walks every section in range); on, the longest stall
+was **65 ms** and no search ran on the main thread (10 jobs, p50 54 ms). ELU 0.525 off, 0.513 on: A* (69–73 % of busy).
+**No log at all** (a desert, 30 s, profiled): each bot's first batch finds nothing and `gather` stops (`stopped early: …
+none found`). Off, **1 225 ms** blocked at the start (10 searches, 1 113 ms of `findBlocks`: 111 ms each, a full walk
+over a desert's sections); on, **15 ms** at most (10 jobs, p50 54 ms). The bench's loop max read 2.9 and 3.0 ms: the
+stall was in its blind spot. With that fixed (`runPhase` now lets the histogram tick before it starts the orders), the
+same pair, unprofiled, 20 s: loop max **1 122 ms** off, **13.9 ms** on (jobs p50 70 ms).
+
+**The freeze itself** (minutes, the event loop blocked until every batch had failed) no longer reproduces with either
+setting. Since `ab027f8` `squad.tasks` yields a macrotask between items (`tests/gather.test.ts`); `npm run
+bench:repro-tasks-spin` now ends after 210 ms, with a longest gap of 204 ms: each of the 10 bots' first search in one
+macrotask, on the fakes' 20 ms search. With the job on, no search runs on the main thread, and each one is a real wait
+of a tick or two, so even a microtask loop around `mineBlock` could not freeze it.
+
+**Tests.** `npm run check`: 230 tests, 11 of them P6's (`tests/find-blocks.test.ts`): the walk against prismarine-world's
+iterator; 135 searches (7 queries, 5 points, 4 maxDistance/count pairs, an unknown column beside the bot) answered as
+mineflayer's `findBlocks` answers on the same real columns; `maxDistance` at its edge; unknown, bot-only and cached
+columns; block changes, names and state ids; a search over many ticks by `continue` (a worker and the inline fallback,
+the same answer); `mineBlock` without the pool, with it (the same logs, no `bot.findBlocks`), its two fallbacks, and its
+unchanged error. **Live core tests** (`LIVE_ONLY=core`, dev server): 7/7 with the defaults, 7/7 with `LIVE_JOBS=4
+LIVE_WORLD=1` (gather's search by job, no fallback).
+
+### 10.5 Where it differs from the plan
+
+- **`findBlock` is not a job** (it stays synchronous on the bot, §10.3); only `mineBlock` uses the job.
+- **No per-section summary in the store** (§10.2: not worth a writer change).
+- **`SharedWorld.dimensionOf(bot)`** was added to P1's file: a job for a bot needs the store's name of its dimension.
+- **Fallbacks to the bot** (§10.3) where the plan had none: the store may not hold the bot's column yet.
+- **The entity snapshot** is published while any job is about, `findBlocks` included, though it reads no entity. A
+  per-type flag in the pool ("needs entities") would save its 70–140 ms a minute here; not done (the pool is P2's).
+
+### 10.6 Not done
+
+- The defaults stay off (`workers.count` 0, `world.enabled` false); the orchestrator flips them after the final
+  measurements.
+- `blockSearchStats` is not in `/api/metrics` or the vitals (the pool's per-type `findBlocks` counts are, §8.5).
+- Unreachable logs are still searched again by every bot and every `mineBlock` call (docs/31 §11.9): cheaper now, but
+  each one still costs an A* search to find out.
+- Measured at N = 10 only, one pair per site.

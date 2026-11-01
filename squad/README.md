@@ -86,6 +86,14 @@ the store but `verify`. Later phases (aim, A* and the bots' own reads on worker 
 
 `npx tsx live-tests/probe-world.ts` (dev server only) checks it block for block against six real bots.
 
+**Block searches on the workers ([docs/37](../docs/37-squad-worker-reads-plan.md) P6, off).** With both
+`workers.count` > 0 and `world.enabled`, `mineBlock` (so `gather`) finds its blocks with a `findBlocks` job: mineflayer's
+`bot.findBlocks` read from the shared world on a reader worker, the same positions in the same order, in about 0.1 ms
+instead of mineflayer's 15 ms on the main thread ([src/api/block-search.ts](src/api/block-search.ts)). Nothing else to
+set. A search the store cannot answer for that bot (not logged in, its column not in the store yet, the job failed or
+waited more than 5 s) runs on the bot as before. `findBlock` stays synchronous on the bot's own world. With either key
+off (the defaults), every search is `bot.findBlocks`, as before.
+
 **Watching the load.** The runtime samples its event loop every 10 s and logs one warning a minute at most when the
 loop's p99 passes 250 ms or its ELU 0.9 (bots move in slow motion past that). `POST /api/metrics` returns the last
 10 s: `loop { p50, p99, max }`, `elu`, `cpuPct`, `rssMb`, `heapMb`, `skippedPackets`, and per bot `ticksPerSec`, path
@@ -167,8 +175,10 @@ on `POST /api/orders/check` (bind) and `POST /api/orders/trigger` (each click; `
 npm run check       # lint + tsc + node:test (fakes only, no Minecraft)
 npm run bench:load  # the load benchmark (bench/README.md; never against production)
 npm run bench:jobs  # the job pool's own overhead: latency, dispatch cost, the entity snapshot (no server)
+npm run bench:find-blocks  # block searches: mineflayer's findBlocks against the shared world's, and as a job (no server)
 npm run live-test   # real bots on the dev server (dev/, ./gradlew runDevServer); ports and RCON password read from its server.properties
 $env:LIVE_PATH_WORKERS='4'; npm run live-test   # the same scenarios with 4 pathfinding workers
+$env:LIVE_JOBS='4'; $env:LIVE_WORLD='1'; npm run live-test   # with 4 reader workers and the shared world (gather's search as a job)
 $env:SERVER_PROPERTIES='../run/server.properties'; npm run live-test   # the production server (run/; world left as is)
 $env:LIVE_ONLY='items'; $env:LIVE_RUNTIME_PORT='8779'; npm run live-test   # only the bound-item scenarios (below)
 ```

@@ -213,6 +213,16 @@ export class SharedWorld extends EventEmitter {
     if (followed) this.holders.set(b, h);
   }
 
+  /**
+   * The dimension an attached bot is in, as the store names it (its login's or last respawn's world name, e.g.
+   * "minecraft:overworld"; mineflayer's bot.game.dimension is the dimension type, "overworld"). Null for a bot not
+   * attached here, or before its login (docs/37 P6: a job that reads the store for a bot needs it).
+   */
+  dimensionOf(bot: unknown): string | null {
+    if (!bot || typeof bot !== 'object') return null;
+    return this.holders.get(bot)?.dim ?? null;
+  }
+
   private onChunk(h: Holder, x: number, z: number, data: Buffer): void {
     if (h.dim === null) return;
     const key = keyOf(h.dim, x, z);

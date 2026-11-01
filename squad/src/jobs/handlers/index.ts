@@ -2,3 +2,5 @@
 // raycast, los; P4: path; P6: findBlocks); each one runs in every reader worker and, inline, on the main thread.
 
 export const STOCK_HANDLERS: URL[] = [new URL('./echo.mjs', import.meta.url)];
+// P6: mineflayer's findBlocks over the shared world (mineBlock's search, api/block-search.ts).
+STOCK_HANDLERS.push(new URL('./find-blocks.mjs', import.meta.url));

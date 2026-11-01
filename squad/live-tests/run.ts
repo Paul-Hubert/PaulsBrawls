@@ -47,6 +47,7 @@ import pathfinderPkg from 'mineflayer-pathfinder';
 
 import { parseConfig } from '../src/config';
 import { start } from '../src/main';
+import { blockSearchStats } from '../src/api/block-search';
 import type { Notice } from '../src/types';
 import { itemScenarios } from './items';
 import { Rcon } from './rcon';
@@ -118,6 +119,10 @@ async function main(): Promise<void> {
   // LIVE_PATH_WORKERS=N runs the same scenarios with the pathfinding worker pool (docs/32 D).
   const pathfinding = { workers: Number(process.env.LIVE_PATH_WORKERS ?? 0) };
   const cfg = parseConfig({ minecraft: { port: MC_PORT }, port: RUNTIME_PORT, dataDir: join(runDir, 'data'), loginStaggerMs: 1500, pathfinding }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN });
+  // LIVE_JOBS=N and LIVE_WORLD=1: the reader workers and the shared world (docs/37); with both, gather's mineBlock
+  // searches through a findBlocks job (P6).
+  cfg.workers.count = Number(process.env.LIVE_JOBS ?? cfg.workers.count);
+  if (process.env.LIVE_WORLD === '1') cfg.world.enabled = true;
   const rt = await start(cfg, { connectBots: true, installGuards: true });
   const { pool, runner } = rt.service.deps;
   runner.on('notice', (n: Notice) => {
@@ -182,7 +187,8 @@ async function main(): Promise<void> {
         const n = notices.filter((x) => /« gather »/.test(x.text)).at(-1)!;
         const logs = pool.bot('LiveMiner')!.inventory.items().filter((i) => i.name.endsWith('_log')).reduce((s, i) => s + i.count, 0);
         if (!/terminé/.test(n.text) || logs <= before) throw new Error(`${n.text} (logs in inventory: ${logs})`);
-        return `${n.text} (inventory: ${logs} logs)`;
+        const bs = blockSearchStats();
+        return `${n.text} (inventory: ${logs} logs; block searches: ${bs.jobs} by job, ${JSON.stringify(bs.fallbacks)} on the bot)`;
       });
 
       await scenario('come: every bot walks to the commander', async () => {

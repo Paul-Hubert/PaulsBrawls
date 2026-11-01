@@ -19,6 +19,7 @@
     "bench:load": "tsx bench/load.ts",
     "bench:micro": "tsx bench/micro.ts",
     "bench:jobs": "tsx bench/jobs.ts",
+    "bench:find-blocks": "tsx bench/find-blocks.ts",
     "bench:profiles": "tsx bench/profile-summary.ts",
     "bench:fight": "tsx bench/fight.ts",
     "bench:report": "tsx bench/report.ts",

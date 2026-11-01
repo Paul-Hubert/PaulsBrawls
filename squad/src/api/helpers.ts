@@ -22,6 +22,7 @@ import { closeStrayWindow, windowOperation, type WindowBot } from '../bots/harde
 import { GoalFollowOffset, slotStandable, type FollowOffset } from '../bots/follow-goal';
 import { orderOf, unwrap } from '../orders/guard';
 import { HelperError, isBotLeft, isStopped } from './errors';
+import { findBlockPositions } from './block-search';
 
 const { goals } = pathfinderPkg;
 
@@ -369,7 +370,10 @@ export async function exploreUntil<T>(bot: Bot, direction: PosLike, maxTime = 60
 
 // -- blocks ----------------------------------------------------------------------------------------------------
 
-/** The nearest block of that id within `maxDistance`, or null (`"_log"` matches every log). */
+/**
+ * The nearest block of that id within `maxDistance`, or null (`"_log"` matches every log). Synchronous, on the bot's
+ * own world, whatever the config: a script gets the Block at once (mineBlock's search may go to a worker, docs/37 P6).
+ */
 export function findBlock(bot: Bot, name: string, maxDistance = 48): Block | null {
   const ids = blockIds(bot, name, 'findBlock');
   return bot.findBlock({ matching: ids, maxDistance }) ?? null;
@@ -378,7 +382,8 @@ export function findBlock(bot: Bot, name: string, maxDistance = 48): Block | nul
 /**
  * Mine `count` blocks of a kind (Voyager's mineBlock): find them, skip blocks another bot or order claimed, path,
  * dig with the best tool and pick up the drops (mineflayer-collectblock). A block that fails is skipped. Throws when
- * nothing at all was mined.
+ * nothing at all was mined. The search is mineflayer's findBlocks, run on a reader worker over the shared world when
+ * both are on (api/block-search.ts, docs/37 P6), else on the bot.
  */
 export async function mineBlock(bot: Bot, name: string, count = 1, opts: { maxDistance?: number } = {}): Promise<{ mined: number; at: Vec3[] }> {
   const ids = blockIds(bot, name, 'mineBlock');
@@ -389,7 +394,7 @@ export async function mineBlock(bot: Bot, name: string, count = 1, opts: { maxDi
   const failed = new Set<string>();
   let lastError = '';
   for (let round = 0; round < 3 && at.length < count; round++) {
-    const positions = bot.findBlocks({ matching: ids, maxDistance, count: Math.max(64, count * 8) });
+    const positions = await findBlockPositions(bot, ids, maxDistance, Math.max(64, count * 8));
     const free = positions.filter((p) => !failed.has(blockKey(p)) && !o?.heldByOther?.(blockKey(p)));
     if (free.length === 0) break;
     for (const p of free) {

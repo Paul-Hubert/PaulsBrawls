@@ -26,6 +26,7 @@ import { loadStock } from './stock';
 import { checkScript } from './script/check';
 import { SquadHttp } from './http/server';
 import { errorMessage, isBotLeft, isStopped } from './api/errors';
+import { useBlockSearch } from './api/block-search';
 import { LoopMonitor } from './vitals/lag-monitor';
 import { Vitals } from './vitals/metrics';
 
@@ -86,6 +87,8 @@ export async function start(
     ...opts.pool,
   });
   const jobs = startJobs(cfg, pool, roster, world);
+  // docs/37 P6: mineBlock's block search becomes a findBlocks job when the workers and the shared world are both on.
+  const dropBlockSearch = jobs && world ? useBlockSearch({ jobs, world }) : undefined;
   const runner = new OrderRunner({ pool, roster, leases, claims, store, journal, limits: cfg.limits });
   const vitals = new Vitals({ pool, journal, skipped: skippedPackets, loop, jobs });
   const service = new SquadService({ roster, pool, leases, claims, store, journal, runner, limits: cfg.limits, vitals });
@@ -114,6 +117,7 @@ export async function start(
       await runner.stopAll('interrupted');
       vitals.stop();
       pool.stop();
+      dropBlockSearch?.();
       await jobs?.stop();
       await pathWorkers?.stop();
       await world?.stop();

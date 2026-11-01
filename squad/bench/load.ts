@@ -14,8 +14,10 @@
 // --no-pregen; experiments (bench-only, the runtime's defaults stay as they are): --tick-timeout, --think-timeout,
 // --search-radius, --plugins all|none|-autoEat,-hawkEye…, --view short|normal|tiny|<chunks>, --movements canDig=false,…,
 // --astar-budget <ms per 50 ms> (the runtime's pathfinding.astarBudgetMs), --workers <N> (the runtime's
-// pathfinding.workers, the pathfinding worker pool), --think-on-compute, --lookahead-cap <ticks>, --lookahead-memo <ticks>,
-// --lookahead-blockcache, --stuck-ticks, --mcdata-memo, --cheap-varint, --astar-blockcache, --astar-blockcache-world.
+// pathfinding.workers, the pathfinding worker pool), --jobs <N> (workers.count, the reader workers), --world
+// (world.enabled, the shared world; with --jobs, mineBlock's search runs as a findBlocks job, docs/37 P6),
+// --think-on-compute, --lookahead-cap <ticks>, --lookahead-memo <ticks>, --lookahead-blockcache, --stuck-ticks,
+// --mcdata-memo, --cheap-varint, --astar-blockcache, --astar-blockcache-world.
 // The server is read from SERVER_PROPERTIES (default ../run/server.properties). The production server is refused.
 
 import './lib/instrument'; // first: it wraps prismarine-physics before mineflayer loads it
@@ -36,11 +38,12 @@ import { loadPlugins, pathfinder, type PluginSet } from '../src/bots/plugins';
 import { keepDecodersAlive, RECIPES_AS_BYTES } from '../src/bots/protocol';
 import type { SpawnRequest } from '../src/bots/pool';
 import { logger } from '../src/logger';
+import { blockSearchStats } from '../src/api/block-search';
 import type { Player } from '../src/roster';
 import { EMPTY_SNAPSHOT, type Snapshot } from '../src/types';
 import { Rcon } from '../live-tests/rcon';
 import { setAstarBlockCache, setLookahead, setThinkOnCompute } from './lib/instrument';
-import { BotMeters, dist, ProcessProbe, r1 } from './lib/probe';
+import { BotMeters, dist, LOOP_RESOLUTION_MS, ProcessProbe, r1 } from './lib/probe';
 import { keepUpLines, LogTail, pidOnPort, processCpu, readProps, tickQuery, type TickSample } from './lib/server';
 import { summaryLine, table, type Phase, type PhaseResult, type ServerPhase } from './lib/table';
 
@@ -75,6 +78,9 @@ const VARIANT = {
   astarBudget: opt('astar-budget') === undefined ? undefined : Number(opt('astar-budget')),
   /** The runtime's pathfinding worker pool (config pathfinding.workers; capped at the cores but one). */
   workers: Number(opt('workers') ?? 0),
+  /** The reader workers (config workers.count, docs/37) and the shared world (world.enabled): with both, mineBlock's search is a findBlocks job (P6). */
+  jobs: Number(opt('jobs') ?? 0),
+  world: flag('world'),
   thinkOnCompute: flag('think-on-compute'),
   lookaheadCap: Number(opt('lookahead-cap') ?? 0),
   lookaheadMemo: Number(opt('lookahead-memo') ?? 0),
@@ -199,7 +205,7 @@ async function main(): Promise<void> {
   }
 
   const cfg = parseConfig(
-    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: { ...(VARIANT.astarBudget === undefined ? {} : { astarBudgetMs: VARIANT.astarBudget }), workers: VARIANT.workers } },
+    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: { ...(VARIANT.astarBudget === undefined ? {} : { astarBudgetMs: VARIANT.astarBudget }), workers: VARIANT.workers }, workers: { count: VARIANT.jobs }, world: { enabled: VARIANT.world } },
     { PAULSBRAWLS_SQUAD_TOKEN: TOKEN },
   );
   const rt = await start(cfg, { connectBots: true, installGuards: true, pool: { createBot, setup } });
@@ -247,13 +253,25 @@ async function main(): Promise<void> {
       }
       for (const phase of n === 0 ? (['idle'] as Phase[]) : PHASES) {
         if (n > 0) await place(rt, rcon, center as { x: number; z: number }, n);
-        const r: PhaseResult & { pathWorkers?: unknown } = await runPhase(rt, rcon, meters, n, phase, center, serverPid);
+        blockSearchStats(true);
+        const r: PhaseResult & { pathWorkers?: unknown; jobs?: unknown; blockSearch?: unknown; world?: unknown } = await runPhase(rt, rcon, meters, n, phase, center, serverPid);
         if (rt.pathWorkers) {
           // Cumulative since the start: searches offloaded and answered, and why any stayed on the main thread.
           const st = rt.pathWorkers.stats();
           r.pathWorkers = st;
           log(`path workers: ${st.alive}/${st.workers} alive, ${st.chunks} chunks mirrored, ${st.offloaded} offloaded, ${st.done} answered, fallbacks ${JSON.stringify(st.fallbacks)}, restarts ${st.restarts}`);
         }
+        // docs/37 P6: where mineBlock's searches ran in this phase (and how long a job took), and the job pool's own
+        // counts. Those are the runtime's last 10 s window (the vitals sampler resets it), so they are not reset here.
+        r.blockSearch = blockSearchStats(true);
+        if (rt.jobs) {
+          const st = rt.jobs.stats();
+          r.jobs = st;
+          const fb = st.types.findBlocks;
+          log(`jobs (last 10 s): ${st.alive}/${st.workers} alive, restarts ${st.restarts}; findBlocks ${fb ? `${fb.done} done, ${fb.continued} continued, ${fb.late} late, ${fb.failed} failed, ${fb.inline} inline, ${fb.costMs} ms of worker time each` : 'none'}`);
+        }
+        if (rt.world) r.world = rt.world.stats();
+        log(`block searches: ${JSON.stringify(r.blockSearch)}`);
         results.push(r);
         save();
         log(summaryLine(r));
@@ -447,6 +465,9 @@ async function runPhase(rt: Started, rcon: Rcon, meters: BotMeters, n: number, p
     await session.post('Profiler.start');
   }
   probe.start();
+  // The delay histogram records a gap only from its second tick on: an order started in this macrotask could block
+  // the loop before that and go unseen (docs/37 §10.4: gather's first searches, 1.2 s, read as a 3 ms max).
+  await sleep(3 * LOOP_RESOLUTION_MS);
 
   const snap: Snapshot = { ...EMPTY_SNAPSHOT, position: { x: center?.x ?? 0, y: 64, z: center?.z ?? 0 } };
   const started: string[] = [];

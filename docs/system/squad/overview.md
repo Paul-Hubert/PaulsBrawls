@@ -20,6 +20,8 @@ sources:
   - squad/src/jobs/batch.mjs
   - squad/src/jobs/entities.mjs
   - squad/src/jobs/snapshot.ts
+  - squad/src/jobs/handlers/
+  - squad/src/api/block-search.ts
   - squad/src/world/
   - squad/src/config.ts
   - squad/src/vitals/lag-monitor.ts
@@ -68,8 +70,8 @@ verified_at: 2026-10-30 (branch rework at 32e086a)
 | Supervisor | `squad/src/supervisor.ts` | The parent process (`npm start`). It forks the runtime with `--import tsx`, expects an IPC heartbeat every second, kills the runtime after 10 s of silence (`HEARTBEAT_TIMEOUT_MS`, :15) and restarts it with backoff 1/2/5/10/30 s |
 | Runtime, main thread | `squad/src/main.ts` `start()` :35 | **Everything else**: every mineflayer bot (protocol decoding, physics ticks, the pathfinder's look-ahead, and A* unless the workers are on; plugins), every order's script, the leases, the HTTP + SSE + MCP server, the synchronous SQLite journal, the vitals sampler |
 | Pathfinding workers (optional) | `squad/src/bots/pathworkers/client.ts` `PathWorkerPool` :113, `worker.mjs`; built in `main.ts` :53 | **Off by default** (`pathfinding.workers` 0). When on: the bots' own A* searches, over a mirror of the world. Details below |
-| Reader workers (optional) | `squad/src/jobs/pool.ts` `JobPool`, `worker.mjs`; built in `main.ts` `startJobs` | **Off by default** (`workers.count` 0), and no real job type yet (docs/37 P2: the framework and an `echo` type). When on: batches of read-only jobs under a per-tick CPU budget, ticked on one online bot's `physicsTick`; an entity snapshot in shared memory. [docs/37 §8](../../37-squad-worker-reads-plan.md) |
-| Shared-world writer (optional) | `squad/src/world/shared-world.ts` `SharedWorld`, `writer.mjs`, `store.mjs`; built in `main.ts` when `world.enabled` | **Off by default.** One copy of the bots' chunks in SharedArrayBuffers, decoded by this thread and readable by any thread (`reader.mjs`). P1 of [docs/37](../../37-squad-worker-reads-plan.md) (§8 there is the as-built): nothing reads it yet but `world.verify` |
+| Reader workers (optional) | `squad/src/jobs/pool.ts` `JobPool`, `worker.mjs`; built in `main.ts` `startJobs` | **Off by default** (`workers.count` 0). Job types: `echo` (P2) and `findBlocks` (P6: mineflayer's `findBlocks` over the shared world, used by `mineBlock` when the shared world is on too; below). When on: batches of read-only jobs under a per-tick CPU budget, ticked on one online bot's `physicsTick`; an entity snapshot in shared memory. [docs/37 §8](../../37-squad-worker-reads-plan.md) |
+| Shared-world writer (optional) | `squad/src/world/shared-world.ts` `SharedWorld`, `writer.mjs`, `store.mjs`; built in `main.ts` when `world.enabled` | **Off by default.** One copy of the bots' chunks in SharedArrayBuffers, decoded by this thread and readable by any thread (`reader.mjs`). P1 of [docs/37](../../37-squad-worker-reads-plan.md) (§9 there is the as-built): read by `world.verify` and, with the reader workers on, by the `findBlocks` job (P6, §10 there) |
 | Typecheck worker | `squad/src/script/typecheck-worker.mjs`, started by `check.ts` `typecheckWorker()` :156 | TypeScript `checkJs` for `check_script`/`submit_command`. First check about 5 s (it parses the library types), later ones 0.1–0.3 s; warmed 2 s after boot. Unref'd when idle |
 | The mod | `com.paul.brawl.squad` in the server JVM | `/bots` commands and the commander snapshot on the server thread; HTTP to the runtime is async; the SSE reader is a virtual thread (`squad-events`); authoring turns are virtual threads running `claude -p` (`ClaudeCodeClient`) |
 
@@ -165,6 +167,16 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
 | Storage | `store/commands.ts`, `journal/journal.ts` | `.squad-data/commands/<uuid>/<name>/meta.json` + `vN.mjs` (append-only, shares, revert); SQLite `squad.db` (WAL, `synchronous=NORMAL`), one row per order with its full report, and one `vitals` row per minute |
 | HTTP | `http/server.ts` | 21 `POST /api/...` routes (incl. `/api/metrics`, `/api/orders/check`, `/api/orders/trigger`), `GET /events` (SSE: `hello`, `notice`, `state`; notices buffered while no mod listens), `POST /mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN` |
 | Stock | `src/stock/*.mjs` | `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`, `raid`, and for bound items `mur-de-boucliers`, `epee`, `ligne-archers`, `tir`. Usable by everyone, and the agent's examples. `defend`, `raid` and the four: below |
+
+**Block searches** (`api/block-search.ts`, [docs/37 §10](../../37-squad-worker-reads-plan.md), P6). `mineBlock`, so
+`gather`, finds its blocks with `findBlockPositions`: mineflayer's `bot.findBlocks({ matching, maxDistance, count })`
+(gather: every `_log` within 48, count 64). With the reader workers and the shared world both on (`workers.count` > 0
+and `world.enabled`; `main.ts` calls `useBlockSearch`), it is a `findBlocks` job instead (`jobs/handlers/find-blocks.mjs`
+over `world/find-blocks.mjs`): the same positions in the same order, read from the store on a worker in 0.1–0.3 ms,
+where mineflayer spends 15–40 ms on the main thread (it builds a `Block` for every block of every section whose palette
+it cannot rule out, all-air sections included). A search the store cannot answer for that bot (no dimension yet, its
+own column not in the store, the job failed or 5 s late) runs on the bot. `findBlock` stays synchronous on the bot's
+own world (a script gets the `Block` at once). With either key off (the defaults), every search is `bot.findBlocks`.
 
 ## Orders bound to items — the runtime (docs/29 §5.4, 2026-10-31)
 
@@ -506,9 +518,10 @@ clicks and sends each one; it decides nothing about what a click does.
 
 ## Tests
 
-- **`squad/`:** `npm run check` = lint + tsc + 168 `node:test` tests on fakes (compile, leases, guard, orders and
+- **`squad/`:** `npm run check` = lint + tsc + 230 `node:test` tests on fakes (2026-11-01; compile, leases, guard, orders and
   reclaim, check/typecheck of the stock commands, HTTP + the real MCP client, supervisor wedge, protocol hardening,
-  helpers, agent config drift, `follow`, the `gather` freeze, one test per dependency patch, the vitals, the worker
+  helpers, agent config drift, `follow`, the `gather` freeze, the `findBlocks` job against mineflayer's own search on
+  real chunk data and `mineBlock` with and without it (`find-blocks.test.ts`), one test per dependency patch, the vitals, the worker
   pool: same path as the main thread on a synthetic world, the mirror's refcounts, every fallback, a clean stop;
   `defend`: commander-relative threats, the leash, two guards per target, distinct slots, quick shots, a hawkEye
   copy per bot, the slot fallback; friends (`raid.test.ts`: the team only, kept up to date; a guard attacks another
@@ -533,7 +546,8 @@ clicks and sends each one; it decides nothing about what a click does.
   trigger, hit and entity JSON and the request body). The stack edits themselves (`ItemStack` needs a bootstrap), the
   hooks and the mixin are checked only in game.
 - **Live:** `npm run live-test`, using RCON against the dev server (`dev/`, `./gradlew runDevServer`; the default) or
-  production (`SERVER_PROPERTIES=../run/server.properties`; the world is never changed there). `LIVE_PATH_WORKERS=N` runs it with N pathfinding workers.
+  production (`SERVER_PROPERTIES=../run/server.properties`; the world is never changed there). `LIVE_PATH_WORKERS=N` runs it with N pathfinding workers;
+  `LIVE_JOBS=N LIVE_WORLD=1` with N reader workers and the shared world (gather's search then runs as a job).
   `LIVE_ONLY=core|items` runs one group; the test's runtime listens on `LIVE_RUNTIME_PORT` (default any free port).
   - **Core** (`live-tests/run.ts`): connect, `gather`, `come`, reclaim per role, despawn. On the dev world the bots
     start from a camp the test lays (grass and two oaks at 1100,100,1000, cleared inventories), and a ladder built high
@@ -601,8 +615,10 @@ clicks and sends each one; it decides nothing about what a click does.
   arrival teleport and kit, the start as `Envahisseur`, a real 20-vs-20 fight, 40 bots on one runtime). A raider that
   dies respawns idle (it leaves its order, docs/29 §4) and does not rejoin the raid; one that arrives after the
   timeout is equipped but stays idle.
-- **The reader workers (docs/37 P2):** only on fakes (`tests/jobs.test.ts`) and `bench:jobs`; no job type uses them
-  yet, so they are off.
+- **The reader workers (docs/37 P2) and the `findBlocks` job (P6):** off by default. The job ran on fakes over real
+  chunk data (`tests/find-blocks.test.ts`: mineflayer's answer, position for position), in `bench:load` gather at
+  N = 10 on the dev server (docs/37 §10.4), and in the live core test with `LIVE_JOBS=4 LIVE_WORLD=1` (7/7, gather's
+  search by job); not on production, and no other job type uses the workers yet.
 - **`/bots status` in game:** only its JUnit test ran. **The worker pool's stats** are not in `/api/metrics` or the
   vitals.
 - **The worker pool on production:** only the dev server and the bench ran it (live test 5/5 with 4 and 14 workers).

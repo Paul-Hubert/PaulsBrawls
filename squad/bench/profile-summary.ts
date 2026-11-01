@@ -24,7 +24,8 @@ interface Profile {
 /**
  * By cause (inclusive): a sample goes to the first cause found on its stack, in this order. The pathfinder comes
  * first, so the block lookups A* makes count as pathfinding; packet handling covers decoding and what mineflayer
- * does with each packet (chunk loading, entity updates).
+ * does with each packet (chunk loading, entity updates). Block searches (mineflayer's findBlocks) come before Squad,
+ * which calls them (docs/37 P6).
  */
 const CAUSES: Array<[string, (pkg: string, n: ProfileNode) => boolean]> = [
   ['pathfinder: A* search', (pkg, n) => pkg === 'mineflayer-pathfinder' && /astar\.js|movements\.js/.test(n.callFrame.url)],
@@ -33,6 +34,7 @@ const CAUSES: Array<[string, (pkg: string, n: ProfileNode) => boolean]> = [
   // Before Squad: Squad's protocol hardening (bots/protocol.ts) wraps protodef's parser, so every packet handler runs
   // under one of its frames.
   ['packet handling (decode, inflate, mineflayer handlers)', (pkg, n) => /^(minecraft-protocol|protodef)$/.test(pkg) || /[\\/]bots[\\/]protocol\.ts$/.test(n.callFrame.url)],
+  ['block searches (mineflayer findBlocks)', (pkg, n) => pkg === 'mineflayer' && /blocks\.js$/.test(n.callFrame.url) && /findBlocks/.test(n.callFrame.functionName)],
   ['Squad (runtime, helpers, commands)', (pkg) => pkg.startsWith('squad ')],
   ['own physics (one simulation per bot per tick)', (pkg, n) => pkg === 'prismarine-physics' || (pkg === 'mineflayer' && /physics\.js/.test(n.callFrame.url))],
   ['bench instrumentation', (pkg) => pkg === 'bench'],
