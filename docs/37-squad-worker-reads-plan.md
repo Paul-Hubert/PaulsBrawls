@@ -1,7 +1,7 @@
 # 37 — Squad: read-only work on worker threads, one shared copy of the world (plan)
 
-> Plan, 2026-11-01. Nothing here is built yet. It follows the measurements of [docs/36](36-squad-fight-performance.md)
-> and Paul's decisions of the same day. Every expected number is an estimate from docs/36's profiles and is
+> Plan, 2026-11-01. **P1 is built** (the shared world, off by default; as built: §8). The rest is a plan. It follows
+> the measurements of [docs/36](36-squad-fight-performance.md) and Paul's decisions of the same day. Every expected number is an estimate from docs/36's profiles and is
 > re-measured after each phase with `bench:fight` and `bench:load`.
 
 ## 0. Owner decisions (Paul, 2026-11-01)
@@ -206,7 +206,7 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 | Phase | Size | What | Done when |
 |---|---|---|---|
 | **P0** | S | **Fix the hawkEye leak now** (`freshHawkEye`: take the new module out of its parent's `children`). Merge `squad-fight-bench` (bench, stagger, kits) once the docs/35 session has landed | `bench/repro-hawkeye-leak.ts` prints 0/20; RSS flat across `bench:fight` rounds |
-| **P1** | L | The shared world: pages, sections, index, epochs, cache, per-state tables, the writer thread, fed from the bots' packets beside today's worlds (nothing reads it yet) | Unit tests on fakes (publish, tombstone, epoch reuse, cache states, dedup). A live parity probe: for every block of every column held, the store's state id = `bot.world.getBlockStateId` |
+| **P1** ✅ | L | The shared world: pages, sections, index, epochs, cache, per-state tables, the writer thread, fed from the bots' packets beside today's worlds (nothing reads it yet) | **Done 2026-11-01** (§8): 19 tests on fakes (`tests/world.test.ts`); the live probe (`live-tests/probe-world.ts`), three runs, each comparing 184.6 M blocks of 1 878 held columns twice: 0 mismatches |
 | **P2** | M | The job queue, dispatcher and reader workers (budget, priorities, deadlines, carry-over, affinity, fallbacks, metrics), with a test job type | Unit tests (budget respected, priorities, `late`, a worker killed mid-batch); `/api/metrics` shows the queue |
 | **P3** | M | Raycast (blocks + hitboxes), LOS and the aim solver as jobs; `shoot` on the schedule with turning; hawkEye removed | `bench:fight`: full-strength ELU ≤ 0.35 (from 0.60–0.66); arrow kills per shot ≥ 3.2 %; failed shots ≤ 5 %; friendly hits 0. Live items tests (`tir`, `ligne-archers`, `defend`) pass |
 | **P4** | M | A* on the reader workers over the shared world (Movements reads per-state tables); the old per-worker mirror retired | `bench:load` walk / gather at 10 and 30 bots: legs and logs per minute ≥ docs/31 §11; live core tests pass; process memory flat with the worker count |
@@ -221,9 +221,12 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 
 ```json
 "workers": { "count": 4, "tickBudgetMs": 40 },
-"world":   { "shared": false, "cacheSeconds": 60, "cacheColumns": 2000 },
+"world":   { "enabled": false, "cacheSeconds": 60, "cacheColumns": 2000, "verify": false, "shared": false },
 "aim":     { "schedule": [0, 10, 11, 12, 13, 14, 20, 21, 22, 23] }
 ```
+
+- `world.enabled`, `cacheSeconds`, `cacheColumns` and `verify` exist since P1 (§8): `world.enabled` builds the store
+  (P2/P3 turn it on), `verify` is the debug comparison of §6.
 
 - `workers.count`: default cores − 2.
 - `pathfinding.workers` remains an alias of `workers.count`.
@@ -248,3 +251,121 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 - **40 logins:** the stall falls from up to 1.6 s to under 250 ms, because each column is decoded once, on the writer
   (P5).
 - **The workers' memory** no longer grows with their count (P4).
+
+## 8. P1 as built (2026-11-01)
+
+**Files** (`squad/src/world/`; the `.mjs` run in any thread without a loader, each with a `.d.mts`, which TypeScript
+needs for an `.mjs` import; a `.d.ts` is not found):
+
+| File | What |
+|---|---|
+| `layout.mjs` | The memory map, shared by reader and writer; `allocateWorld()` |
+| `tables.mjs` | The per-state tables from the registry (`buildStateTables`) and the decoder's settings |
+| `decode.mjs` | A chunk payload into state ids, prismarine-chunk's 1.18+ format, no palette objects |
+| `reader.mjs` | `openWorld(descriptor)`: `WorldReader`, `StateTables`, the `F_*` flag bits. Any thread |
+| `store.mjs` | `WorldStore`: the writer's logic (load, release, set, expire, epochs, reset), synchronous |
+| `writer.mjs` | The writer thread: the message loop around `WorldStore` |
+| `follow.ts` | A bot's world packets, with the same rules as the path workers' mirror |
+| `shared-world.ts` | `SharedWorld`, main thread: holders, routing, the writer's lifecycle, `verify` |
+
+Wiring: `config.ts` `world` (`WorldConfig`, `DEFAULT_WORLD`); `main.ts` builds `SharedWorld` when `world.enabled`
+(`maxReaders` 64, `WORLD_MAX_READERS`) and returns it as `Started.world`; `pool.ts` calls `world.attach(bot)` right after
+`createBot`, beside `pathWorkers.attach` (`BotPoolOptions.world`).
+
+**The API** (as asked, plus the extras marked +):
+
+```ts
+// reader.mjs: any thread
+openWorld(descriptor: WorldDescriptor): WorldReader
+WorldReader: stateId(dim, x, y, z) · hasColumn(dim, cx, cz) · bounds(dim) · enter() · leave() · states
+  + stateIdIn(dimIndex, x, y, z) · dimIndex(dim) · columnVersion(dim, cx, cz) · version()
+StateTables: boxes(s) · isEmpty · isLiquid · isClimbable · isSolid · name · blockId
+  + count · boxStart(s) · boxCount(s) · boxData · flags(s) · isWater(s);   + F_EMPTY … F_BB_BLOCK
+// shared-world.ts: main thread; events 'published' (dim, x, z), 'unloaded' (dim, x, z)
+new SharedWorld({ version, cacheSeconds, cacheColumns, maxReaders, verify? })
+attach(bot) · descriptor() · reader · stats() · stop()
+  + release(descriptor) · settle() · verifyRound(samples?) · killWriter() (tests)
+```
+
+Semantics a caller needs:
+- **Reads need a bracket.** `stateId`, `stateIdIn`, `hasColumn` and `columnVersion` throw outside `enter()`/`leave()`;
+  a second `enter()` throws. `bounds`, `dimIndex`, `version` and `states` read any time.
+- **-1** means no LIVE column: never received, unloaded, or cached. Inside a live column, above or below the
+  dimension's height reads 0 (air), as prismarine-world does. Coordinates are floored.
+- **Columns change while you read.** A block change or a re-sent chunk applied while a batch runs may show in some of
+  its reads and not others; each read is one `Uint16`, never torn. Within a bracket, a column found keeps meaning that
+  chunk, even if it is dropped meanwhile; it then reads -1.
+- **`boxes(s)`** is one shared view per shape. Never write into it.
+- **Flags are per state.** `isEmpty` means no collision box in this state (an open fence gate, a one-layer snow), from
+  the shapes. minecraft-data's per-block `boundingBox`, which mineflayer-pathfinder and prismarine-physics read, is
+  `F_BB_BLOCK`. `isSolid` is exactly the full cube. `isLiquid` is water or lava. `isWater` is physics' water (with
+  seagrass, kelp, bubble columns and waterlogged states). `isClimbable` is 1.21.1's `#minecraft:climbable` tag; the
+  bots' physics climbs only ladder, vine and scaffolding.
+- **Reader slots.** `descriptor()` hands out the next epoch slot (slot 0 is the main thread's `reader`). Each one
+  carries a `readerToken`, and **`release(descriptor)`** frees it. It is meant for a reader that will never read
+  again, such as a dead worker. A reader killed inside `enter()` keeps its old epoch, and no memory freed since can be
+  reused until it is released. `release` is idempotent: it does nothing once the slot has gone to a new reader. Call
+  it only once the thread is gone.
+- **`stats()`** returns `{ columnsLive, columnsCached, sections, bytes, decoded, decodeMs: { p50, max } }`, plus
+  `sectionCapacity`, `retiredBatches`, `skipped`, `failed`, `rejected`, `held`, `dropped`, `resyncs`, `restarts`,
+  `writer` and `verify`.
+
+**Layout:**
+- Five SharedArrayBuffers: control, index, columns, sections, dims. Sections and columns are growable buffers that
+  reserve their maximum, 4 GB = 524 288 sections and 65 536 columns, and grow by 8 MB and 160 KB pages.
+- Readers use **fixed views per page**: in V8 24, a length-tracking view is 15–20 times slower to read. The growth
+  happens before the publish, so **no message announces a page**.
+- **Section refs:** 0 = all air, `-state` = one state fills the section (an ocean's water), else 1 + the section's
+  index. On the live world, 9 sections a column were stored, out of 24.
+- **Columns:** at most 32 sections (512 blocks tall). **Dimensions:** at most 32, names ≤ 64 bytes.
+- **Index:** 131 072 entries of `[tag, x, z, slot]`, tag = dimension + 1. A tombstone is reused once every reader is
+  past it.
+- **Epochs:** the writer retires freed slots, sections and tombstones at the current epoch, moves the epoch, and
+  reclaims a batch when every reader has left or entered after it. It reclaims at the start of each batch, at its end,
+  and every second.
+
+**Deviations from §2:**
+1. **Refcounts live on the main thread**, in `SharedWorld`, not in the writer. The main thread needs the holders anyway:
+   to route block changes, to pick the bot to re-send from, and for P5's per-bot events. It then forwards a payload
+   only for a column new to every bot, a re-send, or a resync. The writer gets `load` / `release` / `set`.
+2. **The payload is copied once, not transferred.** mineflayer parses the same `Buffer` after our listener, so it is
+   copied into an `ArrayBuffer` that is transferred. In P5 nothing else parses it, and it can be transferred.
+3. **Dedup = the primary holder**, not per-batch value dedup. Only the column's first holder forwards its block
+   changes, so the store replays one bot's ordered stream: interleaving several bots' streams can apply an older value
+   last. When the primary lets go while others hold the column, and a change was heard there in the last 5 s
+   (`RESYNC_WINDOW_MS`), the next holder's own column is re-sent (`getColumn().dump()`). Otherwise a change only that
+   holder had heard would be lost.
+   - A re-send to a holder makes it the primary.
+   - **For P5:** the resync and the writer restart both re-send from the bots' own worlds, which P5 removes. P5 needs
+     another source, for example a per-column change sequence, or rebuilding the writer's state from the store, which
+     survives the writer.
+4. **The cache's "same payload" test also needs a clean column.** A column that had a block change since its last
+   payload is decoded again even if the payload is byte-identical: the server may have put the block back while no bot
+   held it.
+5. **A dead writer** is restarted over the same buffers, so descriptors stay valid. It drops every column (readers read
+   -1) and retires all memory; `SharedWorld` re-sends what the bots hold. After 3 deaths in a minute the writer is
+   disabled: the main thread clears the store once, and every read is -1.
+
+**Measured** (`live-tests/probe-world.ts`, three runs on the dev server; the Ryzen 9 9950X3D was shared with other
+sessions, so indicative):
+- **Probe:** 6 bots in two areas 3 000 blocks apart, plus one overlapping the first; 313 columns each, 1 878 held,
+  825–876 unique.
+- **Parity:** 184.6 M blocks compared each time, before and after the RCON changes: 0 mismatches. Also 0 columns held
+  but missing, 0 live but held by no bot, and `verify` 0 mismatches over 2 000–4 600 samples per run.
+- **Decode, on the writer:** p50 0.08–0.12 ms a column, max 1.2–2.3 ms (the first ones, before the JIT). On one thread
+  over 200 payloads: ours 0.09–0.16 ms, prismarine-chunk's `load` 0.12–0.14 ms, so about the same. The point is where
+  it runs (off the main thread) and how often (once per column, not once per bot).
+- **RCON changes reached the store** within 0–68 ms of the RCON reply (≤ 1.4 ticks): setblock, a 125-block fill,
+  break, fill with air.
+- **Memory:** the store committed 67–75 MB (62–65 MB of sections) for 825–871 columns. The bots' own worlds held 121 MB
+  of typed arrays for their 1 878 columns, 20 MB a bot. A column costs about the same in both; the store holds it once.
+- **Cache:** every column went cached when the bots left. A bot back within `cacheSeconds` got 306–311 of its 313
+  columns without a decode; the decoded ones had block changes. Everything expired 14.3 s after the last bot left
+  (`cacheSeconds` 15).
+- **Fresh terrain** gave a different picture: 113 852 dropped non-primary changes (post-generation updates) and 269 of
+  313 columns dirty, all decoded again, as they must be. On generated terrain, the drops fell to 400–450.
+
+**Not done in P1:**
+- the store in `/api/metrics` and the vitals (P2 adds the metrics);
+- `world.shared` (P5);
+- nothing reads the store but `verify` and the tests.

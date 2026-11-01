@@ -15,6 +15,7 @@ sources:
   - squad/src/bots/pathworkers/client.ts
   - squad/src/bots/pathworkers/worker.mjs
   - squad/src/bots/pathworkers/serialize.ts
+  - squad/src/world/
   - squad/src/config.ts
   - squad/src/vitals/lag-monitor.ts
   - squad/src/vitals/metrics.ts
@@ -62,6 +63,7 @@ verified_at: 2026-10-30 (branch rework at 32e086a)
 | Supervisor | `squad/src/supervisor.ts` | The parent process (`npm start`). It forks the runtime with `--import tsx`, expects an IPC heartbeat every second, kills the runtime after 10 s of silence (`HEARTBEAT_TIMEOUT_MS`, :15) and restarts it with backoff 1/2/5/10/30 s |
 | Runtime, main thread | `squad/src/main.ts` `start()` :35 | **Everything else**: every mineflayer bot (protocol decoding, physics ticks, the pathfinder's look-ahead, and A* unless the workers are on; plugins), every order's script, the leases, the HTTP + SSE + MCP server, the synchronous SQLite journal, the vitals sampler |
 | Pathfinding workers (optional) | `squad/src/bots/pathworkers/client.ts` `PathWorkerPool` :113, `worker.mjs`; built in `main.ts` :53 | **Off by default** (`pathfinding.workers` 0). When on: the bots' own A* searches, over a mirror of the world. Details below |
+| Shared-world writer (optional) | `squad/src/world/shared-world.ts` `SharedWorld`, `writer.mjs`, `store.mjs`; built in `main.ts` when `world.enabled` | **Off by default.** One copy of the bots' chunks in SharedArrayBuffers, decoded by this thread and readable by any thread (`reader.mjs`). P1 of [docs/37](../../37-squad-worker-reads-plan.md) (§8 there is the as-built): nothing reads it yet but `world.verify` |
 | Typecheck worker | `squad/src/script/typecheck-worker.mjs`, started by `check.ts` `typecheckWorker()` :156 | TypeScript `checkJs` for `check_script`/`submit_command`. First check about 5 s (it parses the library types), later ones 0.1–0.3 s; warmed 2 s after boot. Unref'd when idle |
 | The mod | `com.paul.brawl.squad` in the server JVM | `/bots` commands and the commander snapshot on the server thread; HTTP to the runtime is async; the SSE reader is a virtual thread (`squad-events`); authoring turns are virtual threads running `claude -p` (`ClaudeCodeClient`) |
 

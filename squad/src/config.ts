@@ -57,6 +57,22 @@ export const MAX_ASTAR_BUDGET_MS = 50;
 /** A sane ceiling on pathfinding workers (each one is a thread with its own copy of the registry, ~50 MB). */
 export const MAX_PATH_WORKERS = 16;
 
+/**
+ * The shared world (docs/37 P1, src/world/): one copy of the chunks the bots receive, in shared memory, written by
+ * one writer thread and readable by every thread. Off by default: in P1 nothing reads it but `verify`.
+ */
+export interface WorldConfig {
+  enabled: boolean;
+  /** A column no bot holds any more is kept this long (readers see it as unknown) in case a bot receives it again. */
+  cacheSeconds: number;
+  /** At most this many such columns, oldest dropped first. */
+  cacheColumns: number;
+  /** Once a second, compare a random sample of the store with the bots' own worlds and log mismatches (debug). */
+  verify: boolean;
+}
+
+export const DEFAULT_WORLD: WorldConfig = { enabled: false, cacheSeconds: 60, cacheColumns: 2_000, verify: false };
+
 export interface SquadConfig {
   minecraft: { host: string; port: number; version: string };
   /** Loopback port of the control API, the SSE stream and the MCP server. */
@@ -71,6 +87,7 @@ export interface SquadConfig {
    */
   loginStaggerMs: number;
   pathfinding: PathfindingConfig;
+  world: WorldConfig;
 }
 
 export const DEFAULT_LIMITS: Limits = {
@@ -118,6 +135,14 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
   if (!Number.isInteger(workers) || workers > MAX_PATH_WORKERS) {
     throw new ConfigError(`squad.json: pathfinding.workers must be an integer from 0 to ${MAX_PATH_WORKERS}, got ${workers}`);
   }
+  const worldRaw = (o.world ?? {}) as Record<string, unknown>;
+  const world: WorldConfig = {
+    enabled: bool(worldRaw.enabled, DEFAULT_WORLD.enabled, 'world.enabled'),
+    cacheSeconds: num(worldRaw.cacheSeconds, DEFAULT_WORLD.cacheSeconds, 'world.cacheSeconds'),
+    cacheColumns: num(worldRaw.cacheColumns, DEFAULT_WORLD.cacheColumns, 'world.cacheColumns'),
+    verify: bool(worldRaw.verify, DEFAULT_WORLD.verify, 'world.verify'),
+  };
+  if (!Number.isInteger(world.cacheColumns)) throw new ConfigError(`squad.json: world.cacheColumns must be an integer, got ${world.cacheColumns}`);
   return {
     minecraft: { host, port, version: typeof mc.version === 'string' ? mc.version : '1.21.1' },
     port: num(o.port, 8772, 'port'),
@@ -126,6 +151,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
     limits,
     loginStaggerMs: num(o.loginStaggerMs, 100, 'loginStaggerMs'),
     pathfinding: { astarBudgetMs, workers },
+    world,
   };
 }
 
@@ -158,6 +184,12 @@ export function loadConfig(path: string): SquadConfig {
     throw new ConfigError(`cannot read ${path}: ${(e as Error).message} (copy squad.example.json to squad.json)`);
   }
   return parseConfig(JSON.parse(text), process.env, resolve(path, '..'));
+}
+
+function bool(v: unknown, fallback: boolean, what: string): boolean {
+  if (v === undefined || v === null) return fallback;
+  if (typeof v !== 'boolean') throw new ConfigError(`squad.json: ${what} must be true or false, got ${JSON.stringify(v)}`);
+  return v;
 }
 
 function num(v: unknown, fallback: number, what: string): number {

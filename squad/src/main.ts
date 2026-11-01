@@ -7,6 +7,7 @@ import { join } from 'node:path';
 
 import { applyPathfinding, loadConfig, pathWorkerCount, type SquadConfig } from './config';
 import { PathWorkerPool } from './bots/pathworkers/client';
+import { SharedWorld } from './world/shared-world';
 import { BotPool, skippedPackets, type BotPoolOptions } from './bots/pool';
 import { Journal } from './journal/journal';
 import { LeaseManager } from './leases';
@@ -23,12 +24,20 @@ import { errorMessage, isBotLeft, isStopped } from './api/errors';
 import { LoopMonitor } from './vitals/lag-monitor';
 import { Vitals } from './vitals/metrics';
 
+/**
+ * Reader epoch slots of the shared world: the main thread's own, and one per reader worker P2 starts (each a
+ * SharedWorld.descriptor()). An idle slot costs 4 bytes and one Atomics.load per writer batch.
+ */
+const WORLD_MAX_READERS = 64;
+
 export interface Started {
   service: SquadService;
   http: SquadHttp;
   port: number;
   /** The pathfinding worker pool, when pathfinding.workers > 0. */
   pathWorkers?: PathWorkerPool;
+  /** The shared world, when world.enabled (docs/37 P1). */
+  world?: SharedWorld;
   stop(): Promise<void>;
 }
 
@@ -51,12 +60,22 @@ export async function start(
     logger.warn('squad', `pathfinding.workers ${cfg.pathfinding.workers} capped to ${workers}: one core stays with the main thread`);
   }
   const pathWorkers = workers > 0 ? new PathWorkerPool({ workers, version: cfg.minecraft.version }) : undefined;
+  const world = cfg.world.enabled
+    ? new SharedWorld({
+        version: cfg.minecraft.version,
+        cacheSeconds: cfg.world.cacheSeconds,
+        cacheColumns: cfg.world.cacheColumns,
+        maxReaders: WORLD_MAX_READERS,
+        verify: cfg.world.verify,
+      })
+    : undefined;
   const pool = new BotPool({
     host: cfg.minecraft.host,
     port: cfg.minecraft.port,
     version: cfg.minecraft.version,
     staggerMs: cfg.loginStaggerMs,
     pathWorkers,
+    world,
     ...opts.pool,
   });
   const runner = new OrderRunner({ pool, roster, leases, claims, store, journal, limits: cfg.limits });
@@ -88,10 +107,11 @@ export async function start(
       vitals.stop();
       pool.stop();
       await pathWorkers?.stop();
+      await world?.stop();
       await http.close();
       journal.close();
     })());
-  return { service, http, port, stop, pathWorkers };
+  return { service, http, port, stop, pathWorkers, world };
 }
 
 /**

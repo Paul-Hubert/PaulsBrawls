@@ -20,6 +20,11 @@ export interface PathWorkers {
   install(bot: MirroredBot): void;
 }
 
+/** The shared world's seam (world/shared-world.ts): it follows a bot's world packets from its first one. */
+export interface WorldFeed {
+  attach(bot: unknown): void;
+}
+
 export const SUPPORTED_MINECRAFT_VERSION = '1.21.1'; // R11: server, mod and bot must agree
 const KEEPALIVE_INTERVAL_MS = 90_000; // R13
 const RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
@@ -101,6 +106,8 @@ export interface BotPoolOptions {
   deafMs?: number;
   /** The pathfinding workers (config pathfinding.workers > 0); absent = every search on the main thread. */
   pathWorkers?: PathWorkers;
+  /** The shared world (config world.enabled); absent = the bots' packets feed only their own worlds. */
+  world?: WorldFeed;
 }
 
 /**
@@ -267,8 +274,15 @@ export class BotPool extends EventEmitter {
     }
     rec.bot = bot;
     rec.lastPacket = Date.now();
-    // Before the first packet: the workers' mirror needs this bot's login and every chunk it receives.
+    // Before the first packet: the workers' mirror and the shared world need this bot's login and every chunk it receives.
     this.withPathWorkers(rec, (pw) => pw.attach(bot as unknown as MirroredBot));
+    if (this.opts.world) {
+      try {
+        this.opts.world.attach(bot);
+      } catch (e) {
+        logger.warn(`bot:${rec.name}`, `shared world: ${(e as Error).message}`);
+      }
+    }
     this.setStatus(rec, 'connecting');
     bot._client?.on?.('packet', () => {
       if (rec.bot === bot) rec.lastPacket = Date.now();
