@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { JobFailedError, JobLateError, JobPool, type JobPoolOptions } from '../src/jobs/pool';
-import { EntitySnapshot, type EntitySourceBot } from '../src/jobs/snapshot';
+import { EntitySnapshot, RESCAN_WRITES, type EntitySourceBot } from '../src/jobs/snapshot';
 import { openEntities } from '../src/jobs/entities.mjs';
 import { TeamIds } from '../src/jobs/teams';
 import { LeaderTicks } from '../src/jobs/ticks';
@@ -248,9 +248,13 @@ test('jobs: a worker killed mid-batch is restarted, its jobs are queued again on
     assert.equal(w.counters[0]! - w.counters[1]!, 3);
     assert.equal(w.counters[2], 0);
     assert.deepEqual(w.released.map((d) => (d as { n: number }).n), [1, 2, 3]);
-    // The dead workers' entity holds were cleared too: the snapshot keeps publishing.
+    // The dead workers' entity holds were cleared too: the snapshot keeps publishing (for jobs that read it).
     const before = jobs.stats().entities;
-    for (let i = 0; i < 3; i++) await jobs.tick();
+    for (let i = 0; i < 3; i++) {
+      const e = jobs.submit({ type: 'entity', input: { id: 3 } });
+      await pump(jobs, [e]);
+      await e;
+    }
     const after = jobs.stats().entities;
     assert.equal(after.skipped, before.skipped);
     assert.ok(after.published >= before.published + 3);
@@ -532,6 +536,173 @@ test('entities: a worker reads the snapshot published on the tick its job was di
   } finally {
     await jobs.stop();
   }
+});
+
+test('entities: the snapshot is published only for jobs whose type reads it (needsEntities), not for the others', async () => {
+  let walks = 0;
+  const zombie = ent(10, 'hostile', 3);
+  // Counts the writer's reads of the bot's entities.
+  const bot = { get entities() {
+    walks++;
+    return { 10: zombie };
+  } } as EntitySourceBot;
+  const jobs = pool({ entities: { bots: () => [bot], teamOf: () => 0 } });
+  try {
+    await jobs.ready();
+    // Echo and burn read no entity (like path and findBlocks): nothing is written, however many ticks they run.
+    const quiet = [...[1, 2, 3].map((a) => jobs.submit({ type: 'echo', input: { a } })), jobs.submit({ type: 'burn', input: { id: 0, ms: 1 } })];
+    await pump(jobs, quiet);
+    for (let i = 0; i < 5; i++) await jobs.tick();
+    assert.equal(jobs.stats().entities.published, 0, 'no snapshot for jobs that read none');
+    assert.equal(walks, 0, "the bots' entities were not even read");
+    // A job that reads entities (the aim's kind): published for its dispatch.
+    const p = jobs.submit<{ row: { x: number } | null }>({ type: 'entity', input: { id: 10 } });
+    await pump(jobs, [p]);
+    assert.equal((await p).row?.x, 3);
+    const published = jobs.stats().entities.published;
+    assert.ok(published >= 1);
+    // Then nothing again, with only echo jobs about.
+    const more = [4, 5].map((a) => jobs.submit({ type: 'echo', input: { a } }));
+    await pump(jobs, more);
+    assert.equal(jobs.stats().entities.published, published);
+    // The stock aim handler declares it; the other stock types do not.
+    const { STOCK_HANDLERS: stock } = await import('../src/jobs/handlers/index');
+    const flags: Record<string, boolean> = {};
+    for (const u of stock) {
+      const m = (await import(u.href)) as { type: string; needsEntities?: boolean };
+      flags[m.type] = m.needsEntities === true;
+    }
+    assert.deepEqual(flags, { echo: false, findBlocks: false, aim: true, path: false });
+  } finally {
+    await jobs.stop();
+  }
+});
+
+/** A bot as the incremental writer follows it: entities, and mineflayer's entitySpawn / entityGone / end events. */
+class EmitterBot extends EventEmitter {
+  entity: FakeEnt | null = null;
+  entities: Record<string, FakeEnt> = {};
+  spawn(e: FakeEnt): void {
+    this.entities[e.id] = e;
+    this.emit('entitySpawn', e);
+  }
+  gone(id: number): void {
+    const e = this.entities[id];
+    if (!e) return;
+    this.emit('entityGone', e);
+    (e as FakeEnt & { isValid?: boolean }).isValid = false;
+    delete this.entities[id];
+  }
+}
+
+/** Every row of the snapshot a reader sees now, as plain values. */
+function rows(snap: EntitySnapshot): Array<Record<string, number>> {
+  const r = openEntities(snap.handles, 0);
+  r.pin();
+  const out: Array<Record<string, number>> = [];
+  r.each((row) => {
+    out.push({ ...row });
+  });
+  r.unpin();
+  return out;
+}
+
+test('entities: the incremental writer (bots followed by their events) writes the rows of the walking one', () => {
+  // A seeded random walk of what a fight does to the bots' entities: spawns (each bot its own copy, at its own
+  // slightly different position), moves, deaths, arrows that come and go, a bot that leaves and one that joins, a
+  // login that empties a bot's entities without an event, an entity made without a spawn event.
+  let seed = 7;
+  const rnd = (): number => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const teams: Record<string, number> = { B0: 1, B1: 1, B2: 2, B3: 2 };
+  let bots: EmitterBot[] = [];
+  const source = { bots: () => bots as unknown as EntitySourceBot[], teamOf: (u: string) => teams[u] ?? 0 };
+  const inc = new EntitySnapshot({ readers: 1, capacity: 512 });
+  const walked = new EntitySnapshot({ readers: 1, capacity: 512, incremental: false });
+  let nextId = 100;
+  /** The world: every entity, by id, with where it is. */
+  const world = new Map<number, { type: string; x: number; z: number; username?: string }>();
+  const copy = (b: EmitterBot, id: number): FakeEnt => {
+    const w = world.get(id)!;
+    return ent(id, w.type, w.x + bots.indexOf(b) * 0.01, { username: w.username, ...(w.type === 'projectile' ? { width: 0.5, height: 0.5 } : {}) });
+  };
+  const join = (name: string): EmitterBot => {
+    const b = new EmitterBot();
+    const id = nextId++;
+    world.set(id, { type: 'player', x: rnd() * 40, z: 0, username: name });
+    bots = [...bots, b];
+    b.entity = copy(b, id);
+    b.entities[id] = b.entity;
+    for (const o of bots) {
+      if (o === b) continue;
+      o.spawn(copy(o, id)); // the others see it
+      const theirs = o.entity!.id;
+      b.entities[theirs] = copy(b, theirs); // it sees them (from its login's packets: no event, the walk at first sight)
+    }
+    for (const [wid] of world) if (!b.entities[wid] && wid !== id && world.get(wid)!.type !== 'player') b.entities[wid] = copy(b, wid);
+    return b;
+  };
+  for (const n of ['B0', 'B1', 'B2', 'B3']) join(n);
+  let ghost = -1;
+  let ghostRows = 0;
+  for (let tick = 1; tick <= 400; tick++) {
+    const r = rnd();
+    if (tick === 60) {
+      // A bot leaves (end, then out of the source).
+      const b = bots[1]!;
+      bots = bots.filter((x) => x !== b);
+      b.emit('end');
+      for (const o of bots) o.gone(b.entity!.id);
+      world.delete(b.entity!.id);
+    } else if (tick === 90) {
+      join('B4');
+    } else if (tick === 120) {
+      // A login: mineflayer empties the bot's entities, no event; the others come again with their spawn packets.
+      const b = bots[0]!;
+      b.entities = { [b.entity!.id]: b.entity! };
+      for (const id of world.keys()) if (id !== b.entity!.id && rnd() < 0.5) b.spawn(copy(b, id));
+    } else if (tick === 150) {
+      // An entity mineflayer made from a packet about an id it had not seen (no spawn event).
+      ghost = nextId++;
+      world.set(ghost, { type: 'object', x: 5, z: 0 });
+      bots[2]!.entities[ghost] = copy(bots[2]!, ghost);
+    } else if (r < 0.25) {
+      // An arrow or a zombie appears: every bot spawns its copy.
+      const id = nextId++;
+      world.set(id, { type: rnd() < 0.7 ? 'projectile' : 'hostile', x: rnd() * 40, z: 0 });
+      for (const b of bots) b.spawn(copy(b, id));
+    } else if (r < 0.45) {
+      // One goes: every bot, or (out of range) only some.
+      const ids = [...world.keys()].filter((id) => world.get(id)!.type !== 'player');
+      const id = ids[Math.floor(rnd() * ids.length)];
+      if (id !== undefined) {
+        const all = rnd() < 0.7;
+        for (const b of bots) if (all || rnd() < 0.5) b.gone(id);
+        if (bots.every((b) => !b.entities[id])) world.delete(id);
+      }
+    }
+    // Everything moves a little (each bot's own copy).
+    for (const b of bots) for (const k in b.entities) b.entities[k]!.position = { x: b.entities[k]!.position.x + (rnd() - 0.5) * 0.3, y: 64, z: tick * 0.01 };
+    if (tick % 3 === 0) continue; // some ticks write nothing (no aim job queued)
+    inc.write(tick, source);
+    walked.write(tick, source);
+    const a = rows(inc);
+    const b = rows(walked);
+    if (ghost >= 0 && ghostRows < 2) {
+      // The entity made without an event: the walking writer has it at once, the incremental one from its next rescan
+      // (first seen there: velocity 0 for that write).
+      if (a.some((x) => x.id === ghost)) ghostRows++;
+      else assert.ok(tick < 150 + (RESCAN_WRITES * 3) / 2 + 2, `tick ${tick}: still no row for the entity made without an event`);
+      const strip = (xs: typeof a): typeof a => xs.filter((x) => x.id !== ghost);
+      assert.deepEqual(strip(a), strip(b), `tick ${tick}`);
+      continue;
+    }
+    assert.deepEqual(a, b, `tick ${tick}`);
+  }
+  assert.equal(ghostRows, 2, 'the entity made without an event came in at a rescan');
+  assert.equal(inc.stats().followed, bots.length, 'one follow per online bot (the one that left was dropped)');
+  assert.equal(bots[0]!.listenerCount('entitySpawn'), 1);
+  inc.close();
+  assert.equal(bots[0]!.listenerCount('entitySpawn'), 0, 'close removes the listeners');
 });
 
 test('teams: bots sharing an owner (and their owners) share a team; everyone else is 0', () => {

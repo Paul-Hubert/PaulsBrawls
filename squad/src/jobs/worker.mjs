@@ -10,12 +10,13 @@
 //   { t: 'batch', tick, budgetMs, jobs: [{ id, type, input?, resume?, transferred?, deadlineTick, est }] }
 //   { t: 'drop', ids }        forget the state or the held input of these jobs (cancelled, late, superseded)
 // Messages out:
-//   { t: 'ready', types, errors, elastic }   elastic: { type: elasticMinMs } of the elastic types (batch.mjs)
+//   { t: 'ready', types, errors, elastic, entities }   elastic: { type: elasticMinMs } of the elastic types; entities:
+//                                                     the types that read the entity snapshot (batch.mjs)
 //   { t: 'done', tick, usedMs, results }      one per batch (batch.mjs's results; a 'continue' may carry `progress`)
 
 import { parentPort, workerData } from 'node:worker_threads';
 
-import { elasticMinMs, loadHandlers, runBatch, serializeError } from './batch.mjs';
+import { elasticMinMs, loadHandlers, needsEntities, runBatch, serializeError } from './batch.mjs';
 import { openEntities } from './entities.mjs';
 
 const data = workerData;
@@ -66,4 +67,5 @@ parentPort.on('message', async (m) => {
 
 const elastic = {};
 for (const [type, h] of handlers) if (elasticMinMs(h) !== undefined) elastic[type] = elasticMinMs(h);
-parentPort.postMessage({ t: 'ready', types: [...handlers.keys()], errors, elastic });
+const entityTypes = [...handlers].filter(([, h]) => needsEntities(h)).map(([type]) => type);
+parentPort.postMessage({ t: 'ready', types: [...handlers.keys()], errors, elastic, entities: entityTypes });

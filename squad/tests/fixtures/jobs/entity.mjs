@@ -1,6 +1,7 @@
 // Test job type: reads the entity snapshot.
 
 export const type = 'entity';
+export const needsEntities = true;
 
 export function run(input, ctx) {
   const e = ctx.entities;

@@ -18,6 +18,10 @@
 // search alone on a worker gets the whole budget and ten share it. It is packed into batches by elasticMinMs, its
 // smallest useful run, not by its measured cost (which is whatever share it got).
 //
+// A type whose handler reads ctx.entities says so (`export const needsEntities = true`, P3's aim): the main thread
+// publishes the entity snapshot only on the ticks it dispatches such a job (pool.ts). For any other job, ctx.entities
+// is whatever snapshot was published last, maybe long ago, maybe none.
+//
 // Async handlers are allowed but discouraged: the batch awaits them, so the time they wait counts against the
 // budget, nothing else runs on this thread's batch meanwhile, and no answer of the batch goes back until it settles.
 
@@ -151,6 +155,11 @@ export async function runBatch(batch, env) {
     env.world?.leave();
   }
   return { results, usedMs: performance.now() - start };
+}
+
+/** Whether a handler reads the entity snapshot (`export const needsEntities = true`): only then is it published. */
+export function needsEntities(h) {
+  return h?.needsEntities === true;
 }
 
 /** A handler's elasticMinMs (a positive number), or undefined: not an elastic type. */
