@@ -153,6 +153,8 @@ their own copy of every chunk):
 - **The writer's restart** rebuilds the bots' columns from the store itself (`encode.mjs`; the bots have no world to
   re-send from) and the payloads not acknowledged yet (kept until then); after three deaths in a minute the main
   thread runs the writer's logic itself (`applyOps`) instead of leaving the bots blind.
+- **Measured** (docs/37 §13.4): 30–36 MB less RSS per bot; the worst stall of 40 logins 449 → 103 ms, and the
+  1.5–2.2 s stalls of 30 bots respawning gone; a fight's full-strength ELU about −0.1; walk and gather unchanged.
 
 ## Patched dependencies (`squad/patches/`, docs/32 B)
 

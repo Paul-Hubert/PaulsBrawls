@@ -217,7 +217,7 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 | **P2** ✅ | M | The job queue, dispatcher and reader workers (budget, priorities, deadlines, carry-over, affinity, fallbacks, metrics), with a test job type | **Done 2026-11-01** (§8): `tests/jobs.test.ts` (budget respected, priorities, `late`, a worker killed mid-batch, …); `/api/metrics` shows `jobs`. Off by default (`workers.count` 0) until P3 |
 | **P3** ✅ | M | Raycast (blocks + hitboxes), LOS and the aim solver as jobs; `shoot` on the schedule with turning; hawkEye removed | **Done 2026-11-01** (§11): the aim from 42 % of the main thread to 1–2 %; full-strength ELU 0.34–0.36 inline (today's baseline 0.65–0.70); kills per shot 3.5–5.2 %; friendly 0; failed shots 19–32 % (not met: friends in the line, D5's check, §11.7); live items tests pass. The `raycast`/`los` job types are not built (nothing calls them) |
 | **P4** ✅ | M | A* on the reader workers over the shared world (Movements reads per-state Block templates); the old per-worker mirror retired | `bench:load` walk / gather at 10 and 30 bots: legs and logs per minute ≥ docs/31 §11; live core tests pass; process memory flat with the worker count. **Built 2026-11-01** (§12): walk, the live core tests and memory (~60 MB a worker) met; gather not shown to match (§12.1), so the default stays off |
-| **P5** ✅ | L | The bots read the one copy: ~~a patched mineflayer blocks plugin~~ a replacement of mineflayer's blocks plugin (createBot `plugins.blocks`, no patch) sends chunks to the writer; `bot.world` is a shared store-backed world (prismarine-world's sync API, `blockUpdate`/`chunkColumnLoad`/`chunkColumnUnload` per bot, block entities on the main thread). Behind `world.shared` (default off until it passes) | `bench:fight` and `bench:load`: ~30–40 MB less per bot; 40 logins with no stall over 250 ms; every live test passes with `world.shared: true`. **Built 2026-11-01** (§13): 35.6 MB less RSS per bot (40 bots idle); 40 logins' worst stall 449 → 103 ms, the respawns' 1.5–2.2 s stalls gone; every live suite passes with it, with and without workers. Off by default |
+| **P5** ✅ | L | The bots read the one copy: ~~a patched mineflayer blocks plugin~~ a replacement of mineflayer's blocks plugin (createBot `plugins.blocks`, no patch) sends chunks to the writer; `bot.world` is a shared store-backed world (prismarine-world's sync API, `blockUpdate`/`chunkColumnLoad`/`chunkColumnUnload` per bot, block entities on the main thread). Behind `world.shared` (default off until it passes) | `bench:fight` and `bench:load`: ~30–40 MB less per bot; 40 logins with no stall over 250 ms; every live test passes with `world.shared: true`. **Built 2026-11-01** (§13): 35.6 MB less RSS per bot in the fight (40 bots idle), 29–30 MB in `bench:load` (21.5–24.8 MB a bot against 51–54); 40 logins' worst stall 449 → 103 ms, the respawns' 1.5–2.2 s stalls gone; full-strength ELU about −0.1; walk and gather unchanged in back-to-back comparisons; every live suite passes with it, with and without workers. Off by default |
 | **P6** ✅ | S | `findBlocks` as a job (gather's search) | **Done 2026-11-01** (§10), off by default (it needs `workers.count` > 0 and `world.enabled`): mineflayer's answer, position for position, on real chunk data (`tests/find-blocks.test.ts`); 0.1 ms on the store against 15 ms in mineflayer. `bench:load` gather at N = 10: logs unchanged within two sites' noise (96 off / 100 on, first runs), block searches on the main thread 0.65–1.0 s a minute → 0; the §2.6 case (no reachable log): the main thread blocked 1 225–1 340 ms at the order's start (ten searches back to back) → 15–65 ms at most, no search on the main thread |
 
 **Order:** P0 → P1 → P2 → P3 (the 45 %) → P4 → P5 → P6.
@@ -1165,3 +1165,133 @@ P1 re-sent columns from the bots' own worlds; with world.shared there are none.
 - **Tested:** a writer made deaf (`tests/fixtures/deaf-writer.mjs`) leaves a block change, a new column and a re-sent
   column unacknowledged; after its death the bot reads every column as mineflayer's world has it; two more deaths move
   the writer to the main thread, and new columns and changes still arrive.
+
+### 13.4 Measured
+
+The Ryzen 9 9950X3D, shared with another agent's server and benches all along: compare the runs of a pair, taken
+back to back, not with other sections. Runs in `squad/bench/.runs/` (gitignored).
+
+**`bench:fight --rounds 3`** (10 guards + 10 archers a side, blue `defend`, red `raid`; the defaults otherwise: no
+reader workers, the inline aim, `loginStaggerMs` 100; round 1 profiled), this branch's dev server, `p5-off` then
+`p5-on` (`--shared`) within ten minutes:
+
+| | off | on (`world.shared`) |
+|---|---|---|
+| **40 logins** (100 ms apart, then 10 s for the last chunks): loop p99 / max | 175.9 / **448.8 ms** | 12.7 / **102.7 ms** |
+| ↳ ELU; RSS; heap | 0.476; 1 738 MB; 456 MB | 0.226; 545 MB; 97 MB |
+| **30–32 respawned bots before rounds 2 and 3** (the runtime's vitals monitor, 10 s windows) | ELU 0.94 / 0.88, loop p99 1 308 / 1 373 ms, **max 1 479 / 2 196 ms**, a bot at 12 ticks/s | **no warning** (loop p99 < 250 ms and ELU < 0.9 in every window) |
+| idle, 40 bots, 20 s: ELU; RSS; heap | 0.087; 1 991 MB; 411 MB | 0.039; 567 MB; 118 MB |
+| **RSS per bot** (idle, 40 bots: the difference / 40) | | **35.6 MB less** (heap 7.3 MB less: most of a bot's world is typed arrays, outside the JS heap) |
+| RSS after rounds 1 / 2 / 3 | 2 057 / 2 831 / 3 219 MB | 650 / 789 / 851 MB |
+| **full-strength ELU** (seconds with > 30 alive), rounds 1 / 2 / 3 | 0.359 / 0.329 / 0.274 | **0.244 / 0.207 / 0.209** |
+| round ELU | 0.200 / 0.183 / 0.178 | 0.137 / 0.143 / 0.130 |
+| main thread busy, round 1's profile | 9.7 s of 65 s | 6.8 s of 69 s |
+| ↳ own physics; packet handling; prismarine-chunk; GC | 1 492; 5 283; 786; 566 ms | 629; 3 903; 0; 314 ms |
+| ticks/s, slowest bot | 19.9 | 19.9 |
+| shots; failed; **arrow kills per shot** | 531 / 530 / 395; 36.7 / 27.9 / 21.8 %; 3.6 / 3.8 / 5.8 % | 535 / 458 / 474; 25.6 / 24.2 / 26.4 %; **4.7 / 4.8 / 4.0 %** |
+| **friendly kills** | 0 | **0** |
+| winner | red ×3 | red ×3 |
+| the shared world after the logins | | 684 columns live, 684 decoded (once each, for 40 bots), 59 MB; 684 payloads of 22.5 KB on average |
+
+- **The login stall is gone:** each column is decoded once, on the writer, and protodef no longer turns its light into
+  JS arrays (§13.2). The worst stall of 40 logins fell from 449 ms to 103 ms; the respawns between rounds, which stalled
+  the loop 1.5–2.2 s, no longer trip the monitor.
+- **Memory:** 35.6 MB less per bot, in the plan's 30–40 MB. The store holds the 684 columns once (59 MB); the bots
+  held 313 each, with light. RSS no longer grows by ~0.4–0.8 GB a round (the respawned bots' worlds).
+- **CPU:** physics costs 58 % less (the store's templates against prismarine-chunk's `getBlock`), packet handling 26 %
+  less, the main thread 30 % less busy in round 1, full-strength ELU about −0.1.
+- **The fight itself** is unchanged within the noise of three rounds: shots, kills per shot and failed shots move both
+  ways round to round, friendly kills 0, red wins every round.
+
+**`bench:load`** (N = 0, 10, 30; idle, walk, gather; 60 s phases; the bench's 4 s stagger), this branch's dev server,
+`p5-load-off`, then `p5-load-on` (`--shared`) 2.5 h later (a pause between the two), each on its own forest:
+
+| | off | on (`world.shared`) |
+|---|---|---|
+| sites | (2936, 64), first visit | (−3000, 0), first visit (hills, harder paths) |
+| N = 0 idle: RSS | 282 MB | 297 MB |
+| idle N = 10 / 30: RSS; heap | 822 / 1 814 MB; 188 / 393 MB | 545 / 943 MB; 70 / 98 MB |
+| **RSS per bot** (idle against N = 0), N = 10 / 30 | 54.0 / 51.1 MB | **24.8 / 21.5 MB** (the store included) |
+| heap per bot, N = 10 / 30 | 14.9 / 11.8 MB | 1.8 / 1.5 MB |
+| RSS, walk / gather at N = 30 | 2 012 / 2 667 MB | 1 001 / 1 003 MB |
+| logins (4 s apart, the bench's stagger): loop max, N = 10 / 30 | 72.6 / 23.7 ms | 65.1 / 15.9 ms |
+| ELU idle, N = 10 / 30 | 0.029 / 0.052 | 0.018 / 0.035 |
+| ELU walk; gather, N = 30 | 0.538; 0.687 | 0.587; 0.596 |
+| loop max, gather N = 30 (the order's start: ten block searches) | 500 ms | 40.5 ms |
+| ticks/s, slowest bot, every phase | 20 | 20 |
+| walk legs, N = 10 / 30 | 58 / 197 | 28 / 139 (its site: below) |
+| gather logs, N = 10 / 30 | 94 / 254 | 86 / 166 (its site: below) |
+
+Each main run's walk and gather measure its site as much as the code (§12.1: 44–109 logs at N = 10 on three forests
+with the same code). So two controlled comparisons, back to back:
+- **Walk, N = 10, the on run's site, its second and third visits:** off 42 legs (5 timeouts, 1 stall), ELU 0.457,
+  RSS 1 298 MB; on **45 legs** (4 timeouts, 1 stall), ELU 0.40, RSS 842 MB. The first on run's 28 legs were the site's
+  first visit, not the shared world.
+- **Gather, N = 10, a crossover on two fresh forests** (P6's design: on first on one site, off first on the other):
+  site (288, −3064): on first **118 logs**, off second 59; site (3224, 3160): off first 97, on second **96**. Loop max
+  41 / 34 ms with it on against 174 / 258 ms off (mineflayer's `findBlocks` at the order's start: with world.shared
+  `bot.findBlocks` by ids is the store's search, §13.2).
+- **Offline, main-thread A*** (mineflayer-pathfinder over each bot's `blockAt`, 11 × 11 forest columns, 18 searches,
+  6 546 nodes): the same paths, 19–22 µs a node over the shared world against 23–25 µs over mineflayer's.
+
+### 13.5 Tests
+
+`npm run check`: TESTCOUNT tests, 17 of them P5's (`tests/shared-bots.test.ts`). Each feeds one packet stream to a bot
+running mineflayer's own blocks plugin and to one on the shared world:
+- every block of three forest columns (stateIds) and a sample of whole Blocks (name, state, type, metadata,
+  position, box, shapes, hardness), before and after the writer applies the changes; `block_change`,
+  `multi_block_change`, `explosion` and `unload_chunk` seen at once; the `blockUpdate`, `blockUpdate:(x, y, z)`,
+  `chunkColumnLoad` and `chunkColumnUnload` events the same, in the same order; nothing readable before the writer
+  publishes it;
+- `findBlocks` and `findBlock`: seven queries (ids, arrays, a point, a matcher, `useExtraInfo` true and a function),
+  position for position; another bot's columns not seen;
+- 145 raycasts, `canSeeBlock`; block entities (a chest, a sign; `tile_entity_data`, `blockEntityData`, one copy for
+  two bots); 120 ticks of prismarine-physics walking and jumping through the forest, position for position; three A*
+  searches (mineflayer-pathfinder's `Movements` and `AStar` over `blockAt`), node for node; the inline aim's reads;
+- two bots sharing columns (decoded once; a change one hears first shows for it at once and is not sent; the
+  primary's is applied once; a column another bot holds readable at once), a bot leaving (its world empty, its own
+  columns cached, the new primary's overlay replayed), a change of dimension (the waiters' (null, null), every column
+  unloaded, the new world loaded, a same-world respawn kept), `waitForChunksToLoad`, digging's prediction (the
+  waiter, the other bot, the server's word, `OVERLAY_MS`), `encode.mjs` (decode.mjs and prismarine-chunk read it back
+  block for block), the writer restart and the inline writer (§13.3);
+- world.shared off: no blocks plugin, prismarine-world's own world, the store fed as in P1, no `blocks` in the
+  pool's createBot request; with it on, the pool hands the plugin over, and a bot the world cannot take gets
+  mineflayer's own; the config; `SHARED_WORLD_PACKETS`' fields before the light are minecraft-data's, and a full
+  `map_chunk` and `update_light` parse with it (chunkData byte for byte).
+
+The known flaky `raid: at the point it hunts the nearest enemy…` (`tests/raid.test.ts`) is untouched.
+
+**Live, with `world.shared` on** (this branch's dev server):
+- `LIVE_ONLY=core LIVE_WORLD_SHARED=1`: 7/7 (spawn, gather with collectblock, come, reclaim per role with a shot,
+  the two ladders, despawn), and 7/7 with `LIVE_WORKERS=4` (A*: 19 by the probe, 8 offloaded, 7 answered, 1 cancelled, no fallback).
+- `LIVE_ONLY=items LIVE_RUNTIME_PORT=8799 LIVE_MOD_PORT=8799 LIVE_WORLD_SHARED=1`: 11/11 through the mod
+  (mur-de-boucliers with a husk, tir on the ground and on a husk, a bound bow and stick, epee, ligne-archers, a
+  reclaimed guard), and 11/11 with `LIVE_WORKERS=4`.
+- All four ran twice: before and after the last changes (the light-as-bytes protocol, the overlay's pruning), the
+  same results.
+- `live-tests/probe-shared.ts` (new: what the suites do not do): 6/6 with world.shared and 6/6 without, the same answers: a sign's block entity as the server set it; a chest looked into, taken from and deposited into (the other bot sees the result); a cobblestone placed (both bots and the server see it); `bot.dig` resolving on its `blockUpdate` in 766 ms (750 off), air for both bots and the server; `mineBlock` with collectblock mining the placed block and picking it up; 162 blocks around the pad the same in both bots' worlds, no overlay entry left, none expired.
+
+### 13.6 Deviations from the plan, and what is not done
+
+1. **No patched mineflayer blocks plugin:** a replacement, given in createBot's `plugins` (§13.2); no patch file.
+2. **`blockUpdate` fires when the bot hears the change**, in its packet's handler, as mineflayer fires it, not when the
+   writer applies it: digging and placing wait on it, and the overlay keeps `blockAt` in step until the store shows
+   it. `chunkColumnLoad` fires on the writer's answer (or at once for a column the store already has).
+3. **The protocol change** (light as raw bytes) was not planned; it halves what is left of a login's chunk work
+   (§13.2). `update_light` is not read at all.
+4. **The resync source** is the store itself plus the copies kept until acknowledged, not a payload per live column
+   (§13.3: a quarter of the store's size, for an event that should not happen). The third writer death in a minute
+   moves the writer to the main thread instead of disabling the store.
+5. **`world.verify`** has nothing to compare with world.shared (it says so at start and does nothing).
+6. **Light and biomes** are not kept (§13.2): a script reading `block.light`, `block.skyLight` or `block.biome` gets 0
+   and biome 0.
+7. **`findBlocks` by ids reads the store**, so a change the bot heard in the last few ms may not show in it (callers
+   check with `blockAt`). A column unloaded before the writer published it gets only its `chunkColumnUnload` (mineflayer
+   fires a load, then the unload). `explosion`'s `blockUpdate:(x, y, z)` names the floored position (mineflayer: the
+   packet's fractional one, which no waiter can match). `setColumn` and `unloadColumn` on a bot's world throw (the
+   shared world holds the columns; nothing calls them).
+8. **Not done:** `world.shared` is off by default (the orchestrator flips the defaults; on the numbers above it can be
+   on by default, with or without the reader workers, which it does not need); not run on production; the
+   inline writer only on fakes (the writer thread never died live); a world with many bots far apart (each bot's
+   columns its own) not measured: there each column is still decoded once, but off the main thread, and the memory
+   saved per bot is the same.

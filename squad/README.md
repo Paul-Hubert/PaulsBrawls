@@ -80,7 +80,8 @@ mineflayer's blocks plugin, `blocks-plugin.ts`), so no bot keeps ~313 parsed col
 each one is decoded once, on the writer thread. A bot sees only the columns it holds, once the writer has published
 them (a few ms after the packet; `waitForChunksToLoad` waits for that); the block changes it hears show at once. Light
 and biomes are not kept (nothing reads them: a block's light is 0, its biome the first). Without it (the default) the
-bots keep their own worlds, as before.
+bots keep their own worlds, as before. Measured: 30–36 MB less RSS per bot, and 40 logins no longer stall the
+event loop (docs/37 §13.4).
 
 | Key in `squad.json` | Default | |
 |---|---|---|
