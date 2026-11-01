@@ -47,10 +47,17 @@ export interface InlineBot {
 
 /** A reader over the bot's own world, or null when it has none the solver can read (a fake, no registry). */
 export function botWorld(bot: InlineBot): AimWorld | null {
-  const w = bot.world as { getColumn?: (cx: number, cz: number) => ColumnLike | null | undefined } | undefined;
+  const w = bot.world as
+    | { getColumn?: (cx: number, cz: number) => ColumnLike | null | undefined; stateIdAt?: (x: number, y: number, z: number) => number }
+    | undefined;
   if (typeof w?.getColumn !== 'function') return null;
   const states = statesFor(bot.version);
   if (!states) return null;
+  // world.shared (docs/37 P5): the bot's world reads the store; its own stateIdAt is -1 where the bot has no column.
+  if (typeof w.stateIdAt === 'function') {
+    const stateIdAt = w.stateIdAt.bind(w);
+    return { dimIndex: () => 0, stateIdIn: (_d: number, x: number, y: number, z: number) => stateIdAt(x, y, z), states: states as unknown as AimWorld['states'] };
+  }
   const getColumn = w.getColumn.bind(w);
   let lastX = Number.NaN;
   let lastZ = Number.NaN;

@@ -64,8 +64,10 @@ export class Octahedron {
 
 export function matchTable(states: StateTables, query: BlockQuery): Uint8Array;
 export function matchKey(query: BlockQuery): string;
-export function startSearch(reader: WorldReader, input: FindBlocksInput, match: Uint8Array): Search;
+/** `visible(chunkX, chunkZ)` (main thread only, P5) limits the search to one bot's columns. */
+export type ColumnFilter = (chunkX: number, chunkZ: number) => boolean;
+export function startSearch(reader: WorldReader, input: FindBlocksInput, match: Uint8Array, visible?: ColumnFilter | null): Search;
 /** Walk until done (true) or the budget falls under MIN_STEP_MS (false); at least one section per call. */
 export function stepSearch(reader: WorldReader, search: Search, budgetLeftMs?: () => number): boolean;
 export function answerOf(search: Search): FindBlocksAnswer;
-export function findBlocksIn(reader: WorldReader, input: FindBlocksInput, match?: Uint8Array): FindBlocksAnswer;
+export function findBlocksIn(reader: WorldReader, input: FindBlocksInput, match?: Uint8Array, visible?: ColumnFilter | null): FindBlocksAnswer;

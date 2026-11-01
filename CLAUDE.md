@@ -114,7 +114,7 @@ cd squad
 npm install
 cp squad.example.json squad.json   # gitignored: minecraft host/port, token (or PAULSBRAWLS_SQUAD_TOKEN, same as the mod's squad.properties)
 npm start                          # supervisor + runtime on 127.0.0.1:8772 (stop with Ctrl+C; killing npm can leave node running)
-npm run check                      # lint + tsc + node:test on fakes (258 tests)
+npm run check                      # lint + tsc + node:test on fakes (275 tests)
 npm run live-test                  # real bots + RCON; SERVER_PROPERTIES=../server/server.properties for production; LIVE_PATH_WORKERS=N; LIVE_ONLY=core|items
 ```
 

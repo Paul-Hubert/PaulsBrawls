@@ -22,6 +22,7 @@ const { RaycastIterator } = require('prismarine-world').iterators;
 export class BlockTemplates {
   /** @param registry a prismarine-registry of the bots' version */
   constructor(registry) {
+    this.registry = registry;
     this.Block = require('prismarine-block')(registry);
     this.templates = [];
     this.built = 0;

@@ -72,17 +72,23 @@ it: an unknown goal class, exclusion areas, a subclassed `Movements`, a column t
 worker (every slot crashed 3 times in a minute), a failed job, or no sign of life for `thinkTimeout` + 2 s. `POST
 /api/metrics` shows the job pool (`jobs`) and the searches (`paths`: offloaded, answered, cancelled, fallbacks by
 reason).
-**Shared world (optional, [docs/37](../docs/37-squad-worker-reads-plan.md) P1).** `squad.json`'s `world` block
+**Shared world (optional, [docs/37](../docs/37-squad-worker-reads-plan.md) P1, P5).** `squad.json`'s `world` block
 builds one copy of the chunks the bots receive, in shared memory ([src/world/](src/world/)). One writer thread decodes
-it from the bots' packets, and any thread can read it lock-free. The bots keep their own worlds; the reader workers
-read the store (A* since P4).
+it from the bots' packets, and any thread can read it lock-free. The reader workers read the store (A* since P4).
+With `world.shared` the bots read it too: `bot.world` is a view of the store (`bot-world.ts`, through a replacement of
+mineflayer's blocks plugin, `blocks-plugin.ts`), so no bot keeps ~313 parsed columns of its own or parses a chunk:
+each one is decoded once, on the writer thread. A bot sees only the columns it holds, once the writer has published
+them (a few ms after the packet; `waitForChunksToLoad` waits for that); the block changes it hears show at once. Light
+and biomes are not kept (nothing reads them: a block's light is 0, its biome the first). Without it (the default) the
+bots keep their own worlds, as before.
 
 | Key in `squad.json` | Default | |
 |---|---|---|
 | `world.enabled` | on with the reader workers (`workers.count` > 0), else `false` | build the store (a writer thread, ~70 MB for 850 columns). `false` with workers on keeps A* on the main thread (a warning at start) |
 | `world.cacheSeconds` | 60 | a column no bot holds any more is kept this long, unreadable, in case a bot receives it again (no decode then) |
 | `world.cacheColumns` | 2000 | at most this many such columns, oldest dropped first |
-| `world.verify` | `false` | once a second, compare 256 random blocks of the store with the bots' own worlds and log mismatches (debug) |
+| `world.verify` | `false` | once a second, compare 256 random blocks of the store with the bots' own worlds and log mismatches (debug; nothing to compare with `world.shared`) |
+| `world.shared` | `false` | the bots read the store instead of keeping their own worlds (docs/37 P5). Turns `world.enabled` on; `"enabled": false` with it is an error |
 
 `npx tsx live-tests/probe-world.ts` (dev server only) checks it block for block against six real bots.
 
@@ -91,8 +97,9 @@ read the store (A* since P4).
 `bot.findBlocks` read from the shared world on a reader worker, the same positions in the same order, in about 0.1 ms
 instead of mineflayer's 15 ms on the main thread ([src/api/block-search.ts](src/api/block-search.ts)). Nothing else to
 set. A search the store cannot answer for that bot (not logged in, its column not in the store yet, the job failed or
-waited more than 5 s) runs on the bot as before. `findBlock` stays synchronous on the bot's own world. With either key
-off (the defaults), every search is `bot.findBlocks`, as before.
+waited more than 5 s) runs on the bot as before. `findBlock` stays synchronous on the bot's own world (with
+`world.shared`, the store's search on the main thread, over that bot's columns). With either key off (the defaults),
+every search is `bot.findBlocks`, as before.
 
 **The archers' aim ([docs/37](../docs/37-squad-worker-reads-plan.md) P3, [src/aim/](src/aim/)).** `shoot` aims
 with Squad's own solver (hawkEye is gone): Minecraft 1.21.1's arrow, the target led along its velocity, the line of
@@ -193,6 +200,7 @@ npm run bench:jobs  # the job pool's own overhead: latency, dispatch cost, the e
 npm run bench:find-blocks  # block searches: mineflayer's findBlocks against the shared world's, and as a job (no server)
 npm run live-test   # real bots on the dev server (dev/, ./gradlew runDevServer); ports and RCON password read from its server.properties
 $env:LIVE_WORKERS='4'; npm run live-test   # the same scenarios with 4 reader workers and the shared world (A*, gather's search, the aim)
+$env:LIVE_WORLD_SHARED='1'; npm run live-test   # the bots read the shared world (world.shared, docs/37 P5); with or without LIVE_WORKERS
 $env:SERVER_PROPERTIES='../run/server.properties'; npm run live-test   # the production server (run/; world left as is)
 $env:LIVE_ONLY='items'; $env:LIVE_RUNTIME_PORT='8779'; npm run live-test   # only the bound-item scenarios (below)
 ```

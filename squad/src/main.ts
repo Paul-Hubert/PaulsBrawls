@@ -55,7 +55,7 @@ export interface Started {
   paths?: PathOffload;
   /** The reader workers' job pool (docs/37), when workers.count > 0. */
   jobs?: JobPool;
-  /** The shared world, when world.enabled (docs/37 P1). */
+  /** The shared world, when world.enabled (docs/37 P1); the bots read it with world.shared (P5). */
   world?: SharedWorld;
   stop(): Promise<void>;
 }
@@ -81,6 +81,8 @@ export async function start(
         cacheColumns: cfg.world.cacheColumns,
         maxReaders: WORLD_MAX_READERS,
         verify: cfg.world.verify,
+        // docs/37 P5: the bots read it too (the pool gives each one the shared world's blocks plugin).
+        shared: cfg.world.shared,
       })
     : undefined;
   // The job pool before the bot pool, which hands each bot's searches to it at spawn; it reads the pool's bots lazily.

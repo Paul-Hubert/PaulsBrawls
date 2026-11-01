@@ -19,6 +19,51 @@ export const RECIPES_AS_BYTES = {
   },
 } as const;
 
+/** The six light fields of 1.21.1's map_chunk and update_light, as one raw buffer (lodash.merge merges arrays by index). */
+const LIGHT_AS_BYTES = [
+  { name: 'light', type: 'restBuffer' },
+  { name: 'light1', type: 'void' },
+  { name: 'light2', type: 'void' },
+  { name: 'light3', type: 'void' },
+  { name: 'light4', type: 'void' },
+  { name: 'light5', type: 'void' },
+] as const;
+
+/**
+ * world.shared (docs/37 P5): RECIPES_AS_BYTES, and the light of map_chunk and update_light read as raw bytes. With the
+ * shared world nothing reads light (bot-world.ts), and protodef decodes each of a column's ~52 light arrays byte by
+ * byte into JS arrays: 0.4 ms per map_chunk on the main thread, per bot, as much as the rest of a login's chunk work
+ * (docs/36 §6). As bytes it is a slice (1 µs). The fields before the light are minecraft-data's
+ * (tests/shared-bots.test.ts checks them). Only for shared bots: mineflayer's own blocks plugin reads the light.
+ *
+ * minecraft-protocol keeps ONE compiled protocol per state, direction and version (its cache ignores customPackets)
+ * and merges customPackets into minecraft-data's own object: every bot of a process must be given the same set, as the
+ * pool does (world.shared is process-wide).
+ */
+export const SHARED_WORLD_PACKETS = {
+  '1.21': {
+    play: {
+      toClient: {
+        types: {
+          ...RECIPES_AS_BYTES['1.21'].play.toClient.types,
+          packet_map_chunk: [
+            'container',
+            [
+              { name: 'x', type: 'i32' },
+              { name: 'z', type: 'i32' },
+              { name: 'heightmaps', type: 'anonymousNbt' },
+              { name: 'chunkData', type: ['buffer', { countType: 'varint' }] },
+              { name: 'blockEntities', type: ['array', { countType: 'varint', type: 'chunkBlockEntity' }] },
+              ...LIGHT_AS_BYTES,
+            ],
+          ],
+          packet_update_light: ['container', [{ name: 'chunkX', type: 'varint' }, { name: 'chunkZ', type: 'varint' }, ...LIGHT_AS_BYTES]],
+        },
+      },
+    },
+  },
+} as const;
+
 export interface SkippedPacket {
   partial: boolean;
   message: string;

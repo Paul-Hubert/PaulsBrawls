@@ -61,7 +61,8 @@ verified_at: 2026-10-30 (branch rework at 32e086a)
 - The runtime is one Node process in `squad/` on `127.0.0.1:8772`; the mod is a thin front. Design and decisions:
   [docs/29](../../29-squad-design.md); §16 there lists where the code differs.
 - Performance: patched library hot spots, an A* budget on by default, optional reader workers that run A* over a
-  shared world (docs/37 P4), and a lag monitor with `POST /api/metrics`, a vitals journal and `/bots status` ([docs/31 §11](../../31-squad-performance-review.md)).
+  shared world (docs/37 P4), optionally the bots themselves reading that shared world instead of keeping their own
+  (`world.shared`, docs/37 P5), and a lag monitor with `POST /api/metrics`, a vitals journal and `/bots status` ([docs/31 §11](../../31-squad-performance-review.md)).
 
 ## Processes and threads
 
@@ -70,7 +71,7 @@ verified_at: 2026-10-30 (branch rework at 32e086a)
 | Supervisor | `squad/src/supervisor.ts` | The parent process (`npm start`). It forks the runtime with `--import tsx`, expects an IPC heartbeat every second, kills the runtime after 10 s of silence (`HEARTBEAT_TIMEOUT_MS`, :15) and restarts it with backoff 1/2/5/10/30 s |
 | Runtime, main thread | `squad/src/main.ts` `start()` :35 | **Everything else**: every mineflayer bot (protocol decoding, physics ticks, the pathfinder's look-ahead, and A* unless the workers are on; plugins), every order's script, the leases, the HTTP + SSE + MCP server, the synchronous SQLite journal, the vitals sampler |
 | Reader workers (optional) | `squad/src/jobs/pool.ts` `JobPool`, `worker.mjs`; built in `main.ts` `startJobs` | **Off by default** (`workers.count` 0). When on: batches of read-only jobs under a per-tick CPU budget, ticked on one online bot's `physicsTick`; an entity snapshot in shared memory ([docs/37 §8](../../37-squad-worker-reads-plan.md)). Job types: the bots' A* (`path`, docs/37 P4), `findBlocks` (P6: mineflayer's `findBlocks` over the shared world, used by `mineBlock`), `aim` (P3) and the trivial `echo`. They replaced docs/32 D's pathfinding worker pool |
-| Shared-world writer (optional) | `squad/src/world/shared-world.ts` `SharedWorld`, `writer.mjs`, `store.mjs`; built in `main.ts` when `world.enabled` | **Off by default.** One copy of the bots' chunks in SharedArrayBuffers, decoded by this thread and readable by any thread (`reader.mjs`). P1 of [docs/37](../../37-squad-worker-reads-plan.md) (§9 there is the as-built): read by `world.verify` and, with the reader workers on, by the `findBlocks` job (P6, §10 there) |
+| Shared-world writer (optional) | `squad/src/world/shared-world.ts` `SharedWorld`, `writer.mjs`, `store.mjs`; built in `main.ts` when `world.enabled` | **Off by default.** One copy of the bots' chunks in SharedArrayBuffers, decoded by this thread and readable by any thread (`reader.mjs`). P1 of [docs/37](../../37-squad-worker-reads-plan.md) (§9 there is the as-built): read by `world.verify` and, with the reader workers on, by the `findBlocks` job (P6, §10 there). With `world.shared` (P5, §13 there) the bots read it too, and this thread is the only one that decodes a chunk |
 | Typecheck worker | `squad/src/script/typecheck-worker.mjs`, started by `check.ts` `typecheckWorker()` :156 | TypeScript `checkJs` for `check_script`/`submit_command`. First check about 5 s (it parses the library types), later ones 0.1–0.3 s; warmed 2 s after boot. Unref'd when idle |
 | The mod | `com.paul.brawl.squad` in the server JVM | `/bots` commands and the commander snapshot on the server thread; HTTP to the runtime is async; the SSE reader is a virtual thread (`squad-events`); authoring turns are virtual threads running `claude -p` (`ClaudeCodeClient`) |
 
@@ -84,7 +85,8 @@ start, `main.ts` :42 and :49):
 |---|---|---|
 | `pathfinding.astarBudgetMs` | **20** (`DEFAULT_ASTAR_BUDGET_MS`, `config.ts` :53); 0 = off, at most 50 (:55) | All A* searches together spend at most this many ms per 50 ms window (the patched `AStar.setBudget`, applied by `applyPathfinding` :133, which throws if the patches are missing). A search that finds the window spent waits with its best partial path; the wait does not count against `thinkTimeout` |
 | `workers.count`, `workers.tickBudgetMs` | **0** (off), **40** ms (`config.ts` `WorkersConfig`) | The reader workers of docs/37 (an integer up to 16, capped at the cores minus one by `jobWorkerCount`; a budget above 0 and at most 50 ms per 50 ms tick). With them on, the bots' A* runs there. `pathfinding.workers` (the old pool's key) is an alias, read only when `workers.count` is not set |
-| `world.enabled` | **true when `workers.count` > 0**, else false (`parseConfig`) | The shared world the workers read. An explicit `false` with workers on keeps A* on the main thread (`main.ts` warns) |
+| `world.enabled` | **true when `workers.count` > 0 or `world.shared`**, else false (`parseConfig`) | The shared world the workers read. An explicit `false` with workers on keeps A* on the main thread (`main.ts` warns); with `world.shared` it is a `ConfigError` |
+| `world.shared` | **false** (`config.ts` `DEFAULT_WORLD`) | docs/37 P5: the bots read the shared world (below) instead of keeping their own. Off until the defaults are flipped after the final measurements |
 
 Why these defaults (measured on a desktop, [docs/31 §11](../../31-squad-performance-review.md)): the budget was better
 than none in every moving phase at 10–30 bots; with it, the main thread was not saturated at 30 moving bots, and
@@ -131,6 +133,26 @@ their own copy of every chunk):
   `lostInput`, `clone`, `unknownType`, `unavailable`, `stopped`, `late`; the pool retries a job whose worker died
   once, on the restarted worker), and `deadline`: no sign of life for `thinkTimeout` + 2 s (`DEFAULT_GRACE_MS`
   :149). `/api/metrics` shows them as `paths`.
+
+**The bots on the shared world** (`world.shared`, docs/37 P5; the as-built and the measurements are docs/37 §13):
+- **How:** `bots/pool.ts` gives `createBot` `plugins: { pathfinder, blocks }` with `SharedWorld.blocksPlugin()`, which
+  replaces mineflayer's internal blocks plugin (no file under `node_modules` changes). `world/blocks-plugin.ts` is a
+  port of mineflayer 4.39's `lib/plugins/blocks.js` (`blockAt`, `findBlocks`, `findBlock`, `canSeeBlock`,
+  `waitForChunksToLoad`, digging's `_updateBlockState`, signs, paintings, the chunk-batch acknowledgements, the
+  `blockUpdate`/`chunkColumnLoad`/`chunkColumnUnload` listener proxy); `bot.world` is a `SharedBotWorld`
+  (`world/bot-world.ts`): prismarine-world's sync API over the store, blocks from the per-state templates of
+  `world/blocks.mjs`. The chunk packets reach only `SharedWorld` (P1's routing: holders, primary, forwarding);
+  `protocol.ts` `SHARED_WORLD_PACKETS` also reads `map_chunk`'s and `update_light`'s light as raw bytes.
+- **What a bot sees:** the columns it holds, once the writer has published them (a few ms after the packet;
+  `chunkColumnLoad` then). A block change it hears (or digging's prediction) is shown to it at once by its overlay,
+  with mineflayer's `blockUpdate` events in the packet's handler, until the store shows it (or 5 s,
+  `OVERLAY_MS`). Block entities per column, one copy for every bot holding it. No light (0) and no biome (the first).
+- **`findBlocks` by block ids** (what the helpers pass) is the store's search on the main thread over the bot's own
+  columns (`find-blocks.mjs` with a column filter): mineflayer's answer in ~0.1 ms instead of 15 ms. With a matcher
+  function it is mineflayer's walk over `blockAt`.
+- **The writer's restart** rebuilds the bots' columns from the store itself (`encode.mjs`; the bots have no world to
+  re-send from) and the payloads not acknowledged yet (kept until then); after three deaths in a minute the main
+  thread runs the writer's logic itself (`applyOps`) instead of leaving the bots blind.
 
 ## Patched dependencies (`squad/patches/`, docs/32 B)
 
@@ -179,7 +201,7 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
 
 | Area | Files | What it does |
 |---|---|---|
-| Bots | `bots/pool.ts`, `plugins.ts`, `hardening.ts`, `protocol.ts` | Dynamic pool, logins 4 s apart, reconnect with backoff, version pinned to 1.21.1, `viewDistance: 'short'`. Plugins: pathfinder, pvp, armor-manager, tool, collectblock, auto-eat (hawkEye, which aimed the bows, is gone since docs/37 P3: `shoot` aims with `aim/`). Pathfinder bounded (searchRadius 64, thinkTimeout 5 s, `hardening.ts`), its library patched and its A* budgeted (above). Per-bot vitals counters. Protocol hardening, below |
+| Bots | `bots/pool.ts`, `plugins.ts`, `hardening.ts`, `protocol.ts` | Dynamic pool, logins 4 s apart, reconnect with backoff, version pinned to 1.21.1, `viewDistance: 'short'`. Plugins: pathfinder, pvp, armor-manager, tool, collectblock, auto-eat (hawkEye, which aimed the bows, is gone since docs/37 P3: `shoot` aims with `aim/`). Pathfinder bounded (searchRadius 64, thinkTimeout 5 s, `hardening.ts`), its library patched and its A* budgeted (above). With `world.shared`, mineflayer's blocks plugin replaced by the shared world's and the chunks' light read as bytes (above). Per-bot vitals counters. Protocol hardening, below |
 | Roster | `roster.ts` | Bots, owners, tags in `.squad-data/roster.json`; the runtime is its only writer |
 | Leases | `leases.ts` | A lease stack per bot (depth 4). `plan` :84 grants idle bots first, then busy ones for `take: 'reclaim'` roles, all or nothing. `apply` :106 runs the old order's cleanup before reuse. `release` :130 hands a bot back to the live order below |
 | Orders | `orders/runner.ts`, `order.ts`, `guard.ts`, `claims.ts` | `start` :141 (tracked per binding, below) → `launch` :147 resolves, compiles (once per version) and runs. Each script gets a **lease-guarded Proxy** of each bot (`guardBot` :81): calls check the lease, listeners and timers are tracked, chat is rate-limited, `quit` is refused. Every leave and every end runs the R4/R5 abort sequence. Claims are shared across orders. `trigger` :208: a bound item's click delivers to, restarts, starts or stops the player's order of that command (below) |
@@ -583,7 +605,7 @@ clicks and sends each one; it decides nothing about what a click does.
   trigger, hit and entity JSON and the request body). The stack edits themselves (`ItemStack` needs a bootstrap), the
   hooks and the mixin are checked only in game.
 - **Live:** `npm run live-test`, using RCON against the dev server (`dev/`, `./gradlew runDevServer`; the default) or
-  production (`SERVER_PROPERTIES=../run/server.properties`; the world is never changed there). `LIVE_WORKERS=N` runs it with N reader workers and the shared world (A*, gather's block search and the aim there; `LIVE_JOBS` and `LIVE_PATH_WORKERS` are older names; `LIVE_WORLD=1` turns the shared world on alone).
+  production (`SERVER_PROPERTIES=../run/server.properties`; the world is never changed there). `LIVE_WORKERS=N` runs it with N reader workers and the shared world (A*, gather's block search and the aim there; `LIVE_JOBS` and `LIVE_PATH_WORKERS` are older names; `LIVE_WORLD=1` turns the shared world on alone; `LIVE_WORLD_SHARED=1` makes the bots read it, docs/37 P5).
   `LIVE_ONLY=core|items` runs one group; the test's runtime listens on `LIVE_RUNTIME_PORT` (default any free port).
   - **Core** (`live-tests/run.ts`): connect, `gather`, `come`, reclaim per role, despawn. On the dev world the bots
     start from a camp the test lays (grass and two oaks at 1100,100,1000, cleared inventories), and a ladder built high
@@ -653,6 +675,9 @@ clicks and sends each one; it decides nothing about what a click does.
   the dev server's `bench:load` and the live core tests (docs/37 §12); the `findBlocks` job on fakes over real chunk data
   (`tests/find-blocks.test.ts`), in `bench:load` gather (docs/37 §10.4) and the live core test (7/7); the `aim` job in
   `bench:fight` and the live items tests (docs/37 §11). Never on production.
+- **`world.shared` (docs/37 P5):** off by default. Ran on fakes over real chunk data against mineflayer's own world
+  (`tests/shared-bots.test.ts`), the live core and items tests (with and without `LIVE_WORKERS=4`), `bench:load` and
+  `bench:fight` (docs/37 §13). Never on production.
 - **`/bots status` in game:** only its JUnit test ran. The A* offload's counters are in `/api/metrics` (`paths`), not
   in the vitals journal.
 - **Known, not fixed (docs/31 §11.9):** mineflayer-collectblock adds two listeners per cancelled stalled `mineBlock`

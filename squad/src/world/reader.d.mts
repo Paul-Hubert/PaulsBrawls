@@ -79,6 +79,11 @@ export interface WorldReader {
   /** stateId with the dimension's index (dimIndex): no name lookup. */
   stateIdIn(dimIndex: number, x: number, y: number, z: number): number;
   hasColumn(dim: string, chunkX: number, chunkZ: number): boolean;
+  /**
+   * A copy of a live column, or null: each section the one state filling it (a number, 0 = air) or its 4 096 state ids
+   * (index (y << 8) | (z << 4) | x). P5's writer restart re-sends the store's own columns (encode.mjs).
+   */
+  copyColumn(dim: string, chunkX: number, chunkZ: number): { minY: number; sections: Array<number | Uint16Array> } | null;
   /** A live column's change counter (every block change and re-decode moves it), or -1. */
   columnVersion(dim: string, chunkX: number, chunkZ: number): number;
   /** { minY, height } of a dimension the store has seen, or null. Any time, no bracket needed. */
@@ -90,6 +95,10 @@ export interface WorldReader {
   /** Bracket every batch of reads (epoch-based reclamation). Re-entrant calls are an error; so is a read outside. */
   enter(): void;
   leave(): void;
+  /** leave() + enter() in one step, for a reader that stays inside (the bots' reads, P5). Inside a bracket only. */
+  refresh(): void;
+  /** Whether the reader is inside a bracket. */
+  readonly inside: boolean;
   readonly states: StateTables;
 }
 

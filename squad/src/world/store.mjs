@@ -72,6 +72,42 @@ function sha1(bytes) {
   return createHash('sha1').update(bytes).digest('base64');
 }
 
+/** At most this many decode errors are reported per batch. */
+const MAX_ERRORS = 5;
+
+/**
+ * One batch of the main thread's ops, in order (writer.mjs runs it per message; with world.shared, SharedWorld runs it
+ * on the main thread itself once the writer thread is given up, P5): ['load', dim, x, z, minY, height, ArrayBuffer] |
+ * ['release', dim, x, z] | ['set', dim, x, y, z, stateId]. Returns what became live and what stopped being live
+ * ([dim, x, z, …] each), the decode times and the first errors.
+ */
+export function applyOps(store, ops) {
+  // First: memory a reader let go of since the last batch (it left, or a dead one was released) is reusable at once.
+  store.reclaim();
+  const published = [];
+  const unloaded = [];
+  const decodeMs = [];
+  const errors = [];
+  for (const op of ops) {
+    const kind = op[0];
+    if (kind === 'set') {
+      store.set(op[1], op[2], op[3], op[4], op[5]);
+    } else if (kind === 'load') {
+      const [, dim, x, z, minY, height, ab] = op;
+      const r = store.load(dim, x, z, minY, height, new Uint8Array(ab));
+      if (r.live) published.push(dim, x, z);
+      else if (r.wasLive) unloaded.push(dim, x, z);
+      if (r.decoded) decodeMs.push(r.ms);
+      if (r.error && errors.length < MAX_ERRORS) errors.push(`${dim} ${x},${z}: ${r.error}`);
+    } else if (kind === 'release') {
+      if (store.release(op[1], op[2], op[3])) unloaded.push(op[1], op[2], op[3]);
+    }
+  }
+  store.expire();
+  store.endBatch();
+  return { published, unloaded, decodeMs, errors };
+}
+
 export class WorldStore {
   /**
    * @param descriptor the buffers (layout.mjs allocateWorld)

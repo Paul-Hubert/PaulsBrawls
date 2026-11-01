@@ -123,9 +123,11 @@ export function matchKey(query) {
 
 /**
  * A search, ready for stepSearch(). `match` is matchTable(reader.states, input) (a handler caches it per query).
- * Coordinates are floored, as mineflayer floors the point.
+ * Coordinates are floored, as mineflayer floors the point. `visible(chunkX, chunkZ)`, on the main thread only (a
+ * function cannot cross to a worker), limits the search to one bot's columns (P5: a bot's own findBlocks over the
+ * store sees the columns that bot holds, as mineflayer's sees its own world only).
  */
-export function startSearch(reader, input, match) {
+export function startSearch(reader, input, match, visible = null) {
   const px = Math.floor(input.x);
   const py = Math.floor(input.y);
   const pz = Math.floor(input.z);
@@ -159,6 +161,7 @@ export function startSearch(reader, input, match) {
     zs: [],
     ds: [],
     stats: { sections: 0, scanned: 0, unknown: 0, slices: 0 },
+    visible,
     done: false,
   };
 }
@@ -198,7 +201,7 @@ export function stepSearch(reader, s, budgetLeftMs = () => Infinity) {
 
 /** One section of the walk (mineflayer's loop body). */
 function visit(reader, s, tag, cx, cy, cz) {
-  if (!reader.find(tag, cx, cz)) {
+  if ((s.visible !== null && !s.visible(cx, cz)) || !reader.find(tag, cx, cz)) {
     s.stats.unknown++;
     return;
   }
@@ -294,8 +297,8 @@ export function answerOf(s) {
 }
 
 /** A whole search at once, inside the caller's enter()/leave() (tests, benchmarks). */
-export function findBlocksIn(reader, input, match = matchTable(reader.states, input)) {
-  const s = startSearch(reader, input, match);
+export function findBlocksIn(reader, input, match = matchTable(reader.states, input), visible = null) {
+  const s = startSearch(reader, input, match, visible);
   stepSearch(reader, s);
   return answerOf(s);
 }

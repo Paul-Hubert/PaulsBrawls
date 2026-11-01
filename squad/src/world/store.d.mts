@@ -31,6 +31,12 @@ export interface StoreStats {
   evicted: number;
 }
 
+/** One batch of ops (the writer's message; SharedWorld's inline writer, P5). */
+export function applyOps(
+  store: WorldStore,
+  ops: unknown[][],
+): { published: Array<string | number>; unloaded: Array<string | number>; decodeMs: number[]; errors: string[] };
+
 export class WorldStore {
   constructor(descriptor: WorldDescriptor, opts: { cacheSeconds: number; cacheColumns: number; reset?: boolean; now?: () => number });
   load(dim: string, x: number, z: number, minY: number, height: number, bytes: Uint8Array): LoadResult;

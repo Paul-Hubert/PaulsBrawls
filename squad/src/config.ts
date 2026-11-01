@@ -87,10 +87,16 @@ export interface WorldConfig {
   cacheColumns: number;
   /** Once a second, compare a random sample of the store with the bots' own worlds and log mismatches (debug). */
   verify: boolean;
+  /**
+   * docs/37 P5: the bots read the shared world too (`bot.world`, blockAt, physics, the pathfinder's look-ahead), and
+   * keep no world of their own: each chunk is decoded once, on the writer thread, instead of once per bot on the main
+   * thread (src/world/bot-world.ts). Turns `enabled` on; an explicit `enabled: false` with it is an error. Default off.
+   */
+  shared: boolean;
 }
 
 /** `enabled` here is the default without reader workers; with them it defaults to true (parseConfig). */
-export const DEFAULT_WORLD: WorldConfig = { enabled: false, cacheSeconds: 60, cacheColumns: 2_000, verify: false };
+export const DEFAULT_WORLD: WorldConfig = { enabled: false, cacheSeconds: 60, cacheColumns: 2_000, verify: false, shared: false };
 
 /**
  * The archers' aim (docs/37 §3, D5; src/aim/): when, in a bow's draw, the aim solver is asked again. The look turns
@@ -191,13 +197,16 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
     throw new ConfigError(`squad.json: workers.tickBudgetMs is per 50 ms tick, so above 0 and at most 50, got ${tickBudgetMs}`);
   }
   const worldRaw = (o.world ?? {}) as Record<string, unknown>;
+  const shared = bool(worldRaw.shared, DEFAULT_WORLD.shared, 'world.shared');
   const world: WorldConfig = {
-    enabled: bool(worldRaw.enabled, count > 0, 'world.enabled'),
+    enabled: bool(worldRaw.enabled, count > 0 || shared, 'world.enabled'),
     cacheSeconds: num(worldRaw.cacheSeconds, DEFAULT_WORLD.cacheSeconds, 'world.cacheSeconds'),
     cacheColumns: num(worldRaw.cacheColumns, DEFAULT_WORLD.cacheColumns, 'world.cacheColumns'),
     verify: bool(worldRaw.verify, DEFAULT_WORLD.verify, 'world.verify'),
+    shared,
   };
   if (!Number.isInteger(world.cacheColumns)) throw new ConfigError(`squad.json: world.cacheColumns must be an integer, got ${world.cacheColumns}`);
+  if (shared && !world.enabled) throw new ConfigError('squad.json: world.shared needs the shared world (world.enabled cannot be false with it)');
   const aim = parseAim((o.aim ?? {}) as Record<string, unknown>);
   return {
     minecraft: { host, port, version: typeof mc.version === 'string' ? mc.version : '1.21.1' },

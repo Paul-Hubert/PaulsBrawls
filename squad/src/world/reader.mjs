@@ -158,6 +158,18 @@ export class WorldReader {
     Atomics.store(this.ctl, K_READERS + this.slot, 0);
   }
 
+  /**
+   * leave() then enter() in one step, for a reader that stays inside (P5: the bots' reads on the main thread, which
+   * come at any time). It publishes the current epoch, so memory retired before now can be reused, and forgets the
+   * column it remembered, which that reuse may hand to another chunk.
+   */
+  refresh() {
+    if (!this.inside) throw new Error('WorldReader.refresh(): not inside a bracket');
+    this.lastTag = 0;
+    this.lastView = null;
+    Atomics.store(this.ctl, K_READERS + this.slot, Atomics.load(this.ctl, K_EPOCH));
+  }
+
   // -- reads --------------------------------------------------------------------------------------------------------
 
   stateId(dim, x, y, z) {
@@ -207,6 +219,31 @@ export class WorldReader {
     const d = this.dimIndex(dim);
     if (d < 0 || !this.find(d + 1, chunkX | 0, chunkZ | 0)) return false;
     return Atomics.load(this.lastView, this.lastBase + C_STATE) === LIVE;
+  }
+
+  /**
+   * A copy of a live column, or null: { minY, sections }, each section the one state that fills it (a number, 0 = air)
+   * or its 4 096 state ids (a Uint16Array, index (y << 8) | (z << 4) | x). P5 re-sends it to a restarted writer.
+   */
+  copyColumn(dim, chunkX, chunkZ) {
+    if (!this.hasColumn(dim, chunkX, chunkZ)) return null;
+    const view = this.lastView;
+    const base = this.lastBase;
+    const n = view[base + C_SECTIONS];
+    const sections = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const ref = Atomics.load(view, base + COL_REFS + i);
+      if (ref <= 0) {
+        sections[i] = -ref;
+        continue;
+      }
+      const s = ref - 1;
+      const page = this.secPages[s >> 10] ?? this.sectionPage(s >> 10);
+      if (page === null) return null;
+      const off = (s & (PAGE_SECTIONS - 1)) << 12;
+      sections[i] = page.slice(off, off + SECTION_BLOCKS);
+    }
+    return { minY: view[base + C_MINY], sections };
   }
 
   /** A live column's change counter (bumped by every block change and re-decode), or -1. */

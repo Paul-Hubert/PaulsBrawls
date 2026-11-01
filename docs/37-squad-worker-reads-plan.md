@@ -5,8 +5,8 @@
 > `bench:fight` and `bench:load`. **Built so far: P0** (the hawkEye leak), **P1** (the shared world, off by default; as
 > built in §9), **P2** (the job queue, dispatcher and reader workers, off by default; as built in §8), **P3** (Squad's
 > own aim, hawkEye removed; as built in §11), **P4** (A* on the reader workers over the shared world, the old per-worker
-> mirror retired; as built in §12) and **P6** (gather's block search as a `findBlocks` job, off by default; as built in
-> §10). The rest is a plan.
+> mirror retired; as built in §12), **P5** (the bots read the shared world, `world.shared`, off by default; as built in
+> §13) and **P6** (gather's block search as a `findBlocks` job, off by default; as built in §10). The rest is a plan.
 
 ## 0. Owner decisions (Paul, 2026-11-01)
 
@@ -217,7 +217,7 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 | **P2** ✅ | M | The job queue, dispatcher and reader workers (budget, priorities, deadlines, carry-over, affinity, fallbacks, metrics), with a test job type | **Done 2026-11-01** (§8): `tests/jobs.test.ts` (budget respected, priorities, `late`, a worker killed mid-batch, …); `/api/metrics` shows `jobs`. Off by default (`workers.count` 0) until P3 |
 | **P3** ✅ | M | Raycast (blocks + hitboxes), LOS and the aim solver as jobs; `shoot` on the schedule with turning; hawkEye removed | **Done 2026-11-01** (§11): the aim from 42 % of the main thread to 1–2 %; full-strength ELU 0.34–0.36 inline (today's baseline 0.65–0.70); kills per shot 3.5–5.2 %; friendly 0; failed shots 19–32 % (not met: friends in the line, D5's check, §11.7); live items tests pass. The `raycast`/`los` job types are not built (nothing calls them) |
 | **P4** ✅ | M | A* on the reader workers over the shared world (Movements reads per-state Block templates); the old per-worker mirror retired | `bench:load` walk / gather at 10 and 30 bots: legs and logs per minute ≥ docs/31 §11; live core tests pass; process memory flat with the worker count. **Built 2026-11-01** (§12): walk, the live core tests and memory (~60 MB a worker) met; gather not shown to match (§12.1), so the default stays off |
-| **P5** | L | The bots read the one copy: a patched mineflayer blocks plugin sends chunks to the writer; `bot.world` is a shared store-backed world (prismarine-world's sync API, `blockUpdate`/`chunkColumnLoad`/`chunkColumnUnload` per bot, block entities on the main thread). Behind `world.shared` (default off until it passes) | `bench:fight` and `bench:load`: ~30–40 MB less per bot; 40 logins with no stall over 250 ms; every live test passes with `world.shared: true` |
+| **P5** ✅ | L | The bots read the one copy: ~~a patched mineflayer blocks plugin~~ a replacement of mineflayer's blocks plugin (createBot `plugins.blocks`, no patch) sends chunks to the writer; `bot.world` is a shared store-backed world (prismarine-world's sync API, `blockUpdate`/`chunkColumnLoad`/`chunkColumnUnload` per bot, block entities on the main thread). Behind `world.shared` (default off until it passes) | `bench:fight` and `bench:load`: ~30–40 MB less per bot; 40 logins with no stall over 250 ms; every live test passes with `world.shared: true`. **Built 2026-11-01** (§13): 35.6 MB less RSS per bot (40 bots idle); 40 logins' worst stall 449 → 103 ms, the respawns' 1.5–2.2 s stalls gone; every live suite passes with it, with and without workers. Off by default |
 | **P6** ✅ | S | `findBlocks` as a job (gather's search) | **Done 2026-11-01** (§10), off by default (it needs `workers.count` > 0 and `world.enabled`): mineflayer's answer, position for position, on real chunk data (`tests/find-blocks.test.ts`); 0.1 ms on the store against 15 ms in mineflayer. `bench:load` gather at N = 10: logs unchanged within two sites' noise (96 off / 100 on, first runs), block searches on the main thread 0.65–1.0 s a minute → 0; the §2.6 case (no reachable log): the main thread blocked 1 225–1 340 ms at the order's start (ten searches back to back) → 15–65 ms at most, no search on the main thread |
 
 **Order:** P0 → P1 → P2 → P3 (the 45 %) → P4 → P5 → P6.
@@ -233,14 +233,14 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 ```
 
 - `world.enabled`, `cacheSeconds`, `cacheColumns` and `verify` exist since P1 (§9): `world.enabled` builds the store
-  (P2/P3 turn it on), `verify` is the debug comparison of §6.
+  (P2/P3 turn it on), `verify` is the debug comparison of §6 (it has nothing to compare with `world.shared`).
 
 - `workers.count`: default cores − 2 in the plan; **0 (off) as built** (§8.5), until the final measurements.
 - `pathfinding.workers` remains an alias of `workers.count` (since P4): read when `workers.count` is not set; when both
   are set, `workers.count` wins.
 - `world.enabled` defaults to `workers.count` > 0 (since P4): the workers read the store. An explicit `false` with
   workers on keeps A* on the main thread (`main.ts` warns).
-- `world.shared` turns P5 on.
+- `world.shared` turns P5 on (§13): default `false`; it turns `world.enabled` on, and `"enabled": false` with it is an error.
 
 ## 6. Risks
 
@@ -1056,3 +1056,112 @@ What this shows:
 
 **Against "done when":** walk ≥ docs/31 §11, yes; gather ≥ docs/31 §11, not shown (above); the live core tests,
 yes; memory flat with the worker count, yes (~60 MB a worker). `workers.count` stays 0.
+
+## 13. P5 as built (2026-11-01)
+
+`world.shared` (default **off**): the bots read the shared world. No bot keeps a world of its own or parses a chunk;
+each column is decoded once, on the writer thread. With it off nothing changes: the bots get mineflayer's own blocks
+plugin and `RECIPES_AS_BYTES`, as before (`tests/shared-bots.test.ts` checks it).
+
+### 13.1 Files
+
+| File | What |
+|---|---|
+| `squad/src/world/bot-world.ts` | `SharedBotWorld`: one bot's `bot.world`, prismarine-world's sync API over the store (`getBlock`, `getBlockStateId`, `getBlockType`, `getBlockData`, `getColumn`/`getColumnAt`/`getColumns`, `raycast`, `setBlockStateId`…), the bot's columns, its overlay, its events; `ColumnView`, what `getColumn` returns |
+| `squad/src/world/blocks-plugin.ts` | mineflayer 4.39's `lib/plugins/blocks.js` for a shared bot: `blockAt`, `findBlocks`, `findBlock`, `canSeeBlock`, `waitForChunksToLoad`, `_updateBlockState`, `updateSign`, paintings, block entities, the chunk-batch acknowledgements, the listener proxy |
+| `squad/src/world/encode.mjs` (+ `.d.mts`) | A store column back into a chunk payload (decode.mjs's format): the writer restart's source |
+| `squad/src/world/shared-world.ts` | + `shared`, `blocksPlugin()`, `bindView()`, `botsReader` (always inside its bracket, refreshed every 50 ms), `templates`, the holders' views and pending readability, overlay pruning, the restart from the store and the unacknowledged batches, the inline writer, `stats().shared` and `payloads` |
+| `squad/src/world/store.mjs`, `writer.mjs` | `applyOps` (one batch), shared by the writer thread and the inline writer |
+| `squad/src/world/reader.mjs` | + `refresh()` (leave and enter in one step), `copyColumn()` |
+| `squad/src/world/find-blocks.mjs` | + a column filter (`visible`, main thread only) |
+| `squad/src/world/blocks.mjs` | + `BlockTemplates.registry` |
+| `squad/src/bots/pool.ts` | `WorldFeed.blocksPlugin()`, `SpawnRequest.blocks`; createBot `plugins: { pathfinder, blocks }` and `customPackets: SHARED_WORLD_PACKETS` |
+| `squad/src/bots/protocol.ts` | `SHARED_WORLD_PACKETS`: `map_chunk`'s and `update_light`'s light read as raw bytes |
+| `squad/src/aim/inline.ts` | The inline aim reads a shared bot's world through its `stateIdAt` |
+| `squad/src/config.ts`, `main.ts` | `world.shared` (turns `world.enabled` on; `"enabled": false` with it is a `ConfigError`) |
+| `squad/bench/load.ts`, `bench/fight.ts`, `live-tests/run.ts` | `--shared`, `LIVE_WORLD_SHARED=1`; `bench:fight` measures the logins as a phase of their own (loop, ELU, RSS, heap, the shared world's size) |
+| `squad/tests/shared-bots.test.ts`, `tests/fixtures/deaf-writer.mjs` | 17 tests (§13.5) |
+
+### 13.2 How a bot's world is replaced
+
+- **No patch.** mineflayer's loader replaces an internal plugin whose key in `createBot`'s `plugins` is a function.
+  The pool passes `plugins: { pathfinder, blocks: SharedWorld.blocksPlugin() }`, so mineflayer's `blocks.js` never
+  loads and nothing under `node_modules` changes. A bot the shared world cannot take (no packet stream, the world
+  stopped) gets mineflayer's own plugin from inside ours.
+- **The packets.** P1's `attach` (pool.ts, right after createBot) still follows the world packets (`follow.ts`): the
+  holders, the primary, the forwarding. A payload is copied once and sent to the writer only for a column new to every
+  bot, a re-send or a resync, as in P1. The plugin, loaded later, takes the rest of `blocks.js`'s packets: block
+  entities, signs, paintings, the chunk batches (the server sends the next batch only once one is acknowledged).
+- **The protocol** (beyond the plan, found by measuring). protodef decodes `map_chunk`'s light, ~52 arrays of 2 048
+  bytes, byte by byte into JS arrays: 0.415 ms a column, per bot, on the main thread, against 0.62 ms for
+  prismarine-chunk's whole `load` with its light (a scratch benchmark of one 1.21.1 column, full light), so about 40 % of
+  a login's chunk work. Nothing reads light with world.shared, so `SHARED_WORLD_PACKETS` reads it (and
+  `update_light`'s) as one raw buffer: 1 µs. minecraft-protocol keeps one compiled protocol per state, direction and
+  version (its cache ignores customPackets) and merges customPackets into minecraft-data's own object, so every bot
+  of a process gets the same set; world.shared is process-wide.
+- **Reads.** `bot.world.getBlock(pos)` (so `bot.blockAt`, physics, the pathfinder's Movements and look-ahead, the
+  goals' and collectblock's raycasts): the bot's column record (a per-bot Map, its last column cached), the store
+  through the main thread's bots' reader, the overlay when the column has one, then the state's template specialised
+  by position (`blocks.mjs`, P4) and the column's block entity. `getBlockStateId` answers 0 for an unloaded column, as
+  prismarine-world does. `stateIdAt(x, y, z)` (-1 unknown) is the cheap read the inline aim uses.
+- **Visibility.** A bot sees the columns IT holds (received, not unloaded), once the store has them live. Another
+  bot's columns are not its world (mineflayer's semantics: unloaded is null). A column new to the store is readable
+  once the writer has published it, a few ms after the packet; until then `blockAt` is null there, as for a column
+  whose packet has not come.
+- **Events.** `chunkColumnLoad` when the column becomes readable for the bot: at once when the store already has it and
+  nothing newer is on its way (another bot holds it), else when the writer's answer publishes the batch of its load
+  (`Held.pending`, by batch). `chunkColumnUnload` on every `unload_chunk` (also for a column it did not hold, as
+  mineflayer), and for every column on a change of dimension, after the `blockUpdate:(…)` waiters hear (null, null)
+  and are dropped (mineflayer's `switchWorld`). `blockUpdate` and `blockUpdate:(x, y, z)` fire for the bot when IT
+  hears the change, in the packet's handler, with mineflayer's old and new Blocks sharing one position object: placing
+  and digging wait on them. The listener proxy forwards them to the bot, as mineflayer's does.
+- **The overlay.** The store shows a change a few ms after the bots hear it, and only from the column's primary's
+  stream (P1). So each bot's world keeps the changes it heard that the store does not show yet, per column, and reads
+  them first: `blockAt` agrees with the `blockUpdate` just fired. An entry goes when the store shows the same state
+  after the batch it was heard before (or with nothing on its way to the writer), or after `OVERLAY_MS` (5 s, P1's
+  `RESYNC_WINDOW_MS`): the store, the primary's stream, wins. No entry is made when the store already shows the change
+  and nothing is on its way. Pruned after every writer answer and once a second.
+- **Writes the bots make.** Only digging's prediction (`digging.js` calls `bot._updateBlockState(pos, 0)` when it
+  finishes): an overlay entry of that bot, with its events, never sent to the store. The server's own `block_change`
+  follows (every holder hears it; the primary's goes to the store), or the store's state comes back after 5 s. So the
+  store only ever follows the primary's packets.
+- **Block entities** stay on the main thread, per column (SharedWorld's record of the column), one copy for every bot
+  holding it: a `map_chunk`'s list replaces the column's, `tile_entity_data` sets one (from any holder: all hear the
+  same), and they go with the column. `blockEntityData` and `signOpen` fire per bot, as mineflayer's.
+- **Light and biomes are not stored.** The evidence: nothing in `squad/src`, the plugins (pathfinder, pvp,
+  collectblock, tool, auto-eat, armor-manager), prismarine-physics or mineflayer's other plugins reads `block.light`,
+  `skyLight`, `biome`, `getBlockLight`, `getSkyLight` or `getBiome` (grep); only `blocks.js` writes them. A block's
+  light and skyLight are 0, its biome the template's (id 0), the getters answer 0. A player's script that reads them
+  gets that.
+- **`findBlocks`.** With block ids (a number or an array: what the helpers and most scripts pass) it is P6's search
+  (`find-blocks.mjs`) over the store, on the main thread, limited to the columns the bot holds: mineflayer's answer,
+  position for position, in ~0.1 ms instead of ~15 ms (§10.4). It reads the store, not the overlay (a change heard in
+  the last few ms may not show yet; every caller checks a found block with `blockAt`). With a matcher function (or a
+  `useExtraInfo` function) it is mineflayer's walk over `blockAt`, a section's states standing in for its palette (a
+  one-state section has no palette in prismarine-chunk 1.18+, so it is read whole, as mineflayer reads it). `findBlock`,
+  synchronous, gets the same speed.
+- **Reader epochs.** The bots read at any time, so the bots' reader (its own epoch slot) stays inside its bracket and
+  moves to the current epoch every 50 ms (`refresh()`): memory the writer frees is reused ~50 ms later.
+
+### 13.3 The resync source
+
+P1 re-sent columns from the bots' own worlds; with world.shared there are none.
+- **A primary that leaves a column changed in the last 5 s:** the new primary's overlay holds exactly the changes it
+  heard that the store does not show (one the old primary had not heard yet). They are sent as its own (`resync`,
+  counted in `resyncs`). No payload is needed.
+- **A writer that dies** is restarted over the same buffers, as in P1, and the new one drops every column. The store's
+  content survives it (shared memory, and no writer runs now), so each column the bots hold is read back from the store
+  on the main thread (`reader.copyColumn`) and encoded as a payload (`encode.mjs`): unless a batch the dead writer never
+  acknowledged had a payload for it. That column may be half-decoded, so that payload is sent again. Then the block
+  changes sent after it, in order. For this, world.shared keeps each batch's ops (payloads included: they are copied to
+  the writer, not transferred) until the writer acknowledges it. The bots read null in those columns until the new
+  writer publishes them, and get `chunkColumnLoad` again then.
+- **The third death in a minute** does not disable the store (P1 then leaves every read unknown, which would leave the
+  bots blind): the main thread runs the writer's logic itself (`applyOps` on a `WorldStore` over the same buffers),
+  decoding each column once, here, as the writer did. `stats().writer` reads `inline`.
+- **Its memory:** the copies kept until acknowledged, at most 562 KB during 40 logins (`stats().shared.unackedPeak`),
+  0 at rest. Keeping the last payload of every live column instead (the source the plan suggested) would cost the
+  payloads' size: 22.5 KB a column on average in the fight (684 columns, 15 MB), a quarter of the store's own 59 MB.
+- **Tested:** a writer made deaf (`tests/fixtures/deaf-writer.mjs`) leaves a block change, a new column and a re-sent
+  column unacknowledged; after its death the bot reads every column as mineflayer's world has it; two more deaths move
+  the writer to the main thread, and new columns and changes still arrive.

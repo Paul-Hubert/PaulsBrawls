@@ -21,12 +21,14 @@ export interface BlockLike {
 
 export class BlockTemplates {
   constructor(registry: unknown);
+  /** The registry the templates are built from. */
+  readonly registry: unknown;
   /** Templates built so far (each state id once). */
   readonly built: number;
   /** The state's template: shared by every block of this state, never write into it. */
   template(stateId: number): BlockLike;
-  /** A Block of this state at `position` (kept as the block's own Vec3: pass a fresh one). */
-  at(stateId: number, position: Vec): BlockLike;
+  /** A Block of this state at `position` (kept as the block's own Vec3: pass a fresh one; null, as a palette's). */
+  at(stateId: number, position: Vec | null): BlockLike;
 }
 
 /** One dimension of the store with prismarine-world's sync reads. Inside the reader's enter()/leave() only. */

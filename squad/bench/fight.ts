@@ -38,7 +38,7 @@
 // (default 1400,1000, the floor at y 100), --stagger <ms> (default the runtime's 4000), --port 8779, --no-mod,
 // --difficulty hard (production's), --dead disconnect|respawn, --workers <N> (pathfinding.workers), --astar-budget <ms>,
 // --jobs <N> (workers.count: the reader workers, docs/37), --world (world.enabled: the shared world; with --jobs the
-// archers' aim runs as jobs on the workers), --no-over-friends (aim.overFriends off: a friend in the line blocks the shot; on by default, docs/37 D6),
+// archers' aim runs as jobs on the workers), --shared (world.shared: the bots read the shared world, docs/37 P5), --no-over-friends (aim.overFriends off: a friend in the line blocks the shot; on by default, docs/37 D6),
 // --label. SERVER_PROPERTIES overrides the server (default
 // ../dev/server.properties); the production server is refused.
 // The archers' aim (docs/37 P3, src/aim/) is recorded per round (aimStats): draws, refusals, solves, flights per
@@ -103,6 +103,8 @@ const WORKERS = Number(opt('workers') ?? 0);
 const ASTAR_BUDGET = opt('astar-budget') === undefined ? undefined : Number(opt('astar-budget'));
 const JOBS = Number(opt('jobs') ?? 0);
 const WORLD = flag('world');
+/** --shared: world.shared, the bots read the shared world (docs/37 P5). */
+const SHARED = flag('shared');
 const OVER_FRIENDS = !flag('no-over-friends');
 const LABEL = opt('label') ?? 'fight';
 if (opt('hawkeye-every') !== undefined) {
@@ -321,7 +323,7 @@ async function main(): Promise<void> {
       limits: { ...DEFAULT_LIMITS, maxBots: 64 },
       pathfinding: { ...(ASTAR_BUDGET === undefined ? {} : { astarBudgetMs: ASTAR_BUDGET }), workers: WORKERS },
       workers: { count: JOBS },
-      world: { enabled: WORLD },
+      world: { enabled: WORLD || SHARED, shared: SHARED },
       aim: { overFriends: OVER_FRIENDS },
     },
     { PAULSBRAWLS_SQUAD_TOKEN: TOKEN },
@@ -347,6 +349,7 @@ async function main(): Promise<void> {
     dead: DEAD,
     jobs: rt.jobs ? rt.jobs.stats().workers : 0,
     world: !!rt.world,
+    shared: SHARED,
     aim: aimMode(),
     overFriends: OVER_FRIENDS,
     node: process.version,
@@ -355,14 +358,26 @@ async function main(): Promise<void> {
     ramGb: Math.round(totalmem() / 1073741824),
     server: { props: PROPS_FILE, port: MC_PORT, viewDistance: props['view-distance'], simulationDistance: props['simulation-distance'], compression: props['network-compression-threshold'], seed },
   };
-  const out: { env: typeof env; idle: unknown; rounds: RoundResult[] } = { env, idle: null, rounds: [] };
+  const out: { env: typeof env; logins: ProcessPhase | null; world?: unknown; idle: unknown; rounds: RoundResult[] } = { env, logins: null, idle: null, rounds: [] };
   const save = (): void => writeFileSync(join(runDir, 'results.json'), JSON.stringify(out, null, 2));
 
   try {
     if (!NO_MOD) await waitForMod(rt);
     // The runtime warms the typecheck worker 2 s after boot (~5 s of compiler work on its own thread): let it finish.
     await sleep(10_000);
+    // The logins as a phase of their own (docs/36 §6, docs/37 P5): every bot's chunks arrive during them.
+    const logins = new ProcessProbe();
+    logins.start();
     await spawnAll(rt);
+    await sleep(10_000); // the last login's chunks
+    out.logins = logins.stop();
+    log(`logins: ${SOLDIERS.length} bots, loop p99 ${out.logins.loop.p99} ms, max ${out.logins.loop.max} ms, ELU ${out.logins.elu}, RSS ${out.logins.rssMb} MB, heap ${out.logins.heapMb} MB`);
+    const w = rt.world?.stats();
+    if (w) {
+      out.world = w;
+      log(`shared world: ${w.columnsLive} columns live, ${w.decoded} decoded, ${Math.round(w.bytes / 1048576)} MB, payloads ${w.payloads.count} of ${w.payloads.count ? Math.round(w.payloads.bytes / w.payloads.count / 102.4) / 10 : 0} KB on average${w.shared ? `; the bots read it: ${w.shared.bots} bots, overlay ${w.shared.overlay}, payloads kept until acknowledged ${Math.round(w.shared.unackedPeak / 1024)} KB at most` : ''}`);
+    }
+    save();
     await kitAll(rt, rcon);
     await placeAll(rt, rcon);
     if (IDLE > 0) {

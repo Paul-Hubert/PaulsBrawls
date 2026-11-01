@@ -15,7 +15,8 @@
 // --search-radius, --plugins all|none|-autoEat,-pvp…, --view short|normal|tiny|<chunks>, --movements canDig=false,…,
 // --astar-budget <ms per 50 ms> (the runtime's pathfinding.astarBudgetMs), --workers <N> (the runtime's workers.count:
 // A*, gather's block searches and the aim on N reader workers over the shared world, docs/37 P3/P4/P6; --jobs <N> is
-// its older name), --world (world.enabled alone), --think-on-compute, --lookahead-cap <ticks>, --lookahead-memo <ticks>,
+// its older name), --world (world.enabled alone), --shared (world.shared: the bots read the shared world, docs/37 P5),
+// --think-on-compute, --lookahead-cap <ticks>, --lookahead-memo <ticks>,
 // --lookahead-blockcache, --stuck-ticks, --mcdata-memo, --cheap-varint, --astar-blockcache, --astar-blockcache-world.
 // The server is read from SERVER_PROPERTIES (default ../run/server.properties). The production server is refused.
 
@@ -35,7 +36,7 @@ import { start, type Started } from '../src/main';
 import type { PathOffloadStats } from '../src/bots/pathworkers/offload';
 import { boundPathfinder, type AbortableBot } from '../src/bots/hardening';
 import { loadPlugins, pathfinder, type PluginSet } from '../src/bots/plugins';
-import { keepDecodersAlive, RECIPES_AS_BYTES } from '../src/bots/protocol';
+import { keepDecodersAlive, RECIPES_AS_BYTES, SHARED_WORLD_PACKETS } from '../src/bots/protocol';
 import type { SpawnRequest } from '../src/bots/pool';
 import { logger } from '../src/logger';
 import { blockSearchStats } from '../src/api/block-search';
@@ -80,6 +81,8 @@ const VARIANT = {
   workers: Number(opt('workers') ?? opt('jobs') ?? 0),
   /** world.enabled without workers (with workers it is on by default, docs/37 P4). */
   world: flag('world'),
+  /** world.shared: the bots read the shared world instead of keeping their own (docs/37 P5). */
+  shared: flag('shared'),
   thinkOnCompute: flag('think-on-compute'),
   lookaheadCap: Number(opt('lookahead-cap') ?? 0),
   lookaheadMemo: Number(opt('lookahead-memo') ?? 0),
@@ -152,8 +155,9 @@ function createBot(req: SpawnRequest): Bot {
     version: req.version,
     viewDistance: VARIANT.view,
     checkTimeoutInterval: req.checkTimeoutInterval,
-    plugins: { pathfinder },
-    customPackets: RECIPES_AS_BYTES,
+    // world.shared (docs/37 P5): the shared world's blocks plugin, as the runtime's own createBot passes it.
+    plugins: req.blocks ? { pathfinder, blocks: req.blocks } : { pathfinder },
+    customPackets: req.blocks ? SHARED_WORLD_PACKETS : RECIPES_AS_BYTES,
   } as Parameters<typeof mineflayer.createBot>[0]);
 }
 
@@ -204,7 +208,7 @@ async function main(): Promise<void> {
   }
 
   const cfg = parseConfig(
-    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: VARIANT.astarBudget === undefined ? {} : { astarBudgetMs: VARIANT.astarBudget }, workers: { count: VARIANT.workers }, ...(VARIANT.world ? { world: { enabled: true } } : {}) },
+    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: VARIANT.astarBudget === undefined ? {} : { astarBudgetMs: VARIANT.astarBudget }, workers: { count: VARIANT.workers }, ...(VARIANT.world || VARIANT.shared ? { world: { enabled: true, shared: VARIANT.shared } } : {}) },
     { PAULSBRAWLS_SQUAD_TOKEN: TOKEN },
   );
   const rt = await start(cfg, { connectBots: true, installGuards: true, pool: { createBot, setup } });

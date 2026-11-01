@@ -11,7 +11,7 @@ import mineflayer, { type Bot } from 'mineflayer';
 import { logger } from '../logger';
 import { boundPathfinder, defaultMovements, type AbortableBot } from './hardening';
 import { loadPlugins, pathfinder } from './plugins';
-import { keepDecodersAlive, RECIPES_AS_BYTES, type SkippedPacket } from './protocol';
+import { keepDecodersAlive, RECIPES_AS_BYTES, SHARED_WORLD_PACKETS, type SkippedPacket } from './protocol';
 import type { OffloadedBot } from './pathworkers/offload';
 
 /**
@@ -25,7 +25,15 @@ export interface PathSearch {
 /** The shared world's seam (world/shared-world.ts): it follows a bot's world packets from its first one. */
 export interface WorldFeed {
   attach(bot: unknown): void;
+  /**
+   * world.shared (docs/37 P5): the plugin that replaces mineflayer's own blocks plugin, so the bot reads the shared
+   * world and parses no chunk (null/absent: the bot keeps its own world).
+   */
+  blocksPlugin?(): BlocksPlugin | null;
 }
+
+/** A mineflayer plugin standing in for its internal `blocks` (createBot's `plugins.blocks`). */
+export type BlocksPlugin = (bot: unknown, options: Record<string, unknown>) => void;
 
 export const SUPPORTED_MINECRAFT_VERSION = '1.21.1'; // R11: server, mod and bot must agree
 const KEEPALIVE_INTERVAL_MS = 90_000; // R13
@@ -40,6 +48,8 @@ export interface SpawnRequest {
   version: string;
   viewDistance: 'short';
   checkTimeoutInterval: number;
+  /** world.shared: mineflayer's blocks plugin replaced by the shared world's (createBot `plugins: { blocks }`). */
+  blocks?: BlocksPlugin;
 }
 
 export type CreateBot = (req: SpawnRequest) => Bot;
@@ -260,6 +270,7 @@ export class BotPool extends EventEmitter {
   private connect(rec: Record_): void {
     let bot: Bot;
     try {
+      const blocks = this.opts.world?.blocksPlugin?.() ?? undefined;
       bot = this.createBot({
         host: this.opts.host,
         port: this.opts.port,
@@ -267,6 +278,7 @@ export class BotPool extends EventEmitter {
         version: this.opts.version ?? SUPPORTED_MINECRAFT_VERSION,
         viewDistance: 'short',
         checkTimeoutInterval: KEEPALIVE_INTERVAL_MS,
+        ...(blocks ? { blocks } : {}),
       });
     } catch (e) {
       rec.lastReason = `createBot failed: ${(e as Error).message}`;
@@ -388,9 +400,11 @@ function defaultCreateBot(req: SpawnRequest): Bot {
     version: req.version,
     viewDistance: req.viewDistance,
     checkTimeoutInterval: req.checkTimeoutInterval,
-    plugins: { pathfinder },
-    // docs/29 §16: the login recipe list is read as bytes (mineflayer never uses it; modded items break it).
-    customPackets: RECIPES_AS_BYTES,
+    // world.shared (docs/37 P5): the shared world's blocks plugin instead of mineflayer's (no chunk parsed per bot).
+    plugins: req.blocks ? { pathfinder, blocks: req.blocks } : { pathfinder },
+    // docs/29 §16: the login recipe list is read as bytes (mineflayer never uses it; modded items break it). With
+    // world.shared, the chunks' light too (nothing reads it, docs/37 P5).
+    customPackets: req.blocks ? SHARED_WORLD_PACKETS : RECIPES_AS_BYTES,
   } as Parameters<typeof mineflayer.createBot>[0]);
 }
 
