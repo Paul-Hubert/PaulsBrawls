@@ -1236,7 +1236,7 @@ with the same code). So two controlled comparisons, back to back:
 
 ### 13.5 Tests
 
-`npm run check`: TESTCOUNT tests, 17 of them P5's (`tests/shared-bots.test.ts`). Each feeds one packet stream to a bot
+`npm run check`: 275 tests, 17 of them P5's (`tests/shared-bots.test.ts`). Each feeds one packet stream to a bot
 running mineflayer's own blocks plugin and to one on the shared world:
 - every block of three forest columns (stateIds) and a sample of whole Blocks (name, state, type, metadata,
   position, box, shapes, hardness), before and after the writer applies the changes; `block_change`,
