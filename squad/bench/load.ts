@@ -287,7 +287,7 @@ async function main(): Promise<void> {
           const worldMb = w ? Math.round(w.bytes / 1048576) : null;
           r.world = w && { columnsLive: w.columnsLive, sections: w.sections, mb: worldMb };
           log(
-            `paths: ${d.probed} done by the probe, ${d.offloaded} offloaded, ${d.answered} answered, ${d.cancelled} cancelled, ${d.partials} partial paths, fallbacks ${JSON.stringify(d.fallbacks)}; ` +
+            `paths: ${d.offloaded} offloaded, ${d.answered} answered, ${d.cancelled} cancelled, ${d.partials} partial paths, fallbacks ${JSON.stringify(d.fallbacks)}; ` +
               `carried over ${d.carried} block_updated resets, not ${JSON.stringify(d.notCarried)}, stale paths ${d.stale.partial} partial / ${d.stale.final} final; ` +
               `workers ${j.alive}/${j.workers} alive, restarts ${j.restarts}, path slice ${pt?.costMs ?? '-'} ms, latency p50/p95 ${pt?.latencyMs.p50 ?? '-'}/${pt?.latencyMs.p95 ?? '-'} ms, ` +
               `budget used ${j.perWorker.map((x) => x.budgetMs.mean).join('/')} ms per tick; world ${w?.columnsLive ?? '-'} columns, ${worldMb ?? '-'} MB`,
@@ -328,7 +328,6 @@ function diffPaths(now: PathOffloadStats, prev: PathOffloadStats | null): PathOf
     return out;
   };
   return {
-    probed: now.probed - prev.probed,
     offloaded: now.offloaded - prev.offloaded,
     answered: now.answered - prev.answered,
     cancelled: now.cancelled - prev.cancelled,

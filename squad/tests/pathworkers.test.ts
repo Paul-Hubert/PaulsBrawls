@@ -203,34 +203,25 @@ test('a search runs on a reader worker over the shared world: the same path as t
   assert.equal(pathStats(rig).inline, 0, 'none on the main thread');
 });
 
-test("the probe: a short search is answered on the main thread at once; a long one moves to a worker, walking the probe's best path meanwhile", async () => {
-  const rig = await newRig({ probeMs: 3, tickBudgetMs: 1 });
+test('a short search goes to a worker too: no A* on the main thread; the bot holds on its start node until the answer', async () => {
+  const rig = await newRig();
   const { bot } = await attached(rig);
-  // Short: done within the probe, never submitted.
   const near = new goals.GoalBlock(4, GROUND + 1, 1);
   const local = mainThread(params(near, movementsFor(bot, false)));
+  assert.equal(local.status, 'success');
   const ctx = bot.pathfinder.searchOffload(params(near, movementsFor(bot, false)));
-  const r = ctx.compute();
-  assert.equal(r.status, 'success', 'answered at the first compute()');
+  const first = ctx.compute();
+  assert.equal(first.status, 'partial', 'not answered here');
+  assert.deepEqual(coords(first.path), [[0, GROUND + 1, 0]], 'the start node: the bot waits for the worker');
+  const r = await rig.settle(ctx);
+  assert.equal(r.status, 'success');
   assert.deepEqual(coords(r.path), coords(local.path));
-  assert.deepEqual(coords(ctx.compute().path), coords(local.path), 'asked again, the same answer');
-  assert.equal(rig.paths.stats().probed, 1);
-  assert.equal(rig.paths.stats().offloaded, 0);
-  // Long (canDig through the wall to the far side, many nodes): the probe's best path at once, then the worker's answer.
-  const goal = new goals.GoalBlock(FAR.x, FAR.y, FAR.z);
-  const far = mainThread(params(goal, movementsFor(bot, true)));
-  const fctx = bot.pathfinder.searchOffload({ ...params(goal, movementsFor(bot, true)), searchRadius: -1 });
-  const first = fctx.compute();
-  if (first.status === 'partial') {
-    assert.ok(first.path.length >= 1, 'a path to walk at once');
-    assert.notDeepEqual(coords(first.path), [[0, GROUND + 1, 0]], "the probe's best path, not the start node");
-    const done = await rig.settle(fctx);
-    assert.deepEqual(coords(done.path), coords(far.path));
-    assert.equal(rig.paths.stats().offloaded, 1);
-  } else {
-    // A machine fast enough to finish it in 3 ms: the probe answered it, as it should.
-    assert.deepEqual(coords(first.path), coords(far.path));
-  }
+  const s = rig.paths.stats();
+  assert.equal(s.offloaded, 1);
+  assert.equal(s.answered, 1);
+  assert.deepEqual(s.fallbacks, {});
+  assert.equal(pathStats(rig).done, 1, 'one path job answered by the pool');
+  assert.equal(pathStats(rig).inline, 0, 'none on the main thread');
 });
 
 test('a bot carrying scaffolding: the same path as an uncached search on the main thread (blocks to place)', async () => {

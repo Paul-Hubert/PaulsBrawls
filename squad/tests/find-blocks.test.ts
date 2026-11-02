@@ -304,6 +304,36 @@ test('mineBlock with the job pool and the shared world: the search is a job, the
   }
 });
 
+test('a block search waits for its job however many ticks it takes: no deadline, never searched on the bot for being slow', async () => {
+  const { world, bot } = await forest({ r: 1, position: new Vec3(0.5, GROUND_Y + 1, 0.5) });
+  const seen = miner(bot, world);
+  const specs: Array<Record<string, unknown>> = [];
+  let answer: ((v: unknown) => void) | undefined;
+  const jobs = {
+    submit<T>(spec: Record<string, unknown>): Promise<T> {
+      specs.push(spec);
+      return new Promise<T>((r) => (answer = r as (v: unknown) => void));
+    },
+  };
+  const drop = useBlockSearch({ jobs, world });
+  try {
+    blockSearchStats(true);
+    const p = findBlockPositions(bot, LOGS, 32, 64);
+    await new Promise((r) => setTimeout(r, 300)); // the workers are busy: the job is still out
+    assert.equal(specs.length, 1);
+    assert.equal(specs[0]?.type, 'findBlocks');
+    assert.equal(specs[0]?.deadlineTick, undefined);
+    answer?.({ positions: [3, GROUND_Y + 1, 4], hits: 1, sections: 1, scanned: 1, unknown: 0, slices: 120 });
+    assert.deepEqual(flat(await p), [3, GROUND_Y + 1, 4]);
+    assert.equal(seen.scans, 0, 'bot.findBlocks was not called');
+    const st = blockSearchStats(true);
+    assert.equal(st.jobs, 1);
+    assert.equal(Object.values(st.fallbacks).reduce((a, b) => a + b, 0), 0);
+  } finally {
+    drop();
+  }
+});
+
 test('mineBlock with the job pool falls back to the bot when the store cannot answer for it', async () => {
   const { world } = await forest({ r: 1 });
   const jobs = newPool({ workers: 1, world, ticks: 'auto' });

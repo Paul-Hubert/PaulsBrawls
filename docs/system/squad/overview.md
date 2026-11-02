@@ -102,10 +102,11 @@ their own copy of every chunk):
   adds (`bots/pathworkers/offload.ts` `install` :174, installed at spawn by `bots/pool.ts` `withPathSearch` :325). A
   caller's synchronous `getPathTo` stays on the main thread. The bots, physics, look-ahead and scripts stay there too,
   so O2 (the real bot) and O4 (instant reclaim) hold.
-- **The probe:** a search that can cross first runs on the main thread for at most 3 ms (`DEFAULT_PROBE_MS`, the
-  plugin's own A*; all probes together at most 10 ms per 50 ms window, `PROBE_BUDGET_MS`). Most of gather's searches end there and are answered at once; the others move
-  to a worker, and the bot walks the probe's best path meanwhile. Without it, gather's searches were reset by nearby
-  block changes before a worker could answer (docs/37 §12).
+- **No A* on the main thread:** every search that can cross goes to a worker, short ones too (Paul, 2026-11-02). Its
+  first answer comes 1–3 ticks later; until the worker's first report the bot holds still on its start node. The
+  main-thread probe of docs/37 P4 (up to 3 ms of the plugin's own A* first, 10 ms per 50 ms for all probes, answering
+  most of gather's short searches at once) is removed: its measurements are docs/37 §12, before the carry over block
+  changes (§14).
 - **The world:** the shared world of docs/37 P1, which follows every bot's packets from its first one (`pool.ts` :282).
   Nothing is mirrored or kept per worker. A search is submitted once the writer has applied what the bots heard
   (`SharedWorld.applied` :422), so a block change heard just before it is in the store.
@@ -228,8 +229,9 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
 and `world.enabled`; `main.ts` calls `useBlockSearch`), it is a `findBlocks` job instead (`jobs/handlers/find-blocks.mjs`
 over `world/find-blocks.mjs`): the same positions in the same order, read from the store on a worker in 0.1–0.3 ms,
 where mineflayer spends 15–40 ms on the main thread (it builds a `Block` for every block of every section whose palette
-it cannot rule out, all-air sections included). A search the store cannot answer for that bot (no dimension yet, its
-own column not in the store, the job failed or 5 s late) runs on the bot. `findBlock` stays synchronous on the bot's
+it cannot rule out, all-air sections included). The job has no deadline: a search longer than its worker's budget for
+the tick goes on there next tick, over as many ticks as it takes. A search the store cannot answer for that bot (no
+dimension yet, its own column not in the store, the job failed) runs on the bot. `findBlock` stays synchronous on the bot's
 own world (a script gets the `Block` at once). With either key off (the defaults), every search is `bot.findBlocks`.
 
 ## Orders bound to items — the runtime (docs/29 §5.4, 2026-10-31)

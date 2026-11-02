@@ -103,8 +103,9 @@ event loop (docs/37 §13.4).
 `workers.count` > 0 and `world.enabled`, `mineBlock` (so `gather`) finds its blocks with a `findBlocks` job: mineflayer's
 `bot.findBlocks` read from the shared world on a reader worker, the same positions in the same order, in about 0.1 ms
 instead of mineflayer's 15 ms on the main thread ([src/api/block-search.ts](src/api/block-search.ts)). Nothing else to
-set. A search the store cannot answer for that bot (not logged in, its column not in the store yet, the job failed or
-waited more than 5 s) runs on the bot as before. `findBlock` stays synchronous on the bot's own world (with
+set. A search is never given up for being slow: it goes on on the workers, tick after tick, until it answers. One the
+store cannot answer for that bot (not logged in, its column not in the store yet, the job failed) runs on the bot as
+before. `findBlock` stays synchronous on the bot's own world (with
 `world.shared`, the store's search on the main thread, over that bot's columns). With either key off,
 every search is `bot.findBlocks`, as before.
 

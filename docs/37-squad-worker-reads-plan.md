@@ -32,6 +32,10 @@
   so the shared world, A*, gather's block searches and the aim are all on the workers and the bots read the one copy.
   `"count": 0` and `"shared": false` turn them off; an explicit `world.enabled: false` turns the default `shared` off
   with it. Taken with §14.2 open: gather still mines fewer logs with the workers.
+- **D8** (Paul, 2026-11-02, later). **No read on the main thread for being slow or short:** the A* probe of §12 is
+  removed (every search that can cross goes to a worker, the bot waits on its start node for the first report), and
+  gather's `findBlocks` job has no deadline (§10.3): each runs on the workers, tick after tick, until it answers. Not
+  measured again (§15's note).
 
 ## 1. Where we start (docs/36)
 
@@ -583,12 +587,13 @@ jobs.submit({ type: 'findBlocks', input: { dim, x, y, z, maxDistance? = 16, coun
 
 - **`mineBlock` only** (async; so `gather`), through `findBlockPositions(bot, ids, maxDistance, count)`. With a
   backend (`main.ts`: a job pool and a shared world) it submits a job at priority 0 (the pool's default; §2.5 puts
-  aim and raycasts above block searches) with a deadline of 100 ticks (5 s). The helper's contract and its errors are
-  unchanged.
+  aim and raycasts above block searches) and no deadline (Paul, 2026-11-02: a search runs on the workers until it
+  answers, over as many ticks as it takes; it had a deadline of 100 ticks, 5 s, then searched on the bot). The helper's
+  contract and its errors are unchanged.
 - **It falls back to `bot.findBlocks`, for that call,** when the store cannot answer for the bot: no dimension (not
   attached, not logged in), the bot's own column not live in the store (just logged in or teleported, before the writer
-  published it; the writer disabled after crashes), the job failed (no worker and no inline fallback, the pool stopping)
-  or was late. A failure is logged at most once a minute. `blockSearchStats()` counts the jobs, the fallbacks by why,
+  published it; the writer disabled after crashes), or the job failed (no worker and no inline fallback, the pool
+  stopping). A failure is logged at most once a minute. `blockSearchStats()` counts the jobs, the fallbacks by why,
   and the jobs' submit → positions latency.
 - **`findBlock` stays synchronous on the bot's own world.** The script API returns a `Block` at once, and a worker's
   answer comes one or two ticks later (§8.4).
@@ -1438,6 +1443,11 @@ targets up sooner on purpose (a short `thinkTimeout` for `collect`'s searches on
 runs past some hundreds of nodes, as docs/31 §11.9 asks), then compare again.
 
 ## 15. Everything on, 32 workers (D7, 2026-11-02)
+
+> **Later the same day (D8, Paul):** no A* on the main thread at all. The probe of §12 (up to 3 ms of the plugin's own
+> A* before a search moves to a worker, `DEFAULT_PROBE_MS` / `PROBE_BUDGET_MS`) is removed: every search that can
+> cross goes to a worker, and the bot holds on its start node until the worker's first report (1–3 ticks). Gather and
+> fights were not measured again after it. Gather's block search lost its 5 s deadline (§10.3) at the same time.
 
 **What changed.** `workers.count` defaults to 32 (`MAX_JOB_WORKERS` raised from 16), capped at the hardware threads
 (`jobWorkerCount`, was the cores minus one; a capped default is logged as info, not a warning); `world.shared` defaults

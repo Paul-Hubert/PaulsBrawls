@@ -322,7 +322,7 @@ async function main(): Promise<void> {
     }
   } finally {
     const paths = rt.paths?.stats();
-    if (paths) console.log(`A* on the workers: ${paths.probed} done by the main-thread probe, ${paths.offloaded} offloaded, ${paths.answered} answered, ${paths.cancelled} cancelled, fallbacks ${JSON.stringify(paths.fallbacks)}`);
+    if (paths) console.log(`A* on the workers: ${paths.offloaded} offloaded, ${paths.answered} answered, ${paths.cancelled} cancelled, fallbacks ${JSON.stringify(paths.fallbacks)}`);
     writeFileSync(join(runDir, 'result.json'), JSON.stringify({ results, notices, ...(paths ? { paths } : {}) }, null, 2));
     await rt.stop();
     rcon.close();

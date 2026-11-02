@@ -29,8 +29,6 @@ export interface PathRig {
 export interface PathRigOptions extends Partial<Pick<JobPoolOptions, 'workers' | 'tickBudgetMs' | 'workerUrl' | 'maxCrashesPerMinute'>> {
   handlers?: URL[];
   graceMs?: number;
-  /** The offload's main-thread probe; 0 by default here, so that every search that can cross goes to a worker. */
-  probeMs?: number;
 }
 
 export async function pathRig(opts: PathRigOptions = {}): Promise<PathRig> {
@@ -47,7 +45,7 @@ export async function pathRig(opts: PathRigOptions = {}): Promise<PathRig> {
     ...(opts.maxCrashesPerMinute === undefined ? {} : { maxCrashesPerMinute: opts.maxCrashesPerMinute }),
   });
   await jobs.ready();
-  const paths = new PathOffload({ jobs, world, probeMs: opts.probeMs ?? 0, ...(opts.graceMs === undefined ? {} : { graceMs: opts.graceMs }) });
+  const paths = new PathOffload({ jobs, world, ...(opts.graceMs === undefined ? {} : { graceMs: opts.graceMs }) });
   return {
     world,
     jobs,

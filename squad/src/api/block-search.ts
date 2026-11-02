@@ -10,7 +10,9 @@
 //   • the bot is not attached to the shared world, or has not logged in yet (no dimension);
 //   • the bot's own column is not live in the store: just logged in or teleported, before the writer published it, or
 //     the writer is disabled after crashes (it then holds nothing);
-//   • the job failed (no worker alive and no inline fallback, the pool stopping) or was late (FIND_BLOCKS_DEADLINE_TICKS).
+//   • the job failed (no worker alive and no inline fallback, the pool stopping).
+// A search is never given up for being slow: it has no deadline, and one that outruns its worker's budget for the tick
+// goes on there next tick from where it stopped (find-blocks.mjs answers { continue }), until it answers.
 // A failure is logged at most once a minute; blockSearchStats() counts the jobs, the fallbacks and the jobs' latency.
 
 import { performance } from 'node:perf_hooks';
@@ -18,7 +20,6 @@ import { performance } from 'node:perf_hooks';
 import type { Bot } from 'mineflayer';
 import { Vec3 } from 'vec3';
 
-import { JobLateError } from '../jobs/errors';
 import { logger } from '../logger';
 import { unwrap } from '../orders/guard';
 import type { FindBlocksAnswer, FindBlocksInput } from '../world/find-blocks.mjs';
@@ -26,15 +27,12 @@ import type { FindBlocksAnswer, FindBlocksInput } from '../world/find-blocks.mjs
 export const FIND_BLOCKS_JOB = 'findBlocks';
 /** The lowest of docs/37 §2.5's order (aim first, then raycasts and line of sight, then paths and block searches). */
 export const FIND_BLOCKS_PRIORITY = 0;
-/** An answer later than this (5 s) is given up for bot.findBlocks: the workers are swamped. */
-export const FIND_BLOCKS_DEADLINE_TICKS = 100;
 const WARN_EVERY_MS = 60_000;
 const LATENCY_SAMPLES = 1_024;
 
 /** The parts of the job pool used here (JobPool). */
 export interface BlockSearchJobs {
-  readonly currentTick: number;
-  submit<T>(spec: { type: string; input: unknown; priority?: number; deadlineTick?: number }): Promise<T>;
+  submit<T>(spec: { type: string; input: unknown; priority?: number }): Promise<T>;
 }
 
 /** The parts of the shared world used here (SharedWorld). */
@@ -48,7 +46,7 @@ export interface BlockSearchBackend {
   world: BlockSearchWorld;
 }
 
-export type BlockSearchFallback = 'off' | 'noDimension' | 'noColumn' | 'failed' | 'late';
+export type BlockSearchFallback = 'off' | 'noDimension' | 'noColumn' | 'failed';
 
 export interface BlockSearchStats {
   /** Searches answered by a findBlocks job. */
@@ -61,7 +59,7 @@ export interface BlockSearchStats {
 
 let backend: BlockSearchBackend | null = null;
 let lastWarn = 0;
-const fresh = (): Omit<BlockSearchStats, 'jobMs'> => ({ jobs: 0, fallbacks: { off: 0, noDimension: 0, noColumn: 0, failed: 0, late: 0 } });
+const fresh = (): Omit<BlockSearchStats, 'jobMs'> => ({ jobs: 0, fallbacks: { off: 0, noDimension: 0, noColumn: 0, failed: 0 } });
 let counts = fresh();
 let latencies: number[] = [];
 
@@ -103,19 +101,14 @@ export async function findBlockPositions(bot: Bot, ids: number[], maxDistance: n
   let answer: FindBlocksAnswer;
   const t0 = performance.now();
   try {
-    answer = await b.jobs.submit<FindBlocksAnswer>({
-      type: FIND_BLOCKS_JOB,
-      input,
-      priority: FIND_BLOCKS_PRIORITY,
-      deadlineTick: b.jobs.currentTick + FIND_BLOCKS_DEADLINE_TICKS,
-    });
+    // No deadline: the search runs on the workers, over as many ticks as it takes.
+    answer = await b.jobs.submit<FindBlocksAnswer>({ type: FIND_BLOCKS_JOB, input, priority: FIND_BLOCKS_PRIORITY });
   } catch (e) {
-    const late = e instanceof JobLateError;
     if (Date.now() - lastWarn > WARN_EVERY_MS) {
       lastWarn = Date.now();
-      logger.warn('squad', `findBlocks job ${late ? 'late' : 'failed'} (${(e as Error).message}): searching on the bot instead`);
+      logger.warn('squad', `findBlocks job failed (${(e as Error).message}): searching on the bot instead`);
     }
-    return onBot(bot, ids, maxDistance, count, late ? 'late' : 'failed');
+    return onBot(bot, ids, maxDistance, count, 'failed');
   }
   counts.jobs++;
   if (latencies.length >= LATENCY_SAMPLES) latencies.shift();

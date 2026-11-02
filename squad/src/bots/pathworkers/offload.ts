@@ -12,15 +12,12 @@
 // the answer brings the path, rebuilt here as the plugin's Move objects (serialize.ts). A search is submitted once the
 // writer has applied what the bots heard (SharedWorld.applied), so a block change heard just before it is in the store.
 //
-// The probe. A worker's first answer comes 1–3 ticks after the search (the pool dispatches and applies once a tick),
-// and meanwhile the plugin resets the search on every block change next to the bot (path_reset 'block_updated'). In
-// gather those come all the time (logs cut, leaves decaying, the neighbours chopping): searches were cancelled before
-// they could answer, again and again (docs/37 §10). Most of those searches are short (on the main thread, gather's plan
-// time is 0.7 ms at the median). So a search first runs here, the plugin's own A*, for at most probeMs (3): done by
-// then, it is answered at once, as before; not done, it goes to a worker, and the probe's best partial path is what
-// the bot walks until the worker reports. The probes have their own budget, PROBE_BUDGET_MS of main-thread A* per 50 ms
-// window for all bots together (past it a search goes straight to a worker), not the A* budget's: that one splits its
-// window evenly between the bots searching, ~0.7 ms each at 30 bots, which left most probes too short to finish.
+// Every search that can cross goes to a worker, short ones too (Paul, 2026-11-02): none of its A* runs on the main
+// thread. Its first answer comes 1–3 ticks after the search (the pool dispatches and applies once a tick); until the
+// worker's first report the bot holds still on its start node. A search longer than its share of a worker's budget
+// keeps its state there and goes on next tick, after the tick's publish, until it answers. (docs/37 P4 had a
+// main-thread probe: up to 3 ms of the plugin's own A* first, all probes 10 ms per 50 ms, answering most of gather's
+// short searches at once; removed.)
 //
 // Carried over a block change (docs/37 §14). Most of gather's resets are not about the path: at 30 bots, 87 % of the
 // block_updated resets of a pending search were leaves decaying a block or two from the bot, and they came every
@@ -71,8 +68,6 @@ interface AStarResult {
 }
 interface AStarLike {
   compute(): AStarResult;
-  /** patches/: one slice of at most `ms`, outside the A* budget. */
-  computeSlice(ms: number): AStarResult;
   visitedChunks: Set<string>;
 }
 const AStar = require('mineflayer-pathfinder/lib/astar') as new (
@@ -148,16 +143,12 @@ export interface PathOffloadOptions {
   world: PathWorld;
   /** How long past thinkTimeout a silent search is waited for before it runs on the main thread. */
   graceMs?: number;
-  /** The main-thread probe, ms (DEFAULT_PROBE_MS); 0 offloads every search that can cross (tests). */
-  probeMs?: number;
   /** Carry a search over a block_updated reset when its path still holds (default true; false: cancelled, as before). */
   carry?: boolean;
 }
 
 /** Counters since the start (bench:load diffs them per phase). */
 export interface PathOffloadStats {
-  /** Searches the probe finished on the main thread (never offloaded). */
-  probed: number;
   /** Searches handed to the workers. */
   offloaded: number;
   /** Answered by a worker (success, noPath, timeout). */
@@ -200,11 +191,6 @@ interface PathProgress {
 }
 
 const DEFAULT_GRACE_MS = 2_000;
-/** A search runs this long on the main thread before it moves to a worker (see the header). */
-export const DEFAULT_PROBE_MS = 3;
-/** All probes together compute at most this long per PROBE_WINDOW_MS. */
-export const PROBE_BUDGET_MS = 10;
-const PROBE_WINDOW_MS = 50;
 /** At most one warning per reason this often (a dead worker fails every search of its batch). */
 const WARN_EVERY_MS = 10_000;
 /** A search held over a block_updated reset is cancelled when the plugin has not planned again by then (5 ticks). */
@@ -222,11 +208,9 @@ const MAX_OFF_PATH = 2;
 export class PathOffload {
   private readonly current = new WeakMap<object, OffloadedSearch>();
   private readonly graceMs: number;
-  private readonly probeMs: number;
   private readonly carry: boolean;
-  private probeWindow = { start: -Infinity, spent: 0 };
   private stopped = false;
-  private readonly counters = { probed: 0, offloaded: 0, answered: 0, cancelled: 0, partials: 0, inFlight: 0, carried: 0 };
+  private readonly counters = { offloaded: 0, answered: 0, cancelled: 0, partials: 0, inFlight: 0, carried: 0 };
   private readonly fallbacks: Record<string, number> = {};
   private readonly notCarried: Record<string, number> = {};
   private readonly stale = { partial: 0, final: 0 };
@@ -234,7 +218,6 @@ export class PathOffload {
 
   constructor(private readonly opts: PathOffloadOptions) {
     this.graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
-    this.probeMs = opts.probeMs ?? DEFAULT_PROBE_MS;
     this.carry = opts.carry ?? true;
   }
 
@@ -259,7 +242,7 @@ export class PathOffload {
   }
 
   /** The hook: a context for this search, or null to search on the main thread. */
-  private offload(bot: OffloadedBot, p: SearchParams): OffloadedSearch | ProbedSearch | null {
+  private offload(bot: OffloadedBot, p: SearchParams): OffloadedSearch | null {
     if (this.stopped) return this.fallback('stopped');
     const world = this.opts.world;
     if (world.writerState !== 'up') return this.fallback('noWorld');
@@ -281,33 +264,11 @@ export class PathOffload {
     if (!settings) return this.fallback('movements');
     if (!world.isLive(dim, p.start.x >> 4, p.start.z >> 4)) return this.fallback('noColumn');
     this.cancel(bot); // one search per bot: the new one supersedes the old
-    let head: unknown[] = [];
-    const probeMs = this.probeSlice();
-    if (probeMs > 0) {
-      const local = new AStar(p.start, p.movements, p.goal, p.timeout, p.tickTimeout, p.searchRadius);
-      const t0 = performance.now();
-      const r = local.computeSlice(probeMs);
-      this.probeWindow.spent += performance.now() - t0;
-      if (r.status !== 'partial') {
-        this.counters.probed++;
-        return new ProbedSearch(local, r);
-      }
-      head = r.path;
-    }
-    const search = new OffloadedSearch(this, bot, p, this.graceMs, head, { dim, goal, settings });
+    const search = new OffloadedSearch(this, bot, p, this.graceMs, { dim, goal, settings });
     this.current.set(bot, search);
     this.counters.offloaded++;
     this.submit(search, p.start);
     return search;
-  }
-
-  /** How long this search may probe: probeMs, or what is left of the probes' window (0: straight to a worker). */
-  private probeSlice(): number {
-    if (this.probeMs <= 0) return 0;
-    const now = performance.now();
-    if (now - this.probeWindow.start >= PROBE_WINDOW_MS) this.probeWindow = { start: now, spent: 0 };
-    const left = PROBE_BUDGET_MS - this.probeWindow.spent;
-    return left < 0.5 ? 0 : Math.min(this.probeMs, left);
   }
 
   /** A job for this search from `start`: the first one, or the search again after its final path broke. */
@@ -457,17 +418,14 @@ export class OffloadedSearch {
   /** Searched again after a final path broke. */
   private restarts = 0;
 
-  /** @param head the probe's best partial path (the bot walks it until the worker reports); empty: the start node. */
   constructor(
     private readonly owner: PathOffload,
     readonly bot: OffloadedBot,
     public params: SearchParams,
     private readonly graceMs: number,
-    head: unknown[],
     readonly wire: WireSearch,
   ) {
     this.origin = params.start as PathNode;
-    if (head.length > 0) this.partial = head as PathNode[];
   }
 
   get signal(): AbortSignal {
@@ -704,23 +662,6 @@ export class OffloadedSearch {
     this.local = new AStar(p.start, p.movements, p.goal, p.timeout, p.tickTimeout, p.searchRadius);
     this.controller.abort(); // the job, if still out, is not wanted any more
     return this.local.compute();
-  }
-}
-
-/** A search the probe finished on the main thread: the plugin's own AStar and its answer (asked again, the same). */
-export class ProbedSearch {
-  constructor(
-    private readonly astar: AStarLike,
-    private readonly result: AStarResult,
-  ) {}
-
-  get visitedChunks(): Set<string> {
-    return this.astar.visitedChunks;
-  }
-
-  compute(): AStarResult {
-    // A copy: the plugin replaces the path of the result it gets (postProcessPath).
-    return { ...this.result, path: [...this.result.path], context: this };
   }
 }
 
