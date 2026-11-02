@@ -5,7 +5,9 @@
 // pathfinder goal arrive (the bot stands on the goal block, the goal is cleared as a reached goal is), and `archer()`:
 // physics ticks (fast, in bursts, as mineflayer catches up) and a bow that fires when released after a draw (one
 // arrow leaves the inventory, the release is recorded with the look it flew at, and the arrow's spawn_entity packet
-// reaches `_client` with this bot as its owner; a bow with Infinity keeps the arrow).
+// reaches `_client` with this bot as its owner; a bow with Infinity keeps the arrow). `physics()`: physics ticks one
+// at a time. On every tick a held `forward` moves the bot along its look (mineflayer's yaw) at walking speed, 0.3 of
+// it sneaking; no momentum, no collisions.
 
 import { EventEmitter } from 'node:events';
 
@@ -72,6 +74,12 @@ export class FakeBot extends EventEmitter {
   drawnAt: number | null = null;
   /** archer(): every release of a drawn bow, with the look it flew at and how many ticks it was drawn. */
   readonly releases: Array<{ yaw: number; pitch: number; drawnTicks: number; fired: boolean }> = [];
+  /** Mineflayer's control states: set by setControlState, all released by clearControlStates. */
+  controlState: Record<string, boolean> = {};
+  /** Blocks a held `forward` moves the bot per physics tick: a walking player's 4.3 blocks a second. */
+  static readonly WALK_PER_TICK = 0.216;
+  /** Sneaking: mineflayer's sneakSpeed, 0.3 of walking. */
+  static readonly SNEAK_FACTOR = 0.3;
   private bowFires = false;
   private ticker: ReturnType<typeof setInterval> | undefined;
 
@@ -243,13 +251,27 @@ export class FakeBot extends EventEmitter {
       const now = Date.now();
       const n = Math.min(20, Math.max(1, Math.floor((now - last) / tickMs)));
       last = now;
-      for (let i = 0; i < n; i++) {
-        this.ticks++;
-        this.emit('physicsTick');
-      }
+      for (let i = 0; i < n; i++) this.tick();
     }, tickMs);
     this.ticker.unref();
     return this;
+  }
+  /** Physics ticks one per `tickMs` (no bursts), each moving the bot by its controls: what a walker needs. Restarts the clock. */
+  physics(opts: { tickMs?: number } = {}): this {
+    this.stopTicks();
+    this.ticker = setInterval(() => this.tick(), opts.tickMs ?? 10);
+    this.ticker.unref();
+    return this;
+  }
+  /** One physics tick: a held `forward` moves the bot along its look, then `physicsTick`. */
+  tick(): void {
+    this.ticks++;
+    if (this.controlState.forward) {
+      const d = FakeBot.WALK_PER_TICK * (this.controlState.sneak ? FakeBot.SNEAK_FACTOR : 1);
+      const yaw = this.entity.yaw; // mineflayer's: 0 looks toward −Z, π/2 toward −X
+      this.entity.position = this.entity.position.offset(-Math.sin(yaw) * d, 0, -Math.cos(yaw) * d);
+    }
+    this.emit('physicsTick');
   }
   stopTicks(): void {
     if (this.ticker) clearInterval(this.ticker);
@@ -263,9 +285,11 @@ export class FakeBot extends EventEmitter {
   }
   clearControlStates(): void {
     this.calls.push('clearControlStates');
+    this.controlState = {};
   }
   setControlState(control: string, state: boolean): void {
     this.calls.push(`setControlState(${control},${state})`);
+    this.controlState[control] = state;
   }
   closeWindow(): void {
     this.calls.push('closeWindow');

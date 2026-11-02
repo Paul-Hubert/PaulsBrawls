@@ -76,7 +76,10 @@ function field() {
     const list: unknown[] = [];
     shots.set(b, list);
     aims.set(name, list);
+    // A physics clock for everyone, as a real bot has: a guard's last step onto its exact place in a shield wall is
+    // walked with its controls (an archer's clock comes in bursts, for its draws).
     if (items.some((i) => i.name === 'bow')) b.archer();
+    else b.physics();
     return b;
   };
   const spawn = (m: Mob): Mob => {
@@ -127,22 +130,78 @@ test('mur-de-boucliers: facing west the guards line up along z at the block look
   await f.h.runner.stopAll();
 });
 
-test('mur-de-boucliers: ten guards at yaw 87°: the middle two no longer share a block, the right half moves one block along the wall (docs/35 F2)', async () => {
+for (const yaw of [87, 45, 90]) {
+  test(`mur-de-boucliers: ten guards at yaw ${yaw}°: a straight line, each guard on its exact lineSlots place (not a block centre), no two closer than a body's width (docs/35 F2)`, async () => {
+    const f = field();
+    const guards = Array.from({ length: 10 }, (_, i) => f.add(`Guard${i}`, 4, i - 5, SHIELD));
+    await f.start('mur-de-boucliers', f.snap({ yaw, lookBlock: { x: 10, y: 63, z: 0, name: 'stone' }, trigger: { kind: 'use', item: 'shield' } }));
+    try {
+      const point = new Vec3(10.5, 64, 0.5);
+      const exact = lineSlots(point, yaw, 10, { spacing: 1 });
+      const block = (p: { x: number; z: number }) => `${Math.floor(p.x)},${Math.floor(p.z)}`;
+      // Block centres are not the line: most places lie off their block's centre (at 90° all, on the blocks' edges), and
+      // at 87° and 45° two places share a block (the middle two at 87°), so guards on their blocks' centres overlapped.
+      const offCentre = exact.filter((s) => Math.hypot(s.x - Math.floor(s.x) - 0.5, s.z - Math.floor(s.z) - 0.5) > 0.2);
+      assert.ok(offCentre.length >= 6, `${offCentre.length} places off their block's centre`);
+      if (yaw !== 90) assert.ok(new Set(exact.map(block)).size < 10, 'two exact places in one block');
+      await until(() => guards.every((g) => shieldUp(g) && facing(g, yaw)), 5_000, 'every shield up, facing the yaw');
+
+      const pos = guards.map((g) => g.entity.position);
+      const show = pos.map((p) => `${p.x.toFixed(2)},${p.z.toFixed(2)}`).join(' ');
+      // Each exact place has exactly one guard on it (within 0.2), on the ground.
+      for (const s of exact) {
+        const on = pos.filter((p) => Math.hypot(p.x - s.x, p.z - s.z) <= 0.2);
+        assert.equal(on.length, 1, `one guard on ${s.x.toFixed(2)},${s.z.toFixed(2)}: ${show}`);
+      }
+      assert.ok(pos.every((p) => p.y === 64), `on the ground: ${show}`);
+      // Collinear: every guard on the line through the point across the view.
+      const fwd = lookDir(yaw);
+      for (const p of pos) assert.ok(Math.abs((p.x - point.x) * fwd.x + (p.z - point.z) * fwd.z) <= 0.2, `on the line: ${show}`);
+      // No two bodies (0.6 wide) overlap: the middle two of the old wall stood on one block's centre.
+      let min = Infinity;
+      for (let i = 0; i < pos.length; i++) for (let j = i + 1; j < pos.length; j++) min = Math.min(min, Math.hypot(pos[i]!.x - pos[j]!.x, pos[i]!.z - pos[j]!.z));
+      assert.ok(min >= 0.6, `the closest two are ${min.toFixed(2)} apart: ${show}`);
+      // The last step was walked with the controls (sneaking), and they were let go.
+      assert.ok(guards.some((g) => g.calls.includes('setControlState(forward,true)') && g.calls.includes('setControlState(sneak,true)')), 'a last step with the controls');
+      assert.ok(guards.every((g) => !g.controlState.forward && !g.controlState.sneak), 'controls released on the slot');
+    } finally {
+      await f.h.runner.stopAll();
+    }
+  });
+}
+
+test('mur-de-boucliers: a new formation ends a last step at once, its controls let go, and the guard walks to its new slot', async () => {
   const f = field();
-  const guards = Array.from({ length: 10 }, (_, i) => f.add(`Guard${i}`, 4, i - 5, SHIELD));
+  // Two guards: their places sit half a block either side of the point's block centre, where their walks end. A slow
+  // clock (40 ms a tick), so each step is seen under way before it ends.
+  const guards = [f.add('Guard0', 4, 0, SHIELD).physics({ tickMs: 40 }), f.add('Guard1', 4, 1, SHIELD).physics({ tickMs: 40 })];
   await f.start('mur-de-boucliers', f.snap({ yaw: 87, lookBlock: { x: 10, y: 63, z: 0, name: 'stone' }, trigger: { kind: 'use', item: 'shield' } }));
   try {
-    await until(() => guards.every(shieldUp), 3_000, 'every shield up');
-    const block = (p: { x: number; z: number }) => `${Math.floor(p.x)},${Math.floor(p.z)}`;
-    const blocks = guards.map((g) => block(g.entity.position));
-    assert.equal(new Set(blocks).size, 10, `ten blocks: ${blocks.join(' ')}`);
-    assert.ok(guards.every((g) => facing(g, 87)), 'the exact yaw');
-    // As before otherwise: the left five on the exact line's slots, the right five one block along it (toward -Z).
-    const exact = lineSlots(new Vec3(10.5, 64, 0.5), 87, 10, { spacing: 1 });
-    const right = lookDir(177);
-    const want = exact.map((s, i) => block(i < 5 ? s : s.offset(right.x, 0, right.z)));
-    assert.deepEqual([...blocks].sort(), [...want].sort());
-    assert.equal(new Set(exact.map(block)).size, 9, 'the exact line alone puts two guards in one block');
+    // Each guard frozen as soon as its last step is under way: the step cannot end by itself (STEP_IN_MS is 3 s).
+    const frozen = new Set<FakeBot>();
+    await until(() => {
+      for (const g of guards) {
+        if (g.controlState.forward && !frozen.has(g)) {
+          g.stopTicks();
+          frozen.add(g);
+        }
+      }
+      return frozen.size === guards.length;
+    }, 3_000, 'both last steps under way');
+    const from = guards.map((g) => g.calls.length);
+    await f.click('mur-de-boucliers', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 10, name: 'stone' }, trigger: { kind: 'use', item: 'shield' } }));
+    await until(() => guards.every((g) => Math.abs(g.entity.position.z - 10.5) < 0.01), 1_500, 'both at the new wall, well before a step would give up');
+    guards.forEach((g, i) => {
+      const after = g.calls.slice(from[i]);
+      const letGo = after.indexOf('setControlState(forward,false)');
+      assert.ok(letGo >= 0 && letGo < after.indexOf('pathfinder.setGoal'), `${g.username}: controls let go before the walk: ${after.join(' ')}`);
+    });
+    for (const g of guards) g.physics({ tickMs: 10 });
+    await until(() => guards.every((g) => shieldUp(g) && facing(g, 0)), 3_000, 'both on the new wall, shields up');
+    // Facing south, the left is +X: the exact places are x = 1 and x = 0, half a block either side of the point.
+    const xs = guards.map((g) => g.entity.position.x).sort((a, b) => a - b);
+    assert.ok(Math.abs(xs[0]! - 0) <= 0.2 && Math.abs(xs[1]! - 1) <= 0.2, `on the exact places: ${xs.join(', ')}`);
+    assert.ok(guards.every((g) => Math.abs(g.entity.position.z - 10.5) <= 0.2));
   } finally {
     await f.h.runner.stopAll();
   }

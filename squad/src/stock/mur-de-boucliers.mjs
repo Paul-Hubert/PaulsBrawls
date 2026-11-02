@@ -7,13 +7,15 @@
 // Arrows and explosions are only blocked. Each later click re-forms the wall where the commander now points, without
 // stopping the order (it listens: ctx.commander.on('trigger')); a bow's arrow-release does not move it, its hit does.
 //
-// The wall keeps the exact yaw and point; when the two middle guards would share a block, the right half of the wall
-// moves one block along it. Slots go to the bots in their order along the line (left to right as the commander sees
-// it), so no two paths cross; that assignment holds for one formation and is redone when the wall moves or a new guard joins. A guard
-// reclaimed by another order keeps its slot, and takes it again when it comes back. Shields go down to walk
-// (blocking slows walking) and up on arrival, and the loop raises a shield again when something lowered it (auto-eat
-// lowers it to eat). The bots walk with pathfinder goals and look again every 200 ms, so a new formation takes them
-// at once.
+// The wall is a straight line at the exact yaw, whatever it is: each guard's slot is its exact place on the line
+// (lineSlots), at the height of the ground in that place's column (groundAt gives only the y), not the centre of a
+// block, so two guards may share a block. Slots go to the bots in their order along the line (left to right as the
+// commander sees it), so no two paths cross; that assignment holds for one formation and is redone when the wall
+// moves or a new guard joins. A guard reclaimed by another order keeps its slot, and takes it again when it comes
+// back. A guard walks to its slot's block with a pathfinder goal (a path ends on a block's centre), then takes the
+// last step onto its exact place itself, with its controls. Shields go down to walk (blocking slows walking) and up on
+// arrival, and the loop raises a shield again when something lowered it (auto-eat lowers it to eat). The bots look
+// again every 200 ms (a last step every tick), so a new formation takes them at once.
 export const manifest = {
   summary: 'Mur de boucliers en travers de mon regard, là où je vise',
   params: {
@@ -32,10 +34,25 @@ export const manifest = {
 const LOOK_MS = 200;
 /** Where the wall goes when the point is too far or there is none (the sky): this many blocks ahead. */
 const AHEAD = 5;
-/** On its slot: within this many blocks horizontally. */
-const ARRIVED = 0.8;
+/** On its slot: within this many blocks horizontally of its exact place. */
+const ON_SLOT = 0.15;
+/** A guard that was on its slot holds it until pushed farther than this (no shield lowered for a nudge). */
+const HOLD = 0.25;
 /** A slot not reached in this long gets a looser goal (something stands there, or no path ends on it). */
 const STUCK_MS = 10_000;
+/** With the looser goal, a guard holds within this many blocks of its slot. */
+const LOOSE = 2.5;
+/**
+ * The last step lets go of the controls this close to the exact place: a sneaking body slides about 0.08 block on
+ * after it, so it comes to rest on the place, well within ON_SLOT.
+ */
+const STEP_STOP = 0.08;
+/** The last step is over once the body moved less than this in a physics tick (at rest). */
+const AT_REST = 0.005;
+/** A last step not over in this long gives up (a block beside the place keeps the body off it): the guard holds there. */
+const STEP_IN_MS = 3_000;
+/** How often a last step looks at what ends it (one physics tick); the steering itself runs on every tick. */
+const TICK_MS = 50;
 /** Arm's reach for the blow back: from the eyes to the attacker's hitbox (the server allows 3, plus 1 of slack). */
 const STRIKE_REACH = 3;
 /** How long a guard steps toward an attacker out of arm's reach before it gives up the blow. */
@@ -95,17 +112,15 @@ export default async function (squad, args, ctx) {
     const at = aimAt;
     const bots = squad.bots.filter((b) => b.entity);
     const point = bots.length > 0 ? pointOf(at, bots[0]) : at.position;
+    // The exact places, each at its column's ground height. groundAt's own x and z (the block's centre) made the wall
+    // jagged at any yaw not axis-aligned, and put the two middle guards of an even count, half a block either side of
+    // the point's block centre, on one spot (10 guards at yaw 87° stood in 9 blocks; docs/35 F2). No ground there (an
+    // unloaded chunk): the raw place, and a loose goal.
+    const slots = lineSlots(point, at.yaw, bots.length, { spacing }).map((s) => {
+      const g = ground(s);
+      return g ? new Vec3(s.x, g.y, s.z) : s;
+    });
     const right = lookDir(at.yaw + 90);
-    const slots = lineSlots(point, at.yaw, bots.length, { spacing });
-    // An even count puts the middle two half a spacing from the point's block centre: with spacing 1, at any yaw that
-    // is not axis-aligned they stood in one block. Then the right half of the wall moves one block along it, which
-    // always takes that guard out of the centre block; the yaw and the rest stay as they were (docs/35 F2).
-    const mid = slots.length / 2;
-    const blockOf = (p) => `${Math.floor(p.x)},${Math.floor(p.z)}`;
-    if (mid > 0 && Number.isInteger(mid) && blockOf(slots[mid - 1]) === blockOf(slots[mid])) {
-      for (let i = mid; i < slots.length; i++) slots[i] = slots[i].offset(right.x, 0, right.z);
-    }
-    for (let i = 0; i < slots.length; i++) slots[i] = ground(slots[i]) ?? slots[i];
     const along = (p) => p.x * right.x + p.z * right.z;
     const sorted = [...bots].sort((a, b) => along(a.entity.position) - along(b.entity.position));
     wall.v++;
@@ -151,22 +166,27 @@ export default async function (squad, args, ctx) {
     ctx.log(`${bot.username}: hit back at ${foe.username ?? foe.name ?? '?'}`);
   };
 
-  /** Where each guard is heading: the slot's key, the goal set for it, since when, loose or exact, reached once. */
+  /**
+   * Where each guard is heading: the slot's key, since when, loose or exact, the goal set for it, reached once (it held
+   * the slot), and whether its last step gave up.
+   */
   const heading = new Map();
   const keyOf = (s) => `${s.x},${s.y},${s.z}`;
-
-  /** Set a goal toward the slot unless it is already the current goal; the guard's loop looks again soon. */
-  const walk = (bot, slot) => {
-    const key = keyOf(slot);
+  // A slot off the ground (an unloaded chunk) gets a loose goal from the start.
+  const fresh = (slot) => ({ key: keyOf(slot), since: Date.now(), loose: !Number.isInteger(slot.y), goal: null, reached: false, gaveUp: false });
+  const headingOf = (bot, slot) => {
     let h = heading.get(bot.username);
-    // A new slot, or the same one again after the guard had reached it (back from a fight, pushed off): a fresh
-    // exact goal and its own STUCK_MS. Timed from the first walk, a guard coming back after a fight later than that
-    // got the loose goal at once and held its shield up to 2.5 blocks off its slot (found live, docs/29 §16).
-    if (!h || h.key !== key || h.reached) {
-      // A slot off the ground (an unloaded chunk) gets a loose goal from the start.
-      h = { key, since: Date.now(), loose: !Number.isInteger(slot.y), goal: null, reached: false };
-      heading.set(bot.username, h);
-    }
+    if (!h || h.key !== keyOf(slot)) heading.set(bot.username, (h = fresh(slot)));
+    return h;
+  };
+
+  /** Set a goal toward the slot's block unless it is already the current goal; the guard's loop looks again soon. */
+  const walk = (bot, slot) => {
+    let h = headingOf(bot, slot);
+    // The same slot again after the guard had reached it (back from a fight, pushed off): a fresh exact goal and its
+    // own STUCK_MS. Timed from the first walk, a guard coming back after a fight later than that got the loose goal at
+    // once and held its shield up to 2.5 blocks off its slot (found live, docs/29 §16).
+    if (h.reached) heading.set(bot.username, (h = fresh(slot)));
     if (!h.loose && Date.now() - h.since > STUCK_MS) {
       h.loose = true;
       h.goal = null;
@@ -176,11 +196,98 @@ export default async function (squad, args, ctx) {
     bot.pathfinder.setGoal(h.goal);
   };
 
-  const arrived = (bot, slot) => {
-    const h = heading.get(bot.username);
-    const near = h && h.key === keyOf(slot) && h.loose ? 2.5 : ARRIVED;
+  /** In the slot's own block, where its walk ends (a slot with ground only: a raw one has no block to stand in). */
+  const inBlock = (p, slot) =>
+    Number.isInteger(slot.y) && Math.floor(p.x) === Math.floor(slot.x) && Math.floor(p.z) === Math.floor(slot.z) && Math.abs(p.y - slot.y) < 1;
+
+  /** What a guard does about its slot now: hold it (shield up), take the last step onto it, or walk to its block. */
+  const next = (bot, slot) => {
     const p = bot.entity.position;
-    return Math.hypot(p.x - slot.x, p.z - slot.z) <= near && Math.abs(p.y - slot.y) <= 2;
+    const d = Math.hypot(p.x - slot.x, p.z - slot.z);
+    const level = Math.abs(p.y - slot.y) <= 2;
+    const h = heading.get(bot.username);
+    const mine = h && h.key === keyOf(slot) ? h : null;
+    if (level && d <= ON_SLOT) return 'hold';
+    if (level && mine?.reached && d <= HOLD) return 'hold';
+    // In the slot's block: the last step onto the place; once a step gave up, hold where the body got.
+    if (inBlock(p, slot)) return mine?.gaveUp ? 'hold' : 'step';
+    if (level && mine?.loose && d <= LOOSE) return 'hold';
+    return 'walk';
+  };
+
+  /** The guard whose last step drives its controls, by name: a later step (the guard back from another order) takes over. */
+  const stepping = new Map();
+  /** Let go of a last step's controls. A bot that left had them released by the abort sequence (and may not be driven). */
+  const letGo = (bot) => {
+    try {
+      bot.setControlState('forward', false);
+      bot.setControlState('sneak', false);
+    } catch (e) {
+      if (!(e instanceof BotLeftError || e instanceof OrderStoppedError)) throw e;
+    }
+  };
+
+  /**
+   * The last step onto the exact place, from inside the slot's block (a path ends on the block's centre, up to 0.7
+   * off it): the guard sneaks straight to it with its controls, steered on every physics tick (mineflayer runs late
+   * ticks in a burst), until it stands still within STEP_STOP. Sneaking is slow enough to stop where it lets go, and
+   * never walks off an edge. A new formation, a hit to answer, the bot leaving, or STEP_IN_MS end it; after that long
+   * the guard holds where it stands. Every call goes through the lease-guarded bot, and the abort sequence of a bot
+   * that leaves releases its controls.
+   */
+  const step = async (bot, slot) => {
+    const h = headingOf(bot, slot);
+    const v = wall.v;
+    const me = {};
+    stepping.set(bot.username, me);
+    // The pathfinder steers too while it has a goal (a guard that came into its block mid-path).
+    if (bot.pathfinder.goal) bot.pathfinder.setGoal(null);
+    h.goal = null;
+    // The walk got to the block, loose goal or not: a later walk (after a hit during the step) is exact, with its own
+    // STUCK_MS, not loose at once for the time this one took.
+    h.since = Date.now();
+    h.loose = false;
+    const end = Date.now() + STEP_IN_MS;
+    let last = bot.entity.position.clone();
+    let still = false;
+    const steer = () => {
+      const p = bot.entity.position;
+      const moved = Math.hypot(p.x - last.x, p.z - last.z);
+      last = p.clone();
+      const dx = slot.x - p.x;
+      const dz = slot.z - p.z;
+      if (Math.hypot(dx, dz) > STEP_STOP) {
+        still = false;
+        bot.look(Math.atan2(-dx, -dz), 0, true); // mineflayer's yaw toward the place, as bot.lookAt turns
+        bot.setControlState('forward', true);
+      } else {
+        bot.setControlState('forward', false);
+        still = moved < AT_REST;
+      }
+    };
+    bot.on('physicsTick', steer);
+    let timedOut = false;
+    try {
+      bot.setControlState('sneak', true);
+      while (!still && stepping.get(bot.username) === me && squad.bots.includes(bot) && wall.v === v && !struck.has(bot.username)) {
+        if (Date.now() >= end) {
+          timedOut = true;
+          break;
+        }
+        await squad.sleep(TICK_MS);
+      }
+    } finally {
+      bot.off('physicsTick', steer);
+      if (stepping.get(bot.username) === me) {
+        stepping.delete(bot.username);
+        letGo(bot);
+      }
+    }
+    if (timedOut) {
+      h.gaveUp = true;
+      const p = bot.entity.position;
+      ctx.log(`${bot.username}: holds ${Math.hypot(p.x - slot.x, p.z - slot.z).toFixed(2)} off its slot (the last step did not get there)`);
+    }
   };
 
   /** One look of one guard: hit back once if it was hit, else walk to the slot, else hold it with the shield up. */
@@ -198,8 +305,13 @@ export default async function (squad, args, ctx) {
         return;
       }
     }
-    if (!arrived(bot, slot)) {
+    const todo = next(bot, slot);
+    if (todo !== 'hold') {
       await raiseShield(bot, false);
+      if (todo === 'step') {
+        await step(bot, slot); // the next look holds the slot, answers a hit, or takes a new one
+        return;
+      }
       walk(bot, slot);
       await squad.sleep(LOOK_MS);
       return;

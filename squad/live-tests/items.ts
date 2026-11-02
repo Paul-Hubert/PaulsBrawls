@@ -19,6 +19,7 @@ import { createHash } from 'node:crypto';
 import mineflayer, { type Bot } from 'mineflayer';
 import { Vec3 } from 'vec3';
 
+import { lineSlots, lookDir } from '../src/api/helpers';
 import { RECIPES_AS_BYTES } from '../src/bots/protocol';
 import type { Started } from '../src/main';
 import type { Order } from '../src/orders/order';
@@ -390,6 +391,57 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
         `west: ${west} | south: ${south} | a NoAI husk left alone, shields up | an attacking husk killed by ${blows.length} blow(s) back ` +
         `(${[...new Set(blows.map((l) => l.split(':')[0]))].join(', ')}; farthest off a slot at its death ${bumped.toFixed(2)}), back in line: ${after} | stopped: "${stop.text}", shields down`
       );
+    });
+
+    await clean('items: mur-de-boucliers (runtime) at yaws not axis-aligned: each guard on its exact place, a straight line (three at 45°; two at 87°, whose places share a block: docs/35 F2)', async () => {
+      /**
+       * The wall of `names` across `yaw` at the block looked at: each guard within 0.2 of its own exact place
+       * (lineSlots through the block's top centre, as the order computes it; RCON Pos for the ground truth), on the
+       * line, no two closer than 0.6 (a body's width), facing the yaw with its shield up.
+       */
+      const exactWall = async (names: string[], yaw: number, look: { x: number; z: number }, what: string): Promise<string> => {
+        const point = new Vec3(look.x + 0.5, A.y + 1, look.z + 0.5);
+        const places = lineSlots(point, yaw, names.length, { spacing: 1 });
+        const onPlaces = (ps: Vec3[]): boolean => places.every((s) => ps.filter((p) => hdist(p, s) <= 0.2).length === 1);
+        const evidence = async (): Promise<string> => {
+          const parts: string[] = [];
+          for (const g of names) {
+            const p = await rconPos(g);
+            parts.push(`${g} ${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)} (${Math.min(...places.map((s) => hdist(p, s))).toFixed(2)} off a place) yaw ${(await rconYaw(g)).toFixed(1)} flags ${handFlags(g)}`);
+          }
+          return `${parts.join('; ')}; places ${places.map((s) => `${s.x.toFixed(2)},${s.z.toFixed(2)}`).join(' ')}`;
+        };
+        try {
+          await until(() => onPlaces(names.map((g) => pos(g)!)) && names.every(shieldUp), 40_000, `the guards on their exact places, shields up (${what})`);
+          await until(async () => {
+            for (const g of names) if (yawDiff(await rconYaw(g), yaw) > 10) return false;
+            return true;
+          }, 10_000, `the guards facing yaw ${yaw} (${what})`);
+          const ps: Vec3[] = [];
+          for (const g of names) ps.push(await rconPos(g));
+          if (!onPlaces(ps)) throw new Error('the server does not have each guard within 0.2 of its place');
+          const fwd = lookDir(yaw);
+          const offLine = Math.max(...ps.map((p) => Math.abs((p.x - point.x) * fwd.x + (p.z - point.z) * fwd.z)));
+          if (offLine > 0.2) throw new Error(`a guard ${offLine.toFixed(2)} off the line`);
+          let closest = Infinity;
+          for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) closest = Math.min(closest, hdist(ps[i]!, ps[j]!));
+          if (closest < 0.6) throw new Error(`two guards ${closest.toFixed(2)} apart`);
+          return `${what}: ${await evidence()}; at most ${offLine.toFixed(2)} off the line, the closest two ${closest.toFixed(2)} apart`;
+        } catch (e) {
+          throw new Error(`${(e as Error).message}: ${await evidence()}`);
+        }
+      };
+      // Three at 45° (looking south-west at a block about 6 ahead): the two outer places lie 0.4 off their blocks' centres.
+      const first = await trigger('mur-de-boucliers', shieldClick(45, block(A.x - 5, A.z + 4)));
+      if (!first.ok || first.started !== true) throw new Error(`first click: ${first.text}`);
+      const three = await exactWall(GUARDS, 45, { x: A.x - 5, z: A.z + 4 }, 'three at 45°');
+      // Two at 87° (@bot filters: the wall restarts with them): their places, half a block either side of the point's
+      // block centre, share that block, where both stood before (10 guards at 87° in 9 blocks, docs/35 F2).
+      const pair = GUARDS.slice(0, 2);
+      const second = await api('/api/orders/trigger', { by: CAPTAIN, command: 'mur-de-boucliers', tokens: [], filters: pair, snap: shieldClick(87, block(A.x - 6, A.z)) });
+      if (!second.ok) throw new Error(`second click: ${second.text}`);
+      const two = await exactWall(pair, 87, { x: A.x - 6, z: A.z }, 'two at 87°');
+      return `${three} | ${two}`;
     });
 
     await clean('items: mur-de-boucliers through the mod: bind, click, click again, sneak-click, unbind', async () => {

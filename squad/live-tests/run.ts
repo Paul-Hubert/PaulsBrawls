@@ -23,7 +23,8 @@
 // archers. `mur-de-boucliers` from /api/orders/trigger: the wall across yaw 90 (RCON Pos and Rotation, shields up as
 // the captain's client sees them; one guard's shield starts in its inventory, so raiseShield equips it), a second
 // click delivered to the same order re-forms it across yaw 0, a NoAI husk in front of it is left alone (shields up), an
-// attacking husk is hit back (meleeHit) until dead and the line re-forms, the stop lowers the shields; archers 2 blocks
+// attacking husk is hit back (meleeHit) until dead and the line re-forms, the stop lowers the shields; at 45° (three)
+// and 87° (two, whose places share a block) each guard stands within 0.2 of its exact place on the line; archers 2 blocks
 // behind the wall (ligne-archers back=2) shoot over the guards and kill a husk beyond it. Through the mod (needs dev/squad.properties
 // → http://127.0.0.1:8779 and LIVE_RUNTIME_PORT=8779, else skipped): `/bots orders bind mur-de-boucliers` puts
 // custom_data.squad, a lore line and the glint on the held shield; a right-click starts the order, a second one

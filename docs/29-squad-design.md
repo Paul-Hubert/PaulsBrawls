@@ -966,12 +966,21 @@ completely, so missed events cannot leave it wrong.
      logged it every 250 ms (296 lines from five archers in #233) and held its target, which the live archers then
      avoided. Every helper that acts on the bot now calls `checkLease` first (`orders/guard.ts`), so a bot that left
      throws `BotLeftError` at once. Test: `defend.test.ts`.
-  2. *The middle guards of a shield wall overlapped.* `lineSlots` is exact and `groundAt` snaps each slot to its
+  2. *The middle guards of a shield wall overlapped.* `lineSlots` is exact and `groundAt` snapped each slot to its
      block centre; with an even count and spacing 1 the middle two sit ±0.5 from the point's block centre, on a block
      edge, so at any yaw not exactly axis-aligned both stood in one block (10 guards at yaw 87° in 9 blocks; the live
-     test passed only at yaw 90). The wall keeps the exact yaw and point, as before; when the middle two would share
-     a block, the right half moves one block along the wall (Paul: only the middle pair, the rest as before).
-     `lineSlots` is unchanged. Test: `item-orders.test.ts`.
+     test passed only at yaw 90), and the rest of the wall followed the blocks, not the line. A first fix (`8d3dec5`)
+     moved the right half of the wall one block along it when the middle two shared a block. Paul undid it: the wall
+     must be a straight line at any yaw, each guard at its exact place; the only fix to keep is that the middle two do
+     not overlap; guards need not stand on their own blocks, nor on a block's centre. Now each slot is its exact
+     `lineSlots` place, with only its height from `groundAt`. A guard walks to its slot's block as before
+     (`GoalBlock`: a path ends on the block's centre, up to 0.7 off the place), then takes the last step itself: it
+     sneaks straight to the place with its controls, steered on every physics tick, and lets go within 0.08 (on the
+     slot within 0.15). A new formation, a hit to answer or the bot leaving ends the step; one not done in 3 s gives up
+     and the guard holds where it got. `lineSlots` is unchanged. Tests: `item-orders.test.ts` (10 guards at 87°, 45°
+     and 90°, each within 0.2 of its exact place, on the line, none closer than 0.6 to another; it fails on both the
+     block-centre wall and `8d3dec5`); the FakeBot's physics ticks move it by its controls. Live (`items.ts`, dev
+     server): three guards at 45° and two at 87° within 0.03 of their exact places.
   3. *Archers ran out of arrows* (`tir` #201 logged « no arrows » 165 times; a `tir` click used about 9 arrows per
      archer, from a kit of 64). The archer kit's bow has Infinity I and Unbreaking III (Paul, D6), raiders' too; the kit
      keeps its 64 arrows (Infinity needs one). `SquadKits.Item` carries enchantments as data, `Squad.equip` applies them
