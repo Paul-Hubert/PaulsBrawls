@@ -737,15 +737,16 @@ test('a reader thread killed inside enter() holds freed memory until release(); 
 
 // -- config, pool ----------------------------------------------------------------------------------------------------
 
-test('config: world.* defaults to off, 60 s, 2 000 columns, no verify; values are checked', () => {
+test('config: world.* defaults to on (shared), 60 s, 2 000 columns, no verify; values are checked', () => {
   const env = { PAULSBRAWLS_SQUAD_TOKEN: 't' };
-  assert.deepEqual(parseConfig({}, env).world, { enabled: false, cacheSeconds: 60, cacheColumns: 2_000, verify: false, shared: false });
+  assert.deepEqual(parseConfig({}, env).world, { enabled: true, cacheSeconds: 60, cacheColumns: 2_000, verify: false, shared: true });
+  assert.deepEqual(parseConfig({ workers: { count: 0 }, world: { shared: false } }, env).world.enabled, false, 'off without workers or shared');
   assert.deepEqual(parseConfig({ world: { enabled: true, cacheSeconds: 5, cacheColumns: 10, verify: true } }, env).world, {
     enabled: true,
     cacheSeconds: 5,
     cacheColumns: 10,
     verify: true,
-    shared: false,
+    shared: true,
   });
   for (const bad of [{ enabled: 'yes' }, { cacheSeconds: -1 }, { cacheColumns: 1.5 }, { verify: 1 }]) {
     assert.throws(() => parseConfig({ world: bad }, env), ConfigError, JSON.stringify(bad));

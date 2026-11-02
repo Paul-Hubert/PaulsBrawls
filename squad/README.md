@@ -51,18 +51,19 @@ applies them too. To change a patch: edit the file in `node_modules`, then `npx 
 `squad.json`'s `pathfinding.astarBudgetMs` (default 20, 0 = off, at most 50) caps the A* time of all bots together per
 50 ms window: measured better than no cap at 10-30 moving bots (docs/31 §11).
 
-**Reader workers (optional, [docs/37](../docs/37-squad-worker-reads-plan.md)).** The job pool of [src/jobs/](src/jobs/):
+**Reader workers ([docs/37](../docs/37-squad-worker-reads-plan.md), on by default).** The job pool of [src/jobs/](src/jobs/):
 read-only calculations run on worker threads, in batches, each worker with a CPU budget per 50 ms tick. Since P4 the
 bots' **A* searches** run there, over the shared world below (a search first gets 3 ms on the main thread: most of
 gather's end there and are answered at once, the long ones move to a worker). A worker costs ~60 MB: its heap is
 sized (16 MB young, 512 MB old), or A*'s garbage grew it by hundreds of MB. The bots, their physics, the look-ahead and the
 scripts stay on the main thread. This replaced docs/32 D's pathfinding worker pool, whose workers each parsed their
 own copy of every chunk (about 9 GB at 14 workers and 30 gathering bots, docs/31 §11.6): now every worker reads the
-one copy in shared memory. Job types: `path` (A*, P4), `findBlocks` (P6), `aim` (P3, below) and `echo` (P2's trivial one). Off by default:
+one copy in shared memory. Job types: `path` (A*, P4), `findBlocks` (P6), `aim` (P3, below) and `echo` (P2's trivial one). On by default with as
+many workers as allowed (docs/37 D7, 2026-11-02); `"count": 0` turns them off:
 
 | Key in `squad.json` | Default | |
 |---|---|---|
-| `workers.count` | 0 (off) | reader worker threads, an integer up to 16, capped at the cores minus one. `pathfinding.workers`, the old pool's key, is an alias: it is read when `workers.count` is not set; when both are set, `workers.count` wins |
+| `workers.count` | 32 | reader worker threads, an integer up to 32 (0 = off), capped at the hardware threads (a capped default is logged as info, not a warning). `pathfinding.workers`, the old pool's key, is an alias: it is read when `workers.count` is not set; when both are set, `workers.count` wins |
 | `workers.tickBudgetMs` | 40 | each worker's CPU budget per 50 ms tick (above 0, at most 50). A worker stops its batch when it is spent; what it did not start goes back to the queue. Searches share it: one search alone on a worker computes up to 40 ms a tick |
 
 With `workers.count` > 0 the shared world is on too (`world.enabled` defaults to true then), the dispatcher ticks on
@@ -75,36 +76,36 @@ it: an unknown goal class, exclusion areas, a subclassed `Movements`, a column t
 worker (every slot crashed 3 times in a minute), a failed job, or no sign of life for `thinkTimeout` + 2 s. `POST
 /api/metrics` shows the job pool (`jobs`) and the searches (`paths`: offloaded, answered, cancelled, fallbacks by
 reason; `carried` over resets and `notCarried` by why; `stale` worker paths). Gather mines fewer logs with the workers
-than without (docs/37 §14.2): part of the main thread's lead comes from the plugin giving a hard target up at once
+than without (docs/37 §14.2; 43 % fewer at 30 bots with 32 workers, §15): part of the main thread's lead comes from the plugin giving a hard target up at once
 when the A* budget is spent.
-**Shared world (optional, [docs/37](../docs/37-squad-worker-reads-plan.md) P1, P5).** `squad.json`'s `world` block
+**Shared world ([docs/37](../docs/37-squad-worker-reads-plan.md) P1, P5, on by default).** `squad.json`'s `world` block
 builds one copy of the chunks the bots receive, in shared memory ([src/world/](src/world/)). One writer thread decodes
 it from the bots' packets, and any thread can read it lock-free. The reader workers read the store (A* since P4).
 With `world.shared` the bots read it too: `bot.world` is a view of the store (`bot-world.ts`, through a replacement of
 mineflayer's blocks plugin, `blocks-plugin.ts`), so no bot keeps ~313 parsed columns of its own or parses a chunk:
 each one is decoded once, on the writer thread. A bot sees only the columns it holds, once the writer has published
 them (a few ms after the packet; `waitForChunksToLoad` waits for that); the block changes it hears show at once. Light
-and biomes are not kept (nothing reads them: a block's light is 0, its biome the first). Without it (the default) the
+and biomes are not kept (nothing reads them: a block's light is 0, its biome the first). With `"shared": false` the
 bots keep their own worlds, as before. Measured: 30–36 MB less RSS per bot, and 40 logins no longer stall the
 event loop (docs/37 §13.4).
 
 | Key in `squad.json` | Default | |
 |---|---|---|
-| `world.enabled` | on with the reader workers (`workers.count` > 0), else `false` | build the store (a writer thread, ~70 MB for 850 columns). `false` with workers on keeps A* on the main thread (a warning at start) |
+| `world.enabled` | on with the reader workers (`workers.count` > 0) or `world.shared`, so on by default | build the store (a writer thread, ~70 MB for 850 columns). `false` with workers on keeps A* on the main thread (a warning at start) |
 | `world.cacheSeconds` | 60 | a column no bot holds any more is kept this long, unreadable, in case a bot receives it again (no decode then) |
 | `world.cacheColumns` | 2000 | at most this many such columns, oldest dropped first |
 | `world.verify` | `false` | once a second, compare 256 random blocks of the store with the bots' own worlds and log mismatches (debug; nothing to compare with `world.shared`) |
-| `world.shared` | `false` | the bots read the store instead of keeping their own worlds (docs/37 P5). Turns `world.enabled` on; `"enabled": false` with it is an error |
+| `world.shared` | `true` (`false` when `world.enabled` is set to `false`) | the bots read the store instead of keeping their own worlds (docs/37 P5). Turns `world.enabled` on; `"shared": true` with `"enabled": false` is an error |
 
 `npx tsx live-tests/probe-world.ts` (dev server only) checks it block for block against six real bots.
 
-**Block searches on the workers ([docs/37](../docs/37-squad-worker-reads-plan.md) P6, off).** With both
+**Block searches on the workers ([docs/37](../docs/37-squad-worker-reads-plan.md) P6, on by default).** With both
 `workers.count` > 0 and `world.enabled`, `mineBlock` (so `gather`) finds its blocks with a `findBlocks` job: mineflayer's
 `bot.findBlocks` read from the shared world on a reader worker, the same positions in the same order, in about 0.1 ms
 instead of mineflayer's 15 ms on the main thread ([src/api/block-search.ts](src/api/block-search.ts)). Nothing else to
 set. A search the store cannot answer for that bot (not logged in, its column not in the store yet, the job failed or
 waited more than 5 s) runs on the bot as before. `findBlock` stays synchronous on the bot's own world (with
-`world.shared`, the store's search on the main thread, over that bot's columns). With either key off (the defaults),
+`world.shared`, the store's search on the main thread, over that bot's columns). With either key off,
 every search is `bot.findBlocks`, as before.
 
 **The archers' aim ([docs/37](../docs/37-squad-worker-reads-plan.md) P3, [src/aim/](src/aim/)).** `shoot` aims

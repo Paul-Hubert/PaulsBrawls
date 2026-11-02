@@ -785,9 +785,13 @@ test("the store's blocks: one template per state, specialised by position; getBl
 test('config: pathfinding.workers is an alias of workers.count (workers.count wins); workers turn the shared world on', async () => {
   const { parseConfig, jobWorkerCount, ConfigError } = await import('../src/config');
   const env = { PAULSBRAWLS_SQUAD_TOKEN: 't' };
-  const off = parseConfig({}, env);
+  const on = parseConfig({}, env);
+  assert.equal(on.workers.count, 32, 'many workers by default');
+  assert.equal(on.world.enabled, true, 'and the shared world they read');
+  const off = parseConfig({ workers: { count: 0 }, world: { enabled: false } }, env);
   assert.equal(off.workers.count, 0);
-  assert.equal(off.world.enabled, false, 'no workers, no shared world by default');
+  assert.equal(off.world.enabled, false, 'both can be turned off');
+  assert.equal(off.world.shared, false, 'world.enabled false turns the default world.shared off with it');
   const alias = parseConfig({ pathfinding: { workers: 4 } }, env);
   assert.equal(alias.workers.count, 4, 'the old key still works');
   assert.equal(alias.world.enabled, true, 'workers read the shared world: on with them');
@@ -796,11 +800,11 @@ test('config: pathfinding.workers is an alias of workers.count (workers.count wi
   assert.equal(parseConfig({ pathfinding: { workers: 4 }, workers: { count: 0 } }, env).workers.count, 0, 'even when it is 0');
   assert.equal(parseConfig({ workers: { count: 3 }, world: { enabled: false } }, env).world.enabled, false, 'an explicit false stays');
   assert.equal(parseConfig({ world: { enabled: true } }, env).world.enabled, true);
-  for (const bad of [-1, 1.5, 17, '2']) {
+  for (const bad of [-1, 1.5, 33, '2']) {
     assert.throws(() => parseConfig({ pathfinding: { workers: bad } }, env), ConfigError, `pathfinding.workers ${String(bad)}`);
     assert.throws(() => parseConfig({ workers: { count: bad } }, env), ConfigError, `workers.count ${String(bad)}`);
   }
-  assert.equal(jobWorkerCount({ count: 8, tickBudgetMs: 40 }, 4), 3);
+  assert.equal(jobWorkerCount({ count: 8, tickBudgetMs: 40 }, 4), 4);
   assert.equal(jobWorkerCount({ count: 2, tickBudgetMs: 40 }, 32), 2);
-  assert.equal(jobWorkerCount({ count: 2, tickBudgetMs: 40 }, 1), 0);
+  assert.equal(jobWorkerCount({ count: 2, tickBudgetMs: 40 }, 1), 1);
 });

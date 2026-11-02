@@ -821,22 +821,23 @@ test('vitals: /api/metrics carries the jobs window and the French line a summary
 
 // -- config and the composition root ---------------------------------------------------------------------------------
 
-test('config: workers defaults to 0 workers and 40 ms, is validated, and is capped at the cores but one', () => {
+test('config: workers defaults to 32 workers and 40 ms, is validated, and is capped at the hardware threads', () => {
   const env = { PAULSBRAWLS_SQUAD_TOKEN: 't' };
-  assert.deepEqual(parseConfig({}, env).workers, { count: 0, tickBudgetMs: 40 });
+  assert.deepEqual(parseConfig({}, env).workers, { count: 32, tickBudgetMs: 40 });
   assert.deepEqual(parseConfig({ workers: { count: 3, tickBudgetMs: 25 } }, env).workers, { count: 3, tickBudgetMs: 25 });
-  for (const bad of [-1, 1.5, 17, 'x']) assert.throws(() => parseConfig({ workers: { count: bad } }, env), ConfigError, `count ${String(bad)}`);
+  for (const bad of [-1, 1.5, 33, 'x']) assert.throws(() => parseConfig({ workers: { count: bad } }, env), ConfigError, `count ${String(bad)}`);
   for (const bad of [0, 51, -2]) assert.throws(() => parseConfig({ workers: { tickBudgetMs: bad } }, env), ConfigError, `budget ${String(bad)}`);
-  assert.equal(jobWorkerCount({ count: 8, tickBudgetMs: 40 }, 4), 3);
+  assert.equal(jobWorkerCount({ count: 8, tickBudgetMs: 40 }, 4), 4);
+  assert.equal(jobWorkerCount({ count: 32, tickBudgetMs: 40 }, 32), 32);
   assert.equal(jobWorkerCount({ count: 2, tickBudgetMs: 40 }, 32), 2);
-  assert.equal(jobWorkerCount({ count: 2, tickBudgetMs: 40 }, 1), 0);
+  assert.equal(jobWorkerCount({ count: 2, tickBudgetMs: 40 }, 1), 1);
 });
 
 test('boot: workers.count > 0 starts the job pool, ticking on an online bot, and /api/metrics shows it', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'squad-jobs-'));
   const TOKEN = 'jobs-token';
-  const off = await start(parseConfig({ port: 0, dataDir: dir, loginStaggerMs: 1 }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN }), { connectBots: false });
-  assert.equal(off.jobs, undefined, 'off by default');
+  const off = await start(parseConfig({ port: 0, dataDir: dir, loginStaggerMs: 1, workers: { count: 0 } }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN }), { connectBots: false });
+  assert.equal(off.jobs, undefined, 'off with workers.count 0');
   await off.stop();
   const cfg = parseConfig({ port: 0, dataDir: dir, loginStaggerMs: 1, workers: { count: 1 } }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN });
   const rt = await start(cfg, {

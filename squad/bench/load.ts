@@ -10,12 +10,15 @@
 //   cd squad && npm run bench:load -- --ns 0,1,5,10,20,30 --label baseline
 //
 // Options: --ns, --phases idle,follow,walk,gather, --seconds 60, --label, --profile 10,30 (a CPU profile per phase at
-// those N), --stagger <ms> (default: the runtime's 4000), --center x,z (default: the nearest forest to spawn),
+// those N), --stagger <ms> (default 4000, the runtime's before docs/36 §6; its own is 100 now), --center x,z (default: the nearest forest to spawn),
 // --no-pregen; experiments (bench-only, the runtime's defaults stay as they are): --tick-timeout, --think-timeout,
 // --search-radius, --plugins all|none|-autoEat,-pvp…, --view short|normal|tiny|<chunks>, --movements canDig=false,…,
 // --astar-budget <ms per 50 ms> (the runtime's pathfinding.astarBudgetMs), --workers <N> (the runtime's workers.count:
 // A*, gather's block searches and the aim on N reader workers over the shared world, docs/37 P3/P4/P6; --jobs <N> is
-// its older name), --world (world.enabled alone), --shared (world.shared: the bots read the shared world, docs/37 P5),
+// its older name; 0 = off), --no-shared (world.shared off: the bots keep their own worlds, docs/37 P5), --no-world
+// (no shared world at all; with --workers 0 that is the runtime before docs/37), --world / --shared (on: the defaults
+// since docs/37 D7). Without these the runtime's defaults: 32 workers, the bots on the shared world.
+//
 // --think-on-compute, --lookahead-cap <ticks>, --lookahead-memo <ticks>,
 // --lookahead-blockcache, --stuck-ticks, --mcdata-memo, --cheap-varint, --astar-blockcache, --astar-blockcache-world.
 // The server is read from SERVER_PROPERTIES (default ../run/server.properties). The production server is refused.
@@ -77,12 +80,12 @@ const VARIANT = {
   movements: Object.fromEntries((opt('movements') ?? '').split(',').filter(Boolean).map((kv) => kv.split('=')).map(([k, v]) => [k, v === 'true' ? true : v === 'false' ? false : Number(v)])) as Record<string, unknown>,
   /** The runtime's own A* budget (config pathfinding.astarBudgetMs, the patched AStar.setBudget), not a prototype. */
   astarBudget: opt('astar-budget') === undefined ? undefined : Number(opt('astar-budget')),
-  /** The runtime's reader workers (config workers.count, which turns the shared world on; capped at the cores but one). */
-  workers: Number(opt('workers') ?? opt('jobs') ?? 0),
-  /** world.enabled without workers (with workers it is on by default, docs/37 P4). */
-  world: flag('world'),
-  /** world.shared: the bots read the shared world instead of keeping their own (docs/37 P5). */
-  shared: flag('shared'),
+  /** The runtime's reader workers (config workers.count); absent = the runtime's default (32, docs/37 D7). */
+  workers: ((n) => (n === undefined ? undefined : Number(n)))(opt('workers') ?? opt('jobs')),
+  /** world.enabled: --world on, --no-world off (the bots on their own worlds, no store); absent = the runtime's default. */
+  world: flag('no-world') ? false : flag('world') ? true : undefined,
+  /** world.shared (docs/37 P5): --shared on, --no-shared (or --no-world) off; absent = the runtime's default (on, D7). */
+  shared: flag('no-shared') || flag('no-world') ? false : flag('shared') ? true : undefined,
   thinkOnCompute: flag('think-on-compute'),
   /** A* on the workers: a block_updated reset cancels a pending search (docs/37 P4) instead of carrying it over (§14). */
   noCarry: flag('no-carry'),
@@ -214,7 +217,7 @@ async function main(): Promise<void> {
   }
 
   const cfg = parseConfig(
-    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: VARIANT.astarBudget === undefined ? {} : { astarBudgetMs: VARIANT.astarBudget }, workers: { count: VARIANT.workers }, ...(VARIANT.world || VARIANT.shared ? { world: { enabled: true, shared: VARIANT.shared } } : {}) },
+    { minecraft: { port: MC_PORT }, port: 0, dataDir: join(runDir, 'data'), loginStaggerMs: STAGGER, limits: { ...DEFAULT_LIMITS, maxBots: 64 }, pathfinding: VARIANT.astarBudget === undefined ? {} : { astarBudgetMs: VARIANT.astarBudget }, ...(VARIANT.workers === undefined ? {} : { workers: { count: VARIANT.workers } }), world: { ...(VARIANT.world === undefined ? {} : { enabled: VARIANT.world }), ...(VARIANT.shared === undefined ? {} : { shared: VARIANT.shared }) } },
     { PAULSBRAWLS_SQUAD_TOKEN: TOKEN },
   );
   const rt = await start(cfg, { connectBots: true, installGuards: true, pool: { createBot, setup } });

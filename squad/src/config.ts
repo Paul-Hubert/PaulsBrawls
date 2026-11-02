@@ -56,8 +56,8 @@ export const MAX_ASTAR_BUDGET_MS = 50;
 export interface WorkersConfig {
   /**
    * Reader worker threads (each one a thread with its own copy of the registry, ~25 MB, and nothing per chunk: they
-   * read the shared world). 0 = off (the default): every search on the main thread. The bots' A* runs there since
-   * docs/37 P4. `pathfinding.workers` (docs/32 D's pathfinding worker pool, which P4 replaced) is an alias, read only
+   * read the shared world). Default 32 (DEFAULT_JOB_WORKERS), capped at the hardware threads (jobWorkerCount); 0 = off,
+   * every search on the main thread. The bots' A* runs there since docs/37 P4. `pathfinding.workers` (docs/32 D's pathfinding worker pool, which P4 replaced) is an alias, read only
    * when `workers.count` is not set: when both are set, `workers.count` wins.
    */
   count: number;
@@ -68,7 +68,9 @@ export interface WorkersConfig {
 export const DEFAULT_WORKER_TICK_BUDGET_MS = 40;
 /** A budget above the 50 ms tick could never be spent. */
 export const MAX_WORKER_TICK_BUDGET_MS = 50;
-export const MAX_JOB_WORKERS = 16;
+export const MAX_JOB_WORKERS = 32;
+/** Everything on by default (Paul, 2026-11-02): as many workers as allowed, the cores permitting. */
+export const DEFAULT_JOB_WORKERS = MAX_JOB_WORKERS;
 
 /**
  * The shared world (docs/37 P1, src/world/): one copy of the chunks the bots receive, in shared memory, written by
@@ -76,7 +78,8 @@ export const MAX_JOB_WORKERS = 16;
  */
 export interface WorldConfig {
   /**
-   * Default: on exactly when the reader workers are (workers.count > 0), since they read it (A*, docs/37 P4). An
+   * Default: on when the reader workers are (workers.count > 0), since they read it (A*, docs/37 P4), or with `shared`
+   * (so on by default). An
    * explicit false with workers on keeps A* on the main thread (main.ts warns); true without workers builds the store
    * for `verify` alone.
    */
@@ -90,13 +93,14 @@ export interface WorldConfig {
   /**
    * docs/37 P5: the bots read the shared world too (`bot.world`, blockAt, physics, the pathfinder's look-ahead), and
    * keep no world of their own: each chunk is decoded once, on the writer thread, instead of once per bot on the main
-   * thread (src/world/bot-world.ts). Turns `enabled` on; an explicit `enabled: false` with it is an error. Default off.
+   * thread (src/world/bot-world.ts). Turns `enabled` on; an explicit `enabled: false` with it is an error. Default on
+   * (Paul, 2026-11-02), unless `enabled` is set to false.
    */
   shared: boolean;
 }
 
-/** `enabled` here is the default without reader workers; with them it defaults to true (parseConfig). */
-export const DEFAULT_WORLD: WorldConfig = { enabled: false, cacheSeconds: 60, cacheColumns: 2_000, verify: false, shared: false };
+/** `enabled` here is the default without reader workers or `shared`; with either it defaults to true (parseConfig). */
+export const DEFAULT_WORLD: WorldConfig = { enabled: false, cacheSeconds: 60, cacheColumns: 2_000, verify: false, shared: true };
 
 /**
  * The archers' aim (docs/37 §3, D5; src/aim/): when, in a bow's draw, the aim solver is asked again. The look turns
@@ -183,7 +187,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
     throw new ConfigError(`squad.json: pathfinding.astarBudgetMs is per 50 ms window, so at most ${MAX_ASTAR_BUDGET_MS}, got ${astarBudgetMs}`);
   }
   // pathfinding.workers: the alias of workers.count (docs/37 P4), used when workers.count is not set.
-  const alias = num(pathRaw.workers, 0, 'pathfinding.workers');
+  const alias = num(pathRaw.workers, DEFAULT_JOB_WORKERS, 'pathfinding.workers');
   if (!Number.isInteger(alias) || alias > MAX_JOB_WORKERS) {
     throw new ConfigError(`squad.json: pathfinding.workers (an alias of workers.count) must be an integer from 0 to ${MAX_JOB_WORKERS}, got ${alias}`);
   }
@@ -197,7 +201,8 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
     throw new ConfigError(`squad.json: workers.tickBudgetMs is per 50 ms tick, so above 0 and at most 50, got ${tickBudgetMs}`);
   }
   const worldRaw = (o.world ?? {}) as Record<string, unknown>;
-  const shared = bool(worldRaw.shared, DEFAULT_WORLD.shared, 'world.shared');
+  // An explicit `enabled: false` turns the default `shared` off with it (the bots cannot read a world that is not there).
+  const shared = bool(worldRaw.shared, worldRaw.enabled === false ? false : DEFAULT_WORLD.shared, 'world.shared');
   const world: WorldConfig = {
     enabled: bool(worldRaw.enabled, count > 0 || shared, 'world.enabled'),
     cacheSeconds: num(worldRaw.cacheSeconds, DEFAULT_WORLD.cacheSeconds, 'world.cacheSeconds'),
@@ -255,11 +260,12 @@ export function applyPathfinding(p: PathfindingConfig): void {
 }
 
 /**
- * The reader workers this machine gets: the configured count, at most one per core other than the main thread's (a
- * worker that shares the main thread's core takes time from the bots' physics). Logged by the caller when it caps.
+ * The reader workers this machine gets: the configured count, at most one per hardware thread (32 on a 32-thread
+ * machine, docs/37 D7). A worker sleeps between its batches and spends at most `tickBudgetMs` of a tick, so one per
+ * thread leaves the main thread its time while they are not all saturated. Logged by the caller when it caps.
  */
 export function jobWorkerCount(w: WorkersConfig, cores = availableParallelism()): number {
-  return Math.max(0, Math.min(w.count, cores - 1));
+  return Math.max(0, Math.min(w.count, cores));
 }
 
 export function loadConfig(path: string): SquadConfig {

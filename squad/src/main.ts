@@ -5,7 +5,7 @@
 
 import { join } from 'node:path';
 
-import { applyPathfinding, jobWorkerCount, loadConfig, type SquadConfig } from './config';
+import { applyPathfinding, DEFAULT_JOB_WORKERS, jobWorkerCount, loadConfig, type SquadConfig } from './config';
 import { PathOffload } from './bots/pathworkers/offload';
 import { SharedWorld } from './world/shared-world';
 import { BotPool, skippedPackets, type BotPoolOptions } from './bots/pool';
@@ -145,14 +145,16 @@ export async function start(
 }
 
 /**
- * The reader workers (docs/37 P2), only when workers.count > 0 (off by default). They run the bots' A* (P4). Their
+ * The reader workers (docs/37 P2), when workers.count > 0 (32 by default, capped at the hardware threads). They run the bots' A* (P4). Their
  * dispatcher ticks on one online bot's physics ticks (LeaderTicks, wired by the caller once the bot pool exists); the
  * entity snapshot merges every online bot's entities, with the roster's owner groups as teams.
  */
 function startJobs(cfg: SquadConfig, botPool: () => BotPool | undefined, roster: Roster, world: SharedWorld | undefined): JobPool | undefined {
   const count = jobWorkerCount(cfg.workers);
   if (count < cfg.workers.count) {
-    logger.warn('squad', `workers.count ${cfg.workers.count} capped to ${count}: one core stays with the main thread`);
+    // The default asks for the most; capping it is the expected case, not a misconfiguration.
+    const say = cfg.workers.count === DEFAULT_JOB_WORKERS ? logger.info : logger.warn;
+    say('squad', `workers.count ${cfg.workers.count} capped to ${count}: one per hardware thread`);
   }
   if (count === 0) return undefined;
   const teams = new TeamIds(() => roster.all());

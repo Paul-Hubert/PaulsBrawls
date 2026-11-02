@@ -26,6 +26,12 @@
 - **D6** (Paul, after P3's measurements, §11.6). **Archers lob over a friend in the line:** `aim.overFriends` is on by
   default, so the high arc goes over a friend as over a wall. Measured: refused shots 4.5–9 % instead of 19–32 %, at
   fewer kills per arrow (3.2–4.0 % instead of 3.5–5.2 %) and about +0.1 ELU, from more arrows in the air on 4–5 s lobs.
+- **D7** (Paul, 2026-11-02, after the tuning, §14). **Everything on by default, many workers:** `workers.count` defaults
+  to 32, the most (`MAX_JOB_WORKERS`, raised from 16), capped at the hardware threads instead of the cores minus one
+  (32 on the 32-thread machine; a worker sleeps between batches, §15), and `world.shared` to `true`,
+  so the shared world, A*, gather's block searches and the aim are all on the workers and the bots read the one copy.
+  `"count": 0` and `"shared": false` turn them off; an explicit `world.enabled: false` turns the default `shared` off
+  with it. Taken with §14.2 open: gather still mines fewer logs with the workers.
 
 ## 1. Where we start (docs/36)
 
@@ -235,12 +241,13 @@ Each phase is shippable on its own, measured before and after, with the docs cha
 - `world.enabled`, `cacheSeconds`, `cacheColumns` and `verify` exist since P1 (§9): `world.enabled` builds the store
   (P2/P3 turn it on), `verify` is the debug comparison of §6 (it has nothing to compare with `world.shared`).
 
-- `workers.count`: default cores − 2 in the plan; **0 (off) as built** (§8.5), until the final measurements.
+- `workers.count`: default cores − 2 in the plan; 0 (off) as built (§8.5); **32 since D7**, capped at the hardware threads.
 - `pathfinding.workers` remains an alias of `workers.count` (since P4): read when `workers.count` is not set; when both
   are set, `workers.count` wins.
 - `world.enabled` defaults to `workers.count` > 0 (since P4): the workers read the store. An explicit `false` with
   workers on keeps A* on the main thread (`main.ts` warns).
-- `world.shared` turns P5 on (§13): default `false`; it turns `world.enabled` on, and `"enabled": false` with it is an error.
+- `world.shared` turns P5 on (§13): default `true` since D7 (`false` when `world.enabled` is set to `false`); it turns
+  `world.enabled` on, and `"shared": true` with `"enabled": false` is an error.
 
 ## 6. Risks
 
@@ -1429,3 +1436,42 @@ over the block changes that do not touch its path, but the gap is the main threa
 offload must not copy (an empty path ends every `goTo`, walking included). Closing it is gather's side: give hard
 targets up sooner on purpose (a short `thinkTimeout` for `collect`'s searches only, or skipping a log whose search
 runs past some hundreds of nodes, as docs/31 §11.9 asks), then compare again.
+
+## 15. Everything on, 32 workers (D7, 2026-11-02)
+
+**What changed.** `workers.count` defaults to 32 (`MAX_JOB_WORKERS` raised from 16), capped at the hardware threads
+(`jobWorkerCount`, was the cores minus one; a capped default is logged as info, not a warning); `world.shared` defaults
+to `true` (`false` when `world.enabled` is set to `false`, so that key alone still turns the store off). With the
+defaults, the shared world, the bots' A* (P4), gather's block searches (P6) and the aim (P3) are on the workers and the
+bots read the one copy (P5). `bench:fight` and `bench:load` follow the runtime's defaults now: `--jobs 0` / `--workers
+0`, `--no-shared` and `--no-world` turn them off. `live-tests/run.ts` too (`LIVE_WORKERS=0`, `LIVE_WORLD_SHARED=0`).
+
+**P0–P6 applied.** Every phase branch (and `squad-fight-bench`, `squad-tune-workers`) is an ancestor of `rework`. Every
+test of every phase branch is in `rework` except the ones of code removed on purpose: hawkEye's (P3) and docs/32 D's
+per-worker mirror pool's (P4, which has its own tests in `pathworkers.test.ts` and `ladders.test.ts`). `main.ts`
+builds them in order: the shared world (P1, with `shared`: P5), the job pool (P2), the path offload (P4), the
+block-search hook (P6), the aim on jobs (P3). hawkEye is loaded nowhere (one test compares the solver with its
+equations when the package is installed).
+
+**Measured** (the Ryzen 9 9950X3D, 32 threads, the isolated dev server of `pb-tune`, the runtime of `rework` + D7):
+
+| Run | 32 workers, `world.shared` | 0 workers, `world.shared` |
+|---|---|---|
+| `bench:fight` 10 + 10 a side, 2 rounds: RSS idle / round 1 / round 2 | 2 010 / 2 156 / 2 225 MB | (§13.4: 669–851 MB) |
+| fight ELU / loop p99 / ticks/s | 0.18–0.19 / 14 ms / 20 | |
+| aim jobs: on how many workers | 1 (short jobs share a batch, `PACK_MS`), 0.07 ms a tick | |
+| `bench:load` N = 30 walk: legs / ELU / p99 / A* on the main thread / RSS | 128 / 0.175 / 16 ms / 0 % / 2 149 MB | 150 / 0.476 / 31 ms / 31 % / 957 MB |
+| N = 30 gather: logs / ELU / p99 / A* on the main thread / RSS | **137** / 0.302 / 21 ms / 0 % / 3 003 MB | **241** / 0.555 / 30 ms / 33 % / 956 MB |
+| gather's searches | 312 offloaded, 137 answered, 175 cancelled, 0 fallbacks; up to 11 workers busy at once; 32 alive, 0 restarts | |
+
+One run each, gather on the same forest (−6032, −5968, put back with `bench:site restore` before each run).
+
+- **32 workers fit because of the shared copy:** 1.2 GB (walk, fight) to 2.0 GB (gather) above the shared world alone,
+  37–65 MB a worker, against ~660 MB a worker for docs/32 D's pool, whose workers each parsed every chunk (6.65 GB at 8
+  workers, §12.1; 32 of them would be about 21 GB).
+- **The main thread:** ELU 0.18–0.30 instead of 0.48–0.56, loop p99 16–21 ms instead of 30–31 ms, no A* there.
+- **Gather mines 43 % fewer logs with the workers** (§14.2, not fixed): the same cause, larger at 30 bots, so the
+  default now costs gather throughput for a lighter main thread. The fix proposed in §14.2 (gather giving hard targets
+  up on purpose) is still to do.
+- **Production:** its `squad.json` set `pathfinding.workers: 0` (the old pool's key, an alias of `workers.count`),
+  which kept the workers off there; removed on 2026-11-02, so production starts with the defaults.

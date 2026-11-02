@@ -35,10 +35,11 @@
 // --profile-rounds 1 (how many rounds, from the first, get a CPU profile; the idle phase is profiled when the first
 // round is), --sampling-us 1000, --gap 40 (blocks between the two front rows), --blue "defend radius=24",
 // --red "raid radius=24" (command and tokens; a raid without x= goes for the other army's position), --arena x,z
-// (default 1400,1000, the floor at y 100), --stagger <ms> (default the runtime's 4000), --port 8779, --no-mod,
+// (default 1400,1000, the floor at y 100), --stagger <ms> (default the runtime's, 100), --port 8779, --no-mod,
 // --difficulty hard (production's), --dead disconnect|respawn, --workers <N> (pathfinding.workers), --astar-budget <ms>,
-// --jobs <N> (workers.count: the reader workers, docs/37), --world (world.enabled: the shared world; with --jobs the
-// archers' aim runs as jobs on the workers), --shared (world.shared: the bots read the shared world, docs/37 P5), --no-over-friends (aim.overFriends off: a friend in the line blocks the shot; on by default, docs/37 D6),
+// --jobs <N> (workers.count: the reader workers, docs/37; 0 = off), --no-shared (world.shared off: the bots keep their
+// own worlds, docs/37 P5), --no-world (no shared world; the aim inline), --world / --shared (on); without them the
+// runtime's defaults (docs/37 D7: 32 workers, the aim as jobs, the bots on the shared world), --no-over-friends (aim.overFriends off: a friend in the line blocks the shot; on by default, docs/37 D6),
 // --label. SERVER_PROPERTIES overrides the server (default
 // ../dev/server.properties); the production server is refused.
 // The archers' aim (docs/37 P3, src/aim/) is recorded per round (aimStats): draws, refusals, solves, flights per
@@ -99,12 +100,14 @@ const NO_MOD = flag('no-mod');
 const DIFFICULTY = opt('difficulty') ?? 'hard';
 const DEAD = (opt('dead') ?? 'disconnect') as 'disconnect' | 'respawn';
 if (!['disconnect', 'respawn'].includes(DEAD)) throw new Error(`--dead ${DEAD}: disconnect or respawn`);
-const WORKERS = Number(opt('workers') ?? 0);
+/** --workers (pathfinding.workers, the old alias) and --jobs (workers.count): absent = the runtime's default (D7). */
+const WORKERS = opt('workers') === undefined ? undefined : Number(opt('workers'));
 const ASTAR_BUDGET = opt('astar-budget') === undefined ? undefined : Number(opt('astar-budget'));
-const JOBS = Number(opt('jobs') ?? 0);
-const WORLD = flag('world');
-/** --shared: world.shared, the bots read the shared world (docs/37 P5). */
-const SHARED = flag('shared');
+const JOBS = opt('jobs') === undefined ? undefined : Number(opt('jobs'));
+/** --world / --no-world: world.enabled; absent = the runtime's default (on, docs/37 D7). */
+const WORLD = flag('no-world') ? false : flag('world') ? true : undefined;
+/** --shared / --no-shared: world.shared, the bots read the shared world (docs/37 P5); --no-world turns it off too. */
+const SHARED = flag('no-shared') || flag('no-world') ? false : flag('shared') ? true : undefined;
 const OVER_FRIENDS = !flag('no-over-friends');
 const LABEL = opt('label') ?? 'fight';
 if (opt('hawkeye-every') !== undefined) {
@@ -321,9 +324,9 @@ async function main(): Promise<void> {
       dataDir: join(runDir, 'data'),
       ...(STAGGER === undefined ? {} : { loginStaggerMs: STAGGER }),
       limits: { ...DEFAULT_LIMITS, maxBots: 64 },
-      pathfinding: { ...(ASTAR_BUDGET === undefined ? {} : { astarBudgetMs: ASTAR_BUDGET }), workers: WORKERS },
-      workers: { count: JOBS },
-      world: { enabled: WORLD || SHARED, shared: SHARED },
+      pathfinding: { ...(ASTAR_BUDGET === undefined ? {} : { astarBudgetMs: ASTAR_BUDGET }), ...(WORKERS === undefined ? {} : { workers: WORKERS }) },
+      ...(JOBS === undefined ? {} : { workers: { count: JOBS } }),
+      world: { ...(WORLD === undefined ? {} : { enabled: WORLD }), ...(SHARED === undefined ? {} : { shared: SHARED }) },
       aim: { overFriends: OVER_FRIENDS },
     },
     { PAULSBRAWLS_SQUAD_TOKEN: TOKEN },
@@ -349,7 +352,7 @@ async function main(): Promise<void> {
     dead: DEAD,
     jobs: rt.jobs ? rt.jobs.stats().workers : 0,
     world: !!rt.world,
-    shared: SHARED,
+    shared: cfg.world.shared,
     aim: aimMode(),
     overFriends: OVER_FRIENDS,
     node: process.version,

@@ -667,9 +667,10 @@ test("with world.shared the pool hands createBot the shared world's blocks plugi
   assert.equal(lone.world.constructor.name, 'WorldSync');
 });
 
-test('config: world.shared defaults to off; on, it turns the shared world on; with world.enabled false it is an error', () => {
+test('config: world.shared defaults to on (off with an explicit world.enabled false); on, it turns the shared world on; with world.enabled false it is an error', () => {
   const env = { PAULSBRAWLS_SQUAD_TOKEN: 't' };
-  assert.equal(parseConfig({}, env).world.shared, false);
+  assert.equal(parseConfig({}, env).world.shared, true);
+  assert.equal(parseConfig({ world: { enabled: false } }, env).world.shared, false);
   assert.deepEqual(parseConfig({ world: { shared: true } }, env).world, { enabled: true, cacheSeconds: 60, cacheColumns: 2_000, verify: false, shared: true });
   assert.throws(() => parseConfig({ world: { shared: true, enabled: false } }, env), ConfigError);
   assert.throws(() => parseConfig({ world: { shared: 'yes' } }, env), ConfigError);

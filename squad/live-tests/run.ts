@@ -117,19 +117,21 @@ async function main(): Promise<void> {
     await rcon.command('difficulty easy');
   }
 
-  // LIVE_WORKERS=N runs the same scenarios with N reader workers (workers.count, which turns the shared world on): the
-  // bots' A* (P4), gather's block searches (P6) and the archers' aim (P3) run there (docs/37). LIVE_JOBS=N and
-  // LIVE_PATH_WORKERS=N (docs/32 D's old pool) are older names for it; LIVE_WORLD=1 turns the shared world on alone.
-  const workers = { count: Number(process.env.LIVE_WORKERS ?? process.env.LIVE_JOBS ?? process.env.LIVE_PATH_WORKERS ?? 0) };
-  const cfg = parseConfig({ minecraft: { port: MC_PORT }, port: RUNTIME_PORT, dataDir: join(runDir, 'data'), loginStaggerMs: 1500, workers }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN });
+  // The runtime's defaults (docs/37 D7): the reader workers (the bots' A*, gather's block searches and the archers'
+  // aim, docs/37 P3/P4/P6) and the bots on the shared world (P5). LIVE_WORKERS=N sets workers.count (0 = off;
+  // LIVE_JOBS=N and LIVE_PATH_WORKERS=N, docs/32 D's old pool, are older names for it); LIVE_WORLD_SHARED=0 gives the
+  // bots their own worlds again; LIVE_WORLD=1 keeps the shared world on with neither.
+  const n = process.env.LIVE_WORKERS ?? process.env.LIVE_JOBS ?? process.env.LIVE_PATH_WORKERS;
+  const workers = n === undefined ? {} : { count: Number(n) };
+  const world = process.env.LIVE_WORLD_SHARED === '0' ? { shared: false } : {};
+  const cfg = parseConfig({ minecraft: { port: MC_PORT }, port: RUNTIME_PORT, dataDir: join(runDir, 'data'), loginStaggerMs: 1500, workers, world }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN });
   if (process.env.LIVE_WORLD === '1') cfg.world.enabled = true;
-  // LIVE_WORLD_SHARED=1: world.shared, the bots read the shared world and keep no world of their own (docs/37 P5).
   if (process.env.LIVE_WORLD_SHARED === '1') {
     cfg.world.enabled = true;
     cfg.world.shared = true;
     console.log('world.shared: the bots read the shared world (docs/37 P5)');
   }
-  if (workers.count > 0) console.log(`reader workers: ${workers.count} (A*, block searches and aim on the workers, over the shared world)`);
+  if (cfg.workers.count > 0) console.log(`reader workers: ${cfg.workers.count}, capped at the cores but one (A*, block searches and aim on the workers, over the shared world)`);
   const rt = await start(cfg, { connectBots: true, installGuards: true });
   const { pool, runner } = rt.service.deps;
   runner.on('notice', (n: Notice) => {
