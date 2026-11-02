@@ -49,6 +49,12 @@ const STUCK_MS = 10_000;
 const ASIDE_MS = 3_000;
 /** Away from its slot, a shot refused for the line of fire: walk on this long before trying again (no sidestep). */
 const WALK_ON_MS = 1_000;
+/**
+ * A target a block stopped an archer's shot at: that archer passes over it this long. Out to 120 blocks the range
+ * reaches mobs in caves and under water below the line (found live, docs/35 F4): picked again and again, they kept
+ * the archer stepping aside instead of shooting what it can hit. A friend in the way is not remembered (they move).
+ */
+const BLOCKED_MS = 5_000;
 
 export default async function (squad, args, ctx) {
   // First: every later click re-forms the line instead of restarting the order.
@@ -147,11 +153,23 @@ export default async function (squad, args, ctx) {
     const d = lookDir(line.yaw);
     const front = (e) => (e.position.x - c.x) * d.x + (e.position.z - c.z) * d.z > 0;
     const free = (e) => load(e) === 0;
+    const passed = blocked.get(bot.username);
+    const open = (e) => !passed || !((passed.get(e.id) ?? 0) > Date.now());
     for (const ok of [(e) => front(e) && free(e), front, free, () => true]) {
-      const t = nearestHostile(bot, range, { filter: ok }) ?? nearestEntity(bot, (e) => isFoe(bot, e) && ok(e), range);
+      const fits = (e) => ok(e) && open(e);
+      const t = nearestHostile(bot, range, { filter: fits }) ?? nearestEntity(bot, (e) => isFoe(bot, e) && fits(e), range);
       if (t) return t;
     }
     return null;
+  };
+
+  /** Per archer: the targets a block stopped its shot at, until when it passes over them (BLOCKED_MS). */
+  const blocked = new Map();
+  const blockedOf = (bot) => {
+    let m = blocked.get(bot.username);
+    if (!m) blocked.set(bot.username, (m = new Map()));
+    for (const [id, until] of m) if (until <= Date.now()) m.delete(id);
+    return m;
   };
 
   /** Why each archer holds fire now; logged once per change, not every look. */
@@ -234,9 +252,10 @@ export default async function (squad, args, ctx) {
       } catch (e) {
         if (e instanceof BotLeftError || e instanceof OrderStoppedError) throw e;
         ctx.log(`${bot.username}: ${e.message}`);
-        const blocked = /no clear line of fire/.test(e.message);
-        if (blocked && slot && !there && !stepping) walkOn.set(bot.username, Date.now() + WALK_ON_MS);
-        else if (blocked) await sidestep(bot, t);
+        const noLine = /no clear line of fire/.test(e.message);
+        if (noLine && !/a friend is in the way/.test(e.message)) blockedOf(bot).set(t.id, Date.now() + BLOCKED_MS);
+        if (noLine && slot && !there && !stepping) walkOn.set(bot.username, Date.now() + WALK_ON_MS);
+        else if (noLine) await sidestep(bot, t);
         else await squad.sleep(250);
       } finally {
         release();

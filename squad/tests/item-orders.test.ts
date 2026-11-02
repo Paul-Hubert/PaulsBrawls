@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import { Vec3 } from 'vec3';
 
+import { HelperError } from '../src/api/errors';
 import { lineSlots, lookDir, mineflayerYaw, toVec3 } from '../src/api/helpers';
 import { GoalFollowOffset } from '../src/bots/follow-goal';
 import type { Order } from '../src/orders/order';
@@ -26,9 +27,13 @@ holdEventLoopPerTest();
  * handed it, { position, isValid: true }; an entity as itself.
  */
 const aims = new Map<string, unknown[]>();
+/** A test may refuse some shots, as shoot does when the line of fire is blocked: the message, or null to shoot. */
+let refuse: ((target: unknown) => string | null) | null = null;
 recordShots((name, t) => {
   const live = !!t && typeof t === 'object' && 'isValid' in t && !!(t as { position?: unknown }).position;
   aims.get(name)?.push(live ? t : { position: toVec3(t as never), isValid: true });
+  const why = refuse?.(t);
+  if (why) throw new HelperError(why);
 });
 
 const stock = await loadStock();
@@ -438,6 +443,29 @@ test('ligne-archers: range is from each archer, 120 by default: a foe 100 blocks
     near.isValid = false;
     far.isValid = false;
   } finally {
+    await f.h.runner.stopAll();
+  }
+});
+
+test('ligne-archers: an archer passes over, for a while, a target a block stopped its shot at (docs/35 F4, found live)', async () => {
+  const f = field();
+  const a = f.add('Archer0', 0, -3, BOW);
+  await f.start('ligne-archers', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 12, name: 'grass_block' }, trigger: { kind: 'use', item: 'arrow' } }), ['back=4']);
+  try {
+    await until(() => a.entity.position.z === 8.5, 3_000, 'on its slot');
+    // The nearer one is in a cave below the line, say: every shot at it is refused for the blocks in the way.
+    const hidden = f.spawn(zombie(0.5, 14));
+    const open = f.spawn(zombie(0.5, 30));
+    refuse = (t) => (t === hidden ? 'shoot(Archer0): no clear line of fire: stone is in the way at (0, 60, 14) (the high arc too)' : null);
+    await until(() => f.shots.get(a)!.includes(open), 4_000, 'the one it can hit shot');
+    const atHidden = () => f.shots.get(a)!.filter((t) => t === hidden).length;
+    assert.equal(atHidden(), 1, 'the hidden one tried once');
+    await tick(1_500);
+    assert.equal(atHidden(), 1, 'and not again for a while');
+    open.isValid = false;
+    hidden.isValid = false;
+  } finally {
+    refuse = null;
     await f.h.runner.stopAll();
   }
 });

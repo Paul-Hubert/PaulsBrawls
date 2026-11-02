@@ -987,7 +987,10 @@ completely, so missed events cannot leave it wrong.
      ground, 124 shooting 10 down, and the bots see entities out to about 128; Paul: as far as possible, D4); a threat
      in range is shot from where the archer stands, walking or not (the goal is cleared for the draw: the pathfinder
      turns the head, and the shooter's motion goes into the arrow); why an archer holds fire is logged once per change.
-     Tests: `item-orders.test.ts`.
+     Found live with the longer range: the archers picked drowned 48 blocks below them, under water, and kept stepping
+     aside; an archer now passes over, for 5 s, a target a block stopped its shot at. Measured live against a marching
+     raid (`LIVE_ONLY=range`): damaging hits per arrow 41 % at 30–59 blocks, 62 % at 60–89, 28 % at 90–120
+     (docs/system/squad/overview.md). Tests: `item-orders.test.ts`.
   5. *A click did not take the order's bots back* (Paul had to stop and click again). An `epee` (#220, until stopped)
      had reclaimed every guard of the wall (#205) and every archer of the line (#207); later clicks were delivered to
      orders with no bots, since a delivered click granted nothing (§5.4 item 6), and a rebind's new args were
