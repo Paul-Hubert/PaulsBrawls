@@ -115,7 +115,7 @@ npm install
 cp squad.example.json squad.json   # gitignored: minecraft host/port, token (or PAULSBRAWLS_SQUAD_TOKEN, same as the mod's squad.properties)
 npm start                          # supervisor + runtime on 127.0.0.1:8772 (stop with Ctrl+C; killing npm can leave node running)
 npm run check                      # lint + tsc + node:test on fakes (288 tests)
-npm run live-test                  # real bots + RCON; SERVER_PROPERTIES=../server/server.properties for production; LIVE_PATH_WORKERS=N; LIVE_ONLY=core|items
+npm run live-test                  # real bots + RCON; SERVER_PROPERTIES=../server/server.properties for production; LIVE_PATH_WORKERS=N; LIVE_ONLY=core|items|range (range: docs/35 F4 measurement)
 ```
 
 - The bots run in the runtime's single event loop. A lag monitor watches it (warns at loop p99 > 250 ms or ELU > 0.9);

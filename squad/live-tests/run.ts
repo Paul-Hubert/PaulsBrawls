@@ -8,8 +8,9 @@
 // The ports and the RCON password come from that server.properties (default ../dev/server.properties); MC_PORT,
 // RCON_PORT, RCON_PASSWORD override them. Only on the dev server (dev/) does the test set the time, the gamerules and
 // the difficulty; elsewhere it leaves the world as it is (LIVE_SETUP_WORLD=1 forces it). LIVE_ONLY=core runs only the
-// first group below, LIVE_ONLY=items only the second. The runtime listens on LIVE_RUNTIME_PORT (default 0: any free
-// port).
+// first group below, LIVE_ONLY=items only the second. LIVE_ONLY=range runs only a measurement (range.ts, docs/35 F4:
+// the archer line's hits per arrow by distance against a moving raid; through the mod). The runtime listens on
+// LIVE_RUNTIME_PORT (default 0: any free port).
 //
 // Core scenarios (on the dev world they start from a camp the test lays at 1100,100,1000: grass, two oaks, clean
 // kits): bots connect; `come` walks them to a point; `gather` mines logs (real collectblock); reclaim per role:
@@ -51,6 +52,7 @@ import { start } from '../src/main';
 import { blockSearchStats } from '../src/api/block-search';
 import type { Notice } from '../src/types';
 import { itemScenarios } from './items';
+import { rangeScenario } from './range';
 import { Rcon } from './rcon';
 
 const { goals } = pathfinderPkg;
@@ -71,7 +73,7 @@ const SETUP_WORLD = process.env.LIVE_SETUP_WORLD ? process.env.LIVE_SETUP_WORLD 
 const TOKEN = 'live-test-token';
 const RUNTIME_PORT = Number(process.env.LIVE_RUNTIME_PORT ?? 0);
 const ONLY = process.env.LIVE_ONLY ?? '';
-if (!['', 'core', 'items'].includes(ONLY)) throw new Error(`LIVE_ONLY=${ONLY}: expected core or items`);
+if (!['', 'core', 'items', 'range'].includes(ONLY)) throw new Error(`LIVE_ONLY=${ONLY}: expected core, items or range`);
 const PAUL = { uuid: '11111111-1111-1111-1111-111111111111', name: 'Paul' };
 const ALICE = { uuid: '22222222-2222-2222-2222-222222222222', name: 'Alice' };
 const BOTS = ['LiveArcher', 'LiveBrute', 'LiveMiner'];
@@ -147,7 +149,7 @@ async function main(): Promise<void> {
   const waitNotice = (re: RegExp, ms = 60_000) => until(() => notices.some((n) => re.test(n.text)), ms, `a notice ${re}`);
 
   try {
-    if (ONLY !== 'items') {
+    if (ONLY === '' || ONLY === 'core') {
       await scenario('bots spawn and connect', async () => {
         // On the dev world the bots start from a camp the test lays itself: a bot logs in where it last stood, and
         // runs had left the archer at the bottom of a pond, where it drowned with its kit (docs/29 §16).
@@ -310,7 +312,10 @@ async function main(): Promise<void> {
       });
     }
 
-    if (ONLY !== 'core') {
+    if (ONLY === 'range') {
+      await rangeScenario({ rcon, rt, mcPort: MC_PORT, setupWorld: SETUP_WORLD, notices, api, scenario, until, sleep, admin: PAUL });
+    }
+    if (ONLY === '' || ONLY === 'items') {
       await itemScenarios({ rcon, rt, mcPort: MC_PORT, setupWorld: SETUP_WORLD, notices, api, scenario, until, sleep, admin: PAUL });
     }
   } finally {

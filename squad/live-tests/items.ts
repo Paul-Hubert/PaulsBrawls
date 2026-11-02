@@ -890,6 +890,83 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       await api('/api/orders/stop', { by: CAPTAIN, target: 'all' });
       return `defend #${defend.id}: guards reclaimed by wall #${wall.id} and back after the stop; then within ${near} of the captain's new spot`;
     });
+
+    // -- a bot that dies (docs/35 F6, F7): it drops nothing, stays off, and /bots squad respawn brings it back --------
+
+    /** `data get entity NAME Inventory`, as `id×count` (enchantments appended), sorted. */
+    const inventoryOf = async (name: string): Promise<string[]> => {
+      const r = await rcon.command(`data get entity ${name} Inventory`);
+      // The list's top-level compounds, by brace depth (an enchanted stack nests four deep), quotes skipped.
+      const stacks: string[] = [];
+      let depth = 0;
+      let from = -1;
+      let quoted = false;
+      const list = r.slice(r.indexOf('['));
+      for (let i = 0; i < list.length; i++) {
+        const ch = list[i];
+        if (ch === '"' && list[i - 1] !== '\\') quoted = !quoted;
+        if (quoted) continue;
+        if (ch === '{' && depth++ === 0) from = i;
+        else if (ch === '}' && --depth === 0) stacks.push(list.slice(from + 1, i));
+      }
+      const out: string[] = [];
+      for (const s of stacks) {
+        const id = /id: "minecraft:([a-z_]+)"/.exec(s)?.[1];
+        if (!id) continue;
+        const count = Number(/count: (\d+)/.exec(s)?.[1] ?? 1);
+        const levels = [...s.matchAll(/"minecraft:([a-z_]+)": (\d+)/g)].map((e) => `${e[1]} ${e[2]}`).sort();
+        out.push(`${id}×${count}${levels.length ? ` (${levels.join(', ')})` : ''}`);
+      }
+      return out.sort();
+    };
+    const itemsNear = async (p: { x: number; y: number; z: number }, r: number): Promise<number> => {
+      const t = await rcon.command(`execute positioned ${p.x} ${p.y} ${p.z} if entity @e[type=minecraft:item,distance=..${r}]`);
+      return Number(/count: (\d+)/.exec(t)?.[1] ?? 0);
+    };
+
+    await clean('items: a bot that dies drops nothing and stays off; /bots squad respawn archers 1 brings the archer back by the captain with exactly its kit (mod)', async () => {
+      if (!viaMod) return skipped();
+      const archer = ARCHERS[1]!;
+      const guard = GUARDS[2]!;
+      await placeCaptain(90);
+      await api('/api/bots/tag', { by: k.admin, admin: true, name: archer, changes: ['+archer'] });
+      await api('/api/bots/tag', { by: k.admin, admin: true, name: guard, changes: ['+guard'] });
+      await rcon.command(`kill @e[type=minecraft:item,x=${A.x - 30},y=${A.y - 10},z=${A.z - 30},dx=60,dy=40,dz=60]`);
+      await sleep(1000); // the mod's cache of the roster (its tags) refreshes on the state event
+      const spots = { [archer]: await rconPos(archer), [guard]: await rconPos(guard) };
+      await rcon.command(`kill ${archer}`);
+      await rcon.command(`kill ${guard}`);
+      await until(() => [archer, guard].every((n) => pool.status(n) === 'offline' && rt.service.deps.roster.get(n)?.dead === true), 20_000, 'both dead and off');
+      await sleep(500);
+      const dropped: string[] = [];
+      for (const n of [archer, guard]) dropped.push(`${n} ${await itemsNear(spots[n]!, 4)}`);
+      if (dropped.some((d) => !d.endsWith(' 0'))) throw new Error(`items lie where they died: ${dropped.join(', ')}`);
+      // Past the first reconnect backoffs: still off.
+      await sleep(3_000);
+      if ([archer, guard].some((n) => pool.status(n) !== 'offline')) throw new Error(`a dead bot came back on its own: ${[archer, guard].map((n) => `${n} ${pool.status(n)}`).join(', ')}`);
+      const list = await api('/api/bots/list', { by: CAPTAIN });
+
+      // The captain's datapack-style call: @s is the captain, the archers' kit, one bot.
+      await rcon.command(`execute as ${CAPTAIN.name} at @s run bots squad respawn archers 1`);
+      await until(() => pool.status(archer) === 'online', 30_000, 'the archer back online');
+      const want = ['arrow×64', 'bow×1 (infinity 1, unbreaking 3)', 'chainmail_boots×1', 'chainmail_chestplate×1', 'chainmail_helmet×1', 'chainmail_leggings×1', 'cooked_beef×16', 'stone_sword×1'];
+      let have: string[] = [];
+      try {
+        await until(async () => (have = await inventoryOf(archer)).join() === want.join(), 10_000, 'the archer with exactly its kit');
+      } catch (e) {
+        throw new Error(`${(e as Error).message}: ${have.join(', ') || 'empty'}`);
+      }
+      const at = await rconPos(archer);
+      const health = floats(await rcon.command(`data get entity ${archer} Health`))[0] ?? 0;
+      if (hdist(at, C) > 6) throw new Error(`the archer came back ${hdist(at, C).toFixed(1)} from the captain, at ${fmt(at)}`);
+      if (!(health > 0)) throw new Error(`the archer is not alive: Health ${health}`);
+      await sleep(2_000);
+      if (pool.status(guard) !== 'offline' || rt.service.deps.roster.get(guard)?.dead !== true) throw new Error(`the guard did not stay dead: ${pool.status(guard)}`);
+      return (
+        `items where they died: ${dropped.join(', ')}; both off for 3 s; list: ${String(list.text).split('\n').filter((l) => /mort/.test(l)).join(' / ')}; ` +
+        `${archer} back at ${fmt(at)} (${hdist(at, C).toFixed(1)} from the captain), Health ${health}, inventory ${have.join(', ')}; ${guard} still dead`
+      );
+    });
   } finally {
     await api('/api/orders/stop', { by: CAPTAIN, target: 'all' }).catch(() => undefined);
     for (const name of ALL) await api('/api/bots/despawn', { by: k.admin, admin: true, name }).catch(() => undefined);
