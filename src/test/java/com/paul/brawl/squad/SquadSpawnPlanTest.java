@@ -46,6 +46,45 @@ class SquadSpawnPlanTest {
     }
 
     @Test
+    void respawnTakesAnOptionalKitThenAnOptionalNumberThenAnOptionalOwner() {
+        SquadSpawnPlan.RespawnArgs r = SquadSpawnPlan.parseRespawn("");
+        assertTrue(r.kit().isEmpty());
+        assertTrue(r.count().isEmpty());
+        assertEquals("@s", r.owner());
+        r = SquadSpawnPlan.parseRespawn("guards 10");
+        assertEquals("guard", r.kit().orElseThrow().name());
+        assertEquals(10, r.count().orElseThrow());
+        assertEquals("@s", r.owner());
+        r = SquadSpawnPlan.parseRespawn("archers 1 Paul");
+        assertEquals("archer", r.kit().orElseThrow().name());
+        assertEquals(1, r.count().orElseThrow());
+        assertEquals("Paul", r.owner());
+        r = SquadSpawnPlan.parseRespawn("3");
+        assertTrue(r.kit().isEmpty());
+        assertEquals(3, r.count().orElseThrow());
+        r = SquadSpawnPlan.parseRespawn("Paul");
+        assertTrue(r.kit().isEmpty());
+        assertTrue(r.count().isEmpty());
+        assertEquals("Paul", r.owner());
+        assertThrows(IllegalArgumentException.class, () -> SquadSpawnPlan.parseRespawn("guard 0"));
+        assertThrows(IllegalArgumentException.class, () -> SquadSpawnPlan.parseRespawn("guard 2 Paul Alice"));
+    }
+
+    @Test
+    void pluralKitsWorkForSpawnAndDespawnToo() {
+        assertEquals("guard", SquadSpawnPlan.parseSpawn("guards 10").kit().name());
+        assertEquals("archer", SquadSpawnPlan.parseDespawn("archers").kit().orElseThrow().name());
+    }
+
+    @Test
+    void theRespawnAnswerCountsInFrench() {
+        java.util.Optional<SquadKits.Kit> guard = SquadKits.find("guard");
+        assertEquals("7 gardes", SquadSpawnPlan.counted(7, guard));
+        assertEquals("1 garde", SquadSpawnPlan.counted(1, guard));
+        assertEquals("3 bots", SquadSpawnPlan.counted(3, java.util.Optional.empty()));
+    }
+
+    @Test
     void despawnTakesAnOptionalKitThenAnOptionalOwner() {
         SquadSpawnPlan.DespawnArgs d = SquadSpawnPlan.parseDespawn("");
         assertTrue(d.kit().isEmpty());

@@ -133,6 +133,14 @@ export class SquadHttp {
         return s.metrics();
       case '/api/bots/spawn':
         return s.spawn(who(), admin, str(b.name), players(b.owners));
+      case '/api/bots/respawn':
+        return s.respawn(
+          who(),
+          admin,
+          b.owner === undefined ? who() : player(b.owner),
+          typeof b.kit === 'string' && b.kit.trim() ? b.kit.trim() : undefined,
+          b.n === undefined || b.n === null ? undefined : count(b.n),
+        );
       case '/api/bots/despawn':
         return s.despawn(who(), admin, str(b.name));
       case '/api/bots/owners':
@@ -225,6 +233,12 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 function str(v: unknown): string {
   if (typeof v !== 'string' || !v.trim()) throw new HttpError(400, 'a required string field is missing');
   return v.trim();
+}
+
+function count(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) throw new HttpError(400, '"n" must be an integer ≥ 1');
+  return n;
 }
 
 function strings(v: unknown): string[] {

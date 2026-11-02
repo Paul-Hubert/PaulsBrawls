@@ -153,7 +153,8 @@ summary row per minute goes to the `vitals` table of `.squad-data/squad.db` (kep
 | `/bots orders unbind` · `/bots orders bound` | remove the held item's binding (its lore line and glint go too); list the bound items in your inventory |
 | `/bots status` | the runtime's load over the last 10 s: ELU, loop p99, the slowest bot's ticks/s |
 | admin: `despawn BOT` · `despawn all` (every bot) · `owners BOT add\|remove P…` · `list all` · `stop all` | |
-| `/bots squad spawn archer\|guard\|miner\|farmer [n=5] [owner=@s] [others…]` (admin) | a ready squad: `n` bots of that kit around the owner, equipped on arrival, owned by the owner and the others. `/bots squad despawn [kit] [owner=@s]` removes the owner's bots of that kit (all of them without a kit). Both work from a datapack function (`@s` = the player running it) |
+| `/bots squad spawn archer\|guard\|miner\|farmer [n=5] [owner=@s] [others…]` (admin) | a ready squad: `n` bots of that kit around the owner, equipped on arrival, owned by the owner and the others. `/bots squad despawn [kit] [owner=@s]` removes the owner's bots of that kit (all of them without a kit, dead ones too). Both work from a datapack function (`@s` = the player running it). Kits may be plural (`guards`, `archers`…) |
+| `/bots squad respawn [kit] [n] [owner=@s]` (admin) | a bot that dies drops nothing, disconnects and stays offline (« mort » in `/bots list`); this brings back up to `n` of the owner's dead bots of that kit (all, of every kit, without them) around you, each with exactly its kit again: `/bots squad respawn guards 10`. From a datapack function too |
 
 Stock commands everyone has: `come`, `follow`, `defend` (archers reclaimed, melee kept; threats within `radius` of
 the commander, at most two guards per creature, each bot on its own spot around the commander), `gather`, `deposit`,

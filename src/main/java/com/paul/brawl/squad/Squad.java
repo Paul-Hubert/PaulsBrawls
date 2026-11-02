@@ -193,6 +193,17 @@ public final class Squad {
         return out;
     }
 
+    /** A roster bot's tags, from the cache (empty for an unknown name). */
+    static List<String> tagsOf(String bot) {
+        List<String> out = new ArrayList<>();
+        for (JsonElement el : stateArray("bots")) {
+            JsonObject b = el.getAsJsonObject();
+            if (!b.get("name").getAsString().equalsIgnoreCase(bot) || !b.has("tags")) continue;
+            for (JsonElement t : b.getAsJsonArray("tags")) out.add(t.getAsString());
+        }
+        return out;
+    }
+
     /** The bots a player owns. */
     static List<String> botsOf(UUID player) {
         List<String> out = new ArrayList<>();
@@ -377,8 +388,17 @@ public final class Squad {
      * {@code then} gets the French answer. Both run on the server thread; call it from there.
      */
     static void equipLater(MinecraftServer srv, String botName, SquadKits.Kit kit, Consumer<String> then) {
+        paced(srv, () -> then.accept(equip(srv, botName, kit)));
+    }
+
+    /** {@link #resetToKit}, paced like {@link #equipLater}. */
+    static void resetToKitLater(MinecraftServer srv, String botName, SquadKits.Kit kit, Consumer<String> then) {
+        paced(srv, () -> then.accept(resetToKit(srv, botName, kit)));
+    }
+
+    /** Run {@code give} on the server thread, at least {@link SquadConfig#kitStaggerMs} after the kit before it. */
+    private static void paced(MinecraftServer srv, Runnable give) {
         long wait = kitPacer.reserve(System.currentTimeMillis(), SquadConfig.INSTANCE.kitStaggerMs);
-        Runnable give = () -> then.accept(equip(srv, botName, kit));
         if (wait <= 0) {
             give.run();
             return;
@@ -450,6 +470,22 @@ public final class Squad {
             out.add(e.getKey() + " " + e.getValue());
         }
         return out;
+    }
+
+    /**
+     * A bot back from the dead ({@code /bots squad respawn}, docs/35 D3): its whole inventory cleared (main, armor,
+     * off-hand), then its kit given as {@link #equip} does, so an archer has its Infinity bow again. A null kit (a bot
+     * with no kit tag) leaves it empty. {@code /bots equip} is unchanged: it keeps what the bot carries. Main thread.
+     */
+    static String resetToKit(MinecraftServer srv, String botName, SquadKits.Kit kit) {
+        ServerPlayerEntity p = srv.getPlayerManager().getPlayer(botName);
+        if (p == null) return "[Bots] " + botName + " n'est pas connecté : impossible de le rééquiper.";
+        p.getInventory().clear();
+        if (kit == null) {
+            LOGGER.info("Squad bot {} back without a kit: inventory cleared", p.getName().getString());
+            return "[Bots] " + p.getName().getString() + " revient sans kit.";
+        }
+        return equip(srv, botName, kit);
     }
 
     private static void give(ServerPlayerEntity p, ItemStack stack) {

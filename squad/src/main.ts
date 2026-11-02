@@ -112,7 +112,10 @@ export async function start(
   const http = new SquadHttp(service, { port: cfg.port, token: cfg.token });
 
   vitals.start();
-  pool.on('gone', (name: string, reason: 'died' | 'disconnected') => void runner.botGone(name, reason));
+  pool.on('gone', (name: string, reason: 'died' | 'disconnected') => {
+    if (reason === 'died') service.died(name); // dead in the roster: offline until /bots squad respawn (docs/35 F7)
+    void runner.botGone(name, reason);
+  });
   const port = await http.listen();
   logger.info('squad', `control API, events and MCP on http://127.0.0.1:${port} (/api, /events, /mcp/squad)`);
 
@@ -120,7 +123,8 @@ export async function start(
     if (row.trial) continue;
     http.notice({ to: [row.commander], text: `[Bots] Le runtime des bots a redémarré : « ${row.command} » (#${row.id}) a été interrompu.` });
   }
-  if (opts.connectBots !== false) for (const b of roster.all()) pool.add(b.name);
+  // A dead bot stays offline across restarts: only /bots squad respawn brings it back (docs/35 F7).
+  if (opts.connectBots !== false) for (const b of roster.all()) if (!b.dead) pool.add(b.name);
   if (opts.installGuards) installGuards(runner);
 
   // Warm the typecheck (the first one parses every library file, ~5 s) so the agent's first check_script is quick.

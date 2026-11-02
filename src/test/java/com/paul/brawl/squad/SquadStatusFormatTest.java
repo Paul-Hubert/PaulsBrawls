@@ -28,6 +28,14 @@ class SquadStatusFormatTest {
     }
 
     @Test
+    void deadBotsAreCounted() {
+        JsonObject r = json("{\"ok\":true,\"loop\":{\"p99\":40},\"elu\":0.5,\"bots\":" + BOTS + ",\"dead\":[\"Garde01\",\"Garde02\"]}");
+        assertEquals("[Bots] Runtime : ELU 0,50 · boucle p99 40 ms · bot le plus lent : Brute à 15,2 ticks/s · 2 bots morts.", SquadStatusFormat.format(r));
+        JsonObject one = json("{\"ok\":true,\"loop\":{\"p99\":40},\"elu\":0.5,\"bots\":[],\"dead\":[\"Garde01\"]}");
+        assertEquals("[Bots] Runtime : ELU 0,50 · boucle p99 40 ms · aucun bot en ligne · 1 bot mort.", SquadStatusFormat.format(one));
+    }
+
+    @Test
     void anOverloadedLoopSaysSo() {
         JsonObject eluHigh = json("{\"ok\":true,\"loop\":{\"p99\":40},\"elu\":0.95,\"bots\":" + BOTS + "}");
         assertEquals("[Bots] Runtime : ELU 0,95 · boucle p99 40 ms · bot le plus lent : Brute à 15,2 ticks/s — surchargé : les bots ralentissent.",

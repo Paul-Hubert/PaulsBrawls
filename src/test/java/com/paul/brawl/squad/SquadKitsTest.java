@@ -68,6 +68,27 @@ class SquadKitsTest {
     }
 
     @Test
+    void pluralNamesFindTheKit() {
+        assertEquals("guard", SquadKits.find("guards").orElseThrow().name());
+        assertEquals("archer", SquadKits.find("Archers").orElseThrow().name());
+        assertEquals("miner", SquadKits.find("miners").orElseThrow().name());
+        assertEquals("farmer", SquadKits.find("FARMERS").orElseThrow().name());
+        assertTrue(SquadKits.find("wizards").isEmpty());
+        assertTrue(SquadKits.find("s").isEmpty());
+        assertTrue(SquadKits.find(null).isEmpty());
+    }
+
+    @Test
+    void aRespawnedBotGetsTheCommandsKitElseItsKitTagElseNone() {
+        SquadKits.Kit guard = SquadKits.find("guard").orElseThrow();
+        SquadKits.Kit archer = SquadKits.find("archer").orElseThrow();
+        assertEquals(guard, SquadKits.forReset(java.util.Optional.of(guard), List.of("archer")).orElseThrow(), "the command's kit");
+        assertEquals(archer, SquadKits.forReset(java.util.Optional.empty(), List.of("scout", "archer")).orElseThrow(), "its kit tag");
+        assertTrue(SquadKits.forReset(java.util.Optional.empty(), List.of("scout")).isEmpty(), "no kit tag: none");
+        assertTrue(SquadKits.forReset(java.util.Optional.empty(), List.of()).isEmpty());
+    }
+
+    @Test
     void kitTagsReplaceEachOther() {
         assertEquals(List.of("-archer", "-miner", "-farmer", "+guard"), SquadKits.tagChanges(SquadKits.find("Guard").orElseThrow()));
     }

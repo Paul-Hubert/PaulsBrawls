@@ -69,6 +69,9 @@ public final class SquadStatusFormat {
         } else {
             sb.append("aucun bot en ligne");
         }
+        // Dead bots stay offline until /bots squad respawn (docs/35 F7): say how many.
+        int dead = r.has("dead") && r.get("dead").isJsonArray() ? r.getAsJsonArray("dead").size() : 0;
+        if (dead > 0) sb.append(" · ").append(dead).append(dead > 1 ? " bots morts" : " bot mort");
         boolean overloaded = elu > OVERLOADED_ELU || p99 > OVERLOADED_P99_MS;
         sb.append(overloaded ? " — surchargé : les bots ralentissent." : ".");
         return sb.toString();

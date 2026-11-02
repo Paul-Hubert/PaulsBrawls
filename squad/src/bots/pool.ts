@@ -41,6 +41,8 @@ const KEEPALIVE_INTERVAL_MS = 90_000; // R13
 const RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
 /** A connected bot that received no packet for this long is deaf (its decoder died): it is reconnected. */
 export const DEAF_MS = 20_000;
+/** A bot that died quits once respawned; when no respawn comes within this long, it quits anyway. */
+export const DEAD_QUIT_MS = 10_000;
 
 export interface SpawnRequest {
   host: string;
@@ -73,6 +75,8 @@ interface Record_ {
   lastPacket: number;
   /** When the current instance spawned (0 while not online): a bot online for part of a window is not "slow". */
   onlineAt: number;
+  /** It died: it quits once respawned and is never reconnected (not by the backoff, nor the deaf watchdog) until revived. */
+  dead: boolean;
   /** The vitals counters (docs/32 C), zeroed by {@link BotPool.readMeters}. */
   meter: BotCounters;
 }
@@ -117,6 +121,8 @@ export interface BotPoolOptions {
   setup?: (bot: Bot) => void;
   /** Override {@link DEAF_MS} (tests). */
   deafMs?: number;
+  /** Override {@link DEAD_QUIT_MS} (tests). */
+  deadQuitMs?: number;
   /** A* on the reader workers (workers.count > 0 with the shared world); absent = every search on the main thread. */
   pathSearch?: PathSearch;
   /** The shared world (config world.enabled); absent = the bots' packets feed only their own worlds. */
@@ -126,7 +132,8 @@ export interface BotPoolOptions {
 /**
  * Events:
  *  - `online` (name, bot): spawned (also after every reconnect);
- *  - `gone` (name, reason): died or disconnected; its order loses it;
+ *  - `gone` (name, reason): died or disconnected; its order loses it. A bot that died then quits once mineflayer has
+ *    respawned it, and stays offline until {@link BotPool.revive} (docs/35 F7, Paul's D2);
  *  - `status` (name, status).
  */
 export class BotPool extends EventEmitter {
@@ -168,8 +175,23 @@ export class BotPool extends EventEmitter {
   /** Add a bot and queue its login (staggered). Re-adding a known name is a no-op. */
   add(name: string): void {
     if (this.records.has(name)) return;
-    this.records.set(name, { name, bot: null, status: 'offline', attempts: 0, lastPacket: Date.now(), onlineAt: 0, meter: newCounters() });
+    this.records.set(name, { name, bot: null, status: 'offline', attempts: 0, lastPacket: Date.now(), onlineAt: 0, dead: false, meter: newCounters() });
     this.enqueue(name);
+  }
+
+  /** A dead bot comes back (`/bots squad respawn`): its login is queued with the others (the stagger holds). */
+  revive(name: string): void {
+    const rec = this.records.get(name);
+    if (!rec) return this.add(name);
+    rec.dead = false;
+    rec.attempts = 0;
+    rec.lastReason = undefined;
+    if (rec.status === 'offline' && !rec.reconnectTimer) this.enqueue(name);
+  }
+
+  /** Whether the pool holds this bot as dead (it died and has not been revived). */
+  isDead(name: string): boolean {
+    return this.records.get(name)?.dead ?? false;
   }
 
   /** Disconnect and forget a bot. */
@@ -253,7 +275,7 @@ export class BotPool extends EventEmitter {
         if (this.stopping || this.queue.length === 0) break;
         const name = this.queue.shift() as string;
         const rec = this.records.get(name);
-        if (rec && rec.status === 'offline') {
+        if (rec && rec.status === 'offline' && !rec.dead) {
           this.lastConnectAt = Date.now();
           this.connect(rec);
         }
@@ -321,8 +343,25 @@ export class BotPool extends EventEmitter {
     });
     bot.on('death', () => {
       if (rec.bot !== bot) return;
-      logger.info(`bot:${rec.name}`, 'died (respawns automatically)');
+      rec.dead = true;
+      rec.lastReason = 'died';
+      logger.info(`bot:${rec.name}`, 'died: it quits once respawned and stays offline until /bots squad respawn');
       this.emit('gone', rec.name, 'died' satisfies GoneReason);
+      // Quit once mineflayer has respawned it (its next spawn), so the server saves it alive at world spawn with an
+      // empty inventory (the mod's drop rule) and puts it where the admin is when it comes back (Squad.expectArrival).
+      const leave = (): void => {
+        clearTimeout(timer);
+        bot.removeListener('spawn', leave);
+        if (rec.bot !== bot || !rec.dead) return;
+        try {
+          bot.quit('died');
+        } catch {
+          /* already gone */
+        }
+      };
+      const timer = setTimeout(leave, this.opts.deadQuitMs ?? DEAD_QUIT_MS);
+      timer.unref();
+      bot.once('spawn', leave);
     });
     bot.on('end', (reason?: unknown) => this.onEnd(rec, bot, reasonText(reason) || 'end'));
     bot.on('kicked', (reason?: unknown) => {
@@ -379,7 +418,7 @@ export class BotPool extends EventEmitter {
     this.setStatus(rec, 'offline');
     logger.info(`bot:${rec.name}`, `offline (${rec.lastReason})`);
     if (wasOnline) this.emit('gone', rec.name, 'disconnected' satisfies GoneReason);
-    if (!this.stopping && this.records.get(rec.name) === rec) this.scheduleReconnect(rec);
+    if (!this.stopping && this.records.get(rec.name) === rec && !rec.dead) this.scheduleReconnect(rec);
   }
 
   private scheduleReconnect(rec: Record_): void {
@@ -387,7 +426,7 @@ export class BotPool extends EventEmitter {
     rec.attempts++;
     rec.reconnectTimer = setTimeout(() => {
       rec.reconnectTimer = undefined;
-      if (!this.stopping && this.records.get(rec.name) === rec && rec.status === 'offline') this.enqueue(rec.name);
+      if (!this.stopping && this.records.get(rec.name) === rec && rec.status === 'offline' && !rec.dead) this.enqueue(rec.name);
     }, backoff);
     rec.reconnectTimer.unref();
   }

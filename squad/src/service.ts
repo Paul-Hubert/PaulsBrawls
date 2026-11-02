@@ -59,7 +59,7 @@ export class SquadService {
         name: b.name,
         owners: b.owners,
         tags: b.tags,
-        status: pool.status(b.name),
+        status: b.dead ? 'dead' : pool.status(b.name),
         ...(top ? { order: { id: top.orderId, role: top.role, ...(d ?? {}) } } : {}),
       };
     });
@@ -76,7 +76,9 @@ export class SquadService {
 
   /** `/bots status`: the last 10 s window of the event loop, the process and every bot. Anyone may ask. */
   metrics(): Metrics | Answer {
-    return this.deps.vitals ? this.deps.vitals.metrics() : no('[Bots] Les mesures du runtime ne sont pas disponibles.');
+    if (!this.deps.vitals) return no('[Bots] Les mesures du runtime ne sont pas disponibles.');
+    // The dead bots (docs/35 F7) are not in the pool's counters once the runtime restarted: named from the roster.
+    return { ...this.deps.vitals.metrics(), dead: this.deps.roster.all().filter((b) => b.dead).map((b) => b.name) };
   }
 
   // -- bots ---------------------------------------------------------------------------------------------------
@@ -91,6 +93,39 @@ export class SquadService {
     } catch (e) {
       return no(`[Bots] ${errorMessage(e)}`);
     }
+  }
+
+  /** A bot died: dead in the roster, so it stays offline (the pool quits it once respawned) until respawned. */
+  died(name: string): void {
+    if (!this.deps.roster.has(name)) return;
+    this.deps.roster.setDead(name, true);
+    this.deps.runner.emit('state');
+  }
+
+  /**
+   * `/bots squad respawn [kit] [n] [owner]` (admin, docs/35 F7): up to `n` (all when absent) of `owner`'s dead bots
+   * tagged `kit` (every dead bot of theirs without a kit), by name, lose their dead mark and log in again (the login
+   * stagger holds). The mod puts each where the admin is and resets its inventory to its kit on arrival.
+   */
+  respawn(by: Player, admin: boolean, owner: Player, kit: string | undefined, n: number | undefined): Answer {
+    if (!admin) return no('[Bots] Seul un admin peut ramener des bots.');
+    const tag = kit?.toLowerCase();
+    const dead = this.deps.roster
+      .botsOf(owner.uuid)
+      .filter((b) => b.dead && (!tag || b.tags.includes(tag)))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    const back = n === undefined ? dead : dead.slice(0, Math.max(0, Math.floor(n)));
+    for (const b of back) {
+      this.deps.roster.setDead(b.name, false);
+      this.deps.pool.revive(b.name);
+    }
+    if (back.length) this.deps.runner.emit('state');
+    const names = back.map((b) => b.name);
+    const s = names.length > 1 ? 's' : '';
+    return ok(
+      names.length ? `[Bots] ${names.length} bot${s} ramené${s} : ${names.join(', ')}.` : `[Bots] Aucun bot mort${tag ? ` (${tag})` : ''} pour ${owner.name}.`,
+      { bots: names },
+    );
   }
 
   async despawn(by: Player, admin: boolean, name: string): Promise<Answer> {
@@ -136,11 +171,20 @@ export class SquadService {
     const bots = all ? this.deps.roster.all() : this.deps.roster.botsOf(by.uuid);
     if (bots.length === 0) return ok(all ? '[Bots] Aucun bot.' : "[Bots] Tu n'as aucun bot.");
     const lines = bots.map((b) => {
-      const status = this.deps.pool.status(b.name);
+      const status = b.dead ? 'dead' : this.deps.pool.status(b.name);
       const bot = this.deps.pool.bot(b.name);
       const top = this.deps.leases.top(b.name);
       const d = top ? this.deps.runner.describe(top.orderId) : undefined;
-      const st = status === 'online' ? (top ? `« ${d?.command ?? '?'} » #${top.orderId} (${d?.commander ?? '?'}, ${top.role})` : 'libre') : status === 'connecting' ? 'connexion…' : `hors ligne${this.deps.pool.lastReason(b.name) ? ` (${this.deps.pool.lastReason(b.name)})` : ''}`;
+      const st =
+        status === 'dead'
+          ? 'mort (/bots squad respawn)'
+          : status === 'online'
+            ? top
+              ? `« ${d?.command ?? '?'} » #${top.orderId} (${d?.commander ?? '?'}, ${top.role})`
+              : 'libre'
+            : status === 'connecting'
+              ? 'connexion…'
+              : `hors ligne${this.deps.pool.lastReason(b.name) ? ` (${this.deps.pool.lastReason(b.name)})` : ''}`;
       const hp = bot ? ` ❤${Math.round(bot.health ?? 0)}` : '';
       return ` • ${b.name}${hp} — ${st}${b.tags.length ? ` [${b.tags.join(', ')}]` : ''}${all || b.owners.length > 1 ? ` — ${b.owners.map((o) => o.name).join(', ')}` : ''}`;
     });

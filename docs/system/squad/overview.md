@@ -212,14 +212,14 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
 | Area | Files | What it does |
 |---|---|---|
 | Bots | `bots/pool.ts`, `plugins.ts`, `hardening.ts`, `protocol.ts` | Dynamic pool, logins 100 ms apart (`loginStaggerMs`), reconnect with backoff, version pinned to 1.21.1, `viewDistance: 'short'`. Plugins: pathfinder, pvp, armor-manager, tool, collectblock, auto-eat (hawkEye, which aimed the bows, is gone since docs/37 P3: `shoot` aims with `aim/`). Pathfinder bounded (searchRadius 64, thinkTimeout 5 s, `hardening.ts`), its library patched and its A* budgeted (above). With `world.shared`, mineflayer's blocks plugin replaced by the shared world's and the chunks' light read as bytes (above). Per-bot vitals counters. Protocol hardening, below |
-| Roster | `roster.ts` | Bots, owners, tags in `.squad-data/roster.json`; the runtime is its only writer |
+| Roster | `roster.ts` | Bots, owners, tags in `.squad-data/roster.json`, and `dead` for a bot that died (docs/35 F7: offline until `/bots squad respawn`); the runtime is its only writer |
 | Leases | `leases.ts` | A lease stack per bot (depth 4). `plan` :84 grants idle bots first, then busy ones for `take: 'reclaim'` roles, all or nothing. `apply` :106 runs the old order's cleanup before reuse. `release` :130 hands a bot back to the live order below |
 | Orders | `orders/runner.ts`, `order.ts`, `guard.ts`, `claims.ts` | `start` :141 (tracked per binding, below) → `launch` :147 resolves, compiles (once per version) and runs. Each script gets a **lease-guarded Proxy** of each bot (`guardBot` :81): calls check the lease, listeners and timers are tracked, chat is rate-limited, `quit` is refused. Reads pass through, so every helper that acts on the bot calls `checkLease` first: a dead archer's empty inventory threw « no bow » before any guarded call, and its loop went round forever holding its target (docs/35 F1). Every leave and every end runs the R4/R5 abort sequence. Claims are shared across orders. `trigger` :208: a bound item's click delivers to, restarts, starts or stops the player's order of that command (below) |
 | Dialect | `api/squad.ts`, `api/helpers.ts`, `api/scope.ts`, `reference/squad.d.ts` | `squad.parallel`, `squad.tasks` (work queue, re-queues the work of a leaving bot), claims, acquire/release, `ctx.commander` (with `on('trigger')`, `off`, `next`), `ctx.run`. Voyager-named helpers (`mineBlock`, `craftItem`, `goTo`, `shoot`…), and the formation helpers of bound items (`lookDir`, `lineSlots`, `groundAt`, `faceYaw`, `raiseShield`, `entityOf`; below) |
 | Scripts | `script/compile.ts`, `manifest.ts`, `check.ts` | ESM rewritten in place, keeping lines (`vm.Script` filename `squad:<author>/<name>@vN.mjs`); loop budget + fences; manifest and args (French errors for players); `check_script` = compile + dry module run + typecheck (`BLOCKING_CODES` :40) |
 | Authoring | `authoring.ts`, `http/mcp.ts`, `agent/` | `cmd-…` tickets (30 min; manual 2 h). Seven MCP tools (`get_api_reference`, `get_context`, `list_commands`, `read_command`, `check_script`, `trial_run` ≤ 60 s on idle bots, `submit_command`). Claude Code config in `agent/claude-code/`, opencode config in `agent/opencode.json` |
 | Storage | `store/commands.ts`, `journal/journal.ts` | `.squad-data/commands/<uuid>/<name>/meta.json` + `vN.mjs` (append-only, shares, revert); SQLite `squad.db` (WAL, `synchronous=NORMAL`), one row per order with its full report, and one `vitals` row per minute |
-| HTTP | `http/server.ts` | 21 `POST /api/...` routes (incl. `/api/metrics`, `/api/orders/check`, `/api/orders/trigger`), `GET /events` (SSE: `hello`, `notice`, `state`; notices buffered while no mod listens), `POST /mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN` |
+| HTTP | `http/server.ts` | 22 `POST /api/...` routes (incl. `/api/metrics`, `/api/orders/check`, `/api/orders/trigger`, `/api/bots/respawn`), `GET /events` (SSE: `hello`, `notice`, `state`; notices buffered while no mod listens), `POST /mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN` |
 | Stock | `src/stock/*.mjs` | `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`, `raid`, and for bound items `mur-de-boucliers`, `epee`, `ligne-archers`, `tir`. Usable by everyone, and the agent's examples. `defend`, `raid` and the four: below |
 
 **Block searches** (`api/block-search.ts`, [docs/37 §10](../../37-squad-worker-reads-plan.md), P6). `mineBlock`, so
@@ -478,6 +478,24 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
   `/bots raid clear` despawns every bot `Envahisseur` owns (and cancels a raid still assembling).
 - **Limits:** 20 defenders + 20 raiders need `limits.maxBots` ≥ 40 in `squad.json` (default 30).
 
+## A bot that dies (docs/35 F6–F7, Paul's D2–D3)
+
+- **The mod:** it drops nothing (`mixin/PlayerEntityMixin` cancels `PlayerEntity.dropInventory()` for a roster
+  name); its stacks are lost, XP is vanilla's.
+- **The runtime:** mineflayer's `death` → the pool marks the record dead and emits `gone … died` (its orders lose it,
+  `leases.drop`), the service marks it `dead` in `roster.json`. On mineflayer's automatic respawn (its next `spawn`)
+  the pool quits it (`bot.quit('died')`; `DEAD_QUIT_MS` 10 s without a respawn: quits anyway), so the server saves
+  it alive at world spawn, empty. A dead record is never reconnected: not by the backoff (`onEnd`, `scheduleReconnect`),
+  not by the drain, not at boot (`main.ts` adds only the living), and the deaf watchdog only ends online bots. The
+  `state` event's status is `dead`; `/bots list` shows « mort (/bots squad respawn) »; `/api/metrics` names them in
+  `dead` and `/bots status` counts them. Dead bots still count toward `limits.maxBots`; `/bots despawn`, `squad
+  despawn` and `raid clear` remove them like any bot.
+- **Back:** `POST /api/bots/respawn { by, admin, owner?, kit?, n? }` (admin; `owner` defaults to `by`): up to `n` of
+  the owner's dead bots tagged `kit` (all of them, every kit, without), by name (numeric order), lose the mark and
+  are revived (`BotPool.revive`: queued with the login stagger); the answer names them (`bots`). The mod's `/bots squad
+  respawn` (above) places them around the caller and resets each inventory to its kit on arrival. With docs/35 F5, a
+  respawned bot comes back idle, and the next click of a running wall or line takes it back.
+
 ## Protocol hardening (found live, docs/29 §16)
 
 Mineflayer's 1.21.1 data cannot decode some items. When protodef's `FullPacketParser` gets a non-partial decode
@@ -500,7 +518,7 @@ Three layers now:
 | `SquadFriends` | Friendly fire: which roster bot must not hurt whom (shared owner, or its own owner). Minecraft-free, JUnit; the hook is `Squad.registerFriendlyFire` |
 | `SquadDeath`, `mixin/PlayerEntityMixin` | A roster bot drops nothing when it dies (docs/35 F6, D2): the mixin cancels `PlayerEntity.dropInventory()` at HEAD for a roster name (`Squad.botNames()`, case-insensitive, `SquadDeath.dropsNothing`, Minecraft-free, JUnit). Its stacks are lost: the respawned player copies no inventory without `keepInventory`, and `/bots squad respawn` gives the kit again. Players and XP unchanged. Target checked in the named jar (declared by `PlayerEntity`, not overridden by `ServerPlayerEntity`), the intermediary jar (`class_1657.method_16078()V`) and the generated refmap; registered in `paulsbrawls.mixins.json` (`defaultRequire: 1`) |
 | `SquadRaid`, `SquadRaidPlan` | `/bots raid` (above); the plan (arguments, point, names, spread, timeout) is Minecraft-free, JUnit |
-| `SquadSpawn`, `SquadSpawnPlan` | `/bots squad spawn KIT [n] [owner] [others…]` / `squad despawn [KIT] [owner]` (admin): `n` bots named after the kit, on a ring around the owner at the owner's height (`standNear`: a floor within 6 blocks, never the roof), kit and tag on arrival like `raid`; despawn by owner and kit tag. The plan (arguments, names, ring) is Minecraft-free, JUnit |
+| `SquadSpawn`, `SquadSpawnPlan` | `/bots squad spawn KIT [n] [owner] [others…]` / `squad despawn [KIT] [owner]` / `squad respawn [KIT] [n] [owner]` (admin): `n` bots named after the kit, on a ring around the owner at the owner's height (`standNear`: a floor within 6 blocks, never the roof), kit and tag on arrival like `raid`; despawn by owner and kit tag (dead bots too); respawn (docs/35 F7): `POST /api/bots/respawn { by, admin, owner, kit?, n? }`, then each bot named in the answer is expected on a ring around the caller (`@s`, a datapack function's too; else the owner) and on arrival `Squad.resetToKitLater` clears its whole inventory and gives its kit (`SquadKits.forReset`: the command's kit, else its kit tag; none: empty, « sans kit » in the answer). Kits may be plural (`SquadKits.find`). The plan (arguments, names, ring, the French count) is Minecraft-free, JUnit |
 | `Squad` | Lifecycle, the SSE loop and the cache, notices (kept for offline players), whitelist, join gate (a bot name from a non-loopback address is kicked), arrival teleport (to the admin, or to a given spot with a callback), `hasPlayed` (spawn refuses names with a `playerdata` file), `equip` |
 | `SquadKits` | Kits for archer, guard, miner and farmer (Minecraft-free); an item may carry enchantments (id → level): the archer's bow has Infinity I and Unbreaking III (docs/35 D6; raiders use the archer kit too). `equip` wears armor, holds weapons, puts the shield in the off-hand, and enchants a stack from the server's enchantment registry (`RegistryKeys.ENCHANTMENT`, dynamic since 1.21; `ItemStack.addEnchantment`) |
 | `SquadAuthoring` | One `squad-author` turn: reserve the slot, open, run the agent, close, announce « Commande X prête » |
@@ -720,9 +738,10 @@ clicks and sends each one; it decides nothing about what a click does.
   crossbow), a held right-click against the limiter, the lore and glint as a real client renders them (only the
   stack's data was read), a rebind, and a bound item given to another player.
 - **`raid` and `/bots raid`** (2026-10-31) ran only on fakes and JUnit: never on a server (the surface, the
-  arrival teleport and kit, the start as `Envahisseur`, a real 20-vs-20 fight, 40 bots on one runtime). A raider that
-  dies respawns idle (it leaves its order, docs/29 §4) and does not rejoin the raid; one that arrives after the
-  timeout is equipped but stays idle.
+  arrival teleport and kit, the start as `Envahisseur`, a real 20-vs-20 fight, 40 bots on one runtime); Paul's first
+  fights on production (2026-10-31) used it, read from the journal only (docs/35). A raider that dies stays dead,
+  offline, until `/bots raid clear` (docs/35 F7), so the enemy army shrinks; one that arrives after the timeout is
+  equipped but stays idle.
 - **The reader workers (docs/37 P2, P3, P4, P6):** on by default since docs/37 D7. A* on them ran on fakes (`tests/pathworkers.test.ts`),
   the dev server's `bench:load` and the live core tests (docs/37 §12); the `findBlocks` job on fakes over real chunk data
   (`tests/find-blocks.test.ts`), in `bench:load` gather (docs/37 §10.4) and the live core test (7/7); the `aim` job in

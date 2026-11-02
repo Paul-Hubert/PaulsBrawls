@@ -19,12 +19,16 @@ public final class SquadSpawnPlan {
 
     static final String SPAWN_USAGE = "/bots squad spawn archer|guard|miner|farmer [nombre=5] [propriétaire=@s] [autres propriétaires…]";
     static final String DESPAWN_USAGE = "/bots squad despawn [archer|guard|miner|farmer] [propriétaire=@s]";
+    static final String RESPAWN_USAGE = "/bots squad respawn [archer|guard|miner|farmer] [nombre] [propriétaire=@s]";
 
     /** {@code owner} is a player name or {@code @s}; {@code others} the other owners, in order. */
     public record SpawnArgs(SquadKits.Kit kit, int count, String owner, List<String> others) {}
 
     /** No kit: every bot of the owner. */
     public record DespawnArgs(Optional<SquadKits.Kit> kit, String owner) {}
+
+    /** No kit: every dead bot of the owner; no count: all of them. */
+    public record RespawnArgs(Optional<SquadKits.Kit> kit, Optional<Integer> count, String owner) {}
 
     /** An offset from the owner, on the ground plane. */
     public record XZ(double x, double z) {}
@@ -65,6 +69,32 @@ public final class SquadSpawnPlan {
         String owner = i < t.size() ? t.get(i++) : "@s";
         if (i < t.size()) throw new IllegalArgumentException("trop d'arguments (usage : " + DESPAWN_USAGE + ")");
         return new DespawnArgs(kit, owner);
+    }
+
+    /**
+     * {@code [KIT] [number] [owner]} (docs/35 F7): a kit name first if given (singular or plural), then a number (1 to
+     * {@link #MAX_COUNT}) if the next token is one, then the owner (default {@code @s}).
+     */
+    public static RespawnArgs parseRespawn(String text) {
+        List<String> t = SquadArgs.names(text);
+        int i = 0;
+        Optional<SquadKits.Kit> kit = Optional.empty();
+        if (i < t.size() && SquadKits.find(t.get(i)).isPresent()) kit = SquadKits.find(t.get(i++));
+        Optional<Integer> count = Optional.empty();
+        if (i < t.size() && t.get(i).matches("\\d+")) {
+            int n = Integer.parseInt(t.get(i++));
+            if (n < 1 || n > MAX_COUNT) throw new IllegalArgumentException("« nombre » : entre 1 et " + MAX_COUNT);
+            count = Optional.of(n);
+        }
+        String owner = i < t.size() ? t.get(i++) : "@s";
+        if (i < t.size()) throw new IllegalArgumentException("trop d'arguments (usage : " + RESPAWN_USAGE + ")");
+        return new RespawnArgs(kit, count, owner);
+    }
+
+    /** « 7 gardes », « 1 garde », « 3 bots »: a count and the kit's label (or « bot »), French plural. */
+    public static String counted(int n, Optional<SquadKits.Kit> kit) {
+        String word = kit.map(SquadKits.Kit::label).orElse("bot");
+        return n + " " + word + (n > 1 ? "s" : "");
     }
 
     private static SquadKits.Kit kit(String name) {

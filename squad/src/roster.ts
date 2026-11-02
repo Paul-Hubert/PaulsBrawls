@@ -15,6 +15,8 @@ export interface RosterBot {
   tags: string[];
   createdAt: number;
   createdBy: string;
+  /** Died: disconnected, and never reconnected until `/bots squad respawn` clears it (docs/35 F7, Paul's D2). */
+  dead?: boolean;
 }
 
 export class RosterError extends Error {
@@ -95,6 +97,15 @@ export class Roster {
     return copy(b);
   }
 
+  /** Mark a bot dead (it died: offline until respawned) or alive again. */
+  setDead(name: string, dead: boolean): RosterBot {
+    const b = this.require(name);
+    if (dead) b.dead = true;
+    else delete b.dead;
+    this.save();
+    return copy(b);
+  }
+
   /** `changes` like ['+archer', '-melee', 'scout'] (no sign = add). */
   tag(name: string, changes: string[]): RosterBot {
     const b = this.require(name);
@@ -141,7 +152,14 @@ function dedupe(players: Player[]): Player[] {
 }
 
 function normalize(b: RosterBot): RosterBot {
-  return { name: b.name, owners: dedupe(b.owners ?? []), tags: [...(b.tags ?? [])], createdAt: b.createdAt ?? 0, createdBy: b.createdBy ?? '' };
+  return {
+    name: b.name,
+    owners: dedupe(b.owners ?? []),
+    tags: [...(b.tags ?? [])],
+    createdAt: b.createdAt ?? 0,
+    createdBy: b.createdBy ?? '',
+    ...(b.dead ? { dead: true } : {}),
+  };
 }
 
 function copy(b: RosterBot): RosterBot {

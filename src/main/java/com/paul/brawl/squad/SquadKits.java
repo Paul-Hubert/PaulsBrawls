@@ -71,8 +71,29 @@ public final class SquadKits {
 
     private SquadKits() {}
 
+    /**
+     * A kit by name, singular or plural ({@code guards}, {@code archers}, {@code miners}, {@code farmers}: Paul types
+     * {@code /bots squad respawn guards 10}), any case.
+     */
     public static Optional<Kit> find(String name) {
-        return Optional.ofNullable(name == null ? null : KITS.get(name.toLowerCase(java.util.Locale.ROOT)));
+        if (name == null) return Optional.empty();
+        String n = name.toLowerCase(java.util.Locale.ROOT);
+        Kit k = KITS.get(n);
+        if (k == null && n.endsWith("s")) k = KITS.get(n.substring(0, n.length() - 1));
+        return Optional.ofNullable(k);
+    }
+
+    /**
+     * The kit a bot comes back with ({@code /bots squad respawn}, docs/35 D3): the command's kit, else the bot's kit
+     * tag (the first of its tags that names a kit), else none (it comes back with an empty inventory).
+     */
+    public static Optional<Kit> forReset(Optional<Kit> commandKit, java.util.Collection<String> tags) {
+        if (commandKit.isPresent()) return commandKit;
+        for (String t : tags) {
+            Kit k = t == null ? null : KITS.get(t.toLowerCase(java.util.Locale.ROOT));
+            if (k != null) return Optional.of(k);
+        }
+        return Optional.empty();
     }
 
     /** Tag changes for the runtime: drop every kit tag, add this kit's. */

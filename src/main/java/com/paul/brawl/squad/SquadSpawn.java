@@ -23,8 +23,8 @@ import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 
 /**
- * {@code /bots squad spawn KIT [number] [owner] [other owners…]} and {@code /bots squad despawn [KIT] [owner]}
- * (admin): a ready squad in one call. Spawn makes {@code number} bots (default 5) named after the kit, owned by the
+ * {@code /bots squad spawn KIT [number] [owner] [other owners…]}, {@code /bots squad despawn [KIT] [owner]} and
+ * {@code /bots squad respawn [KIT] [number] [owner]} (admin): a ready squad in one call, and its dead brought back. Spawn makes {@code number} bots (default 5) named after the kit, owned by the
  * owner (default {@code @s}, whoever runs it, also from a datapack function) and the other owners, each set on a ring
  * around the owner at the owner's height and given its kit and tag as it arrives. Despawn removes the owner's bots of
  * that kit (or all of them). Everything here runs on the server thread; the HTTP answers hop back to it.
@@ -179,6 +179,74 @@ final class SquadSpawn {
             }
         }
         return null;
+    }
+
+    // -- /bots squad respawn ------------------------------------------------------------------------------------------
+
+    /**
+     * {@code /bots squad respawn [KIT] [number] [owner=@s]} (docs/35 F7): a bot that died is offline until this. The
+     * runtime picks up to {@code number} of the owner's dead bots of that kit (all of them, every kit, when left out)
+     * and logs them in again; each is expected around whoever runs it ({@code @s}, also from a datapack function; else
+     * around the owner), and on arrival its inventory is reset to its kit (the command's, else its kit tag; none: empty).
+     */
+    static int respawn(ServerCommandSource src, String text) {
+        if (!Squad.enabled()) return SquadCommand.reply(src, "[Bots] Squad est désactivé (squad.properties : enabled=false).");
+        SquadSpawnPlan.RespawnArgs a;
+        try {
+            a = SquadSpawnPlan.parseRespawn(text);
+        } catch (IllegalArgumentException e) {
+            return SquadCommand.reply(src, "[Bots] " + e.getMessage() + ".");
+        }
+        MinecraftServer srv = src.getServer();
+        Optional<GameProfile> owner = SquadCommand.owner(src, a.owner());
+        if (owner.isEmpty()) {
+            return SquadCommand.reply(src, a.owner().equals("@s")
+                ? "[Bots] Lance-la en jeu, ou nomme le propriétaire : " + SquadSpawnPlan.RESPAWN_USAGE
+                : "[Bots] Joueur inconnu : " + a.owner());
+        }
+        ServerPlayerEntity caller = src.getPlayer();
+        ServerPlayerEntity center = caller != null ? caller : srv.getPlayerManager().getPlayer(owner.get().getId());
+        if (center == null) {
+            return SquadCommand.reply(src, "[Bots] Lance-la en jeu (ou avec " + owner.get().getName() + " en jeu) : les bots reviennent autour de toi.");
+        }
+        ServerWorld world = center.getServerWorld();
+        double cx = center.getX(), cy = center.getY(), cz = center.getZ();
+        float yaw = center.getYaw();
+        JsonObject body = SquadCommand.base(src);
+        body.add("owner", Squad.player(owner.get()));
+        a.kit().ifPresent(k -> body.addProperty("kit", k.name()));
+        a.count().ifPresent(n -> body.addProperty("n", n));
+        Squad.client().post("/api/bots/respawn", body).thenAccept(res -> srv.execute(() -> {
+            if (!SquadAuthoring.ok(res)) {
+                SquadCommand.show(src, res);
+                return;
+            }
+            List<String> names = new ArrayList<>();
+            if (res.has("bots") && res.get("bots").isJsonArray()) for (JsonElement e : res.getAsJsonArray("bots")) names.add(e.getAsString());
+            if (names.isEmpty()) {
+                boolean self = caller != null && caller.getUuid().equals(owner.get().getId());
+                SquadCommand.reply(src, "[Bots] Aucun " + a.kit().map(SquadKits.Kit::label).orElse("bot") + " mort"
+                    + (self ? "" : " pour " + owner.get().getName()) + ".");
+                return;
+            }
+            List<String> shown = new ArrayList<>();
+            for (int i = 0; i < names.size(); i++) {
+                String name = names.get(i);
+                Optional<SquadKits.Kit> kit = SquadKits.forReset(a.kit(), Squad.tagsOf(name));
+                SquadSpawnPlan.XZ d = SquadSpawnPlan.ring(i, names.size());
+                BlockPos feet = standNear(world, cx + d.x(), cy, cz + d.z());
+                double x = feet != null ? feet.getX() + 0.5 : cx;
+                double y = feet != null ? feet.getY() : cy;
+                double z = feet != null ? feet.getZ() + 0.5 : cz;
+                Squad.whitelist(srv, name, true);
+                Squad.expectArrival(name, world, x, y, z, yaw, bot -> Squad.resetToKitLater(srv, bot.getName().getString(), kit.orElse(null),
+                    answer -> LOGGER.info("Squad bot {} back: {}", name, answer)));
+                shown.add(kit.isPresent() ? name : name + " (sans kit)");
+            }
+            SquadCommand.reply(src, "[Bots] " + SquadSpawnPlan.counted(names.size(), a.kit()) + (names.size() > 1 ? " ramenés" : " ramené")
+                + " : " + String.join(", ", shown) + ".");
+        }));
+        return Command.SINGLE_SUCCESS;
     }
 
     // -- /bots squad despawn ------------------------------------------------------------------------------------------

@@ -133,9 +133,14 @@ After the copy, `squad/` never imports from `eden/`, and a fix in one is not por
   happen.
 - **Despawn** `/bots despawn BOT` (admin): stop its orders, disconnect, remove the roster entry and the
   whitelist entry.
-- **Death:** the bot leaves its order (reason `died`), respawns automatically, and becomes idle. Its inventory is
-  where it died. **Disconnect:** it leaves its order (reason `disconnected`), reconnects with backoff, and becomes
-  idle.
+- **Death** (Paul, 2026-11-01, docs/35 D2–D3): the bot leaves its order (reason `died`); mineflayer respawns it,
+  and it then **disconnects and stays offline**, marked dead in the roster (`roster.json`, so across restarts too):
+  neither the reconnect backoff, the boot nor the deaf-bot watchdog brings it back. It drops nothing (the mod's
+  `PlayerEntityMixin`; its inventory is lost). `/bots squad respawn [KIT] [n] [owner]` (admin) brings dead bots
+  back around whoever runs it, each inventory reset to its kit. A dead bot still counts toward `limits.maxBots`, and
+  `/bots despawn`, `squad despawn` and `raid clear` remove it like any bot. Until docs/35 F7 a dead bot respawned at
+  world spawn and stood there idle. **Disconnect:** it leaves its order (reason `disconnected`), reconnects with
+  backoff, and becomes idle.
 - The server must be in offline mode (`online-mode=false`, as `run/server.properties` is today). Online mode
   would need one Microsoft account per bot, which is out of scope.
 
@@ -572,7 +577,8 @@ density invariant that made Eden's revisions work. The result is version N+1, an
 |---|---|---|
 | `/bots spawn BOT P1 [P2 …]` | admin | Create and connect a bot owned by P1…Pn; `@s` (also in `owners` and `share`) is whoever runs it, so a datapack function run by a player gives the bots to that player |
 | `/bots despawn BOT` / `despawn all` | admin | Stop, disconnect, forget; `all`: every roster bot, and a raid still assembling is cancelled (so `all` is refused as a bot name) |
-| `/bots squad spawn KIT [n] [owner] [others…]` / `squad despawn [KIT] [owner]` | admin | A ready squad in one call: `n` bots (default 5, at most 30) named after the kit (`Garde01`, `Archer01`, `Mineur01`, `Fermier01`; taken names skipped), owned by `owner` (default `@s`) and the others, on a ring around the owner at their height, facing their way, each given its kit and tag on arrival (the owner must be in game). `despawn`: the owner's bots of that kit, or all of them (`SquadSpawn`, `SquadSpawnPlan`) |
+| `/bots squad spawn KIT [n] [owner] [others…]` / `squad despawn [KIT] [owner]` | admin | A ready squad in one call: `n` bots (default 5, at most 30) named after the kit (`Garde01`, `Archer01`, `Mineur01`, `Fermier01`; taken names skipped), owned by `owner` (default `@s`) and the others, on a ring around the owner at their height, facing their way, each given its kit and tag on arrival (the owner must be in game). `despawn`: the owner's bots of that kit (dead ones too), or all of them (`SquadSpawn`, `SquadSpawnPlan`). A kit may be named in the plural (`guards`, `archers`, `miners`, `farmers`) wherever one is taken |
+| `/bots squad respawn [KIT] [n] [owner]` | admin | Bring back up to `n` of `owner`'s (default `@s`) dead bots of that kit (all of them, of every kit, when left out), e.g. `/bots squad respawn guards 10`: they log in again (staggered), appear on a ring around whoever runs it (a datapack function's `@s` too; else the owner), and on arrival their inventory is cleared and their kit given (the command's, else the bot's kit tag; none: empty, « sans kit »). « [Bots] 7 gardes ramenés : Garde56, … », « [Bots] Aucun garde mort. » (`POST /api/bots/respawn`, docs/35 F7) |
 | `/bots equip BOT archer\|guard\|miner\|farmer` | admin | Give the role's kit server-side (`SquadKits`): armor worn, weapon in hand, shield in the off-hand; replaced items go to the inventory. Tags the bot with the role (removing the other kit tags). The caller, when a player, also becomes one of its owners (the others keep it) |
 | `/bots owners BOT add\|remove P …` | admin | Change owners |
 | `/bots raid [distance] [archers] [guards]` / `raid stop` / `raid clear` | admin, in game | An enemy army (200 blocks ahead, 10 archers + 10 guards by default) owned by the virtual player `Envahisseur`: spawned, put on the ground there and equipped on arrival, then ordered `raid` against the caller and their bots. `stop` stops it, `clear` despawns every raider (§16) |
@@ -991,3 +997,12 @@ completely, so missed events cannot leave it wrong.
      `PlayerEntity.dropInventory()` for a roster name; its inventory is lost, and `/bots squad respawn` resets it to its
      kit (item 7). Players keep vanilla drops (no `keepInventory`). Tests: `SquadDeathTest`; live, a guard killed over
      RCON leaves no item entity.
+  7. *Dead bots respawned at world spawn ("at base") and stood there idle.* Now (Paul, D2–D3) a bot that dies leaves
+     its orders, quits once mineflayer has respawned it (so the server saves it alive at spawn with an empty inventory,
+     and the mod's first-join placement works when it returns; after 10 s without a respawn it quits anyway), and is
+     marked dead in the roster: no reconnect by the backoff, the boot or the deaf watchdog. `/bots squad respawn` (the
+     runtime's `POST /api/bots/respawn`) brings dead bots back around the caller, their inventory reset to their kit
+     (`Squad.resetToKit`). `/bots list` shows « mort », `/bots status` counts them. A raider that dies stays dead until
+     `/bots raid clear`, so the enemy army shrinks. With item 5, a respawned bot comes back idle, and the next click of
+     a running wall or line takes it back. Tests: `death.test.ts`; `SquadKitsTest`, `SquadSpawnPlanTest`,
+     `SquadStatusFormatTest`.
