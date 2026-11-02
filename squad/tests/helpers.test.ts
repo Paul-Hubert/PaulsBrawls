@@ -27,6 +27,7 @@ import {
   raiseShield,
   SHIELD_REASSERT_MS,
   shoot,
+  stepTo,
 } from '../src/api/helpers';
 import { HelperError } from '../src/api/errors';
 import { ORDER } from '../src/orders/guard';
@@ -261,6 +262,65 @@ test('raiseShield: into the off-hand, held up once, again after something lowere
     raiseShield(none as never),
     (e: unknown) => e instanceof HelperError && /raiseShield\(Bare\): no shield in the off-hand or the inventory \(off-hand: empty, hand: iron_sword\)/.test((e as Error).message),
   );
+});
+
+test("stepTo: from its block's centre the bot sneaks straight onto the exact place, comes to rest on it and lets go; the walk's goal is cleared first", async () => {
+  const b = new FakeBot('Guard', { position: new Vec3(0.5, 64, 0.5) }).physics();
+  try {
+    b.pathfinder.goal = { x: 0, y: 64, z: 0 };
+    // Half a block off the centre, toward +X and −Z: a slot on a line at 45°.
+    const place = new Vec3(0.85, 64, 0.15);
+    const r = await stepTo(b as never, place);
+    assert.equal(r.there, true);
+    assert.equal(r.timedOut, false);
+    assert.ok(r.off <= 0.08, `${r.off} off`);
+    assert.ok(Math.hypot(b.entity.position.x - place.x, b.entity.position.z - place.z) <= 0.08);
+    assert.equal(b.calls[0], 'pathfinder.setGoal(null)', 'the goal cleared first');
+    assert.ok(b.calls.includes('setControlState(sneak,true)') && b.calls.includes('setControlState(forward,true)'), 'sneaking, with forward');
+    assert.ok(!b.controlState.forward && !b.controlState.sneak, 'let go');
+    assert.equal(b.listenerCount('physicsTick'), 0, 'no steering left on the ticks');
+  } finally {
+    b.stopTicks();
+  }
+});
+
+test('stepTo: until() ends it at once; with no move it gives up after timeoutMs; either way the controls are let go; a place 2 blocks off is an error', async () => {
+  const b = new FakeBot('Archer', { position: new Vec3(0.5, 64, 0.5) }).physics({ tickMs: 40 });
+  try {
+    let foe = false;
+    const step = stepTo(b as never, new Vec3(0.5, 64, 0.95), { until: () => foe });
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(b.controlState.sneak, true, 'under way');
+    foe = true;
+    const r = await step;
+    assert.deepEqual([r.there, r.timedOut], [false, false]);
+    assert.ok(r.off > 0.08, 'not there yet');
+    assert.ok(!b.controlState.forward && !b.controlState.sneak, 'let go');
+    assert.equal(b.listenerCount('physicsTick'), 0);
+  } finally {
+    b.stopTicks();
+  }
+  // No physics ticks: the body never moves.
+  const t0 = Date.now();
+  const r = await stepTo(b as never, new Vec3(0.5, 64, 0.95), { timeoutMs: 200 });
+  assert.deepEqual([r.there, r.timedOut], [false, true]);
+  assert.ok(Date.now() - t0 >= 200);
+  assert.ok(!b.controlState.forward && !b.controlState.sneak, 'let go after giving up');
+  await assert.rejects(stepTo(b as never, new Vec3(3, 64, 0.5)), (e: unknown) => e instanceof HelperError && /stepTo\(Archer\): 2\.50 blocks from .*: walk to its block first/.test((e as Error).message));
+});
+
+test('stepTo: a later stepTo on the same body takes its controls over; the earlier one ends and leaves them alone', async () => {
+  const b = new FakeBot('Guard', { position: new Vec3(0.5, 64, 0.5) }); // no ticks: neither step gets there
+  const first = stepTo(b as never, new Vec3(0.9, 64, 0.5));
+  await new Promise((r) => setTimeout(r, 10));
+  let done = false;
+  const second = stepTo(b as never, new Vec3(0.1, 64, 0.5), { until: () => done });
+  const r1 = await first;
+  assert.deepEqual([r1.there, r1.timedOut], [false, false], 'taken over, not timed out');
+  assert.equal(b.controlState.sneak, true, "the later step's sneak stays");
+  done = true;
+  await second;
+  assert.ok(!b.controlState.sneak, 'let go by the later step');
 });
 
 /** An independent flight (pos += v; v × 0.99; v.y − 0.05, from the eyes − 0.1): the closest it comes to `target`. */

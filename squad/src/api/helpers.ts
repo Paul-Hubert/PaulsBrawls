@@ -1159,6 +1159,98 @@ export async function raiseShield(bot: Bot, on = true): Promise<{ raised: boolea
   }
 }
 
+/**
+ * stepTo lets go of the controls this close to the place: a sneaking body slides about 0.08 block on after it, so it
+ * comes to rest on the place, well within the 0.15 the stock lines count as on a slot.
+ */
+const STEP_STOP = 0.08;
+/** stepTo is over once the body moved less than this in a physics tick (at rest). */
+const STEP_AT_REST = 0.005;
+/** stepTo gives up after this long by default (a block beside the place keeps the body off it). */
+const STEP_TIMEOUT_MS = 3_000;
+/** How often stepTo looks at what ends it (a physics tick); the steering itself runs on every tick. */
+const STEP_LOOK_MS = 50;
+/** stepTo walks straight, blind: a place farther than this needs a path first (its block: goals.GoalBlock). */
+const STEP_REACH = 2;
+/** Per body: the stepTo that drives its controls. A later one takes over, and the earlier one then leaves them alone. */
+const stepping = new WeakMap<object, object>();
+/** Let go of stepTo's controls. A bot that left had them released by the abort sequence (and may not be driven). */
+function letGoStep(bot: Bot): void {
+  try {
+    bot.setControlState('forward', false);
+    bot.setControlState('sneak', false);
+  } catch (e) {
+    if (!isBotLeft(e) && !isStopped(e)) throw e;
+  }
+}
+
+/**
+ * The last step onto an exact place (its x and z, not a block's centre; its y is not used), from close by: a path ends
+ * on a block's centre, up to 0.7 off a place inside that block, so a formation at any yaw walks each bot to its
+ * place's block, then steps (docs/35 F2, the shield wall). The bot sneaks straight to the place with its controls,
+ * steered on every physics tick (mineflayer runs late ticks in a burst), until it stands still within STEP_STOP.
+ * Sneaking is slow enough to stop where it lets go, and never walks off an edge. It clears the pathfinder's goal
+ * first (the pathfinder steers too). It ends at rest there (`there`), when `until()` returns true (checked every
+ * STEP_LOOK_MS: a new formation, a hit to answer, a foe to shoot), or after `timeoutMs` (`timedOut`). On every exit it
+ * takes its steering off the ticks and lets go of forward and sneak, unless a later stepTo on the same body took them
+ * over; so a bot about to draw a bow after it has neither its own motion going into the arrow nor the step's looks
+ * fighting the draw's. A bot that left throws BotLeftError (the abort sequence released its controls).
+ */
+export async function stepTo(bot: Bot, place: PosLike, opts: { until?: () => boolean; timeoutMs?: number } = {}): Promise<{ there: boolean; timedOut: boolean; off: number }> {
+  checkLease(bot);
+  const label = `stepTo(${who(bot)})`;
+  const to = toVec3(place, `${label} place`);
+  const timeoutMs = Number(opts.timeoutMs ?? STEP_TIMEOUT_MS);
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) throw new HelperError(`${label}: timeoutMs must be a number of milliseconds ≥ 0, got ${safeJson(opts.timeoutMs)}`);
+  const until = opts.until ?? (() => false);
+  const off = (): number => Math.hypot(to.x - bot.entity.position.x, to.z - bot.entity.position.z);
+  if (off() > STEP_REACH) {
+    throw new HelperError(`${label}: ${off().toFixed(2)} blocks from ${fmt(to)}, more than ${STEP_REACH}: walk to its block first (goals.GoalBlock), then step`);
+  }
+  const real = unwrap(bot) as object;
+  const me = {};
+  stepping.set(real, me);
+  let last = bot.entity.position.clone();
+  let still = false;
+  const steer = (): void => {
+    const p = bot.entity.position;
+    const moved = Math.hypot(p.x - last.x, p.z - last.z);
+    last = p.clone();
+    const dx = to.x - p.x;
+    const dz = to.z - p.z;
+    if (Math.hypot(dx, dz) > STEP_STOP) {
+      still = false;
+      bot.look(Math.atan2(-dx, -dz), 0, true).catch(() => undefined); // mineflayer's yaw toward the place, as bot.lookAt turns
+      bot.setControlState('forward', true);
+    } else {
+      bot.setControlState('forward', false);
+      still = moved < STEP_AT_REST;
+    }
+  };
+  const end = Date.now() + timeoutMs;
+  let timedOut = false;
+  try {
+    if (bot.pathfinder?.goal) bot.pathfinder.setGoal(null);
+    bot.on('physicsTick', steer);
+    bot.setControlState('sneak', true);
+    while (!still && stepping.get(real) === me && !until()) {
+      if (Date.now() >= end) {
+        timedOut = true;
+        break;
+      }
+      await sleepMs(STEP_LOOK_MS);
+      checkLease(bot);
+    }
+  } finally {
+    bot.removeListener('physicsTick', steer);
+    if (stepping.get(real) === me) {
+      stepping.delete(real);
+      letGoStep(bot);
+    }
+  }
+  return { there: still, timedOut, off: off() };
+}
+
 /** An entity as a snapshot names it: `ctx.commander.at.lookEntity`, `at.trigger.hit.entity`. */
 export interface EntityRefLike {
   id?: number;
@@ -1412,6 +1504,7 @@ export const HELPERS = {
   groundAt,
   faceYaw,
   raiseShield,
+  stepTo,
   entityOf,
   pointedTarget,
 } as const;

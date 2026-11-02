@@ -36,7 +36,8 @@
 // forms the wall where its arrow lands (about 20 blocks ahead), not where the release looked, and drawing it while
 // sneaking stops it; `epee` bound to a stick beside a husk kills it, then holds empty ground. `epee` at a NoAI husk
 // (archers shoot, at most 2 guards on it, it dies), then at the ground (guards and archers on their rings);
-// `ligne-archers` (a line across the view, 4 short of the point); a guard reclaimed from `defend` by a wall goes back
+// `ligne-archers` (a line across the view, 4 short of the point; at 45° and at 87° with spacing 1 and back 0, whose
+// places share a block, each archer within 0.2 of its exact place on the line); a guard reclaimed from `defend` by a wall goes back
 // to `defend` when the wall stops and follows the captain again. Each starts with the bots at the same spots and
 // stops the captain's orders at its end, failed or not.
 //

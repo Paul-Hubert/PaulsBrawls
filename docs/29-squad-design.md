@@ -1000,6 +1000,22 @@ completely, so missed events cannot leave it wrong.
      aside; an archer now passes over, for 5 s, a target a block stopped its shot at. Measured live against a marching
      raid (`LIVE_ONLY=range`): damaging hits per arrow 41 % at 30–59 blocks, 62 % at 60–89, 28 % at 90–120
      (docs/system/squad/overview.md). Tests: `item-orders.test.ts`.
+     Then (2026-11-02) Paul decided for the line what he decided for the wall (item 2): each rank is a straight line at
+     any yaw, each archer at its exact `lineSlots` place with only its height from `groundAt`, not a block's centre (the
+     line's centre too, exactly `back` short of the point); archers need not stand on their own blocks nor on a block's
+     centre, and no two overlap. Before, `groundAt` snapped every slot to its block's centre: at yaws not axis-aligned
+     the ranks followed the blocks, and at spacing 1 two archers stood on one spot. An archer walks to its slot's block,
+     then takes the wall's last step, now the helper `stepTo` (copied, it put `ligne-archers` past the 400 lines a
+     command may have; the wall uses it too, unchanged in behaviour). A foe in range ends the step at once: `stepTo`
+     takes its steering off the ticks and lets go of `forward` and `sneak` before the archer draws (its own motion would
+     go into the arrow, and the step's looks would fight the draw's); the archer shoots from where it stopped, then
+     steps again with a fresh 3 s, so shooting does not count toward giving up. In its slot's block it counts as beside
+     its slot, as within the old 0.8: a refused shot there steps aside. Tests: `item-orders.test.ts` (ten archers at
+     87°, 45° and 90°, one rank and two, each within 0.2 of its exact place, each rank on its line, none closer than
+     0.6; a new formation and a foe each ending a step, the foe's with the controls let go before the draw; all fail on
+     the block-centre line), `helpers.test.ts` (`stepTo`). Live (`items.ts`, dev server): two archers at 45° and two at
+     87° 1 apart (whose places share a block) within 0.03 of their exact places, at most 0.02 off the line, facing the
+     yaw; the wall's 45°/87° check passes as before on `stepTo` (within 0.03).
   5. *A click did not take the order's bots back* (Paul had to stop and click again). An `epee` (#220, until stopped)
      had reclaimed every guard of the wall (#205) and every archer of the line (#207); later clicks were delivered to
      orders with no bots, since a delivered click granted nothing (§5.4 item 6), and a rebind's new args were

@@ -10,10 +10,15 @@
 // now points, without stopping the order (it listens: ctx.commander.on('trigger')); a bow's arrow-release does not
 // move it, its hit does.
 //
-// One rank unless `ranks` says more (2 blocks apart; a back rank shoots over the front one on the high arc). Slots go
-// to the bots by where they stand (the front-most to the front rank, then left to right as the commander sees it), so no two paths cross; that assignment holds for one
-// formation and is redone when the line moves or a new archer joins. An archer pulled away by another order (a `tir`)
-// keeps its slot, and goes back to it afterwards.
+// One rank unless `ranks` says more (2 blocks apart; a back rank shoots over the front one on the high arc). Each rank
+// is a straight line at the exact yaw, whatever it is: each archer's slot is its exact place (lineSlots), at the
+// height of the ground in that place's column (groundAt gives only the y), not the centre of a block, so two archers
+// may share a block. Slots go to the bots by where they stand (the front-most to the front rank, then left to right as
+// the commander sees it), so no two paths cross; that assignment holds for one formation and is redone when the line
+// moves or a new archer joins. An archer pulled away by another order (a `tir`) keeps its slot, and goes back to it
+// afterwards. An archer walks to its slot's block with a pathfinder goal (a path ends on a block's centre), then takes
+// the last step onto its exact place itself, with its controls (stepTo), as a guard of mur-de-boucliers does; a foe in
+// range ends that step, and the archer shoots from where it stands.
 export const manifest = {
   summary: "Ligne d'archers en travers de mon regard, en deçà du point visé, qui tire sur ce qui approche",
   params: {
@@ -41,10 +46,14 @@ const AHEAD = 10;
  * « as far as possible » (docs/35 D4).
  */
 const MAX_RANGE = 120;
-/** On its slot: within this many blocks horizontally. */
-const ARRIVED = 0.8;
+/** On its slot: within this many blocks horizontally of its exact place. */
+const ON_SLOT = 0.15;
+/** An archer that was on its slot holds it until pushed farther than this. */
+const HOLD = 0.25;
 /** A slot not reached in this long gets a looser goal (something stands there, or no path ends on it). */
 const STUCK_MS = 10_000;
+/** With the looser goal, an archer holds within this many blocks of its slot. */
+const LOOSE = 2.5;
 /** How long an archer that stepped aside shoots from there before going back to its slot. */
 const ASIDE_MS = 3_000;
 /** Away from its slot, a shot refused for the line of fire: walk on this long before trying again (no sidestep). */
@@ -110,11 +119,18 @@ export default async function (squad, args, ctx) {
     const fwd = lookDir(at.yaw);
     const right = lookDir(at.yaw + 90);
     const p = bots.length > 0 ? pointOf(at, bots[0]) : at.position;
-    const raw = p.offset(-fwd.x * back, 0, -fwd.z * back);
-    const centre = ground(raw) ?? raw;
+    // Exact places, each at its column's ground height: the centre `back` blocks short of the point, and every slot.
+    // groundAt's own x and z (the block's centre) made each rank jagged at any yaw not axis-aligned, and could put two
+    // archers on one spot, as it did the shield wall's guards (docs/35 F2). No ground there (an unloaded chunk): the
+    // raw place, and a loose goal.
+    const onGround = (q) => {
+      const g = ground(q);
+      return g ? new Vec3(q.x, g.y, q.z) : q;
+    };
+    const centre = onGround(p.offset(-fwd.x * back, 0, -fwd.z * back));
     const ranks = Math.max(1, Math.min(ranksWanted, bots.length));
     const per = Math.ceil(bots.length / ranks);
-    const slots = lineSlots(centre, at.yaw, bots.length, { spacing, ranks, depth: 2 }).map((s) => ground(s) ?? s);
+    const slots = lineSlots(centre, at.yaw, bots.length, { spacing, ranks, depth: 2 }).map(onGround);
     const dot = (q, d) => q.x * d.x + q.z * d.z;
     const byFront = [...bots].sort((a, b) => dot(b.entity.position, fwd) - dot(a.entity.position, fwd));
     const given = new Map();
@@ -180,20 +196,26 @@ export default async function (squad, args, ctx) {
     if (why) ctx.log(`${bot.username}: holds fire: ${why}`);
   };
 
-  /** Where each archer is heading: the slot's key, the goal set for it, since when, loose or exact, reached once. */
+  /**
+   * Where each archer is heading: the slot's key, since when, loose or exact, the goal set for it, reached once (it
+   * held the slot), and whether its last step gave up.
+   */
   const heading = new Map();
   const keyOf = (s) => `${s.x},${s.y},${s.z}`;
-
-  /** Set a goal toward the slot unless it is already the current goal; the archer's loop looks again soon. */
-  const walk = (bot, slot) => {
-    const key = keyOf(slot);
+  // A slot off the ground (an unloaded chunk) gets a loose goal from the start.
+  const fresh = (slot) => ({ key: keyOf(slot), since: Date.now(), loose: !Number.isInteger(slot.y), goal: null, reached: false, gaveUp: false });
+  const headingOf = (bot, slot) => {
     let h = heading.get(bot.username);
-    // A new slot, or the same one again after the archer had reached it (pushed off): a fresh exact goal and its own
-    // STUCK_MS, not the loose goal of a timer started at the first walk (docs/29 §16).
-    if (!h || h.key !== key || h.reached) {
-      h = { key, since: Date.now(), loose: !Number.isInteger(slot.y), goal: null, reached: false };
-      heading.set(bot.username, h);
-    }
+    if (!h || h.key !== keyOf(slot)) heading.set(bot.username, (h = fresh(slot)));
+    return h;
+  };
+
+  /** Set a goal toward the slot's block unless it is already the current goal; the archer's loop looks again soon. */
+  const walk = (bot, slot) => {
+    let h = headingOf(bot, slot);
+    // The same slot again after the archer had reached it (pushed off): a fresh exact goal and its own STUCK_MS, not
+    // the loose goal of a timer started at the first walk (docs/29 §16).
+    if (h.reached) heading.set(bot.username, (h = fresh(slot)));
     if (!h.loose && Date.now() - h.since > STUCK_MS) {
       h.loose = true;
       h.goal = null;
@@ -203,17 +225,57 @@ export default async function (squad, args, ctx) {
     bot.pathfinder.setGoal(h.goal);
   };
 
-  const arrived = (bot, slot) => {
-    const h = heading.get(bot.username);
-    const near = h && h.key === keyOf(slot) && h.loose ? 2.5 : ARRIVED;
+  /** In the slot's own block, where its walk ends (a slot with ground only: a raw one has no block to stand in). */
+  const inBlock = (p, slot) =>
+    Number.isInteger(slot.y) && Math.floor(p.x) === Math.floor(slot.x) && Math.floor(p.z) === Math.floor(slot.z) && Math.abs(p.y - slot.y) < 1;
+
+  /** What an archer does about its slot now: hold it (face the view), take the last step onto it, or walk to its block. */
+  const next = (bot, slot) => {
     const p = bot.entity.position;
-    return Math.hypot(p.x - slot.x, p.z - slot.z) <= near && Math.abs(p.y - slot.y) <= 2;
+    const d = Math.hypot(p.x - slot.x, p.z - slot.z);
+    const level = Math.abs(p.y - slot.y) <= 2;
+    const h = heading.get(bot.username);
+    const mine = h && h.key === keyOf(slot) ? h : null;
+    if (level && d <= ON_SLOT) return 'hold';
+    if (level && mine?.reached && d <= HOLD) return 'hold';
+    // In the slot's block: the last step onto the place; once a step gave up, hold where the body got.
+    if (inBlock(p, slot)) return mine?.gaveUp ? 'hold' : 'step';
+    if (level && mine?.loose && d <= LOOSE) return 'hold';
+    return 'walk';
   };
 
   /** Until when each archer that stepped aside shoots from where it is. */
   const aside = new Map();
   /** Until when each archer away from its slot walks on after a refused shot. */
   const walkOn = new Map();
+
+  /**
+   * What this archer shoots now: nothing while it walks on after a refused shot away from its slot (`beside`: on its
+   * slot or in its block), else pick.
+   */
+  const target = (bot, beside) => (!beside && Date.now() < (walkOn.get(bot.username) ?? 0) ? null : pick(bot));
+
+  /**
+   * The last step onto the exact place, from inside the slot's block (a path ends on the block's centre, up to 0.7 off
+   * it): stepTo, as a guard of mur-de-boucliers takes it. A new formation, a foe to shoot or the bot leaving end it; one
+   * not done in 3 s gives up, and the archer holds where it stands. Ended for a foe, it has let go of forward and sneak
+   * and taken its steering off the ticks before the loop draws: the shooter's own motion goes into the arrow, and the
+   * step's looks would fight the draw's. The next step has its own 3 s: the time spent shooting does not count.
+   */
+  const step = async (bot, slot) => {
+    const h = headingOf(bot, slot);
+    const v = line.v;
+    // stepTo clears the walk's goal. The walk got to the block, loose goal or not: a later walk (after a sidestep) is
+    // exact, with its own STUCK_MS, not loose at once for the time this one took.
+    h.goal = null;
+    h.since = Date.now();
+    h.loose = false;
+    const r = await stepTo(bot, slot, { until: () => line.v !== v || !!target(bot, true) });
+    if (r.timedOut) {
+      h.gaveUp = true;
+      ctx.log(`${bot.username}: holds ${r.off.toFixed(2)} off its slot (the last step did not get there)`);
+    }
+  };
 
   /** One to two blocks to one side of the line to the target: out from behind whatever blocked the shot. */
   const sidestep = async (bot, t) => {
@@ -230,17 +292,22 @@ export default async function (squad, args, ctx) {
 
   /**
    * One look of one archer: a threat in range is shot from where the archer stands (it stops walking to draw: the
-   * pathfinder turns the head toward the path and the shooter's own motion goes into the arrow); otherwise it walks to
-   * its slot, or faces the view once there.
+   * pathfinder turns the head toward the path and the shooter's own motion goes into the arrow; a last step has let go
+   * of its controls, see step); otherwise it walks to its slot's block, takes the last step onto its slot, or faces the
+   * view once there.
    */
   const archer = async (bot) => {
     const slot = line.slots.get(bot.username);
-    const there = !!slot && arrived(bot, slot);
+    const todo = slot ? next(bot, slot) : null;
+    const there = todo === 'hold';
+    // In its slot's block with the last step still to take counts as beside the slot, for shots as the old 0.8 did: a
+    // shot refused there steps aside, it does not walk on.
+    const beside = there || todo === 'step';
     const h = slot ? heading.get(bot.username) : undefined;
     if (h && h.key === keyOf(slot) && there) h.reached = true;
-    const stepping = Date.now() < (aside.get(bot.username) ?? 0);
+    const isAside = Date.now() < (aside.get(bot.username) ?? 0);
     // Walking on after a refused shot: moving changes the line of fire, so the next look may shoot.
-    const t = !there && slot && Date.now() < (walkOn.get(bot.username) ?? 0) ? null : pick(bot);
+    const t = slot ? target(bot, beside) : pick(bot);
     if (t) {
       hold(bot, null);
       const walking = !!h && !!h.goal && bot.pathfinder.goal === h.goal;
@@ -254,7 +321,7 @@ export default async function (squad, args, ctx) {
         ctx.log(`${bot.username}: ${e.message}`);
         const noLine = /no clear line of fire/.test(e.message);
         if (noLine && !/a friend is in the way/.test(e.message)) blockedOf(bot).set(t.id, Date.now() + BLOCKED_MS);
-        if (noLine && slot && !there && !stepping) walkOn.set(bot.username, Date.now() + WALK_ON_MS);
+        if (noLine && slot && !beside && !isAside) walkOn.set(bot.username, Date.now() + WALK_ON_MS);
         else if (noLine) await sidestep(bot, t);
         else await squad.sleep(250);
       } finally {
@@ -269,13 +336,19 @@ export default async function (squad, args, ctx) {
       await squad.sleep(LOOK_MS); // until a formation gives it a slot
       return;
     }
-    if (!stepping && !there) {
+    // An archer aside stays there (the sidestep's goal is its own) until ASIDE_MS is over: no walk, no last step.
+    if (!isAside && !there) {
+      // The last step is part of the walk to the slot, for the log too.
       hold(bot, Date.now() < (walkOn.get(bot.username) ?? 0) ? 'walking to its slot after a blocked shot' : `walking to its slot, nothing within ${range} blocks`);
+      if (todo === 'step') {
+        await step(bot, slot); // the next look shoots, holds the slot, or takes a new one
+        return;
+      }
       walk(bot, slot);
       await squad.sleep(LOOK_MS);
       return;
     }
-    hold(bot, stepping ? `stepped aside, nothing within ${range} blocks` : `on its slot, nothing within ${range} blocks`);
+    hold(bot, isAside ? `stepped aside, nothing within ${range} blocks` : `on its slot, nothing within ${range} blocks`);
     await faceYaw(bot, line.yaw);
     await squad.sleep(LOOK_MS);
   };

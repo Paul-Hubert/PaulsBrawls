@@ -13,9 +13,9 @@
 // commander sees it), so no two paths cross; that assignment holds for one formation and is redone when the wall
 // moves or a new guard joins. A guard reclaimed by another order keeps its slot, and takes it again when it comes
 // back. A guard walks to its slot's block with a pathfinder goal (a path ends on a block's centre), then takes the
-// last step onto its exact place itself, with its controls. Shields go down to walk (blocking slows walking) and up on
-// arrival, and the loop raises a shield again when something lowered it (auto-eat lowers it to eat). The bots look
-// again every 200 ms (a last step every tick), so a new formation takes them at once.
+// last step onto its exact place itself, with its controls (stepTo). Shields go down to walk (blocking slows walking)
+// and up on arrival, and the loop raises a shield again when something lowered it (auto-eat lowers it to eat). The
+// bots look again every 200 ms (a last step every tick), so a new formation takes them at once.
 export const manifest = {
   summary: 'Mur de boucliers en travers de mon regard, là où je vise',
   params: {
@@ -42,17 +42,6 @@ const HOLD = 0.25;
 const STUCK_MS = 10_000;
 /** With the looser goal, a guard holds within this many blocks of its slot. */
 const LOOSE = 2.5;
-/**
- * The last step lets go of the controls this close to the exact place: a sneaking body slides about 0.08 block on
- * after it, so it comes to rest on the place, well within ON_SLOT.
- */
-const STEP_STOP = 0.08;
-/** The last step is over once the body moved less than this in a physics tick (at rest). */
-const AT_REST = 0.005;
-/** A last step not over in this long gives up (a block beside the place keeps the body off it): the guard holds there. */
-const STEP_IN_MS = 3_000;
-/** How often a last step looks at what ends it (one physics tick); the steering itself runs on every tick. */
-const TICK_MS = 50;
 /** Arm's reach for the blow back: from the eyes to the attacker's hitbox (the server allows 3, plus 1 of slack). */
 const STRIKE_REACH = 3;
 /** How long a guard steps toward an attacker out of arm's reach before it gives up the blow. */
@@ -215,78 +204,24 @@ export default async function (squad, args, ctx) {
     return 'walk';
   };
 
-  /** The guard whose last step drives its controls, by name: a later step (the guard back from another order) takes over. */
-  const stepping = new Map();
-  /** Let go of a last step's controls. A bot that left had them released by the abort sequence (and may not be driven). */
-  const letGo = (bot) => {
-    try {
-      bot.setControlState('forward', false);
-      bot.setControlState('sneak', false);
-    } catch (e) {
-      if (!(e instanceof BotLeftError || e instanceof OrderStoppedError)) throw e;
-    }
-  };
-
   /**
    * The last step onto the exact place, from inside the slot's block (a path ends on the block's centre, up to 0.7
-   * off it): the guard sneaks straight to it with its controls, steered on every physics tick (mineflayer runs late
-   * ticks in a burst), until it stands still within STEP_STOP. Sneaking is slow enough to stop where it lets go, and
-   * never walks off an edge. A new formation, a hit to answer, the bot leaving, or STEP_IN_MS end it; after that long
-   * the guard holds where it stands. Every call goes through the lease-guarded bot, and the abort sequence of a bot
-   * that leaves releases its controls.
+   * off it): stepTo, which sneaks straight to it with the controls, steered on every physics tick, until at rest
+   * there. A new formation, a hit to answer or the bot leaving end it; one not done in 3 s gives up, and the guard
+   * holds where it stands.
    */
   const step = async (bot, slot) => {
     const h = headingOf(bot, slot);
     const v = wall.v;
-    const me = {};
-    stepping.set(bot.username, me);
-    // The pathfinder steers too while it has a goal (a guard that came into its block mid-path).
-    if (bot.pathfinder.goal) bot.pathfinder.setGoal(null);
+    // stepTo clears the walk's goal. The walk got to the block, loose goal or not: a later walk (after a hit during
+    // the step) is exact, with its own STUCK_MS, not loose at once for the time this one took.
     h.goal = null;
-    // The walk got to the block, loose goal or not: a later walk (after a hit during the step) is exact, with its own
-    // STUCK_MS, not loose at once for the time this one took.
     h.since = Date.now();
     h.loose = false;
-    const end = Date.now() + STEP_IN_MS;
-    let last = bot.entity.position.clone();
-    let still = false;
-    const steer = () => {
-      const p = bot.entity.position;
-      const moved = Math.hypot(p.x - last.x, p.z - last.z);
-      last = p.clone();
-      const dx = slot.x - p.x;
-      const dz = slot.z - p.z;
-      if (Math.hypot(dx, dz) > STEP_STOP) {
-        still = false;
-        bot.look(Math.atan2(-dx, -dz), 0, true); // mineflayer's yaw toward the place, as bot.lookAt turns
-        bot.setControlState('forward', true);
-      } else {
-        bot.setControlState('forward', false);
-        still = moved < AT_REST;
-      }
-    };
-    bot.on('physicsTick', steer);
-    let timedOut = false;
-    try {
-      bot.setControlState('sneak', true);
-      while (!still && stepping.get(bot.username) === me && squad.bots.includes(bot) && wall.v === v && !struck.has(bot.username)) {
-        if (Date.now() >= end) {
-          timedOut = true;
-          break;
-        }
-        await squad.sleep(TICK_MS);
-      }
-    } finally {
-      bot.off('physicsTick', steer);
-      if (stepping.get(bot.username) === me) {
-        stepping.delete(bot.username);
-        letGo(bot);
-      }
-    }
-    if (timedOut) {
+    const r = await stepTo(bot, slot, { until: () => wall.v !== v || struck.has(bot.username) });
+    if (r.timedOut) {
       h.gaveUp = true;
-      const p = bot.entity.position;
-      ctx.log(`${bot.username}: holds ${Math.hypot(p.x - slot.x, p.z - slot.z).toFixed(2)} off its slot (the last step did not get there)`);
+      ctx.log(`${bot.username}: holds ${r.off.toFixed(2)} off its slot (the last step did not get there)`);
     }
   };
 

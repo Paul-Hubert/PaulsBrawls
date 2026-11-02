@@ -381,8 +381,10 @@ declare global {
    * `count` positions on a line through `center`, perpendicular to the view `yaw`, `spacing` apart (default 1.5),
    * ordered LEFT TO RIGHT as the commander sees them. With `ranks` > 1 they fill rank by rank, Math.ceil(count / ranks)
    * per rank, each rank centred, rank r `depth * r` blocks (default 2) behind the first, toward the commander. Pure (no
-   * bot): every slot keeps center's y, so pass each through groundAt. Give bots their slots sorted by their position
-   * along the line (lookDir(yaw + 90) points to the commander's right) so their paths do not cross.
+   * bot): every slot keeps center's y, so pass each through groundAt. groundAt gives its block's centre: for a line
+   * that stays straight at any yaw keep the slot's x and z with groundAt's y, walk to its block, then stepTo it. Give
+   * bots their slots sorted by their position along the line (lookDir(yaw + 90) points to the commander's right) so
+   * their paths do not cross.
    */
   function lineSlots(center: Pos, yaw: number, count: number, opts?: { spacing?: number; ranks?: number; depth?: number }): Vec3Class[];
   /**
@@ -400,6 +402,16 @@ declare global {
    * walking: lower it to walk, raise it once there. A bot leaving the order lowers it.
    */
   function raiseShield(bot: SquadBot, on?: boolean): Promise<{ raised: boolean }>;
+  /**
+   * The last step onto an exact place (its x and z, not a block's centre; its y is not used), from within 2 blocks: a
+   * path ends on a block's centre, so walk to the place's block first (goals.GoalBlock), then stepTo the place. The
+   * bot sneaks straight there with its controls, steered every physics tick, and comes to rest within about 0.1. It
+   * clears the pathfinder's goal first. It ends at rest there (there: true), when `until()` returns true (checked
+   * every 50 ms: a new formation, a foe to shoot), or after `timeoutMs` (default 3000: something keeps the body off
+   * the place; timedOut: true). On every exit it lets go of forward and sneak (unless a later stepTo on the same bot
+   * took them over), so the bot can draw a bow at once. `off`: how far off the place the body is.
+   */
+  function stepTo(bot: SquadBot, place: Pos, opts?: { until?: () => boolean; timeoutMs?: number }): Promise<{ there: boolean; timedOut: boolean; off: number }>;
   /**
    * The live entity of a snapshot entity (ctx.commander.at.lookEntity, at.trigger.hit.entity) as this bot sees it now,
    * or null (dead, gone, out of its sight): by `id` (bot.entities[id]), else a player by `username`, else the nearest
@@ -435,7 +447,8 @@ declare module 'squad' {
   export {
     mineBlock, craftItem, smeltItem, placeItem, killMob, exploreUntil, getItemFromChest, depositItemIntoChest,
     checkItemInsideChest, goTo, follow, attack, shoot, equip, eat, pickupDrops, findBlock, nearestEntity,
-    nearestHostile, isFriend, blockKey, lookDir, lineSlots, groundAt, faceYaw, raiseShield, entityOf, pointedTarget,
+    nearestHostile, isFriend, blockKey, lookDir, lineSlots, groundAt, faceYaw, raiseShield, stepTo, entityOf,
+    pointedTarget,
   };
 }
 

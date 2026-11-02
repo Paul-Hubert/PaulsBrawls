@@ -461,6 +461,158 @@ test('ligne-archers: one rank by default, ten archers too; `ranks=2`: two ranks 
   }
 });
 
+/** The block 12 ahead of Paul along the view, as a click on it gives lookBlock (its top centre is the point). */
+const blockAhead = (yaw: number) => {
+  const d = lookDir(yaw);
+  return { x: Math.floor(0.5 + d.x * 12), y: 63, z: Math.floor(0.5 + d.z * 12), name: 'grass_block' };
+};
+/** The line's centre for a click on `look`: `back` blocks short of the block's top centre, toward Paul (exact, as the order computes it). */
+const lineCentre = (look: { x: number; z: number }, yaw: number, back: number): Vec3 => {
+  const fwd = lookDir(yaw);
+  return new Vec3(look.x + 0.5 - fwd.x * back, 64, look.z + 0.5 - fwd.z * back);
+};
+
+// Spacing 1, the closest the line allows (neighbours' places 1 apart, bodies 0.6 wide), except two ranks at 90°: ranks
+// of 5 at spacing 1 across an axis stand on block centres, where they always stood; at 1.5 four places lie on the
+// blocks' edges.
+for (const [yaw, ranks, spacing] of [[87, 1, 1], [87, 2, 1], [45, 1, 1], [45, 2, 1], [90, 1, 1], [90, 2, 1.5]] as const) {
+  test(`ligne-archers: ten archers at yaw ${yaw}°, ${ranks === 1 ? 'one rank' : 'ranks=2'}, spacing ${spacing}: each rank a straight line, each archer on its exact lineSlots place (not a block centre), no two closer than a body's width (docs/35 F4, as the wall's F2)`, async () => {
+    const f = field();
+    const archers = Array.from({ length: 10 }, (_, i) => f.add(`Archer${i}`, i - 5, -6, BOW));
+    const look = blockAhead(yaw);
+    await f.start('ligne-archers', f.snap({ yaw, lookBlock: look, trigger: { kind: 'use', item: 'arrow' } }), [`spacing=${spacing}`, `ranks=${ranks}`]);
+    try {
+      const centre = lineCentre(look, yaw, 4);
+      const exact = lineSlots(centre, yaw, 10, { spacing, ranks, depth: 2 });
+      // Block centres are not the line: places lie off their block's centre (at 90° on the blocks' edges), so archers
+      // on their blocks' centres stood in a jagged line, and at 87° and 45° two of them on one spot.
+      const offCentre = exact.filter((s) => Math.hypot(s.x - Math.floor(s.x) - 0.5, s.z - Math.floor(s.z) - 0.5) > 0.2);
+      assert.ok(offCentre.length >= 4, `${offCentre.length} places off their block's centre`);
+      // Not sneaking: done with its last step (whose look toward the place can be the view's own yaw).
+      const done = (a: FakeBot) => facing(a, yaw) && !a.controlState.forward && !a.controlState.sneak;
+      await until(() => archers.every(done), 5_000, 'every archer facing the yaw, its last step done');
+
+      const pos = archers.map((a) => a.entity.position);
+      const show = pos.map((p) => `${p.x.toFixed(2)},${p.z.toFixed(2)}`).join(' ');
+      // Each exact place has exactly one archer on it (within 0.2), on the ground.
+      for (const s of exact) {
+        const on = pos.filter((p) => Math.hypot(p.x - s.x, p.z - s.z) <= 0.2);
+        assert.equal(on.length, 1, `one archer on ${s.x.toFixed(2)},${s.z.toFixed(2)}: ${show}`);
+      }
+      assert.ok(pos.every((p) => p.y === 64), `on the ground: ${show}`);
+      // Each rank collinear: on its line across the view, rank r 2r blocks behind the centre (toward Paul).
+      const fwd = lookDir(yaw);
+      const ahead = (p: Vec3) => (p.x - centre.x) * fwd.x + (p.z - centre.z) * fwd.z;
+      for (let r = 0; r < ranks; r++) assert.equal(pos.filter((p) => Math.abs(ahead(p) + 2 * r) <= 0.2).length, 10 / ranks, `rank ${r} on its line: ${show}`);
+      // No two bodies (0.6 wide) overlap.
+      let min = Infinity;
+      for (let i = 0; i < pos.length; i++) for (let j = i + 1; j < pos.length; j++) min = Math.min(min, Math.hypot(pos[i]!.x - pos[j]!.x, pos[i]!.z - pos[j]!.z));
+      assert.ok(min >= 0.6, `the closest two are ${min.toFixed(2)} apart: ${show}`);
+      // The last step was walked with the controls (sneaking).
+      assert.ok(archers.some((a) => a.calls.includes('setControlState(forward,true)') && a.calls.includes('setControlState(sneak,true)')), 'a last step with the controls');
+    } finally {
+      await f.h.runner.stopAll();
+    }
+  });
+}
+
+/** Stop an archer's fast clock and tick it every `tickMs` instead (0: the test ticks it), so a last step is seen under way. */
+const slowClock = (a: FakeBot, tickMs: number): FakeBot => {
+  a.stopTicks();
+  return a.archer({ tickMs });
+};
+
+test('ligne-archers: a new formation ends a last step at once, its controls let go, and the archer walks to its new slot', async () => {
+  const f = field();
+  // Two archers, back 0 and spacing 1: their places sit half a block either side of the point's block centre, where
+  // their walks end. A slow clock (40 ms a tick), so each step is seen under way before it ends.
+  const archers = [slowClock(f.add('Archer0', 4, 0, BOW), 40), slowClock(f.add('Archer1', 4, 1, BOW), 40)];
+  const tokens = ['back=0', 'spacing=1'];
+  const look = blockAhead(87);
+  const places = lineSlots(lineCentre(look, 87, 0), 87, 2, { spacing: 1 });
+  assert.equal(new Set(places.map((s) => `${Math.floor(s.x)},${Math.floor(s.z)}`)).size, 1, 'both places in one block');
+  await f.start('ligne-archers', f.snap({ yaw: 87, lookBlock: look, trigger: { kind: 'use', item: 'arrow' } }), tokens);
+  try {
+    // Each archer frozen as soon as its last step is under way: the step cannot end by itself (STEP_IN_MS is 3 s).
+    const frozen = new Set<FakeBot>();
+    await until(() => {
+      for (const a of archers) {
+        if (a.controlState.forward && !frozen.has(a)) {
+          a.stopTicks();
+          frozen.add(a);
+        }
+      }
+      return frozen.size === archers.length;
+    }, 3_000, 'both last steps under way');
+    const from = archers.map((a) => a.calls.length);
+    // The same args: a click with others would restart the order (docs/35 F5).
+    await f.click('ligne-archers', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 10, name: 'grass_block' }, trigger: { kind: 'use', item: 'arrow' } }), tokens);
+    await until(() => archers.every((a) => Math.abs(a.entity.position.z - 10.5) < 0.01), 1_500, 'both at the new line, well before a step would give up');
+    archers.forEach((a, i) => {
+      const after = a.calls.slice(from[i]);
+      const walk = after.indexOf('pathfinder.setGoal');
+      for (const c of ['setControlState(forward,false)', 'setControlState(sneak,false)']) {
+        const at = after.indexOf(c);
+        assert.ok(at >= 0 && at < walk, `${a.username}: ${c} before the walk: ${after.join(' ')}`);
+      }
+    });
+    for (const a of archers) a.archer();
+    await until(() => archers.every((a) => facing(a, 0) && !a.controlState.sneak), 3_000, 'both on the new line, facing south');
+    // Facing south, the left is +X: the exact places are x = 1 and x = 0, half a block either side of the point.
+    const xs = archers.map((a) => a.entity.position.x).sort((a, b) => a - b);
+    assert.ok(Math.abs(xs[0]! - 0) <= 0.2 && Math.abs(xs[1]! - 1) <= 0.2, `on the exact places: ${xs.join(', ')}`);
+    assert.ok(archers.every((a) => Math.abs(a.entity.position.z - 10.5) <= 0.2));
+  } finally {
+    await f.h.runner.stopAll();
+  }
+});
+
+test('ligne-archers: a foe in range ends a last step: the archer lets go of forward and sneak before it draws, shoots from where it stands, then finishes the step (docs/35 F4)', async () => {
+  const f = field();
+  // The test ticks this archer's clock itself until the step is under way.
+  const a = slowClock(f.add('Archer0', 4, 0, BOW), 0);
+  // The controls and the body's place at each draw.
+  const atDraw: Array<{ forward: boolean; sneak: boolean; at: Vec3 }> = [];
+  const activate = a.activateItem.bind(a);
+  a.activateItem = (offHand = false) => {
+    if (!offHand) atDraw.push({ forward: !!a.controlState.forward, sneak: !!a.controlState.sneak, at: a.entity.position.clone() });
+    activate(offHand);
+  };
+  const look = blockAhead(45);
+  // One archer: its place is the line's centre, 4 short of the point, about 0.24 off its block's centre.
+  const slot = lineCentre(look, 45, 4);
+  const off = (p: Vec3) => Math.hypot(p.x - slot.x, p.z - slot.z);
+  await f.start('ligne-archers', f.snap({ yaw: 45, lookBlock: look, trigger: { kind: 'use', item: 'arrow' } }));
+  try {
+    await until(() => !!a.controlState.sneak, 2_000, 'the last step under way (sneaking)');
+    const from = a.entity.position.clone();
+    assert.ok(off(from) > 0.15, `its walk ended ${off(from).toFixed(2)} off the place`);
+    a.tick(); // one physics tick: the step steers toward the place and holds forward
+    assert.ok(a.controlState.forward, 'the step walks with forward');
+    const z = f.spawn(zombie(look.x + 0.5, look.z + 4.5));
+    await until(() => !a.controlState.forward && !a.controlState.sneak, 1_000, 'the step letting go for the foe, at once');
+    assert.ok(off(a.entity.position) > 0.15, 'still off its place: the step was ended, not done');
+    a.archer(); // its clock again: the draw counts ticks
+    await until(() => a.releases.some((r) => r.fired), 3_000, 'a shot');
+    assert.equal(f.shots.get(a)![0], z);
+    assert.deepEqual({ forward: atDraw[0]!.forward, sneak: atDraw[0]!.sneak }, { forward: false, sneak: false }, 'the controls let go at the draw');
+    assert.ok(atDraw[0]!.at.distanceTo(from) < 1e-9, 'drawn from where the step stopped');
+    // In the calls too: forward and sneak let go after the last forward and before the draw, and not taken again.
+    const draw = a.calls.indexOf('activateItem');
+    const lastForward = a.calls.lastIndexOf('setControlState(forward,true)', draw);
+    for (const c of ['setControlState(forward,false)', 'setControlState(sneak,false)']) {
+      const at = a.calls.lastIndexOf(c, draw);
+      assert.ok(at > lastForward, `${c} after the step's last forward and before the draw: ${a.calls.join(' ')}`);
+    }
+    // Dead: the archer finishes its step onto the exact place (its controls let go) and faces the view. The step's look
+    // toward the place is the view's own yaw here (the centre lies along the view from the block's centre).
+    z.isValid = false;
+    await until(() => facing(a, 45) && off(a.entity.position) <= 0.15 && !a.controlState.forward && !a.controlState.sneak, 3_000, 'on its exact place, its step done, facing the view');
+  } finally {
+    await f.h.runner.stopAll();
+  }
+});
+
 test('ligne-archers: an archer still walking to its slot shoots a foe in range from where it stands, then goes on (docs/35 F4)', async () => {
   const f = field();
   const a = f.add('Archer0', 0, -3, BOW);

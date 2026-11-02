@@ -868,6 +868,62 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       return `#${r.orderId}: ${line}`;
     });
 
+    await clean('items: ligne-archers (runtime) at yaws not axis-aligned: each archer on its exact place, a straight line (two at 45°; two at 87° 1 apart, whose places share a block: docs/35 F4, as the wall)', async () => {
+      /**
+       * The line the archers form for a click on the block `look` across `yaw`, with `tokens` (`back`, `spacing`): each
+       * archer within 0.2 of its own exact place (lineSlots through the centre `back` short of the block's top centre,
+       * as the order computes it; RCON Pos for the ground truth), on the line, no two closer than 0.6 (a body's width),
+       * facing the yaw. A click whose args differ from the running line's restarts it with them (docs/35 F5).
+       */
+      const exactLine = async (yaw: number, look: { x: number; z: number }, back: number, spacing: number, what: string): Promise<string> => {
+        const fwd = lookDir(yaw);
+        const centre = new Vec3(look.x + 0.5 - fwd.x * back, A.y + 1, look.z + 0.5 - fwd.z * back);
+        const places = lineSlots(centre, yaw, ARCHERS.length, { spacing });
+        const onPlaces = (ps: Vec3[]): boolean => places.every((s) => ps.filter((p) => hdist(p, s) <= 0.2).length === 1);
+        const evidence = async (): Promise<string> => {
+          const parts: string[] = [];
+          for (const a of ARCHERS) {
+            const p = await rconPos(a);
+            parts.push(`${a} ${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)} (${Math.min(...places.map((s) => hdist(p, s))).toFixed(2)} off a place) yaw ${(await rconYaw(a)).toFixed(1)}`);
+          }
+          return `${parts.join('; ')}; places ${places.map((s) => `${s.x.toFixed(2)},${s.z.toFixed(2)}`).join(' ')}`;
+        };
+        const r = await api('/api/orders/trigger', {
+          by: CAPTAIN,
+          command: 'ligne-archers',
+          tokens: [`back=${back}`, `spacing=${spacing}`],
+          filters: [],
+          snap: snap(yaw, { heldItem: 'arrow', lookBlock: block(look.x, look.z), trigger: use('arrow') }),
+        });
+        if (!r.ok) throw new Error(`${what}: click: ${r.text}`);
+        try {
+          await until(() => onPlaces(ARCHERS.map((a) => pos(a)!)), 40_000, `the archers on their exact places (${what})`);
+          await until(async () => {
+            for (const a of ARCHERS) if (yawDiff(await rconYaw(a), yaw) > 10) return false;
+            return true;
+          }, 10_000, `the archers facing yaw ${yaw} (${what})`);
+          const ps: Vec3[] = [];
+          for (const a of ARCHERS) ps.push(await rconPos(a));
+          if (!onPlaces(ps)) throw new Error('the server does not have each archer within 0.2 of its place');
+          const offLine = Math.max(...ps.map((p) => Math.abs((p.x - centre.x) * fwd.x + (p.z - centre.z) * fwd.z)));
+          if (offLine > 0.2) throw new Error(`an archer ${offLine.toFixed(2)} off the line`);
+          let closest = Infinity;
+          for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) closest = Math.min(closest, hdist(ps[i]!, ps[j]!));
+          if (closest < 0.6) throw new Error(`two archers ${closest.toFixed(2)} apart`);
+          return `${what} (#${r.orderId}): ${await evidence()}; at most ${offLine.toFixed(2)} off the line, the two ${closest.toFixed(2)} apart`;
+        } catch (e) {
+          throw new Error(`${(e as Error).message}: ${await evidence()}`);
+        }
+      };
+      // Two at 45° (looking south-west at a block about 8 ahead), back 4 and spacing 2 (the defaults): their places lie
+      // off their blocks' centres.
+      const diagonal = await exactLine(45, { x: A.x - 6, z: A.z + 6 }, 4, 2, 'two at 45°');
+      // Two at 87°, 1 apart with back 0: their places, half a block either side of the point's block centre, share that
+      // block, where both stood before (docs/35 F2 for the wall).
+      const pair = await exactLine(87, { x: A.x - 8, z: A.z }, 0, 1, 'two at 87°, spacing 1, back 0');
+      return `${diagonal} | ${pair}`;
+    });
+
     await clean('items: ligne-archers behind a mur-de-boucliers: the archers, 2 blocks behind the guards, shoot over them and kill a husk 6 blocks beyond the wall', async () => {
       // The wall along x at z = A.z + 6.5 facing south, the archers' line 2 blocks behind it (back=2): each archer has
       // a guard right in front of it. Before, the flat arc went into the guards' backs (hawkEye checks blocks only).

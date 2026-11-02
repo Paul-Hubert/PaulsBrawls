@@ -62,7 +62,9 @@ Every tool except `get_api_reference` takes the ticket from the first message.
   or `await ctx.commander.next(ms)` get each click instead: nothing is stopped, and the click takes back the order's
   bots (they come as `squad.on('joined')`: start their loops there). For a command meant
   for a bound item (a formation, a target to strike), re-aim the running order rather than letting it restart. Each
-  click replaces `ctx.commander.at`: read it again after a trigger.
+  click replaces `ctx.commander.at`: read it again after a trigger. A formation that stays straight at any yaw keeps
+  `lineSlots`' exact places (`groundAt` only for the y): a path ends on a block's centre, so walk each bot to its
+  place's block (`goals.GoalBlock`), then `stepTo(bot, place)` puts it on the place.
 - PvP and griefing are allowed on this server: nothing stops a bot from hitting a player or breaking blocks. Use
   `isFriend(entity)` so bots never attack the commander, the co-owners or other squad bots unless asked.
 - Return a short French sentence (what was done); `ctx.say(text)` for progress the commander should see,
