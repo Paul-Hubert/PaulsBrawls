@@ -59,7 +59,8 @@ Every tool except `get_api_reference` takes the ticket from the first message.
   (a right-click; with a bow, the arrow leaving, then where it hits) starts the order with `ctx.commander.at.trigger`
   (`{ kind: 'use' | 'arrow-release' | 'arrow-hit', item, hit? }`; an entity's `id` is its key in `bot.entities`).
   A later click while the order runs restarts it, unless the order listens: `ctx.commander.on('trigger', at => …)`
-  or `await ctx.commander.next(ms)` get each click instead, and nothing is stopped or reclaimed. For a command meant
+  or `await ctx.commander.next(ms)` get each click instead: nothing is stopped, and the click takes back the order's
+  bots (they come as `squad.on('joined')`: start their loops there). For a command meant
   for a bound item (a formation, a target to strike), re-aim the running order rather than letting it restart. Each
   click replaces `ctx.commander.at`: read it again after a trigger.
 - PvP and griefing are allowed on this server: nothing stops a bot from hitting a player or breaking blocks. Use

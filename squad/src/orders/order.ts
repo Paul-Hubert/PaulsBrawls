@@ -9,7 +9,7 @@ import type { Bot } from 'mineflayer';
 
 import { abortActiveTasks } from '../bots/hardening';
 import { BotLeftError, OrderStoppedError, errorMessage, isBotLeft, isStopped } from '../api/errors';
-import type { LeaseHolder, LeaseManager, LeftReason, RoleRequest } from '../leases';
+import type { LeaseHolder, LeaseManager, LeftReason, RoleRequest, Take } from '../leases';
 import type { BotFacts, Manifest, RoleSpec } from '../script/manifest';
 import { matches } from '../script/manifest';
 import type { CommandRef, Notice, OrderReport, OrderStatus, Player, Snapshot, TriggerOutcome, Vitals } from '../types';
@@ -80,6 +80,9 @@ export class Order implements LeaseHolder {
   listening = false;
   /** End without the chat line: a bound item's stop or restart already answered the player (runner.trigger). */
   silentEnd = false;
+  /** The @bot filters and take it was started with: a bound item's click with others restarts it (runner.trigger). */
+  filters: string[] = [];
+  take?: Take;
   readonly trial: boolean;
   readonly friends: Set<string>;
   readonly filename: string;
@@ -304,7 +307,11 @@ export class Order implements LeaseHolder {
 
   // -- script-facing operations (squad.acquire / squad.release) ------------------------------------------------
 
-  async acquire(spec: RoleSpec, as: string, candidates: string[]): Promise<Bot[]> {
+  /**
+   * More bots mid-run (squad.acquire). `announce`: each one also comes as a 'joined' event, as a bot given back does,
+   * for a bound item's click that takes back the order's bots (runner.trigger): the script did not ask for them.
+   */
+  async acquire(spec: RoleSpec, as: string, candidates: string[], opts: { announce?: boolean } = {}): Promise<Bot[]> {
     this.assertRunning();
     const sel = spec.select ?? {};
     const req: RoleRequest = {
@@ -335,6 +342,7 @@ export class Order implements LeaseHolder {
         }
       } else this.deps.leases.release(this.id, g.bot);
     }
+    if (opts.announce) for (const b of out) if (this.status === 'running') this.emitSafe('joined', b, as);
     return out;
   }
 
@@ -453,7 +461,8 @@ export class Order implements LeaseHolder {
 
   /**
    * A later click of the bound item reaches the running order: the snapshot becomes `ctx.commander.at`, listeners
-   * and a waiting `next()` get it. Nothing is stopped or reclaimed (O4). False when the order no longer runs.
+   * and a waiting `next()` get it. Nothing is stopped; the runner then takes back the order's bots (runner.takeBack,
+   * docs/35 F5). False when the order no longer runs.
    */
   deliverTrigger(snap: Snapshot): boolean {
     if (!this.running) return false;

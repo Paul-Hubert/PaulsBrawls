@@ -284,7 +284,8 @@ test('epee from any item: the creature nearest the point (within `near`) is atta
     // The block (30, 63, 0) with a zombie 6 blocks from its top: no target, the bots hold the point (a radius of 4
     // around it, so that zombie is not theirs either).
     const far = f.spawn(zombie(30.5, 6.5));
-    const r = await f.click('epee', f.snap({ yaw: -90, lookBlock: { x: 30, y: 63, z: 0, name: 'stone' }, trigger: stick }));
+    // The binding's own line again (another one would restart the order, docs/35 F5).
+    const r = await f.click('epee', f.snap({ yaw: -90, lookBlock: { x: 30, y: 63, z: 0, name: 'stone' }, trigger: stick }), ['radius=4']);
     assert.ok('delivered' in r && r.delivered);
     const point = new Vec3(30.5, 64, 0.5);
     await until(() => guards.every((g) => Math.abs(Math.hypot(g.entity.position.x - point.x, g.entity.position.z - point.z) - 3) < 1), 3_000, 'on the ring around the point');
@@ -436,6 +437,80 @@ test('ligne-archers: range is from each archer, 120 by default: a foe 100 blocks
     assert.ok(!f.shots.get(a)!.includes(far));
     near.isValid = false;
     far.isValid = false;
+  } finally {
+    await f.h.runner.stopAll();
+  }
+});
+
+// -- a click takes back the order's bots (docs/35 F5) -----------------------------------------------------------
+
+const wallClick = (f: ReturnType<typeof field>, z = 0) =>
+  f.snap({ yaw: 90, lookBlock: { x: -8, y: 63, z, name: 'stone' }, trigger: { kind: 'use', item: 'shield' } });
+
+test('a click on the wall takes back the guards an epee reclaimed; the epee goes on with its archers; no stack holds an order twice (docs/35 F5)', async () => {
+  const f = field();
+  const guards = [f.add('Guard0', -3, 3, SHIELD), f.add('Guard1', -3, -2, SHIELD), f.add('Guard2', -3, 0, SHIELD)];
+  f.add('Archer0', 2, -3, BOW);
+  f.add('Archer1', 4, -3, BOW);
+  const wall = await f.start('mur-de-boucliers', wallClick(f));
+  try {
+    await until(() => guards.every(shieldUp), 3_000, 'the wall up');
+    // An epee at the ground reclaims every bot: the guards from the wall, the idle archers.
+    const epee = await f.start('epee', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 8, name: 'stone' }, trigger: { kind: 'use', item: 'iron_sword' } }));
+    assert.equal(epee.memberNames().length, 5);
+    assert.deepEqual(wall.memberNames(), []);
+    // Before, this click was delivered to a wall with no bots (#205, #220).
+    const r = await f.click('mur-de-boucliers', wallClick(f));
+    assert.deepEqual(r, { ok: true, text: '', orderId: wall.id, delivered: true });
+    assert.deepEqual(wall.memberNames().sort(), ['Guard0', 'Guard1', 'Guard2']);
+    assert.deepEqual(epee.memberNames().sort(), ['Archer0', 'Archer1'], 'the epee keeps its archers');
+    assert.equal(epee.status, 'running');
+    for (const g of guards) assert.deepEqual(f.h.leases.stack(g.username).map((e) => e.orderId), [wall.id], `${g.username}: the wall once, the epee popped`);
+    await until(() => guards.every(shieldUp), 3_000, 'the guards back in the wall, shields up');
+    // Another click: nothing more to take back, nothing pushed twice.
+    await f.click('mur-de-boucliers', wallClick(f));
+    for (const g of guards) assert.equal(f.h.leases.stack(g.username).length, 1);
+  } finally {
+    await f.h.runner.stopAll();
+  }
+});
+
+test('a click on the wall brings in an idle guard that was not in it (docs/35 F5)', async () => {
+  const f = field();
+  const guards = [f.add('Guard0', -3, 3, SHIELD), f.add('Guard1', -3, -2, SHIELD)];
+  const wall = await f.start('mur-de-boucliers', wallClick(f));
+  try {
+    await until(() => guards.every(shieldUp), 3_000, 'the wall up');
+    const late = f.add('Guard2', -3, 0, SHIELD); // a guard spawned (or respawned) since
+    await f.click('mur-de-boucliers', wallClick(f));
+    assert.ok(wall.hasMember('Guard2'));
+    await until(() => [...guards, late].every(shieldUp), 3_000, 'three shields up');
+    assert.equal(new Set([...guards, late].map((g) => xz(g).join())).size, 3, 'three slots');
+  } finally {
+    await f.h.runner.stopAll();
+  }
+});
+
+test('a click whose args differ from the running order restarts it with them; the same args (defaults too) are delivered (docs/35 F5)', async () => {
+  const f = field();
+  f.add('Guard0', -3, 3, SHIELD);
+  f.add('Guard1', -3, -2, SHIELD);
+  const first = await f.start('mur-de-boucliers', wallClick(f), ['spacing=2']);
+  try {
+    // A rebind with spacing=1 (#221 → #223): restarted, with spacing 1.
+    const r = await f.click('mur-de-boucliers', wallClick(f), ['spacing=1']);
+    assert.ok(r.ok && 'restarted' in r && r.restarted, r.text);
+    const second = f.h.runner.get((r as { orderId: string }).orderId)!;
+    assert.notEqual(second.id, first.id);
+    assert.equal(first.status, 'stopped');
+    assert.equal(second.args.spacing, 1);
+    // No args: spacing's default is 1, the same line: delivered.
+    assert.deepEqual(await f.click('mur-de-boucliers', wallClick(f)), { ok: true, text: '', orderId: second.id, delivered: true });
+    // Other @bot filters restart it too.
+    const third = await f.click('mur-de-boucliers', wallClick(f));
+    assert.ok('delivered' in third);
+    const filtered = await f.h.runner.trigger({ commander: PAUL, command: 'mur-de-boucliers', tokens: [], filters: ['Guard0'], snap: wallClick(f) });
+    assert.ok(filtered.ok && 'restarted' in filtered && filtered.restarted, filtered.text);
   } finally {
     await f.h.runner.stopAll();
   }

@@ -99,3 +99,23 @@ test('death clears the stack; an owner freeing a bot returns it below', async ()
   assert.deepEqual(o1.left.at(-1), ['A', 'died', undefined]);
   assert.ok(L.isIdle('A'));
 });
+
+test('taking back a bot lent from an order: the orders above it go, never a second entry of one order (docs/35 F5)', async () => {
+  const L = new LeaseManager();
+  const [wall, epee, tir] = [new Holder('1'), new Holder('2'), new Holder('3')];
+  for (const h of [wall, epee, tir]) L.register(h);
+  await L.apply('1', [{ bot: 'A', role: 'guards' }]);
+  await L.apply('2', [{ bot: 'A', role: 'melee', from: '1' }]);
+  await L.apply('3', [{ bot: 'A', role: 'x', from: '2' }]);
+  assert.deepEqual(L.stack('A').map((e) => e.orderId), ['1', '2', '3']);
+  // The wall plans it again: busy, under a reclaiming role.
+  const p = L.plan('1', [role('guards', 'reclaim', null)], ['A']);
+  assert.deepEqual(p.ok && p.grants, [{ bot: 'A', role: 'guards', from: '3' }]);
+  await L.apply('1', p.ok ? p.grants : []);
+  assert.deepEqual(L.stack('A'), [{ orderId: '1', role: 'guards' }]);
+  assert.deepEqual(tir.left, [['A', 'reclaimed', '1']], 'the top order saw it leave');
+  assert.ok(L.holds('1', 'A'));
+  // When the wall lets go, the bot goes idle: the orders it was lent to are gone from its stack.
+  assert.equal(L.release('1', 'A'), undefined);
+  assert.ok(L.isIdle('A'));
+});

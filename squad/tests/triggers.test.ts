@@ -282,7 +282,8 @@ export default async function (squad, args, ctx) {
   h.command(PAUL, 'mur', LISTEN);
   const f = await trigger(h, PAUL, 'fragile', snap(1), { filters: ['Bob'] });
   const m = await trigger(h, PAUL, 'mur', snap(1), { filters: ['Eve'] });
-  await trigger(h, PAUL, 'fragile', snap(6));
+  // The binding's own line again (other @bot filters would restart it, docs/35 F5).
+  await trigger(h, PAUL, 'fragile', snap(6), { filters: ['Bob'] });
   await until(() => h.notices.some((n) => /« fragile » a échoué : boom at 6/.test(n.text)), 1000, 'fragile to fail');
   assert.equal(h.runner.get(idOf(f))!.status, 'failed');
   assert.equal(h.runner.get(idOf(m))!.status, 'running');

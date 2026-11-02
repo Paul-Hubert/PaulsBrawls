@@ -102,7 +102,12 @@ export class LeaseManager {
     return shortfall.length > 0 ? { ok: false, shortfall } : { ok: true, grants };
   }
 
-  /** Apply a plan: busy bots leave their order first (awaited: their abort sequence runs), then are pushed. */
+  /**
+   * Apply a plan: busy bots leave their order first (awaited: their abort sequence runs), then are pushed. A bot whose
+   * stack already holds this order below the top (it was lent to the orders above: a shield wall's guard to an `epee`)
+   * comes back to it: the entries above go (the top one was told, reason `reclaimed`), and its entry is on top again.
+   * Never a second entry of one order on a stack (a bound item's click takes back its order's bots, docs/35 F5).
+   */
   async apply(orderId: string, grants: Grant[]): Promise<void> {
     const leaving: Array<Promise<void> | void> = [];
     for (const g of grants) {
@@ -115,8 +120,14 @@ export class LeaseManager {
     await Promise.all(leaving);
     for (const g of grants) {
       const s = this.stacks.get(g.bot) ?? [];
-      s.push({ orderId, role: g.role });
-      while (s.length > this.maxDepth) s.shift(); // the bottom order will not get it back
+      const mine = s.findIndex((e) => e.orderId === orderId);
+      if (mine >= 0) {
+        s.splice(mine);
+        s.push({ orderId, role: g.role });
+      } else {
+        s.push({ orderId, role: g.role });
+        while (s.length > this.maxDepth) s.shift(); // the bottom order will not get it back
+      }
       this.stacks.set(g.bot, s);
       this.lastGranted.set(g.bot, ++this.clock);
     }

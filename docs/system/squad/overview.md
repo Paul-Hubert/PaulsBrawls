@@ -249,10 +249,19 @@ The mod keeps the binding on the item stack and sends each click; the runtime de
   it:
   - `stop: true`: stopped, `[Bots] « X » arrêté.` (`[Bots] Aucun ordre « X » en cours.` when none runs). It also
     stops an order whose command no longer resolves for the player (unshared, deleted), matched by its canonical name.
-  - **Running and listening** (`order.listening`, set by `ctx.commander.on('trigger')` or `next()`): delivered,
-    `{ ok: true, text: '', orderId, delivered: true }`. Nothing is stopped, granted or reclaimed (O4).
-  - **Running, not listening:** every running order of that binding is stopped, then one is started with the new
-    snapshot, tokens, filters and take: the start's answer plus `restarted: true`.
+  - **Running and listening** (`order.listening`, set by `ctx.commander.on('trigger')` or `next()`) **with the same
+    line** (`sameLine`: the args parsed against its manifest, so a default equals its value; the `@bot` filters; the
+    take; an order keeps its start's `filters` and `take`): delivered, `{ ok: true, text: '', orderId, delivered: true
+    }`, **then the order's bots are taken back** (`takeBack`, docs/35 F5): each manifest role in turn,
+    `Order.acquire` (the `squad.acquire` path) over the commander's online bots (after the order's filters) not in it,
+    up to the role's max, take as at its start, with `announce`: each granted bot is also a `'joined'` event, so the
+    item commands re-form and `parallel` over a live array runs it. `LeaseManager.apply` never pushes a second entry
+    of one order: a bot whose stack holds the order below the top (lent to an `epee`, a `tir`) gets the entries above
+    it removed (the top order is told, `reclaimed`) and is the order's again. A bot reclaimed from another order
+    returns there when this one stops (O4). One take-back at a time per order (`takingBack`).
+  - **Running, not listening**, or listening **with another line** (a rebind with `spacing=1` used to be delivered
+    with the old args, #221 → #223): every running order of that binding is stopped, then one is started with the
+    new snapshot, tokens, filters and take: the start's answer plus `restarted: true`.
   - **Not running:** `launch`, exactly as `/api/orders/start`, plus `started: true`.
   - Several running orders of one binding (two `/bots order`): delivery goes to the newest; a stop or a restart takes
     them all.

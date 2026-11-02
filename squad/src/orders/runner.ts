@@ -81,6 +81,8 @@ export class OrderRunner extends EventEmitter {
   private readonly compiled = new Map<string, CommandFactory>();
   /** Starts in flight per binding key (commander, author, command): a trigger arriving meanwhile waits for them. */
   private readonly starting = new Map<string, Promise<StartResult>>();
+  /** A delivered click's take-back in flight per order (takeBack). */
+  private readonly takingBack = new Map<string, Promise<void>>();
   private nextId: number;
 
   constructor(private readonly deps: RunnerDeps) {
@@ -158,6 +160,8 @@ export class OrderRunner extends EventEmitter {
     }
     const ref: CommandRef = { author: resolved.meta.author, name: resolved.meta.name, version: resolved.version };
     const order = this.newOrder(ref, req.commander, req.snap, false);
+    order.filters = [...(req.filters ?? [])];
+    if (req.take) order.take = req.take;
     try {
       const factory = this.factory(ref, resolved.source);
       const { fn, manifest } = await this.load(order, factory);
@@ -198,9 +202,12 @@ export class OrderRunner extends EventEmitter {
    * A bound item's trigger (§5.4 item 6). The binding's order is the player's running order of that command (author
    * + name), whoever started it (a click or `/bots order`); trials never count.
    * - `stop`: stop it.
-   * - Running and listening (it called `ctx.commander.on('trigger')` or `next()`): deliver. Nothing is stopped or
-   *   reclaimed, and the answer has no text (no chat line per click).
-   * - Running, not listening: restart it with the new snapshot, args, filters and take.
+   * - Running and listening (it called `ctx.commander.on('trigger')` or `next()`), with the same args, @bot filters
+   *   and take: deliver, then take back the order's bots (docs/35 F5, Paul's D5): its roles are planned again as a
+   *   start would, over the commander's bots not in it, and granted mid-run; a bot lent from it to another order
+   *   (an `epee` reclaimed the wall's guards) comes back from there. The answer has no text (no chat line per click).
+   * - Running, not listening, or a click whose args, filters or take differ: restart it with the new snapshot, args,
+   *   filters and take.
    * - Not running: start it like `/bots order`.
    * A trigger arriving while a start of the binding is in flight (the arrow-hit after the arrow-release that starts
    * the order) waits for it, then goes to the order it started even before that order listens.
@@ -223,7 +230,8 @@ export class OrderRunner extends EventEmitter {
       return mine.length ? this.stopByTrigger(mine, req) : { ok: true, text: `[Bots] Aucun ordre « ${b.name} » en cours.`, stopped: false };
     }
     const current = mine[mine.length - 1];
-    if (current && (current.listening || current.id === fresh) && current.deliverTrigger(req.snap)) {
+    if (current && (current.listening || current.id === fresh) && sameLine(current, req) && current.deliverTrigger(req.snap)) {
+      await this.takeBack(current, req.commander);
       return { ok: true, text: '', orderId: current.id, delivered: true };
     }
     const restarted = mine.map((o) => o.id);
@@ -241,6 +249,35 @@ export class OrderRunner extends EventEmitter {
     }
     this.orders.get(r.orderId)?.noteTrigger(req.snap, restarted.length ? 'restarted' : 'started');
     return restarted.length ? { ...r, restarted: true } : { ...r, started: true };
+  }
+
+  /**
+   * A delivered click takes back the order's bots (docs/35 F5): each role of its manifest, in order, gets the
+   * commander's bots that match it and are not in the order, as at its start (idle ones first, then for a `reclaim`
+   * role busy ones, a bot lent from this order to another coming back from there), up to the role's max. They join
+   * the running order (a 'joined' event each: the item commands re-form). One take-back at a time per order: two
+   * quick clicks would otherwise plan the same bot twice.
+   */
+  private takeBack(order: Order, commander: Player): Promise<void> {
+    const prev = this.takingBack.get(order.id) ?? Promise.resolve();
+    const next = prev.then(async () => {
+      const m = order.manifest;
+      if (!m || !order.running) return;
+      const candidates = this.candidates(commander.uuid, order.filters);
+      let got = 0;
+      for (const [role, spec] of Object.entries(m.roles)) {
+        if (!order.running) break;
+        const room = spec.max - (order.roles[role]?.length ?? 0);
+        if (room <= 0) continue;
+        got += (await order.acquire({ select: spec.select, max: room, take: order.take ?? spec.take }, role, candidates, { announce: true })).length;
+      }
+      if (got > 0) this.emit('state');
+    }).catch(() => undefined); // the order stopped meanwhile: nothing to take back
+    this.takingBack.set(order.id, next);
+    void next.then(() => {
+      if (this.takingBack.get(order.id) === next) this.takingBack.delete(order.id);
+    });
+    return next;
   }
 
   private async stopByTrigger(victims: Order[], req: TriggerRequest): Promise<TriggerResult> {
@@ -530,6 +567,24 @@ function describeBots(bots: Array<{ name: string; role: string; from?: string }>
   return bots
     .map((b) => `${b.name}${showRole ? ` (${b.role})` : ''}${b.from ? ` réquisitionné de #${b.from}` : ''}`)
     .join(', ');
+}
+
+/**
+ * Whether a click carries the running order's own line: the same args (parsed against its manifest, so `spacing=2`
+ * equals the default 2), @bot filters and take. A rebind with other args (`spacing=1`) used to be delivered with the
+ * old ones (#221 → #223); it restarts the order now (docs/35 F5).
+ */
+function sameLine(o: Order, req: TriggerRequest): boolean {
+  if (!o.manifest) return true;
+  let args: Record<string, unknown>;
+  try {
+    args = parseArgs(o.manifest, req.tokens);
+  } catch {
+    return false; // the restart answers with the usage line
+  }
+  const sorted = (a: Record<string, unknown>): string => JSON.stringify(Object.keys(a).sort().map((k) => [k, a[k]]));
+  const names = (f: string[] | undefined): string => (f ?? []).map((n) => n.toLowerCase()).sort().join(',');
+  return sorted(args) === sorted(o.args) && names(req.filters) === names(o.filters) && (req.take ?? null) === (o.take ?? null);
 }
 
 /** A canonical binding (`name`, `author:name`, `squad:name`) names this order's command, whatever the share rights. */

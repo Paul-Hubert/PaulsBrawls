@@ -352,8 +352,16 @@ Decisions:
    (author + name) whose commander is the player, whether a click or `/bots order` started it.
    - **Running and listening** (it has called `ctx.commander.on('trigger', …)` or `ctx.commander.next()`): the
      trigger is delivered to it. `ctx.commander.at` becomes the new snapshot, the listeners get it, and a `next()`
-     resolves with it, or the latest is kept for the next `next()`. Nothing is stopped or reclaimed, so a shield wall
-     re-forms where the player now looks within a few hundred milliseconds.
+     resolves with it, or the latest is kept for the next `next()`. Nothing is stopped, so a shield wall re-forms where
+     the player now looks within a few hundred milliseconds. **Then the click takes back the order's bots** (docs/35
+     F5, Paul's D5; until 2026-11-01 nothing was granted, and a wall whose guards an `epee` had reclaimed got clicks
+     with no bots): each role is planned again as a start would, over the commander's bots not in the order (idle
+     ones first, then for a `reclaim` role busy ones), and the bots join it mid-run (`squad.on('joined')`). A bot
+     lent from this order to another (its stack holds this order below the top) comes back: the orders above it
+     lose it (reason `reclaimed`); a stack never holds one order twice. A bot reclaimed from elsewhere returns there
+     when this order stops (O4).
+   - **Running with another line** (other args, parsed against the manifest, other `@bot` filters or take: a rebind
+     with `spacing=1`): it is restarted with them, as below. Before, the click was delivered with the old args.
    - **Running, not listening:** it is restarted (stopped, then started with the new snapshot).
    - **Not running:** the trigger starts it, exactly like `/bots order` with the binding's line.
    - **A trigger that arrives while the start is in flight** (a bow's `arrow-hit` after its `arrow-release`) waits
@@ -974,3 +982,8 @@ completely, so missed events cannot leave it wrong.
      in range is shot from where the archer stands, walking or not (the goal is cleared for the draw: the pathfinder
      turns the head, and the shooter's motion goes into the arrow); why an archer holds fire is logged once per change.
      Tests: `item-orders.test.ts`.
+  5. *A click did not take the order's bots back* (Paul had to stop and click again). An `epee` (#220, until stopped)
+     had reclaimed every guard of the wall (#205) and every archer of the line (#207); later clicks were delivered to
+     orders with no bots, since a delivered click granted nothing (§5.4 item 6), and a rebind's new args were
+     delivered with the old ones (#221 → #223). Now (Paul, D5) a click whose line differs restarts the order, and a
+     delivered one takes back the order's bots (§5.4 item 6). Tests: `item-orders.test.ts`, `leases.test.ts`.
