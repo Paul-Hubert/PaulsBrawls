@@ -28,10 +28,14 @@ import com.paul.brawl.AgentClient;
 import com.paul.brawl.ClaudeCodeClient;
 
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.minecraft.enchantment.Enchantment;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.registry.entry.RegistryEntry;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.WhitelistEntry;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -399,6 +403,7 @@ public final class Squad {
                 continue;
             }
             ItemStack stack = new ItemStack(Registries.ITEM.get(id), it.count());
+            List<String> enchants = enchant(srv, stack, it);
             switch (it.slot()) {
                 case INVENTORY -> give(p, stack);
                 case MAINHAND -> {
@@ -420,10 +425,31 @@ public final class Squad {
                     if (!old.isEmpty()) give(p, old);
                 }
             }
-            given.add(it.count() > 1 ? it.count() + " " + it.id() : it.id());
+            String what = it.count() > 1 ? it.count() + " " + it.id() : it.id();
+            given.add(enchants.isEmpty() ? what : what + " (" + String.join(", ", enchants) + ")");
         }
         LOGGER.info("Equipped squad bot {} as {}: {}", p.getName().getString(), kit.name(), given);
         return "[Bots] " + p.getName().getString() + " équipé en " + kit.label() + " : " + String.join(", ", given) + ".";
+    }
+
+    /**
+     * The kit item's enchantments on its stack, from the server's enchantment registry (dynamic since 1.21: it is the
+     * server's, not a static one). An unknown id is logged and skipped. Returns « infinity 1 »… for the answer.
+     */
+    private static List<String> enchant(MinecraftServer srv, ItemStack stack, SquadKits.Item it) {
+        List<String> out = new ArrayList<>();
+        if (it.enchantments().isEmpty()) return out;
+        Registry<Enchantment> registry = srv.getRegistryManager().get(RegistryKeys.ENCHANTMENT);
+        for (Map.Entry<String, Integer> e : new java.util.TreeMap<>(it.enchantments()).entrySet()) {
+            Optional<RegistryEntry.Reference<Enchantment>> entry = registry.getEntry(Identifier.of("minecraft", e.getKey()));
+            if (entry.isEmpty()) {
+                LOGGER.warn("Kit item {}: unknown enchantment {}", it.id(), e.getKey());
+                continue;
+            }
+            stack.addEnchantment(entry.get(), e.getValue());
+            out.add(e.getKey() + " " + e.getValue());
+        }
+        return out;
     }
 
     private static void give(ServerPlayerEntity p, ItemStack stack) {

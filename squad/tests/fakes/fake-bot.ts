@@ -4,7 +4,8 @@
 // a `calls` recorder. Optional: a block world (`world`, e.g. flatWorld()) and `autoWalk`, which makes a positional
 // pathfinder goal arrive (the bot stands on the goal block, the goal is cleared as a reached goal is), and `archer()`:
 // physics ticks (fast, in bursts, as mineflayer catches up) and a bow that fires when released after a draw (one
-// arrow leaves the inventory, the release is recorded with the look it flew at).
+// arrow leaves the inventory, the release is recorded with the look it flew at, and the arrow's spawn_entity packet
+// reaches `_client` with this bot as its owner; a bow with Infinity keeps the arrow).
 
 import { EventEmitter } from 'node:events';
 
@@ -13,7 +14,12 @@ import { Vec3 } from 'vec3';
 export interface FakeItem {
   name: string;
   count: number;
+  /** As prismarine-item's `enchants` before 1.20.5 ({ name, lvl }). */
+  enchants?: Array<{ name: string; lvl: number }>;
 }
+
+/** minecraft-data's arrow entity (1.21.1): the spawn_entity packet's `type` is its internal id. */
+export const ARROW_ENTITY = { id: 4, internalId: 4, name: 'arrow', type: 'projectile' };
 
 export interface FakeBlock {
   name: string;
@@ -38,7 +44,7 @@ export class FakeBot extends EventEmitter {
   readonly _client = new EventEmitter();
   health = 20;
   food = 20;
-  heldItem: { name: string } | null = null;
+  heldItem: { name: string; enchants?: FakeItem['enchants'] } | null = null;
   /** Mineflayer's flag: set by activateItem, cleared by deactivateItem. */
   usingHeldItem = false;
   currentWindow: unknown = null;
@@ -51,7 +57,9 @@ export class FakeBot extends EventEmitter {
   players: Record<string, { entity: unknown; gamemode?: number }> = {};
   readonly calls: string[] = [];
   readonly sentChat: string[] = [];
-  readonly registry = { itemsByName: {} as Record<string, { id: number }>, blocksByName: {} as Record<string, { id: number; name: string }>, entitiesByName: {} as Record<string, unknown>, foodsByName: {} };
+  readonly registry = { itemsByName: {} as Record<string, { id: number }>, blocksByName: {} as Record<string, { id: number; name: string }>, entitiesByName: { arrow: ARROW_ENTITY } as Record<string, unknown>, foodsByName: {} };
+  /** archer(): the network ids of the arrows it spawns. */
+  private nextArrowId = 9_000;
   private items: FakeItem[];
   /** Pending long calls (goto, collect, attack): rejected by the abort sequence. */
   private pending = new Set<(e: Error) => void>();
@@ -196,8 +204,16 @@ export class FakeBot extends EventEmitter {
       const drawnTicks = this.ticks - this.drawnAt;
       const arrows = this.items.find((i) => i.name === 'arrow');
       const fired = !!arrows && arrows.count > 0;
-      if (fired) this.items = this.items.map((i) => (i === arrows ? { ...i, count: i.count - 1 } : i)).filter((i) => i.count > 0);
+      // Infinity: a plain arrow is not used up (it still needs one in the inventory).
+      const infinity = !!this.heldItem.enchants?.some((e) => e.name === 'infinity' && e.lvl > 0);
+      if (fired && !infinity) this.items = this.items.map((i) => (i === arrows ? { ...i, count: i.count - 1 } : i)).filter((i) => i.count > 0);
       this.releases.push({ yaw: this.entity.yaw, pitch: this.entity.pitch, drawnTicks, fired });
+      if (fired) {
+        // The server spawns the arrow at the eyes with its owner's entity id in the packet's data (0 when unknown).
+        const p = this.entity.position;
+        const id = (this.entity as { id?: number }).id;
+        this._client.emit('spawn_entity', { entityId: this.nextArrowId++, type: ARROW_ENTITY.internalId, objectData: id ?? 0, x: p.x, y: p.y + 1.52, z: p.z });
+      }
     }
     this.drawnAt = null;
   }
@@ -267,7 +283,8 @@ export class FakeBot extends EventEmitter {
       this.inventory.slots[45] = moved;
       return;
     }
-    this.heldItem = { name };
+    // The stack itself: a bow keeps its enchantments in hand.
+    this.heldItem = item && typeof item === 'object' && 'name' in item ? { ...(item as FakeItem) } : { name };
   }
   async lookAt(): Promise<void> {
     this.calls.push('lookAt');

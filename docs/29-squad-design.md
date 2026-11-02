@@ -958,3 +958,10 @@ completely, so missed events cannot leave it wrong.
      test passed only at yaw 90). The wall keeps the exact yaw and point, as before; when the middle two would share
      a block, the right half moves one block along the wall (Paul: only the middle pair, the rest as before).
      `lineSlots` is unchanged. Test: `item-orders.test.ts`.
+  3. *Archers ran out of arrows* (`tir` #201 logged « no arrows » 165 times; a `tir` click used about 9 arrows per
+     archer, from a kit of 64). The archer kit's bow has Infinity I and Unbreaking III (Paul, D6), raiders' too; the kit
+     keeps its 64 arrows (Infinity needs one). `SquadKits.Item` carries enchantments as data, `Squad.equip` applies them
+     from the server's enchantment registry. `shoot` knew a shot had left by the arrow count dropping, which Infinity
+     never does: it now also counts the arrow entity spawned with the bot as owner (the spawn packet's data), and
+     prefers the bow in hand, then an Infinity one. Tests: `SquadKitsTest`, `helpers.test.ts`, `item-orders.test.ts`;
+     the live items scenarios count the arrows the archers shoot by their spawn packets, not their inventories.

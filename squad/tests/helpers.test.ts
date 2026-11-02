@@ -11,7 +11,9 @@ import { Vec3 } from 'vec3';
 
 import {
   ARROW,
+  ARROW_WAIT_MS,
   bowAim,
+  enchantLevel,
   entityOf,
   faceYaw,
   goTo,
@@ -28,7 +30,7 @@ import {
 } from '../src/api/helpers';
 import { HelperError } from '../src/api/errors';
 import { ORDER } from '../src/orders/guard';
-import { FakeBot, flatWorld } from './fakes/fake-bot';
+import { ARROW_ENTITY, FakeBot, flatWorld, type FakeItem } from './fakes/fake-bot';
 import { holdEventLoopPerTest } from './fakes/keep-alive';
 
 holdEventLoopPerTest();
@@ -71,6 +73,84 @@ test('shoot: the release fires an arrow and the shot returns at once; a release 
   } finally {
     c.stopTicks();
   }
+});
+
+test('shoot with an Infinity bow: the arrow entity it owns is the shot, though the arrow count stays (docs/35 F3)', { timeout: 20_000 }, async () => {
+  const target = { id: 5, name: 'husk', position: new Vec3(10, 80, 0), height: 1.95, isValid: true };
+  const INFINITY = { name: 'bow', count: 1, enchants: [{ name: 'infinity', lvl: 1 }, { name: 'unbreaking', lvl: 3 }] };
+  const PLAIN = { name: 'bow', count: 1 };
+  const archer = (name: string, items: FakeItem[], id?: number) => {
+    const b = new FakeBot(name, { position: new Vec3(0, 80, 0), items }).archer();
+    if (id !== undefined) Object.assign(b.entity, { id });
+    return b;
+  };
+  const arrowsOf = (b: FakeBot) => b.inventory.items().filter((i) => i.name === 'arrow').reduce((n, i) => n + i.count, 0);
+  const bots: FakeBot[] = [];
+  try {
+    // Owned by the bot (the spawn packet's data is its entity id): resolves at once, no wait for a count that never drops.
+    const a = archer('Archer', [INFINITY, { name: 'arrow', count: 64 }], 7);
+    bots.push(a);
+    for (let i = 0; i < 3; i++) {
+      const t0 = Date.now();
+      assert.deepEqual(await shoot(a as never, target as never), { shot: true });
+      assert.ok(Date.now() - t0 < ARROW_WAIT_MS, `shot ${i} returned with the arrow's spawn, not after the ${ARROW_WAIT_MS} ms wait`);
+    }
+    assert.equal(a.releases.filter((r) => r.fired).length, 3);
+    assert.equal(arrowsOf(a), 64, 'Infinity: the arrows stay');
+    assert.equal(a.calls.filter((c) => c === 'activateItem').length, 3, 'one draw per shot, no second (manual) one');
+
+    // No owner id to go by (the bot's own id unknown): an arrow at its eyes is its own.
+    const b = archer('Archer2', [INFINITY, { name: 'arrow', count: 64 }]);
+    bots.push(b);
+    assert.deepEqual(await shoot(b as never, target as never), { shot: true });
+
+    // Another shooter's arrow is not this bot's shot.
+    const c = archer('Archer3', [INFINITY, { name: 'arrow', count: 64 }], 8);
+    bots.push(c);
+    const fire = c.deactivateItem.bind(c);
+    c.deactivateItem = () => {
+      c.drawnAt = null; // the release sends nothing that fires
+      c.calls.push('deactivateItem');
+      c._client.emit('spawn_entity', { entityId: 1, type: ARROW_ENTITY.internalId, objectData: 99, x: 0, y: 81.5, z: 0 });
+    };
+    await assert.rejects(shoot(c as never, target as never), /no arrow left the bow/);
+    c.deactivateItem = fire;
+
+    // A plain bow still works by the count.
+    const d = archer('Archer4', [PLAIN, { name: 'arrow', count: 10 }], 9);
+    bots.push(d);
+    assert.deepEqual(await shoot(d as never, target as never), { shot: true });
+    assert.equal(arrowsOf(d), 9);
+
+    // The bow in hand first (/bots equip put the new one there, the old one went to the main inventory, listed first).
+    const e = archer('Archer5', [PLAIN, { name: 'arrow', count: 10 }, INFINITY], 10);
+    bots.push(e);
+    e.heldItem = { ...INFINITY };
+    await shoot(e as never, target as never);
+    assert.ok(!e.calls.some((x) => x.startsWith('equip(')), 'the held bow, not re-equipped');
+    assert.equal(arrowsOf(e), 10);
+    // Nothing in hand but a sword: the Infinity bow over the plain one listed before it.
+    e.heldItem = { name: 'stone_sword' };
+    await shoot(e as never, target as never);
+    assert.ok(e.calls.includes('equip(bow,hand)'));
+    assert.equal(e.heldItem?.enchants?.[0]?.name, 'infinity');
+    assert.equal(arrowsOf(e), 10);
+  } finally {
+    for (const b of bots) b.stopTicks();
+  }
+});
+
+test('enchantLevel: by name before 1.20.5, by registry id from the 1.21.1 component', () => {
+  const b = new FakeBot('Bob');
+  (b.registry as Record<string, unknown>).enchantments = { 16: { name: 'infinity' }, 39: { name: 'unbreaking' } };
+  assert.equal(enchantLevel(b as never, { name: 'bow', enchants: [{ name: 'infinity', lvl: 1 }] }, 'infinity'), 1);
+  const component = { name: 'bow', enchants: { enchantments: [{ id: 16, level: 1 }, { id: 39, level: 3 }], showTooltip: true } };
+  assert.equal(enchantLevel(b as never, component, 'unbreaking'), 3);
+  assert.equal(enchantLevel(b as never, component, 'infinity'), 1);
+  assert.equal(enchantLevel(b as never, { name: 'bow', enchants: [] }, 'infinity'), 0);
+  assert.equal(enchantLevel(b as never, { name: 'bow' }, 'infinity'), 0);
+  const throwing = { name: 'bow', get enchants(): never { throw new Error('bad component'); } };
+  assert.equal(enchantLevel(b as never, throwing, 'infinity'), 0);
 });
 
 // -- formations and aiming (docs/29 §5.4) ----------------------------------------------------------------------

@@ -315,6 +315,14 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
   again. A bot leaving an order lowers it (the abort sequence's `deactivateItem`).
 - `shoot(bot, target)`: an entity (anything with `isValid`, as prismarine-entity's are) or a position (a Vec3,
   `[x, y, z]`, a block, a snapshot ref). Squad's own aim since docs/37 P3 (`aim/`; hawkEye is gone):
+  - **Which bow:** the one in hand, else one with Infinity (`enchantLevel`: 1.21.1's prismarine-item hands back the
+    `enchantments` component as is, `{ enchantments: [{ id, level }] }`, ids from the registry), else any. `/bots equip`
+    puts a new bow in the hand and moves the old one to the main inventory, which `inventory.items()` lists first.
+  - **When the arrow has left:** an `arrow` (or spectral) `spawn_entity` packet whose data is this bot's entity id (the
+    owner; 1.21.1's `ProjectileEntity.createSpawnPacket`; mineflayer does not keep it, so `shoot` listens on
+    `_client`), or with no id to go by an arrow within 2 blocks of its eyes (`OWN_ARROW_REACH`); or the arrow count
+    dropping. An Infinity bow keeps its arrow, so before docs/35 F3 every shot waited 500 ms and threw « no arrow left
+    the bow », and `tir` counted none.
   - **The arrow** (`aim/arrow.mjs`), read from the 1.21.1 server: from the eyes − 0.1; a full bow 3 blocks per tick plus
     the shooter's last move (y dropped on the ground), a crossbow 3.15 and no shooter move; per tick the segment is
     checked (blocks, then hitboxes grown by 0.3), then move, × 0.99 (0.6 in water), y − 0.05.
@@ -413,7 +421,7 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
   fights what). `attack(…, { leash: { center: commander, radius } })` breaks off when the target leaves the circle or
   the guard is more than radius + 4 from the commander; the guard then goes back to its slot.
 - **Archers** (`archers`, `take: 'reclaim'`): one shot, then the next target at once, preferring a threat no other
-  archer shoots. `shoot` returns when the arrow count drops. After "no clear line of fire" the archer steps 2 blocks
+  archer shoots. `shoot` returns when its arrow leaves (below). After "no clear line of fire" the archer steps 2 blocks
   aside.
 - **Slots.** Between threats each bot follows its own point around the commander (`follow` with `offset`, a
   `GoalFollowOffset`, `bots/follow-goal.ts`): guards on a ring of 3, archers of 6, an angle by the bot's index in its
@@ -484,7 +492,7 @@ Three layers now:
 | `SquadRaid`, `SquadRaidPlan` | `/bots raid` (above); the plan (arguments, point, names, spread, timeout) is Minecraft-free, JUnit |
 | `SquadSpawn`, `SquadSpawnPlan` | `/bots squad spawn KIT [n] [owner] [others…]` / `squad despawn [KIT] [owner]` (admin): `n` bots named after the kit, on a ring around the owner at the owner's height (`standNear`: a floor within 6 blocks, never the roof), kit and tag on arrival like `raid`; despawn by owner and kit tag. The plan (arguments, names, ring) is Minecraft-free, JUnit |
 | `Squad` | Lifecycle, the SSE loop and the cache, notices (kept for offline players), whitelist, join gate (a bot name from a non-loopback address is kicked), arrival teleport (to the admin, or to a given spot with a callback), `hasPlayed` (spawn refuses names with a `playerdata` file), `equip` |
-| `SquadKits` | Kits for archer, guard, miner and farmer (Minecraft-free); `equip` wears armor, holds weapons and puts the shield in the off-hand |
+| `SquadKits` | Kits for archer, guard, miner and farmer (Minecraft-free); an item may carry enchantments (id → level): the archer's bow has Infinity I and Unbreaking III (docs/35 D6; raiders use the archer kit too). `equip` wears armor, holds weapons, puts the shield in the off-hand, and enchants a stack from the server's enchantment registry (`RegistryKeys.ENCHANTMENT`, dynamic since 1.21; `ItemStack.addEnchantment`) |
 | `SquadAuthoring` | One `squad-author` turn: reserve the slot, open, run the agent, close, announce « Commande X prête » |
 | `SquadClient`, `SquadArgs`, `SquadNotice`, `CommanderSnap`, `SquadConfig` | HTTP/1.1 client and SSE framing; argument tokenizing; lines with clicks; exact position and look target (`lookEntity` with its network `id`, only what a crosshair can target: `canHit()`); `squad.properties` |
 
@@ -697,7 +705,7 @@ clicks and sends each one; it decides nothing about what a click does.
   bow, a friend pointed at.
 - **The shield wall and the archers over it** (2026-11-01) passed live against one husk each (above). Not live: a
   player's blows on a shield (the swing after the block), a wall against several attackers or moving targets, archers
-  in two ranks behind a wall, and how fast 64 arrows run out at a short draw.
+  in two ranks behind a wall. (Running out of arrows is settled: the archer kit's bow has Infinity, docs/35 F3.)
 - **The mod side of bound items** passed live on the dev server (above). Still not run on a server: multishot (a
   crossbow), a held right-click against the limiter, the lore and glint as a real client renders them (only the
   stack's data was read), a rebind, and a bound item given to another player.

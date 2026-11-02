@@ -331,7 +331,8 @@ declare global {
   ): Promise<{ killed: boolean; brokeOff?: 'leash' | 'until' }>;
   /**
    * One aimed bow (or crossbow) shot at an entity, or at a position (a volley on the ground: `shoot(bot, point)`);
-   * needs the weapon and arrows. Resolves as soon as the arrow has left (~1.3 s for a bow). It leads a moving target,
+   * needs the weapon and arrows (one is enough with an Infinity bow). The bow in hand is used first, else one with
+   * Infinity, else any. Resolves as soon as the arrow has left (~1.3 s for a bow). It leads a moving target,
    * and checks the line of fire against blocks and every creature: over a wall on a high arc if it must; an enemy in
    * the line counts as a hit. Throws "no clear line of fire: …" when a block or a friend is in
    * the way (nothing fired; a friend gets ~1 s to step out first): step aside or move closer. A snapshot entity

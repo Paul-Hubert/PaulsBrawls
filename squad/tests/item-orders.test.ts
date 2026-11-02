@@ -441,6 +441,21 @@ test('tir: an arrow in the ground sends a volley, `volley` arrows per archer spr
   assert.ok(new Set(all.map((s) => `${s.position.x},${s.position.z}`)).size > 1, 'spread, not one point');
 });
 
+test('tir with Infinity bows: the volley counts every arrow, and the archers keep theirs (docs/35 F3)', async () => {
+  const f = field();
+  const INFINITY: FakeItem[] = [{ name: 'bow', count: 1, enchants: [{ name: 'infinity', lvl: 1 }, { name: 'unbreaking', lvl: 3 }] }, { name: 'arrow', count: 64 }];
+  const archers = [0, -3, -6].map((z, i) => f.add(`Archer${i}`, 0, z, INFINITY));
+  const hit = { x: 20.5, y: 64.05, z: 10.5 };
+  const r = await f.click('tir', f.snap({ yaw: -60, trigger: { kind: 'arrow-hit', item: 'bow', hit: { position: hit } } }), ['volley=3', 'spread=3']);
+  assert.ok(r.ok, r.text);
+  await until(() => !!f.ended('tir'), 5_000, 'the volley to end');
+  assert.equal(f.ended('tir'), '[Bots] « tir » terminé : Volée tirée : 9 flèches.');
+  for (const a of archers) {
+    assert.equal(a.releases.filter((x) => x.fired).length, 3, `${a.username}: 3 arrows fired`);
+    assert.equal(a.inventory.items().find((i) => i.name === 'arrow')?.count, 64, `${a.username}: still 64 arrows`);
+  }
+});
+
 test('tir: a release looking at nothing waits for its hit; the creature hit is shot by every archer until it is dead', async () => {
   const f = field();
   const archers = [f.add('Archer0', 0, 0, BOW), f.add('Archer1', 2, 0, BOW)];

@@ -846,18 +846,51 @@ export async function killMob(bot: Bot, mobName: string, timeout = 300): Promise
   return r;
 }
 
-/** After the release, how long `shoot` waits for the arrow count to drop (the server's set_slot: a tick or two). */
+/** After the release, how long `shoot` waits for its arrow to show (the spawn packet or set_slot: a tick or two). */
 export const ARROW_WAIT_MS = 500;
-/** How often `shoot` looks at the arrow count while it waits. */
+/** With no owner id to go by, an arrow that appears within this many blocks of the shooter's eyes is its own. */
+export const OWN_ARROW_REACH = 2;
+/** How often `shoot` looks for its arrow while it waits. */
 export const SHOT_POLL_MS = 50;
 /** At most this long, `shoot` lets auto-eat finish a meal before it takes the hand back (its eatingTimeout is 3 s). */
 export const EAT_WAIT_MS = 3_500;
 /** A crossbow's arrow leaves at 3.15 blocks per tick (CrossbowItem), a full-draw bow's at 3. */
 export const CROSSBOW_SPEED = AIM_CROSSBOW_SPEED;
 
+/** The fields of minecraft-protocol's spawn_entity packet `shoot` reads: `objectData` is a projectile's owner id. */
+interface SpawnPacket {
+  type: number;
+  objectData?: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
 /** A live entity (prismarine-entity always has `isValid`), as opposed to a position, a block or a snapshot ref. */
 function isLiveEntity(t: unknown): t is Entity {
   return !!t && typeof t === 'object' && !Array.isArray(t) && 'isValid' in t && !!(t as { position?: unknown }).position;
+}
+
+/**
+ * An item's level of an enchantment by name, 0 without. Before 1.20.5 prismarine-item's `enchants` is
+ * `[{ name, lvl }]`; in 1.21.1 it hands back the `enchantments` component's data as is (`{ enchantments: [{ id, level
+ * }] }`), whose ids are the server's enchantment registry (vanilla's is minecraft-data's order).
+ */
+export function enchantLevel(bot: Bot, item: unknown, name: string): number {
+  let raw: unknown;
+  try {
+    raw = (item as { enchants?: unknown } | null)?.enchants;
+  } catch {
+    return 0; // prismarine-item's getter on an item it cannot read
+  }
+  const inner = (raw as { enchantments?: unknown } | null)?.enchantments;
+  const list = (Array.isArray(raw) ? raw : Array.isArray(inner) ? inner : []) as Array<{ name?: string; lvl?: number; id?: number; level?: number }>;
+  const byId = (bot.registry as { enchantments?: Record<number, { name?: string }> } | undefined)?.enchantments;
+  for (const e of list) {
+    const n = e?.name ?? (typeof e?.id === 'number' ? byId?.[e.id]?.name : undefined);
+    if (n && bareName(n) === name) return Number(e.lvl ?? e.level ?? 1) || 0;
+  }
+  return 0;
 }
 
 /** What stopped a shot, for the error (a friend's name, the block). */
@@ -874,8 +907,10 @@ function inTheWay(bot: Bot, sol: AimSolution): string {
 
 /**
  * Shoot once with a bow (or crossbow) at an entity, or at a position (a volley on the ground): equips the weapon,
- * needs arrows. Resolves as soon as an arrow has left (the arrow count drops: ~1.25 s for a bow), so an archer can
- * pick its next target at once.
+ * needs arrows. Resolves as soon as an arrow has left (~1.25 s for a bow), so an archer can pick its next target at
+ * once. An arrow has left when the server spawns an arrow entity owned by this bot (the spawn packet's data is the
+ * owner's id; without one, an arrow within 2 blocks of its eyes), or the arrow count drops: a bow with Infinity keeps
+ * its arrow, so the count never would (docs/35 F3). The bow in hand is used first, else one with Infinity, else any.
  *
  * The aim is Squad's own (aim/, docs/37 §3): solved before the draw and again on the ticks of `aim.schedule`, the
  * look turning smoothly between the answers, the release on tick `aim.drawTicks` (24). It leads an entity along its
@@ -895,13 +930,37 @@ export async function shoot(bot: Bot, target: Entity | PosLike | null | undefine
   const point = entity ? null : toVec3(target as PosLike, `${label} target`);
   const what = entity ? `${entity.name ?? entity.username ?? 'entity'} ${fmt(entity.position)}` : fmt(point);
   const weapon = opts.weapon ?? 'bow';
-  const item = bot.inventory.items().find((i) => i.name === weapon);
+  // In hand first (/bots equip puts a new bow there and moves the old one to the main inventory, which items() lists
+  // before the hotbar), else one with Infinity, else any.
+  const bows = bot.inventory.items().filter((i) => i.name === weapon);
+  const item = (bot.heldItem?.name === weapon ? bot.heldItem : null) ?? bows.find((i) => enchantLevel(bot, i, 'infinity') > 0) ?? bows[0];
   if (!item) throw new HelperError(`${label}: no ${weapon} in the inventory`);
   const arrows = (): number => countItem(bot, 'arrow') + countItem(bot, 'spectral_arrow') + countItem(bot, 'tipped_arrow');
   const before = arrows();
   if (before === 0) throw new HelperError(`${label}: no arrows`);
-  const gone = (): boolean => arrows() < before;
-  /** Poll the arrow count until one has left or `ms` ran out. */
+  const real = unwrap(bot) as Bot;
+  const client = (real as unknown as { _client?: { on?: (e: string, f: (p: SpawnPacket) => void) => void; removeListener?: (e: string, f: (p: SpawnPacket) => void) => void } })._client;
+  const arrowTypes = new Set(
+    ['arrow', 'spectral_arrow']
+      .map((n) => bot.registry?.entitiesByName?.[n] as { id?: number; internalId?: number } | undefined)
+      .filter((e) => !!e)
+      .map((e) => e!.internalId ?? e!.id),
+  );
+  let spawned = false;
+  const onSpawn = (p: SpawnPacket): void => {
+    if (spawned || !arrowTypes.has(p.type)) return;
+    const me = real.entity as (Entity & { id?: number }) | undefined;
+    if (!me) return;
+    if (typeof p.objectData === 'number' && typeof me.id === 'number') {
+      spawned = p.objectData === me.id;
+      return;
+    }
+    const eye = ((me as { eyeHeight?: number }).eyeHeight ?? 1.62) + me.position.y;
+    spawned = Math.hypot(p.x - me.position.x, p.y - eye, p.z - me.position.z) <= OWN_ARROW_REACH;
+  };
+  client?.on?.('spawn_entity', onSpawn);
+  const gone = (): boolean => spawned || arrows() < before;
+  /** Poll until an arrow has left or `ms` ran out. */
   const waitArrow = async (ms: number): Promise<boolean> => {
     const deadline = Date.now() + ms;
     while (!gone() && Date.now() < deadline) await sleepMs(Math.min(SHOT_POLL_MS, Math.max(1, deadline - Date.now())));
@@ -921,6 +980,8 @@ export async function shoot(bot: Bot, target: Entity | PosLike | null | undefine
   } catch (e) {
     passControl(e);
     throw new HelperError(`${label}: ${(e as Error).message} at ${what}`);
+  } finally {
+    client?.removeListener?.('spawn_entity', onSpawn);
   }
   if (end.kind === 'blocked') {
     throw new HelperError(`${label}: no clear line of fire: ${inTheWay(bot, end.sol)}, shooting at ${what} from ${fmt(bot.entity.position)}${end.drawn ? ' (put down unfired)' : ''}`);

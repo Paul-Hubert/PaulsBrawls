@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -36,6 +37,21 @@ class SquadKitsTest {
     }
 
     @Test
+    void archersBowHasInfinityAndUnbreakingThreeAndStillComesWithArrows() {
+        SquadKits.Item bow = SquadKits.find("archer").orElseThrow().items().stream()
+            .filter(i -> i.slot() == SquadKits.Slot.MAINHAND).findFirst().orElseThrow();
+        assertEquals(Map.of("infinity", 1, "unbreaking", 3), bow.enchantments());
+        // Infinity needs at least one arrow in the inventory.
+        assertTrue(SquadKits.find("archer").orElseThrow().items().stream().anyMatch(i -> i.id().equals("arrow") && i.count() >= 1));
+        // Nothing else in any kit is enchanted.
+        for (String name : SquadKits.NAMES) {
+            for (SquadKits.Item i : SquadKits.find(name).orElseThrow().items()) {
+                if (i != bow) assertTrue(i.enchantments().isEmpty(), name + " " + i.id());
+            }
+        }
+    }
+
+    @Test
     void everyKitHasAToolAndAtMostOneItemPerEquipmentSlot() {
         for (String name : SquadKits.NAMES) {
             SquadKits.Kit k = SquadKits.find(name).orElseThrow();
@@ -45,6 +61,8 @@ class SquadKitsTest {
                 assertTrue(k.items().stream().filter(i -> i.slot() == s).count() <= 1, name + " " + s);
             }
             assertTrue(k.items().stream().allMatch(i -> i.id().matches("[a-z_]+") && i.count() >= 1 && i.count() <= 64), name);
+            assertTrue(k.items().stream().flatMap(i -> i.enchantments().entrySet().stream())
+                .allMatch(e -> e.getKey().matches("[a-z_]+") && e.getValue() >= 1 && e.getValue() <= 255), name);
         }
         assertEquals(SquadKits.KITS.keySet(), Set.copyOf(SquadKits.NAMES));
     }

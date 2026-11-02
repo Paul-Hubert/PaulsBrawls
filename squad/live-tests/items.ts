@@ -94,12 +94,24 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
     return yaw;
   };
   const pos = (name: string): Vec3 | undefined => pool.bot(name)?.entity?.position;
-  const arrows = (name: string): number =>
-    pool
-      .bot(name)!
-      .inventory.items()
-      .filter((i) => i.name === 'arrow')
-      .reduce((s, i) => s + i.count, 0);
+  /**
+   * Arrows a bot has shot since the scenarios began: the arrow entities spawned with it as their owner (the spawn
+   * packet's data is the owner's entity id), as its own client hears them. Not its inventory: the archers' bows have
+   * Infinity, so the count never drops (docs/35 F3).
+   */
+  const shotCounts = new Map<string, number>();
+  const counting = new WeakSet<object>();
+  const arrowsShot = (name: string): number => {
+    const b = pool.bot(name)!;
+    if (!counting.has(b)) {
+      counting.add(b);
+      const arrow = (b.registry.entitiesByName.arrow as { internalId?: number; id: number }) ?? { id: -1 };
+      b._client.on('spawn_entity', (p: { type: number; objectData?: number }) => {
+        if (p.type === (arrow.internalId ?? arrow.id) && p.objectData === b.entity?.id) shotCounts.set(name, (shotCounts.get(name) ?? 0) + 1);
+      });
+    }
+    return shotCounts.get(name) ?? 0;
+  };
 
   // -- the captain ---------------------------------------------------------------------------------------------
   let captain: Bot | undefined;
@@ -285,7 +297,8 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       for (const [i, a] of ARCHERS.entries()) {
         await rcon.command(`tp ${a} ${C.x} ${C.y} ${C.z - 4 - 2 * i}`);
         await rcon.command(`clear ${a}`);
-        await rcon.command(`give ${a} bow`);
+        // The archer kit's bow (docs/35 D6): shoot must see its arrows leave by their spawn, not by the count.
+        await rcon.command(`give ${a} bow[enchantments={levels:{"minecraft:infinity":1,"minecraft:unbreaking":3}}]`);
         await rcon.command(`give ${a} arrow 64`);
       }
       // Fed for the whole run: a bot eating lowers its shield (auto-eat), which is not what these scenarios check.
@@ -447,7 +460,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       return order!;
     };
     const captainArrows = (): number => cap().inventory.items().find((i) => i.name === 'arrow')?.count ?? 0;
-    const shots = (before: number[], after: number[]): string => ARCHERS.map((a, i) => `${a} ${before[i]}→${after[i]}`).join(', ');
+    const shots = (before: number[], after: number[]): string => ARCHERS.map((a, i) => `${a} ${after[i]! - before[i]!}`).join(', ');
     const arrowsNear = async (p: { x: number; y: number; z: number }, r: number): Promise<number> => {
       const t = await rcon.command(`execute positioned ${p.x} ${p.y} ${p.z} if entity @e[type=minecraft:arrow,distance=..${r}]`);
       return Number(/count: (\d+)/.exec(t)?.[1] ?? 0);
@@ -467,18 +480,18 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       const bound = await command('/bots orders bind tir', /Ordre « tir » lié/);
       const listed = await command('/bots orders bound', /: tir$/);
       await sleep(1000);
-      const before = ARCHERS.map(arrows);
+      const before = ARCHERS.map(arrowsShot);
       const captainBefore = captainArrows();
 
       // The floor 15 blocks west.
       const order = await shootBound({ x: A.x - 14.5, y: A.y + 0.9, z: A.z + 0.5 });
-      const after = ARCHERS.map(arrows);
+      const after = ARCHERS.map(arrowsShot);
       const ev = triggers(order);
       const release = ev.find((e) => e.trigger === 'arrow-release');
       const hit = ev.find((e) => e.trigger === 'arrow-hit');
       const landed = hit?.pos ? await arrowsNear({ x: hit.pos[0] + 0.5, y: hit.pos[1], z: hit.pos[2] + 0.5 }, 6) : 0;
       const evidence =
-        `#${order.id} ${describeTriggers(order)}; result "${order.report.result}"; archers' arrows ${shots(before, after)}; ` +
+        `#${order.id} ${describeTriggers(order)}; result "${order.report.result}"; archers' shots ${shots(before, after)}; ` +
         `captain ${captainBefore}→${captainArrows()}; arrows within 6 of the hit: ${landed}`;
       if (release?.outcome !== 'started' || release.item !== 'bow') throw new Error(`no arrow-release start: ${evidence}`);
       // The release's snapshot is taken as the arrow enters the world in front of the eyes: that arrow is not what the
@@ -490,7 +503,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
         throw new Error(`the hit is far from where the captain looked: ${evidence}`);
       }
       // volley 3 (the default) from each archer, nothing more.
-      const fired = before.map((b, i) => b - after[i]!);
+      const fired = before.map((b, i) => after[i]! - b);
       if (order.report.result !== 'Volée tirée : 6 flèches.' || fired.some((n) => n !== 3)) {
         throw new Error(`a volley of exactly 3 arrows each was expected: ${evidence}`);
       }
@@ -505,17 +518,17 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       await rcon.command(`summon husk ${A.x - 9.5} ${A.y + 1} ${A.z + 0.5} {PersistenceRequired:1b,NoAI:1b,Tags:["${TAG}"]}`);
       await until(() => Object.values(cap().entities).some((e) => e.name === 'husk'), 5_000, 'the captain seeing the husk');
       const husk = Object.values(cap().entities).find((e) => e.name === 'husk')!;
-      const before = ARCHERS.map(arrows);
+      const before = ARCHERS.map(arrowsShot);
       // At its chest: at 10 blocks a full-draw arrow flies nearly straight.
       const order = await shootBound({ x: husk.position.x, y: husk.position.y + 1.2, z: husk.position.z });
-      const after = ARCHERS.map(arrows);
+      const after = ARCHERS.map(arrowsShot);
       const ev = triggers(order);
       const release = ev.find((e) => e.trigger === 'arrow-release');
       const hit = ev.find((e) => e.trigger === 'arrow-hit');
       const alive = /passed/i.test(await rcon.command(`execute if entity @e[type=minecraft:husk,tag=${TAG}]`));
       const evidence =
         `#${order.id} ${describeTriggers(order)} (release looks at ${release?.entity ?? 'nothing'}, hit ${hit?.entity ?? 'no entity'}); ` +
-        `result "${order.report.result}"; archers' arrows ${shots(before, after)}; husk ${alive ? 'alive' : 'dead'}`;
+        `result "${order.report.result}"; archers' shots ${shots(before, after)}; husk ${alive ? 'alive' : 'dead'}`;
       if (release?.outcome !== 'started' || release.entity !== 'husk') throw new Error(`the release did not start tir at the husk: ${evidence}`);
       if (hit?.outcome !== 'delivered' || hit.entity !== 'husk') throw new Error(`no arrow-hit naming the husk: ${evidence}`);
       if (alive || !/^Cible abattue \(husk\)/.test(String(order.report.result))) throw new Error(`the husk was not killed: ${evidence}`);
@@ -573,18 +586,18 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       // meets the floor first, so the click's snapshot names no entity, and pointedTarget finds the husk within 4.
       const husk = await summonHusk(A.x - 9.5, A.z + 0.5);
       await look({ x: A.x - 6.5, y: A.y + 1, z: A.z + 0.5 });
-      const before1 = ARCHERS.map(arrows);
+      const before1 = ARCHERS.map(arrowsShot);
       const first = await clickFor('tir');
       await until(() => first.ended, 40_000, 'the tir at the husk to end');
       await sleep(1500);
-      const after1 = ARCHERS.map(arrows);
+      const after1 = ARCHERS.map(arrowsShot);
       const s1 = first.report.snap;
       const top1 = s1.lookBlock ? { x: s1.lookBlock.x + 0.5, z: s1.lookBlock.z + 0.5 } : null;
       const alive = await huskAlive();
       const ev1 =
         `#${first.id} ${describeTriggers(first)}; lookEntity ${s1.lookEntity?.name ?? 'none'}, lookBlock ${JSON.stringify(s1.lookBlock)} ` +
         `(${top1 ? hdist(top1, husk.position).toFixed(1) : '?'} from the husk); result "${first.report.result}"; ` +
-        `archers' arrows ${shots(before1, after1)}; husk ${alive ? 'alive' : 'dead'}`;
+        `archers' shots ${shots(before1, after1)}; husk ${alive ? 'alive' : 'dead'}`;
       if (triggers(first)[0]?.trigger !== 'use' || triggers(first)[0]?.item !== 'stick') throw new Error(`not a stick's use trigger: ${ev1}`);
       if (s1.lookEntity) throw new Error(`the click looked at an entity (the point must be beside the husk): ${ev1}`);
       if (!top1 || hdist(top1, husk.position) < 2 || hdist(top1, husk.position) > 4) throw new Error(`the point is not 2–4 blocks from the husk: ${ev1}`);
@@ -596,11 +609,11 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       const around = othersNear(point, 4);
       if (around.length) throw new Error(`the empty ground is not empty: ${around.join(', ')}`);
       await look({ x: point.x, y: A.y + 1, z: point.z });
-      const before2 = ARCHERS.map(arrows);
+      const before2 = ARCHERS.map(arrowsShot);
       const second = await clickFor('tir');
       await until(() => second.ended, 40_000, 'the volley to end');
       await sleep(1500);
-      const after2 = ARCHERS.map(arrows);
+      const after2 = ARCHERS.map(arrowsShot);
       // Counted around where the click really pointed (its block's top centre).
       const aimed = topOf(second.report.snap) ?? point;
       const landed = await arrowsNear(aimed, 6);
@@ -609,8 +622,8 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       const s2 = second.report.snap;
       const ev2 =
         `#${second.id} ${describeTriggers(second)}; lookEntity ${s2.lookEntity?.name ?? 'none'}; result "${second.report.result}"; ` +
-        `archers' arrows ${shots(before2, after2)}; arrows within 6 of the point: ${landed}; arrows seen: ${lying.join(', ')}`;
-      const fired = before2.map((b, i) => b - after2[i]!);
+        `archers' shots ${shots(before2, after2)}; arrows within 6 of the point: ${landed}; arrows seen: ${lying.join(', ')}`;
+      const fired = before2.map((b, i) => after2[i]! - b);
       if (second.report.result !== 'Volée tirée : 6 flèches.' || fired.some((n) => n !== 3)) throw new Error(`a volley of 3 each was expected: ${ev2}`);
       if (landed < 4) throw new Error(`the volley did not land around the point: ${ev2}`);
       const unbound = await command('/bots orders unbind', /délié de ton objet/);
@@ -679,7 +692,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       const husk = await summonHusk(A.x - 9.5, A.z + 0.5);
       const hp = husk.position.clone();
       await look({ x: A.x - 6.5, y: A.y + 1, z: A.z + 0.5 });
-      const before = ARCHERS.map(arrows);
+      const before = ARCHERS.map(arrowsShot);
       const n0 = notices.length;
       const o = await clickFor('epee');
       let most = 0;
@@ -693,7 +706,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       const s0 = o.report.snap;
       if (s0.lookEntity) throw new Error(`the click looked at ${s0.lookEntity.name} (the point must be beside the husk)`);
       if (most > 2 || most < 1) throw new Error(`${most} guards on the husk at once (1–2 expected)`);
-      const shot = ARCHERS.map((a, i) => before[i]! - arrows(a));
+      const shot = ARCHERS.map((a, i) => arrowsShot(a) - before[i]!);
 
       // Empty ground: delivered to the same order, the bots hold around it (the point: the block the click hit).
       const aim = { x: A.x - 7.5, z: A.z + 8.5 };
@@ -729,7 +742,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       await until(() => Object.values(cap().entities).some((e) => e.name === 'husk'), 5_000, 'the captain seeing the husk');
       const husk = Object.values(cap().entities).find((e) => e.name === 'husk')!;
       const hp = { x: husk.position.x, y: husk.position.y, z: husk.position.z };
-      const before = ARCHERS.map(arrows);
+      const before = ARCHERS.map(arrowsShot);
       const first = await trigger(
         'epee',
         snap(90, {
@@ -754,7 +767,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
         await sleep(250);
       }
       await until(() => notices.some((n) => /Cible abattue \(husk\)/.test(n.text)), 5_000, 'the « Cible abattue (husk). » line');
-      const shot = ARCHERS.map((a, i) => before[i]! - arrows(a));
+      const shot = ARCHERS.map((a, i) => arrowsShot(a) - before[i]!);
       if (most > 2) throw new Error(`${most} guards were on the husk at once (2 at most)`);
       if (most < 1) throw new Error('no guard fought the husk');
 
@@ -813,7 +826,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       if (!r.ok || r.started !== true) throw new Error(`line: ${r.text}`);
       await until(() => onLine(ARCHERS, 'x', A.z + 4.5, A.x + 0.5), 40_000, 'the archers 2 blocks behind the wall');
       const slots = ARCHERS.map((a) => pos(a)!.clone());
-      const before = ARCHERS.map(arrows);
+      const before = ARCHERS.map(arrowsShot);
       const line = runner.get(String(r.orderId))!;
       // Each arrow's launch speed (blocks per tick) from its spawn packet, as the captain sees it: the draw the server
       // counted (BowItem: pull × 3), against the one shoot asked for.
@@ -832,11 +845,11 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       try {
         await until(huskGone, 60_000, 'the archers killing the husk over the wall');
       } catch (e) {
-        throw new Error(`${(e as Error).message}: arrows used ${ARCHERS.map((a, i) => before[i]! - arrows(a)).join(', ')}; speeds ${histogram()}; ${line.report.logs.slice(-6).join(' | ')}`);
+        throw new Error(`${(e as Error).message}: arrows used ${ARCHERS.map((a, i) => arrowsShot(a) - before[i]!).join(', ')}; speeds ${histogram()}; ${line.report.logs.slice(-6).join(' | ')}`);
       } finally {
         cap().off('entitySpawn', onSpawn as never);
       }
-      const used = ARCHERS.map((a, i) => before[i]! - arrows(a));
+      const used = ARCHERS.map((a, i) => arrowsShot(a) - before[i]!);
       const moved = ARCHERS.map((a, i) => hdist(pos(a)!, slots[i]!));
       if (moved.some((d) => d > 1)) throw new Error(`an archer left its slot to shoot (${moved.map((d) => d.toFixed(1)).join(', ')}): ${line.report.logs.slice(-6).join(' | ')}`);
       if (!GUARDS.every(shieldUp)) throw new Error(`a guard lowered its shield: ${await wallEvidence()}`);
