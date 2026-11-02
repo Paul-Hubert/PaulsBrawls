@@ -175,9 +175,9 @@ A bow's arrow-release waits for its hit (a release does not move a formation; it
   others fight what is near it) until it is dead or `seconds` (60) pass; only the ground: the bots hold that spot
   (rings of 3 and 6 around it); the sky or a friend: they defend you. Params `radius` 16, `seconds` 60, `near` 4.
 - `ligne-archers` (e.g. an arrow, right-click): the archers line up across your view, `back` (4) blocks short of where
-  you point, in two ranks past 8, and shoot what comes within `range` (24) of the line, from their slots. A friend in
-  their line of fire (a shield wall in front) is shot over: a shorter draw, a steeper and weaker arrow, or a lob.
-  Params `distance` 24, `spacing` 2, `back` 4, `range` 24.
+  you point, in `ranks` (1) ranks, and shoot what comes within `range` (120, about as far as a bow carries) of each
+  archer, from where they stand: on their slots, or on their way to them. A friend in their line of fire (a shield
+  wall in front) is shot over on a higher arc. Params `distance` 24, `spacing` 2, `back` 4, `range` 120, `ranks` 1 (1–3).
 - `tir` (e.g. a bow, or a stick): the archers shoot where you point, from where they stand: the creature there (or the
   nearest within `near`) until it is dead or `seconds` (8) pass, else a volley of `volley` (3) arrows each spread over
   `spread` (3) blocks around the point. A friend with nobody near them is refused. It ends after that; archers it took

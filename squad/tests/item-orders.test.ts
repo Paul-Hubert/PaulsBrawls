@@ -382,14 +382,63 @@ test('ligne-archers behind a shield wall: each archer lobs over the guard 2 bloc
   }
 });
 
-test('ligne-archers: past 8 archers, two ranks 2 blocks apart', async () => {
+test('ligne-archers: one rank by default, ten archers too; `ranks=2`: two ranks 2 blocks apart (docs/35 F4)', async () => {
+  for (const [tokens, front, back] of [[[], 10, 0], [['ranks=2'], 5, 5]] as const) {
+    const f = field();
+    const archers = Array.from({ length: 10 }, (_, i) => f.add(`Archer${i}`, i - 5, -6, BOW));
+    await f.start('ligne-archers', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 12, name: 'grass_block' }, trigger: { kind: 'use', item: 'arrow' } }), [...tokens]);
+    try {
+      await until(() => archers.filter((a) => a.entity.position.z === 8.5).length === front && archers.filter((a) => a.entity.position.z === 6.5).length === back, 3_000, `${front} + ${back}`);
+      assert.equal(new Set(archers.map((a) => xz(a).join())).size, 10, 'distinct slots');
+    } finally {
+      await f.h.runner.stopAll();
+    }
+  }
+});
+
+test('ligne-archers: an archer still walking to its slot shoots a foe in range from where it stands, then goes on (docs/35 F4)', async () => {
   const f = field();
-  const archers = Array.from({ length: 10 }, (_, i) => f.add(`Archer${i}`, i - 5, -6, BOW));
-  await f.start('ligne-archers', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 12, name: 'grass_block' }, trigger: { kind: 'use', item: 'arrow' } }));
-  await until(() => archers.every((a) => a.entity.position.z === 8.5 || a.entity.position.z === 6.5), 3_000, 'the two ranks formed');
-  assert.equal(archers.filter((a) => a.entity.position.z === 8.5).length, 5);
-  assert.equal(new Set(archers.map((a) => xz(a).join())).size, 10, 'distinct slots');
-  await f.h.runner.stopAll();
+  const a = f.add('Archer0', 0, -3, BOW);
+  a.walkMs = 60_000; // still on its way for the whole test
+  const o = await f.start('ligne-archers', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 12, name: 'grass_block' }, trigger: { kind: 'use', item: 'arrow' } }), ['back=4']);
+  try {
+    await until(() => a.pathfinder.goal !== null, 2_000, 'walking to its slot');
+    const start = xz(a);
+    const z = f.spawn(zombie(0.5, 30));
+    await until(() => a.releases.some((r) => r.fired), 3_000, 'a shot on the way');
+    assert.deepEqual(f.shots.get(a)![0], z);
+    assert.deepEqual(xz(a), start, 'from where it stood');
+    // It stopped walking to draw: the goal cleared before the draw, set again after.
+    const draw = a.calls.indexOf('activateItem');
+    assert.ok(a.calls.lastIndexOf('pathfinder.setGoal(null)', draw) > a.calls.indexOf('pathfinder.setGoal'), 'the goal cleared before the draw');
+    z.isValid = false;
+    await until(() => a.pathfinder.goal !== null, 2_000, 'walking on to its slot');
+    assert.ok(o.report.logs.some((l) => /Archer0: holds fire: walking to its slot, nothing within 120 blocks/.test(l)));
+  } finally {
+    await f.h.runner.stopAll();
+  }
+});
+
+test('ligne-archers: range is from each archer, 120 by default: a foe 100 blocks away is shot, one 130 away is not; holding fire is logged once per reason (docs/35 F4)', async () => {
+  const f = field();
+  const a = f.add('Archer0', 0, -3, BOW);
+  const o = await f.start('ligne-archers', f.snap({ yaw: 0, lookBlock: { x: 0, y: 63, z: 12, name: 'grass_block' }, trigger: { kind: 'use', item: 'arrow' } }), ['back=4']);
+  try {
+    await until(() => a.entity.position.z === 8.5, 3_000, 'on its slot');
+    const far = f.spawn(zombie(0.5, 8.5 + 130));
+    await tick(800);
+    assert.equal(f.shots.get(a)!.length, 0, 'nothing shot at 130 blocks');
+    const holds = o.report.logs.filter((l) => /holds fire/.test(l));
+    assert.deepEqual(holds.slice(-1), ['Archer0: holds fire: on its slot, nothing within 120 blocks'], 'logged once, not every look');
+    assert.equal(holds.filter((l) => /on its slot/.test(l)).length, 1);
+    const near = f.spawn(zombie(0.5, 8.5 + 100));
+    await until(() => f.shots.get(a)!.includes(near), 3_000, 'the foe 100 blocks away shot');
+    assert.ok(!f.shots.get(a)!.includes(far));
+    near.isValid = false;
+    far.isValid = false;
+  } finally {
+    await f.h.runner.stopAll();
+  }
 });
 
 // -- tir ----------------------------------------------------------------------------------------------------------

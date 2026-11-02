@@ -965,3 +965,12 @@ completely, so missed events cannot leave it wrong.
      never does: it now also counts the arrow entity spawned with the bot as owner (the spawn packet's data), and
      prefers the bow in hand, then an Infinity one. Tests: `SquadKitsTest`, `helpers.test.ts`, `item-orders.test.ts`;
      the live items scenarios count the arrows the archers shoot by their spawn packets, not their inventories.
+  4. *The archer line: always two ranks, short range, archers that did not shoot.* `ONE_RANK = 8` gave Paul's
+     10-archer squads two ranks (the back one shooting into the front one); an archer shot only once on its slot, and
+     every click re-formed the line (11 in #207) while archers came back from `tir` (98 reclaims in #207), so they
+     spent the fight walking; threats counted only within 24 of the line's centre. Now: `ranks` (default 1, 1–3);
+     `range` from each archer, default and maximum 120 (`MAX_RANGE`: a full-draw arrow carries about 117 blocks on flat
+     ground, 124 shooting 10 down, and the bots see entities out to about 128; Paul: as far as possible, D4); a threat
+     in range is shot from where the archer stands, walking or not (the goal is cleared for the draw: the pathfinder
+     turns the head, and the shooter's motion goes into the arrow); why an archer holds fire is logged once per change.
+     Tests: `item-orders.test.ts`.
