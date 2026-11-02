@@ -987,3 +987,7 @@ completely, so missed events cannot leave it wrong.
      orders with no bots, since a delivered click granted nothing (§5.4 item 6), and a rebind's new args were
      delivered with the old ones (#221 → #223). Now (Paul, D5) a click whose line differs restarts the order, and a
      delivered one takes back the order's bots (§5.4 item 6). Tests: `item-orders.test.ts`, `leases.test.ts`.
+  6. *Dead bots dropped their kits* on the battlefield. A roster bot now drops nothing (Paul, D2): a mixin cancels
+     `PlayerEntity.dropInventory()` for a roster name; its inventory is lost, and `/bots squad respawn` resets it to its
+     kit (item 7). Players keep vanilla drops (no `keepInventory`). Tests: `SquadDeathTest`; live, a guard killed over
+     RCON leaves no item entity.
