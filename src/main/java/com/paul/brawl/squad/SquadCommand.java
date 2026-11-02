@@ -389,7 +389,8 @@ public final class SquadCommand {
         if (p == null) return reply(c.getSource(), "[Bots] À lancer en jeu, par un joueur.");
         String name = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
         if (!SquadArgs.COMMAND_NAME.matcher(name).matches()) return reply(c.getSource(), "[Bots] Nom de commande invalide (a-z, 0-9 et -, 2 à 32 caractères).");
-        Squad.authoring().start(mode, p.getUuid(), p.getName().getString(), name, text, CommanderSnap.of(p));
+        String playerName = p.getName().getString();
+        CommanderSnap.take(p).thenAccept(snap -> Squad.authoring().start(mode, p.getUuid(), playerName, name, text, snap));
         return Command.SINGLE_SUCCESS;
     }
 
@@ -401,14 +402,16 @@ public final class SquadCommand {
         int sp = trimmed.indexOf(' ');
         String name = sp < 0 ? trimmed : trimmed.substring(0, sp);
         SquadArgs.OrderArgs a = SquadArgs.order(sp < 0 ? "" : trimmed.substring(sp + 1));
-        return call(c, "/api/orders/start", b -> {
+        // The order starts once the look is found (SquadLook: on its worker, a tick or more).
+        CommanderSnap.take(p).thenAccept(snap -> call(c, "/api/orders/start", b -> {
             b.addProperty("command", name);
             b.add("tokens", array(a.tokens()));
             b.add("filters", array(a.filters()));
             if (a.take() != null) b.addProperty("take", a.take());
-            b.add("snap", CommanderSnap.of(p));
+            b.add("snap", snap);
             return b;
-        });
+        }));
+        return Command.SINGLE_SUCCESS;
     }
 
     /**
@@ -526,8 +529,10 @@ public final class SquadCommand {
         body.addProperty("mode", "manual");
         body.addProperty("name", StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT));
         body.addProperty("request", "");
-        body.add("snap", CommanderSnap.of(p));
-        Squad.client().post("/api/authoring/open", body).thenAccept(r -> src.getServer().execute(() -> {
+        CommanderSnap.take(p).thenCompose(snap -> {
+            body.add("snap", snap);
+            return Squad.client().post("/api/authoring/open", body);
+        }).thenAccept(r -> src.getServer().execute(() -> {
             if (!SquadAuthoring.ok(r)) {
                 show(src, r);
                 return;

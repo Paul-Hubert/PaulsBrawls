@@ -139,11 +139,15 @@ public final class SquadTriggers {
                                 SquadTriggerJson.Hit hit, boolean stop) {
         UUID who = sp.getUuid();
         if (!LIMITER.tryAcquire(who)) return false;
-        JsonObject snap = CommanderSnap.of(sp);
-        snap.add("trigger", SquadTriggerJson.trigger(kind, item, hit));
-        JsonObject body = SquadTriggerJson.body(sp.getUuidAsString(), sp.getName().getString(), sp.hasPermissionLevel(2), binding, stop, snap);
+        String uuid = sp.getUuidAsString();
+        String name = sp.getName().getString();
+        boolean admin = sp.hasPermissionLevel(2);
         MinecraftServer srv = sp.getServer();
-        Squad.client().post("/api/orders/trigger", body).thenAccept(r -> srv.execute(() -> answer(srv, who, r)));
+        // Sent once the look is found (SquadLook, a tick or more), after this player's earlier triggers.
+        CommanderSnap.take(sp).thenCompose(snap -> {
+            snap.add("trigger", SquadTriggerJson.trigger(kind, item, hit));
+            return Squad.client().post("/api/orders/trigger", SquadTriggerJson.body(uuid, name, admin, binding, stop, snap));
+        }).thenAccept(r -> srv.execute(() -> answer(srv, who, r)));
         return true;
     }
 

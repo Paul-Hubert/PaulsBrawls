@@ -206,7 +206,7 @@ declare global {
     pitch: number;
     dimension: string;
     heldItem: string | null;
-    /** The block they were looking at (≤ 64 blocks), or null. */
+    /** The block they were looking at, as far as they could see (up to 4 096 blocks), or null (the sky, or too far). */
     lookBlock: (Vec3Class & { name: string }) | null;
     /** The entity they were looking at, or null. */
     lookEntity: SquadAtEntity | null;

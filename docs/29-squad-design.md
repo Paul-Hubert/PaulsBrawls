@@ -334,13 +334,13 @@ Decisions:
 
    - **Left-click (swing) is not a trigger.** It is the player's own attack, a click in the air reaches the server
      only as an arm-swing packet (a mixin with no Fabric event), and an attack reaches 3 blocks where a right-click
-     aims at 64 (the `CommanderSnap` raycast).
+     aims as far as the player sees (the `CommanderSnap` look, §7.1).
    - **Stop gesture: sneak + right-click** with any bound item stops that binding's order. A bound bow drawn while
      sneaking stops it too, and an arrow shot while sneaking is not a trigger.
    - **Rate limit:** 4 triggers a second per player (a bucket of 4, refilled at 4/s). Arrow hits count. The excess is
      dropped silently.
 5. **What the script receives.** The snapshot is taken on the main thread at the click (at the hit for
-   `arrow-hit`), as for `/bots order`, plus
+   `arrow-hit`), as for `/bots order` (its look a tick or more later, on a worker: §7.1), plus
    `trigger: { kind: 'use' | 'arrow-release' | 'arrow-hit', item, hit?: { position, entity? } }`.
    - An `entity` (in `hit` and in `lookEntity`) carries `id`, the network entity id, which is mineflayer's key:
      `bot.entities[id]`. The helper `entityOf(bot, ref)` resolves one.
@@ -470,8 +470,16 @@ A script never holds the raw bot. It gets a **Proxy** made for its order:
 ### 7.1 Path
 
 1. **Mod.** `/bots order NAME [args] [@bot…] [--free|--reclaim]` is checked by `SquadArgs`, which tokenizes and
-   is Minecraft-free. `CommanderSnap` is taken on the main thread. Then the mod sends
-   `POST /api/orders {commander, command, args, filters, take, snap}`.
+   is Minecraft-free. `CommanderSnap` is taken on the main thread: the position, rotation, dimension and held item at
+   once. Its look (`lookBlock`, `lookEntity`: what the crosshair points at) reaches as far as the player can see, up
+   to 4 096 blocks, clipped to the chunks the server sends them and to the world's height (`SquadLook`, Paul,
+   2026-11-02). It is cast off the server thread: at each tick's end the server thread copies the chunk sections the
+   ray crosses (and, until one is found, the entities along it) within 1 ms a tick, and a worker thread walks that
+   copy as vanilla's raycast does. A walk that stops short (out of copy, or 20 ms spent) keeps where it got to; the next
+   tick's end copies the world from there as it is then and the worker goes on, over as many ticks as it takes. Then
+   (one tick later in practice, for the whole view) the mod sends `POST /api/orders {commander, command, args,
+   filters, take, snap}`, after any earlier snapshot of the same player (an arrow's hit after its release). The same
+   snapshot goes with a bound item's click, `/bots create` and `/bots ticket`.
 2. **Runtime.** It resolves `NAME`: own commands first, then commands shared with the commander;
    `owner:NAME` resolves a clash. It validates args against `params`, with defaults and coercion. It grants bots
    (§6.2), imports the command module (compiled once per version), and runs it.

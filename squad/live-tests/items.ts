@@ -494,6 +494,35 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
       return `"${bound}" | #${order.id} ${describeTriggers(order)} | west: ${west} | south: ${south} | "${unbound}"`;
     });
 
+    await clean('items: the look reaches as far as the captain sees: /bots order come at a wall 150 blocks west (the old raycast stopped at 64), cast on the mod\'s worker', async () => {
+      if (!viaMod) return `skipped (the runtime is on port ${rt.port}: LIVE_RUNTIME_PORT=${MOD_RUNTIME_PORT} with dev/squad.properties pointing at it)`;
+      // A gold wall across the end of a cleared corridor at the captain's eye height, far past the arena.
+      const far = { x: A.x - 150, y: A.y + 2, z: A.z };
+      const loaded = `${far.x - 2} ${A.z - 2} ${A.x - 24} ${A.z + 2}`;
+      await rcon.command(`forceload add ${loaded}`);
+      try {
+        await rcon.command(`fill ${far.x + 1} ${A.y + 1} ${A.z - 1} ${A.x - 25} ${A.y + 4} ${A.z + 1} air`);
+        await rcon.command(`fill ${far.x} ${A.y + 1} ${A.z - 1} ${far.x} ${A.y + 4} ${A.z + 1} gold_block`);
+        await rcon.command(`clear ${CAPTAIN.name}`);
+        await placeCaptain(90);
+        await look({ x: far.x + 0.5, y: far.y + 0.5, z: far.z + 0.5 });
+        const line = await command('/bots order come', /« come » lancé \(#\d+\)/);
+        const id = /#(\d+)/.exec(line)?.[1] ?? '';
+        const o = runner.get(id);
+        if (!o) throw new Error(`no order #${id}: ${line}`);
+        const s = o.report.snap;
+        const lb = s.lookBlock;
+        if (!lb || lb.x !== far.x || lb.y !== far.y || lb.z !== far.z || lb.name !== 'gold_block') {
+          throw new Error(`#${id}'s snapshot: lookBlock ${JSON.stringify(lb)}, lookEntity ${s.lookEntity?.name ?? 'none'}, yaw ${s.yaw}, pitch ${s.pitch} (expected gold_block at ${far.x},${far.y},${far.z})`);
+        }
+        if (s.lookEntity) throw new Error(`#${id} looked at an entity: ${JSON.stringify(s.lookEntity)}`);
+        return `"${line}" | lookBlock ${lb.name} ${lb.x},${lb.y},${lb.z}, ${hdist(lb, C).toFixed(0)} blocks away`;
+      } finally {
+        await rcon.command(`fill ${far.x} ${A.y + 1} ${A.z - 1} ${far.x} ${A.y + 4} ${A.z + 1} air`).catch(() => '');
+        await rcon.command(`forceload remove ${loaded}`).catch(() => '');
+      }
+    });
+
     /** The captain draws the bound bow at a point for 1.2 s and lets go: the tir order that arrow starts, once ended. */
     const shootBound = async (at: { x: number; y: number; z: number }): Promise<Order> => {
       await look(at);

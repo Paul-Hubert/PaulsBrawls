@@ -49,6 +49,8 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 		com.paul.brawl.squad.SquadCommand.register();
 		// Orders bound to items (docs/29 §5.4): the right-click, the arrow released and its first hit (with the mixin).
 		com.paul.brawl.squad.SquadTriggers.register();
+		// Where a commander looks, as far as they can see, on a worker thread (the snapshot of every order and click).
+		com.paul.brawl.squad.SquadLook.register();
 
 		// Track the live server so off-thread callers (idle watchdog) can
 		// reach the bot without holding a player reference.
