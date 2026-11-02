@@ -946,3 +946,9 @@ completely, so missed events cannot leave it wrong.
     7 days) and `/bots status`. It warns at loop p99 > 250 ms or ELU > 0.9, not Eden's 1 s: bots are in slow motion
     well before.
   - `follow` keeps its goal between calls, and the guard proxy caches its wrappers.
+- **The first real fights (production, 2026-10-31, orders #174–#233; fixes decided by Paul in docs/35):**
+  1. *Dead bots kept running their order's loop.* The lease-guarded bot checks the lease on calls; reads pass
+     through. `shoot` read the inventory and threw « no bow » before any guarded call, so a dead archer's `defend` loop
+     logged it every 250 ms (296 lines from five archers in #233) and held its target, which the live archers then
+     avoided. Every helper that acts on the bot now calls `checkLease` first (`orders/guard.ts`), so a bot that left
+     throws `BotLeftError` at once. Test: `defend.test.ts`.

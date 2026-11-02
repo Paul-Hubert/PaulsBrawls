@@ -12,6 +12,7 @@ import type { Bot } from 'mineflayer';
 
 export const REAL = Symbol.for('squad.realBot');
 export const ORDER = Symbol.for('squad.order');
+const CHECK = Symbol.for('squad.checkLease');
 
 /** Plugin objects whose methods act on the body (they are guarded like the bot's own methods). */
 export const PLUGIN_NAMESPACES = new Set(['pathfinder', 'pvp', 'collectBlock', 'tool', 'autoEat', 'armorManager']);
@@ -51,6 +52,17 @@ export function unwrap<T>(value: T): T {
 
 export function isGuarded(value: unknown): boolean {
   return !!value && typeof value === 'object' && !!(value as Record<symbol, unknown>)[REAL];
+}
+
+/**
+ * Throws BotLeftError / OrderStoppedError when a guarded bot is no longer its order's (a raw bot passes). Reads pass
+ * through the guard, so a helper that throws on what it reads (no bow: a dead bot's inventory is empty) before any
+ * call let a dead archer's loop go round forever; helpers call this first (docs/35 F1).
+ */
+export function checkLease(bot: unknown): void {
+  if (!bot || typeof bot !== 'object') return;
+  const check = (bot as Record<symbol, unknown>)[CHECK];
+  if (typeof check === 'function') (check as () => void)();
 }
 
 /** The order a guarded bot belongs to (helpers use it for claims and logs), or undefined for a raw bot. */
@@ -129,6 +141,7 @@ export function guardBot(real: Bot, ctl: GuardControl): Bot {
     get(target, prop) {
       if (prop === REAL) return target;
       if (prop === ORDER) return ctl.order;
+      if (prop === CHECK) return ctl.check;
       if (prop === 'tags') return ctl.tags();
       if (prop === 'role') return ctl.role();
       if (typeof prop === 'string') {

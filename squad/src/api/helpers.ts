@@ -20,7 +20,7 @@ import { Vec3 } from 'vec3';
 
 import { closeStrayWindow, windowOperation, type WindowBot } from '../bots/hardening';
 import { GoalFollowOffset, slotStandable, type FollowOffset } from '../bots/follow-goal';
-import { orderOf, unwrap } from '../orders/guard';
+import { checkLease, orderOf, unwrap } from '../orders/guard';
 import { HelperError, isBotLeft, isStopped } from './errors';
 import { findBlockPositions } from './block-search';
 import { CROSSBOW_SPEED as AIM_CROSSBOW_SPEED } from '../aim/arrow.mjs';
@@ -247,6 +247,7 @@ export async function follow(
   range = 3,
   opts: { untilMs?: number; offset?: FollowOffset | null } = {},
 ): Promise<{ following: boolean }> {
+  checkLease(bot);
   const o = order(bot);
   if (!entity) {
     await sleepMs(opts.untilMs ?? 1_000);
@@ -340,6 +341,7 @@ function deferFollowClear(bot: Bot, real: Bot, goal: unknown, o: OrderLike | und
 
 /** Explore in a direction (Voyager: a Vec3 of -1/0/1 per axis) until `callback()` returns something, or `maxTime` s. */
 export async function exploreUntil<T>(bot: Bot, direction: PosLike, maxTime = 60, callback?: () => T | Promise<T>): Promise<T | null> {
+  checkLease(bot);
   const dir = toVec3(direction, 'exploreUntil direction');
   if (dir.x === 0 && dir.z === 0 && dir.y === 0) throw new HelperError('exploreUntil: direction must not be (0, 0, 0)');
   const deadline = Date.now() + maxTime * 1000;
@@ -389,6 +391,7 @@ export function findBlock(bot: Bot, name: string, maxDistance = 48): Block | nul
  * both are on (api/block-search.ts, docs/37 P6), else on the bot.
  */
 export async function mineBlock(bot: Bot, name: string, count = 1, opts: { maxDistance?: number } = {}): Promise<{ mined: number; at: Vec3[] }> {
+  checkLease(bot);
   const ids = blockIds(bot, name, 'mineBlock');
   const maxDistance = opts.maxDistance ?? 32;
   const o = order(bot);
@@ -439,6 +442,7 @@ export async function mineBlock(bot: Bot, name: string, count = 1, opts: { maxDi
  * neighbour to place against.
  */
 export async function placeItem(bot: Bot, name: string, position: PosLike): Promise<{ placed: true; at: Vec3 }> {
+  checkLease(bot);
   const target = toVec3(position, 'placeItem').floored();
   const label = `placeItem(${who(bot)})`;
   const o = order(bot);
@@ -534,6 +538,7 @@ export async function craftItem(bot: Bot, name: string, count = 1): Promise<{ cr
 
 /** Smelt `count` items in a furnace within 32 blocks (or placed from the inventory), fuelled with `fuelName`. */
 export async function smeltItem(bot: Bot, itemName: string, fuelName: string, count = 1): Promise<{ smelted: number }> {
+  checkLease(bot);
   const label = `smeltItem(${who(bot)})`;
   const input = itemIdOf(bot, itemName, 'smeltItem');
   const fuel = itemIdOf(bot, fuelName, 'smeltItem');
@@ -645,6 +650,7 @@ export async function checkItemInsideChest(bot: Bot, chestPosition: PosLike): Pr
 
 /** Equip an item by id (`"_sword"` picks any sword, the best one first). */
 export async function equip(bot: Bot, name: string, destination: 'hand' | 'off-hand' | 'head' | 'torso' | 'legs' | 'feet' = 'hand'): Promise<{ equipped: string }> {
+  checkLease(bot);
   const n = bareName(name);
   const items = bot.inventory.items();
   const pick = n.startsWith('_') || n.endsWith('_')
@@ -668,6 +674,7 @@ const BANNED_FOOD = new Set(['rotten_flesh', 'pufferfish', 'chorus_fruit', 'pois
 
 /** Eat the most nourishing safe food in the inventory. */
 export async function eat(bot: Bot): Promise<{ ate: string }> {
+  checkLease(bot);
   const foods = bot.registry.foodsByName ?? {};
   const best = bot.inventory
     .items()
@@ -686,6 +693,7 @@ export async function eat(bot: Bot): Promise<{ ate: string }> {
 
 /** Walk onto dropped items within `radius` (gap E: dig drops land out of pickup range). */
 export async function pickupDrops(bot: Bot, radius = 8, opts: { timeoutMs?: number } = {}): Promise<{ picked: number }> {
+  checkLease(bot);
   const deadline = Date.now() + (opts.timeoutMs ?? 15_000);
   let picked = 0;
   for (let i = 0; i < 32 && Date.now() < deadline; i++) {
@@ -790,6 +798,7 @@ export async function attack(
   entity: Entity | null | undefined,
   opts: { timeoutMs?: number; leash?: Leash; until?: () => boolean } = {},
 ): Promise<{ killed: boolean; brokeOff?: 'leash' | 'until' }> {
+  checkLease(bot);
   const label = `attack(${who(bot)})`;
   if (!entity) throw new HelperError(`${label}: no target (null)`);
   if (opts.leash && !(opts.leash.radius >= 0)) throw new HelperError(`${label}: leash.radius must be a number ≥ 0, got ${safeJson(opts.leash.radius)}`);
@@ -829,6 +838,7 @@ export async function attack(
 
 /** Voyager's killMob: the nearest `mobName` within 32 blocks, fought until dead or `timeout` seconds. */
 export async function killMob(bot: Bot, mobName: string, timeout = 300): Promise<{ killed: boolean }> {
+  checkLease(bot);
   const mob = nearestEntity(bot, bareName(mobName), 32);
   if (!mob) throw new HelperError(`killMob(${who(bot)}): no ${bareName(mobName)} within 32 blocks of ${fmt(bot.entity?.position)}`);
   const r = await attack(bot, mob, { timeoutMs: timeout * 1000 });
@@ -877,6 +887,8 @@ function inTheWay(bot: Bot, sol: AimSolution): string {
  * for the live one.
  */
 export async function shoot(bot: Bot, target: Entity | PosLike | null | undefined, opts: { weapon?: 'bow' | 'crossbow' } = {}): Promise<{ shot: true }> {
+  // A bot that left (it died: its inventory is empty) throws BotLeftError here, not « no bow » every loop (docs/35 F1).
+  checkLease(bot);
   const label = `shoot(${who(bot)})`;
   if (!target) throw new HelperError(`${label}: no target (null)`);
   const entity = isLiveEntity(target) ? target : null;
@@ -1053,6 +1065,7 @@ const shieldUp = new WeakMap<object, number>();
  * Leaving an order lowers it (the abort sequence's deactivateItem).
  */
 export async function raiseShield(bot: Bot, on = true): Promise<{ raised: boolean }> {
+  checkLease(bot);
   const label = `raiseShield(${who(bot)})`;
   const real = unwrap(bot) as object;
   try {

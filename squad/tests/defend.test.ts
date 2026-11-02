@@ -286,3 +286,33 @@ test('defend: archers spread their fire, shoot only inside the circle, and re-ai
   log.restore();
   for (const b of s.archers) b.stopTicks();
 });
+
+test('defend: an archer that dies stops its loop at once and lets go of its target (docs/35 F1)', async () => {
+  // Archer0 has run out of arrows: it logs « no arrows » and tries again every 250 ms, holding the zombie nearest the
+  // commander. Then it dies: the server empties its inventory and the runtime takes it out of the order. Its loop
+  // used to go on forever (« no bow » read from the inventory before any lease-checked call), holding that zombie.
+  const s = squad([], [[0, 3], [0, -3]]);
+  s.archers[0]!.setItems([{ name: 'bow', count: 1 }]);
+  const log = recordShots();
+  for (const a of s.archers) a.archer();
+  const near = s.spawn(zombie(6)); // nearest the commander: Archer0 opens on it, Archer1 takes the other
+  const far = s.spawn(zombie(-12));
+  try {
+    const order = await s.start(16);
+    const lines = (name: string) => order.report.logs.filter((l) => l.includes(name)).length;
+    await until(() => lines('Archer0') >= 2 && (log.byBot.get('Archer1')?.length ?? 0) >= 1, 3_000, 'Archer0 failing, Archer1 shooting');
+    assert.equal(log.byBot.get('Archer1')![0], far, 'Archer1 opened on the zombie Archer0 did not hold');
+
+    s.archers[0]!.setItems([]);
+    await s.h.runner.botGone('Archer0', 'died');
+    const after = lines('Archer0');
+    const shotsBefore = log.byBot.get('Archer1')!.length;
+    await until(() => log.byBot.get('Archer1')!.slice(shotsBefore).includes(near), 3_000, 'Archer1 on the zombie the dead archer held');
+    await tick(600);
+    assert.equal(lines('Archer0'), after, `no more lines from the dead archer: ${order.report.logs.slice(-4).join(' | ')}`);
+  } finally {
+    await s.h.runner.stopAll();
+    log.restore();
+    for (const b of s.archers) b.stopTicks();
+  }
+});
