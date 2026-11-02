@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 
 import { Vec3 } from 'vec3';
 
-import { mineflayerYaw, toVec3 } from '../src/api/helpers';
+import { lineSlots, lookDir, mineflayerYaw, toVec3 } from '../src/api/helpers';
 import { GoalFollowOffset } from '../src/bots/follow-goal';
 import type { Order } from '../src/orders/order';
 import { loadStock } from '../src/stock';
@@ -120,6 +120,27 @@ test('mur-de-boucliers: facing west the guards line up along z at the block look
   assert.equal(o.status, 'running');
   assert.equal(f.h.runner.running().length, 1);
   await f.h.runner.stopAll();
+});
+
+test('mur-de-boucliers: ten guards at yaw 87°: the middle two no longer share a block, the right half moves one block along the wall (docs/35 F2)', async () => {
+  const f = field();
+  const guards = Array.from({ length: 10 }, (_, i) => f.add(`Guard${i}`, 4, i - 5, SHIELD));
+  await f.start('mur-de-boucliers', f.snap({ yaw: 87, lookBlock: { x: 10, y: 63, z: 0, name: 'stone' }, trigger: { kind: 'use', item: 'shield' } }));
+  try {
+    await until(() => guards.every(shieldUp), 3_000, 'every shield up');
+    const block = (p: { x: number; z: number }) => `${Math.floor(p.x)},${Math.floor(p.z)}`;
+    const blocks = guards.map((g) => block(g.entity.position));
+    assert.equal(new Set(blocks).size, 10, `ten blocks: ${blocks.join(' ')}`);
+    assert.ok(guards.every((g) => facing(g, 87)), 'the exact yaw');
+    // As before otherwise: the left five on the exact line's slots, the right five one block along it (toward -Z).
+    const exact = lineSlots(new Vec3(10.5, 64, 0.5), 87, 10, { spacing: 1 });
+    const right = lookDir(177);
+    const want = exact.map((s, i) => block(i < 5 ? s : s.offset(right.x, 0, right.z)));
+    assert.deepEqual([...blocks].sort(), [...want].sort());
+    assert.equal(new Set(exact.map(block)).size, 9, 'the exact line alone puts two guards in one block');
+  } finally {
+    await f.h.runner.stopAll();
+  }
 });
 
 test('mur-de-boucliers: a guard keeps its shield up with a zombie at the wall; hit in melee it hits back once, then raises its shield again', async () => {

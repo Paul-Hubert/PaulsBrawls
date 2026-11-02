@@ -7,8 +7,9 @@
 // Arrows and explosions are only blocked. Each later click re-forms the wall where the commander now points, without
 // stopping the order (it listens: ctx.commander.on('trigger')); a bow's arrow-release does not move it, its hit does.
 //
-// Slots go to the bots in their order along the line (left to right as the commander sees it), so no two paths
-// cross; that assignment holds for one formation and is redone when the wall moves or a new guard joins. A guard
+// The wall keeps the exact yaw and point; when the two middle guards would share a block, the right half of the wall
+// moves one block along it. Slots go to the bots in their order along the line (left to right as the commander sees
+// it), so no two paths cross; that assignment holds for one formation and is redone when the wall moves or a new guard joins. A guard
 // reclaimed by another order keeps its slot, and takes it again when it comes back. Shields go down to walk
 // (blocking slows walking) and up on arrival, and the loop raises a shield again when something lowered it (auto-eat
 // lowers it to eat). The bots walk with pathfinder goals and look again every 200 ms, so a new formation takes them
@@ -94,8 +95,17 @@ export default async function (squad, args, ctx) {
     const at = aimAt;
     const bots = squad.bots.filter((b) => b.entity);
     const point = bots.length > 0 ? pointOf(at, bots[0]) : at.position;
-    const slots = lineSlots(point, at.yaw, bots.length, { spacing }).map((s) => ground(s) ?? s);
     const right = lookDir(at.yaw + 90);
+    const slots = lineSlots(point, at.yaw, bots.length, { spacing });
+    // An even count puts the middle two half a spacing from the point's block centre: with spacing 1, at any yaw that
+    // is not axis-aligned they stood in one block. Then the right half of the wall moves one block along it, which
+    // always takes that guard out of the centre block; the yaw and the rest stay as they were (docs/35 F2).
+    const mid = slots.length / 2;
+    const blockOf = (p) => `${Math.floor(p.x)},${Math.floor(p.z)}`;
+    if (mid > 0 && Number.isInteger(mid) && blockOf(slots[mid - 1]) === blockOf(slots[mid])) {
+      for (let i = mid; i < slots.length; i++) slots[i] = slots[i].offset(right.x, 0, right.z);
+    }
+    for (let i = 0; i < slots.length; i++) slots[i] = ground(slots[i]) ?? slots[i];
     const along = (p) => p.x * right.x + p.z * right.z;
     const sorted = [...bots].sort((a, b) => along(a.entity.position) - along(b.entity.position));
     wall.v++;

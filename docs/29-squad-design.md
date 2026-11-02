@@ -952,3 +952,9 @@ completely, so missed events cannot leave it wrong.
      logged it every 250 ms (296 lines from five archers in #233) and held its target, which the live archers then
      avoided. Every helper that acts on the bot now calls `checkLease` first (`orders/guard.ts`), so a bot that left
      throws `BotLeftError` at once. Test: `defend.test.ts`.
+  2. *The middle guards of a shield wall overlapped.* `lineSlots` is exact and `groundAt` snaps each slot to its
+     block centre; with an even count and spacing 1 the middle two sit ±0.5 from the point's block centre, on a block
+     edge, so at any yaw not exactly axis-aligned both stood in one block (10 guards at yaw 87° in 9 blocks; the live
+     test passed only at yaw 90). The wall keeps the exact yaw and point, as before; when the middle two would share
+     a block, the right half moves one block along the wall (Paul: only the middle pair, the rest as before).
+     `lineSlots` is unchanged. Test: `item-orders.test.ts`.
