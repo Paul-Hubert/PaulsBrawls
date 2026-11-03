@@ -23,7 +23,7 @@ sources:
   - src/test/java/com/paul/brawl/RecordingBodyTools.java
   - src/test/java/com/paul/brawl/McpTestClients.java
   - src/test/resources/mcp-bench/01-prayer-full-encounter.json
-  - build.gradle
+  - gradle/mod.gradle
   - src/main/java/com/paul/brawl/McpHttpEndpoint.java
   - src/main/java/com/paul/brawl/AgentTickets.java
   - src/main/java/com/paul/brawl/AgentTurns.java
@@ -57,7 +57,7 @@ stand-ins.
 
 The JDK `HttpServer` adds ~40 ms of Nagle/delayed-ACK stall to every request unless
 `sun.net.httpserver.nodelay` is true when the JVM's first `HttpServer` is created. The code sets it
-(`JdkHttpServers.tcpNoDelay()`, in production and in every test stand-in), so `build.gradle` no longer does; without
+(`JdkHttpServers.tcpNoDelay()`, in production and in every test stand-in), so `gradle/mod.gradle` no longer does; without
 it the fuzz suite takes ~50 s instead of ~5 s.
 
 ## The fixture: `McpBench`

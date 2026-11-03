@@ -1,0 +1,23 @@
+// Minecraft 26.1.2, being ported. The shared build is gradle/mod.gradle; the versions are in gradle.properties.
+plugins {
+	id 'net.fabricmc.fabric-loom'
+}
+
+apply from: rootProject.file('gradle/mod.gradle')
+
+loom {
+	// No runs yet: runServer and runClient are the primary version's (Gradle runs a task named on the command line in
+	// every project that has it), and this version has no server directory of its own.
+	runs.clear()
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+
+// While it is ported: every compile error, not javac's first 100.
+tasks.withType(JavaCompile).configureEach {
+	options.compilerArgs += ['-Xmaxerrs', '10000']
+}

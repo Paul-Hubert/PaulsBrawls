@@ -4,7 +4,7 @@ title: AI God — ChatBot LLM request pipeline
 system: aigod
 summary: ChatBot internals - per-player token-window memory, per-turn message list, tool-spec assembly, the response/tool loop, Wait deferrals, depth cap, error path, threading, timeouts, provider builders.
 tags: [aigod, chatbot, langchain4j, memory, tokenwindowchatmemory, tool-loop, threading, executor, provider, openai, lmstudio, ollama, anthropic]
-sources: [src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/ImageAwareTokenEstimator.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/GodService.java, src/main/java/com/paul/brawl/MainThread.java, src/main/java/com/paul/brawl/ImageMime.java, src/main/java/com/paul/brawl/BlockInfoJson.java, src/main/java/com/paul/brawl/LLMCommand.java, src/main/java/com/paul/brawl/GodToolGate.java, src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/PlayerDataCollector.java, src/main/java/com/paul/brawl/ChatMessageHistory.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodActionQueue.java, src/main/java/com/paul/brawl/GodScheduler.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/MCPConfig.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/ChatCommand.java, build.gradle]
+sources: [src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/ImageAwareTokenEstimator.java, src/main/java/com/paul/brawl/ChatBotFunctions.java, src/main/java/com/paul/brawl/GodService.java, src/main/java/com/paul/brawl/MainThread.java, src/main/java/com/paul/brawl/ImageMime.java, src/main/java/com/paul/brawl/BlockInfoJson.java, src/main/java/com/paul/brawl/LLMCommand.java, src/main/java/com/paul/brawl/GodToolGate.java, src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/PlayerDataCollector.java, src/main/java/com/paul/brawl/ChatMessageHistory.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/GodSessionManager.java, src/main/java/com/paul/brawl/GodActionQueue.java, src/main/java/com/paul/brawl/GodScheduler.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/MCPConfig.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/ChatCommand.java, gradle/mod.gradle]
 verified_at: 98cb908
 ---
 
@@ -38,7 +38,7 @@ tool calls, and either loops (`sendFunctionOutputs`), defers (`Wait`), or ends t
   `BuildSubAgent`s keep their own histories (see [building.md](building.md)).
 - **Contents:** only `UserMessage`, `AiMessage`, `ToolExecutionResultMessage`. System messages are *never* stored —
   they are rebuilt and prepended each turn (`ChatBot.java:450-483`).
-- **Estimator:** o200k_base tokenizer via `jtokkit` (jar-in-jar'd, `build.gradle:64`). For non-OpenAI providers it is
+- **Estimator:** o200k_base tokenizer via `jtokkit` (jar-in-jar'd, `gradle/mod.gradle`). For non-OpenAI providers it is
   an approximation (source comment `ChatBot.java:72-81`).
 - **Eviction:** handled by LangChain4j's `TokenWindowChatMemory`. The source comment (`ChatBot.java:59-62`) states it
   evicts a tool-call `AiMessage` together with its following tool results.

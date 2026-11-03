@@ -8,3 +8,18 @@ pluginManagement {
 		gradlePluginPortal()
 	}
 }
+
+plugins {
+	// Downloads a JDK that a version's toolchain asks for and this machine lacks (26.x needs Java 25).
+	id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+rootProject.name = 'pauls-brawls'
+
+// One project per Minecraft version, versions/<version>/, each building the shared src/ (gradle/mod.gradle). Which
+// versions build comes from mc_versions (gradle.properties, or -Pmc_versions=…); the first is the primary one.
+gradle.ext.mcVersions = providers.gradleProperty('mc_versions').get().split(',')*.trim().findAll { it }
+gradle.ext.mcVersions.each { v ->
+	include(":$v")
+	project(":$v").projectDir = file("versions/$v")
+}

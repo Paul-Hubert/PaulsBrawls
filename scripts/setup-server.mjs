@@ -1,5 +1,5 @@
 // Sets up a standalone Fabric server for this mod, like the production one (PaulsBrawlsVanilla), from a clone:
-//   the Fabric server launcher for the Minecraft and loader versions in gradle.properties (it downloads Mojang's
+//   the Fabric server launcher for the Minecraft and loader versions in versions/<mc>/gradle.properties (it downloads Mojang's
 //   server jar and the libraries itself on first start: Mojang's jar may not be redistributed, so it is not in git),
 //   Fabric API, the mod built from this checkout, the production server's extra mods (pinned, hash-checked),
 //   the runtime files the mod reads from its working directory, and start scripts.
@@ -8,8 +8,9 @@
 //   node scripts/setup-server.mjs D:/mc/brawls           # anywhere else
 //   node scripts/setup-server.mjs --accept-eula          # also write eula.txt (you accept Mojang's EULA:
 //                                                        #   https://aka.ms/MinecraftEULA)
-//   --no-extras      only Fabric API and the mod        --skip-build   reuse build/libs instead of building
-//   --memory=6G      the start scripts' -Xmx (4G)
+//   --no-extras      only Fabric API and the mod        --skip-build   reuse the built jar instead of building
+//   --memory=6G      the start scripts' -Xmx (4G)       --mc=26.1.2    another Minecraft version (versions/; default
+//                                                                      the first of mc_versions; extras are 1.21.1's)
 // Re-running updates jars and keeps everything else (worlds, configs, server.properties, edited prompts).
 // After an EULA stop the window stays open: WorldEdit's session timer is a non-daemon thread. Close it and restart.
 //
@@ -46,9 +47,17 @@ const EXTRAS = [
 /** What the mod reads from its working directory, copied in when missing (never overwritten). */
 const RUNTIME_FILES = ['run/prompt.txt', 'run/build_prompt.txt', 'run/mcp_config.properties'];
 
-const props = Object.fromEntries(readFileSync(join(ROOT, 'gradle.properties'), 'utf8').split(/\r?\n/)
+const readProps = path => Object.fromEntries(readFileSync(path, 'utf8').split(/\r?\n/)
     .filter(l => /^[a-z_]+=/i.test(l)).map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]));
+// The root's properties, overridden by the version's own, as Gradle reads them for versions/<mc>/.
+const rootProps = readProps(join(ROOT, 'gradle.properties'));
+const VERSION_DIR = join(ROOT, 'versions', opt('mc', rootProps.mc_versions.split(',')[0].trim()));
+if (!existsSync(join(VERSION_DIR, 'gradle.properties'))) throw new Error(`${VERSION_DIR}: no such version (see versions/)`);
+const props = { ...rootProps, ...readProps(join(VERSION_DIR, 'gradle.properties')) };
 const MC = props.minecraft_version, LOADER = props.loader_version, FAPI = props.fabric_version;
+// An obfuscated Minecraft (1.x) ships the jar remapped to intermediary names; 26.1 and newer ship it as built.
+const JAR_TASK = MC.startsWith('1.') ? 'remapJar' : 'jar';
+if (MC !== '1.21.1' && !flag('no-extras')) throw new Error(`the extra mods are pinned for 1.21.1: pass --no-extras for ${MC}`);
 const MOD_JAR = `${props.archives_base_name}-${props.mod_version}.jar`;
 const log = (...a) => console.log(...a);
 const sha = (algo, buf) => createHash(algo).update(buf).digest('hex');
@@ -94,16 +103,19 @@ if (!flag('no-extras')) {
     }
 }
 
-// 4. The mod, built from this checkout. remapJar, not build: build's finalizers copy the jar into the mods_folder
-//    paths in gradle.properties (Paul's machines).
+// 4. The mod, built from this checkout. remapJar (or jar), not build: build's finalizers copy the jar into the
+//    mods_folder paths in versions/<mc>/gradle.properties (Paul's machines).
+const gradleTask = `:${MC}:${JAR_TASK}`;
 if (!flag('skip-build')) {
-    log('  building the mod (gradlew remapJar)…');
+    log(`  building the mod (gradlew ${gradleTask})…`);
     // An absolute path: with NoDefaultCurrentDirectoryInExePath set, cmd does not look in the current directory.
     const win = process.platform === 'win32';
-    execFileSync(win ? 'cmd.exe' : join(ROOT, 'gradlew'), [...(win ? ['/c', join(ROOT, 'gradlew.bat')] : []), 'remapJar', '--console=plain', '-q'], { cwd: ROOT, stdio: 'inherit' });
+    // -Pmc_versions: the version builds even when it is not (yet) in gradle.properties' list.
+    const args = [`-Pmc_versions=${MC}`, gradleTask, '--console=plain', '-q'];
+    execFileSync(win ? 'cmd.exe' : join(ROOT, 'gradlew'), [...(win ? ['/c', join(ROOT, 'gradlew.bat')] : []), ...args], { cwd: ROOT, stdio: 'inherit' });
 }
-const built = join(ROOT, 'build', 'libs', MOD_JAR);
-if (!existsSync(built)) throw new Error(`${built} not found: build the mod (./gradlew remapJar) or drop --skip-build`);
+const built = join(VERSION_DIR, 'build', 'libs', MOD_JAR);
+if (!existsSync(built)) throw new Error(`${built} not found: build the mod (./gradlew ${gradleTask}) or drop --skip-build`);
 dropOtherVersions(MODS, MOD_JAR, `${props.archives_base_name}-`);
 cpSync(built, join(MODS, MOD_JAR));
 log(`  copied  ${join(MODS, MOD_JAR)}`);

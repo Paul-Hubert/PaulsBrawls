@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-A Fabric mod for Minecraft 1.21.1 (Java 21), `paulsbrawls`, bundling three loosely-coupled gameplay
+A Fabric mod for Minecraft 1.21.1 (Java 21; 26.1.2 being ported, [docs/39](docs/39-cross-version.md)), `paulsbrawls`, bundling three loosely-coupled gameplay
 features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 
 - **Gibber** — server-wide money system (a custom `coin` item) with admin gift commands and a periodic salary scheduler.
@@ -53,18 +53,28 @@ not Yarn's: it was migrated on 2026-11-03 so that 26.x, which ships unobfuscated
 still cite Yarn names. `run/` holds no server jar: Loom fetches the server for
 `runServer` ([run/README.md](run/README.md)).
 
+**One Gradle project per Minecraft version** ([docs/39](docs/39-cross-version.md)): `versions/<version>/` builds the
+shared `src/` (with [gradle/mod.gradle](gradle/mod.gradle)) plus its own `versions/<version>/src/`; its
+`gradle.properties` holds its Minecraft, loader, Fabric API and Java versions. `mc_versions` in the root
+[gradle.properties](gradle.properties) picks which versions build (default `1.21.1`, the production version; its jar
+is `versions/1.21.1/build/libs/`). The first is the primary one: only it has `runServer`/`runDevServer`/`runClient`/
+`mcpProbe`, because Gradle runs a command-line task in every project that has it. **26.1.2 is being ported**
+(`-Pmc_versions=1.21.1,26.1.2 :26.1.2:compileJava`, Java 25, fetched into `~/.gradle/jdks` by the foojay resolver);
+don't add it to `mc_versions` until it compiles, or `./gradlew build` fails.
+
 **A standalone server** (a Fabric launcher and jar instead of `./gradlew runServer`) from a clone: `node scripts/setup-server.mjs [dir]`
-(default `server/`, gitignored). It downloads the Fabric server launcher for the versions in `gradle.properties`,
+(default `server/`, gitignored). It downloads the Fabric server launcher for the versions in `versions/<mc>/gradle.properties`
+(`--mc=VERSION`, default the primary one),
 Fabric API, and the production server's other mods (WorldEdit 7.3.8, Simple Voice Chat 2.5.33,
-pinned and SHA-512-checked; Universal Shops was removed, docs/29 §16). It then builds the mod with `remapJar`, not `build`, whose finalizers copy into
+pinned and SHA-512-checked for 1.21.1; Universal Shops was removed, docs/29 §16). It then builds the mod with `:<mc>:remapJar`, not `build`, whose finalizers copy into
 `mods_folder`. It copies `prompt.txt`, `build_prompt.txt`, `mcp_config.properties` and `god-agent/claude-code/`,
 seeds `server.properties` from `run/` (port 25565, RCON off, `online-mode=false` for the bots), and writes
 `start.bat`/`start.sh`. `--accept-eula` writes `eula.txt`; `--no-extras`, `--skip-build` and `--memory=6G` adjust it.
 Mojang's server jar is not redistributable: the launcher downloads it on first start.
 
-`build` is finalized by two `Copy` tasks (`copyToMods`, `copyToClientMods`) in [build.gradle:153-172](build.gradle:153).
-They copy the remapped jar into the paths set by `mods_folder` / `client_mods_folder` in
-[gradle.properties](gradle.properties). Those point at Paul's local Minecraft installs — on a different
+`build` is finalized by two `Copy` tasks (`copyToMods`, `copyToClientMods`) in [gradle/mod.gradle](gradle/mod.gradle).
+They copy the shipped jar into the paths set by `mods_folder` / `client_mods_folder` in
+[versions/1.21.1/gradle.properties](versions/1.21.1/gradle.properties). Those point at Paul's local Minecraft installs — on a different
 machine, set them to your own mods folder or revert to the placeholder `path/to/your/mods` so the copy is
 skipped. (PrismLauncher's instance dir is `minecraft/`, **no dot** — a wrong path silently leaves a stale jar.)
 
@@ -505,7 +515,7 @@ architecture.
 - **The 1.21.1 pin is everywhere** — server, mod, and bot must agree (`SUPPORTED_MINECRAFT_VERSION` in `bot-connection.ts`).
 - **`dig-block` is TEMP-disabled** at user request (registration commented out, two ava tests `test.skip`'d — NOT a defect). Restore path: grep `TEMP DISABLED`/`TEMP SKIPPED` (five spots) + `CANONICAL_TOOLS` in `verify-mcp-tools.mjs`. `move-in-direction` was **permanently removed** (blind WASD, no obstacle awareness) — don't re-add it.
 - **`Mineflayer detected … deprecated event (physicTick)`** on every spawn is harmless upstream noise from a loaded plugin — don't chase it.
-- **The bundled LangChain4j + OkHttp/Okio/Kotlin pile** is jar-in-jar'd via `include` in [build.gradle](build.gradle) specifically because `langchain4j-mcp`'s `HttpMcpTransport` is OkHttp-based. Without those lines the first `/pray` NCDFEs on `okhttp3/Interceptor`. When bumping `langchain4j-mcp`, re-derive the pins with `./gradlew dependencyInsight --dependency okhttp`.
+- **The bundled LangChain4j + OkHttp/Okio/Kotlin pile** is jar-in-jar'd via `include` in [gradle/mod.gradle](gradle/mod.gradle) specifically because `langchain4j-mcp`'s `HttpMcpTransport` is OkHttp-based. Without those lines the first `/pray` NCDFEs on `okhttp3/Interceptor`. When bumping `langchain4j-mcp`, re-derive the pins with `./gradlew dependencyInsight --dependency okhttp`.
 
 ### Coexistence & decommission
 

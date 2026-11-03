@@ -36,7 +36,7 @@ This God is **not** Eden's village God (`Dieu` avatar username) — they are sep
 |---|---|---|
 | Code | `src/main/java/com/paul/brawl/ChatBot*.java` (JVM, Fabric mod) | `eden/src/god/` (Node, separate process) |
 | Trigger | `/pray`, `/prove`, `/build` | Eden's own curriculum/critic/orchestrator loop |
-| LLM lib | LangChain4j 1.0.0 (`build.gradle:40-49`) | Eden's own LLM layer |
+| LLM lib | LangChain4j 1.0.0 (`gradle/mod.gradle`) | Eden's own LLM layer |
 | Avatar Minecraft username | `BridgeConfig.botUsername`, default **`LLMBot`** (`BridgeConfig.java:36`) | **`Dieu`** (`eden/eden.example.json:26`; Java side knows it as `VillageConfig.edenAvatarName = "Dieu"`, `VillageConfig.java:50`) |
 | Avatar driver | Node "unified bridge" at `BridgeConfig.bridgeUrl` (default `http://127.0.0.1:8765`) | Eden's own mineflayer pool |
 | Chat persona prefix | `"Dieu : "` (text only — `ChatBot.java:629`) | n/a |

@@ -13,7 +13,7 @@ sources:
   - src/main/java/com/paul/brawl/BridgeConfig.java
   - src/main/java/com/paul/brawl/GodToolGate.java
   - src/main/java/com/paul/brawl/LLMConfig.java
-  - build.gradle
+  - gradle/mod.gradle
   - run/mcp_config.properties
   - MCP_TOOLS_VERIFICATION.md
   - verify-mcp-tools.mjs
@@ -43,7 +43,7 @@ connect failures back off 30 s; dispatch failures return an error string and for
 | `MCPCommand` | `src/main/java/com/paul/brawl/MCPCommand.java` | `/mcp`, `/mcp status`, `/mcp reload` |
 | Tool list merge | `ChatBotFunctions.java:297-324` (`buildToolSpecs`) | Appends MCP specs for bots with `needsMcpTools` |
 | Dispatch fallthrough | `ChatBotFunctions.java:431-449` (`executeFunction` default arm) | Gates (`GodToolGate`) and routes MCP tool calls |
-| Libraries | `build.gradle:48,56,84-89` | `dev.langchain4j:langchain4j-mcp:1.0.0-beta5` (jar-in-jar), OkHttp 4.12.0 + okhttp-sse + Okio 3.6.0 + Kotlin stdlib 1.9.10 included because `HttpMcpTransport` is OkHttp-based |
+| Libraries | `gradle/mod.gradle` | `dev.langchain4j:langchain4j-mcp:1.0.0-beta5` (jar-in-jar), OkHttp 4.12.0 + okhttp-sse + Okio 3.6.0 + Kotlin stdlib 1.9.10 included because `HttpMcpTransport` is OkHttp-based |
 
 ## Configuration — `mcp_config.properties`
 

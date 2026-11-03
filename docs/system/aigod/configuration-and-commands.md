@@ -4,7 +4,7 @@ title: AI God — LLMConfig, llm_config.properties, /llm, /pray, /prompt and pro
 system: aigod
 summary: LLMConfig fields, llm_config.properties keys, env vars, every AI God command (/llm, /llm bridge, /pray, /accept, /prompt, /godbody, /block, /construction), prompt.txt loading.
 tags: [aigod, config, llmconfig, llm_config.properties, env, openai_api_key, commands, llm, pray, prompt, godbody, accept, prompt.txt, permissions]
-sources: [src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/LLMCommand.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPCommand.java, src/main/java/com/paul/brawl/Prompts.java, src/main/java/com/paul/brawl/BuildGuard.java, prompt.txt, build_prompt.txt, build.gradle]
+sources: [src/main/java/com/paul/brawl/LLMConfig.java, src/main/java/com/paul/brawl/LLMCommand.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/ChatBotActions.java, src/main/java/com/paul/brawl/TradeOffers.java, src/main/java/com/paul/brawl/BridgeConfig.java, src/main/java/com/paul/brawl/MCPCommand.java, src/main/java/com/paul/brawl/Prompts.java, src/main/java/com/paul/brawl/BuildGuard.java, prompt.txt, build_prompt.txt, gradle/mod.gradle]
 verified_at: 98cb908
 ---
 
@@ -39,7 +39,7 @@ commands are perm 2; `/pray`, `/pray stop`, `/accept` are perm 0. The persona is
 | `anthropic` | `https://api.anthropic.com` | `443` | `claude-opus-4-8` | `""` (→ env) |
 
 Anthropic uses `AnthropicChatModel` and ignores host/port (dependency `langchain4j-anthropic:1.0.0-beta5`,
-`build.gradle:49`, `:57`). Builder details: [llm-pipeline.md](llm-pipeline.md) (section "Provider construction").
+`gradle/mod.gradle`, `:57`). Builder details: [llm-pipeline.md](llm-pipeline.md) (section "Provider construction").
 
 ### Environment variables
 

@@ -1,0 +1,29 @@
+// Minecraft 1.21.1, the production version. The shared build is gradle/mod.gradle; the versions are in gradle.properties.
+plugins {
+	id 'net.fabricmc.fabric-loom-remap'
+}
+
+apply from: rootProject.file('gradle/mod.gradle')
+
+loom {
+	// runServer is the production server (run/, port 25565). runDevServer is the server for dev tests (dev/, port
+	// 25599, its own world and ports, dev/README.md): the live tests target it, so they never touch production. Both
+	// run in the repo's run/ and dev/, not in this project's directory.
+	runs {
+		configureEach {
+			runDir "../../run"
+		}
+		devServer {
+			inherit server
+			configName = "Dev Server"
+			runDir "../../dev"
+		}
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	mappings loom.officialMojangMappings()
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}

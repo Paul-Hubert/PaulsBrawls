@@ -4,7 +4,7 @@ title: Build, packaging and runtime layout of the Fabric mod
 system: platform
 summary: How the paulsbrawls Fabric mod is built (Loom, versions, jar-in-jar deps, copy tasks), what is tracked in run/, CI reality, the Java unit tests, the vendored minecraft-mcp-server, supervisor/ and .claude/.
 tags: [gradle, loom, junit, tests, fabric, build, jar-in-jar, langchain4j, okhttp, mixins, assets, ci, run-dir, server-properties, submodule, supervisor]
-sources: [build.gradle, settings.gradle, gradle.properties, .gitignore, .gitattributes, src/main/resources/fabric.mod.json, src/main/resources/paulsbrawls.mixins.json, src/client/resources/paulsbrawls.client.mixins.json, src/main/java/com/paul/brawl/mixin/ExampleMixin.java, src/client/java/com/paul/brawl/mixin/client/ExampleClientMixin.java, src/main/resources/assets/paulsbrawls/items/coin.json, src/main/resources/assets/paulsbrawls/models/item/coin.json, src/main/resources/assets/paulsbrawls/lang/en_us.json, src/main/resources/assets/paulsbrawls/lang/fr_fr.json, run/server.properties, run/mcp_config.properties, run/eula.txt, run/prompt.txt, supervisor/SUPERVISOR.md, supervisor/check.ps1, .claude/launch.json, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/test/java/com/paul/brawl/TradeMathTest.java, src/test/java/com/paul/brawl/BuildGuardTest.java, src/test/java/com/paul/brawl/FlagGlowTest.java, src/test/java/com/paul/brawl/GodClampsTest.java, src/test/java/com/paul/brawl/BlockInfoJsonTest.java, src/test/java/com/paul/brawl/EdenRetryTest.java, src/test/java/com/paul/brawl/GibberMathTest.java, src/test/java/com/paul/brawl/GodToolGateTest.java, src/test/java/com/paul/brawl/ImageMimeTest.java, src/test/java/com/paul/brawl/ItemIdsTest.java, src/test/java/com/paul/brawl/GodActionQueueTest.java, src/test/java/com/paul/brawl/McpBench.java, src/test/java/com/paul/brawl/McpLiveProbe.java]
+sources: [build.gradle, gradle/mod.gradle, settings.gradle, gradle.properties, versions/1.21.1/build.gradle, versions/1.21.1/gradle.properties, .gitignore, .gitattributes, src/main/resources/fabric.mod.json, src/main/resources/paulsbrawls.mixins.json, src/client/resources/paulsbrawls.client.mixins.json, src/main/java/com/paul/brawl/mixin/ExampleMixin.java, src/client/java/com/paul/brawl/mixin/client/ExampleClientMixin.java, src/main/resources/assets/paulsbrawls/items/coin.json, src/main/resources/assets/paulsbrawls/models/item/coin.json, src/main/resources/assets/paulsbrawls/lang/en_us.json, src/main/resources/assets/paulsbrawls/lang/fr_fr.json, run/server.properties, run/mcp_config.properties, run/eula.txt, run/prompt.txt, supervisor/SUPERVISOR.md, supervisor/check.ps1, .claude/launch.json, src/main/java/com/paul/brawl/ChatBot.java, src/main/java/com/paul/brawl/MCPGateway.java, src/main/java/com/paul/brawl/ChatCommand.java, src/main/java/com/paul/brawl/ImageReceiver.java, src/test/java/com/paul/brawl/TradeMathTest.java, src/test/java/com/paul/brawl/BuildGuardTest.java, src/test/java/com/paul/brawl/FlagGlowTest.java, src/test/java/com/paul/brawl/GodClampsTest.java, src/test/java/com/paul/brawl/BlockInfoJsonTest.java, src/test/java/com/paul/brawl/EdenRetryTest.java, src/test/java/com/paul/brawl/GibberMathTest.java, src/test/java/com/paul/brawl/GodToolGateTest.java, src/test/java/com/paul/brawl/ImageMimeTest.java, src/test/java/com/paul/brawl/ItemIdsTest.java, src/test/java/com/paul/brawl/GodActionQueueTest.java, src/test/java/com/paul/brawl/McpBench.java, src/test/java/com/paul/brawl/McpLiveProbe.java]
 verified_at: 98cb908
 ---
 
@@ -17,31 +17,50 @@ folders. The Gradle wrapper is tracked, there is **no `.github/` directory** (gi
 `minecraft-mcp-server/` is **vendored** (since 2026-10-26), and the Java side has eleven JUnit 5 suites
 for its Minecraft-free helpers (`./gradlew test`).
 
-## Toolchain and versions
+## One project per Minecraft version (since 2026-11-03, docs/39)
 
-All versions come from `gradle.properties` and are interpolated into `build.gradle`.
+The root project only aggregates. Each Minecraft version is a project, `versions/<version>/` (project path
+`:<version>`), that builds the **shared** sources in the root's `src/` plus its own `versions/<version>/src/`
+(absent until a file differs between versions; a class lives in one or the other, never both):
 
-| Property | Value | Where |
-|---|---|---|
-| `minecraft_version` | `1.21.1` | `gradle.properties:7` |
-| Mappings | Mojang's official names, `mappings loom.officialMojangMappings()` (Yarn until 2026-11-03: the code was migrated with Loom's `migrateMappings`, so 26.x, which ships unobfuscated, uses the same names) | `build.gradle:42` |
-| `loader_version` (Fabric Loader) | `0.17.3` | `gradle.properties:8` |
-| `loom_version` (plugin `net.fabricmc.fabric-loom-remap`, the remapping Loom for obfuscated versions) | `1.15.5` (Gradle ≥ 9.2, runs on Java 21) | `gradle.properties:9`, `build.gradle:2` |
-| `fabric_version` (Fabric API) | `0.116.7+1.21.1` | `gradle.properties:17` |
-| `mod_version` | `1.0.0` | `gradle.properties:12` |
-| `maven_group` | `com.paul.paulsbrawls` | `gradle.properties:13` |
-| `archives_base_name` | `paulsbrawls` | `gradle.properties:14` |
-| Gradle JVM | `-Xmx4G`, `org.gradle.parallel=true` | `gradle.properties:2-3` |
-| Java release | `options.release = 21`, source/target `VERSION_21` | `build.gradle:113`, `build.gradle:123-124` |
+| File | Holds |
+|---|---|
+| `settings.gradle` | Includes one project per entry of `mc_versions`; the foojay toolchain resolver (Gradle downloads a missing JDK into `~/.gradle/jdks`) |
+| `build.gradle` (root) | Declares both Loom plugins (`apply false`): one artifact, two plugin ids |
+| `gradle.properties` (root) | `mc_versions` (default `1.21.1`; `-Pmc_versions=1.21.1,26.1.2` adds 26.1.2), `loom_version`, the mod's id/version/group, Gradle JVM flags |
+| `gradle/mod.gradle` | Everything the versions share: source sets, the library deps and their `include`s, tests, `mcpProbe`, resources, Java toolchain, copy tasks |
+| `versions/<v>/build.gradle` | Its Loom plugin, Minecraft + mappings + Fabric Loader + Fabric API, its runs |
+| `versions/<v>/gradle.properties` | `minecraft_version`, `loader_version`, `fabric_version`, `java_version`, `minecraft_dependency` (for `fabric.mod.json`), the mods folders |
 
-`settings.gradle` only declares plugin repositories: Fabric maven (`https://maven.fabricmc.net/`),
-Maven Central, Gradle Plugin Portal. Project repositories: `mavenCentral()` only (`build.gradle:14-16`).
+Gradle runs a task named on the command line in **every** project that has it, so only the primary version (the first
+of `mc_versions`) answers `runServer`, `runDevServer`, `runClient` and `mcpProbe`; the other versions have no runs
+(`runs.clear()`) and no `mcpProbe`. `build` and `test` run in every included version.
+
+| Version | Loom plugin | Mappings | Java | Fabric Loader / API | Status |
+|---|---|---|---|---|---|
+| `1.21.1` | `net.fabricmc.fabric-loom-remap` (obfuscated: the jar is remapped to intermediary) | `loom.officialMojangMappings()` (Yarn until 2026-11-03) | 21 | `0.17.3` / `0.116.7+1.21.1` | Production |
+| `26.1.2` | `net.fabricmc.fabric-loom` (unobfuscated: nothing remapped, `implementation` not `modImplementation`, `jar` not `remapJar`) | none | 25 | `0.20.1` / `0.155.3+26.1.2` | Being ported: not in `mc_versions` |
+
+Shared values (root `gradle.properties`):
+
+| Property | Value |
+|---|---|
+| `loom_version` | `1.15.5` (Gradle ≥ 9.2; the Gradle JVM may be 21) |
+| `mod_version` | `1.0.0` |
+| `maven_group` | `com.paul.paulsbrawls` |
+| `archives_base_name` | `paulsbrawls` |
+| Gradle JVM | `-Xmx4G`, `org.gradle.parallel=true` |
+
+`options.release` and the Java toolchain are the version's `java_version` (`gradle/mod.gradle`), so 1.21.1 compiles,
+tests and runs on JDK 21 whatever JVM Gradle itself runs on. `settings.gradle` declares plugin repositories: Fabric
+maven (`https://maven.fabricmc.net/`), Maven Central, Gradle Plugin Portal. Project repositories: `mavenCentral()` only
+(`gradle/mod.gradle`).
 
 Note the Java package is `com.paul.brawl` while `maven_group` is `com.paul.paulsbrawls` — they are unrelated.
 
 ## Source-set split
 
-`loom { splitEnvironmentSourceSets() }` (`build.gradle:17-27`) creates two source sets, both assigned to
+`loom { splitEnvironmentSourceSets() }` (`gradle/mod.gradle`) creates two source sets, both assigned to
 the single mod id `paulsbrawls`:
 
 | Source set | Path | Contains |
@@ -54,7 +73,7 @@ Client code may reference `main` classes (e.g. `ClientEntryPoint` calls `Money.r
 
 ## Dependencies
 
-### Compile/runtime (`build.gradle:29-98`)
+### Compile/runtime (`gradle/mod.gradle`)
 
 | Configuration | Artifact | Version |
 |---|---|---|
@@ -69,7 +88,7 @@ Client code may reference `main` classes (e.g. `ClientEntryPoint` calls `Money.r
 | `testImplementation` | `org.junit:junit-bom` (platform) + `org.junit.jupiter:junit-jupiter` | 5.11.4 |
 | `testRuntimeOnly` | `org.junit.platform:junit-platform-launcher` | (from the BOM) |
 
-Test dependencies (`build.gradle:94-97`) are not bundled. The `test { … }` block runs the JUnit Platform and passes
+Test dependencies (`gradle/mod.gradle`) are not bundled. The `test { … }` block runs the JUnit Platform and passes
 the MCP test bench knobs (`-PmcpFuzz`, `-PmcpSeed`). It no longer sets `sun.net.httpserver.nodelay`: the code
 does (`JdkHttpServers.tcpNoDelay()`, see [aigod/mcp-servers.md](../aigod/mcp-servers.md)). `gradle mcpProbe` (a `JavaExec` on the test classpath) probes a running
 server's MCP endpoints read-only ([aigod/mcp-test-bench.md](../aigod/mcp-test-bench.md)).
@@ -81,37 +100,37 @@ server's MCP endpoints read-only ([aigod/mcp-test-bench.md](../aigod/mcp-test-be
 
 | Group | Artifacts (`include`) | Why (from comments) | Lines |
 |---|---|---|---|
-| LangChain4j | `langchain4j`, `langchain4j-core`, `langchain4j-open-ai`, `langchain4j-http-client`, `langchain4j-http-client-jdk` (all 1.0.0); `langchain4j-mcp`, `langchain4j-anthropic` (1.0.0-beta5) | LLM client + MCP client | `build.gradle:56-62` |
-| jspecify | `org.jspecify:jspecify:1.0.0` | runtime-retained `@NullMarked`/`@Nullable` from langchain4j-core | `build.gradle:65` |
-| jtokkit | `com.knuddels:jtokkit:1.1.0` | `OpenAiTokenCountEstimator` (ChatBot token budget) — without it: NCDFE `com/knuddels/jtokkit/Encodings` on boot | `build.gradle:69` |
-| Jackson | `jackson-databind` 2.21.1, `jackson-core` 2.21.1, `jackson-bom` 2.21.1, `jackson-annotations` 2.21, `jackson-datatype-jdk8` 2.21.1, `jackson-datatype-jsr310` 2.21.1 | LangChain4j + `@JsonClassDescription`/`@JsonPropertyDescription` on tool POJOs read by `JsonSchemaAdapter`; the MCP SDK's Jackson 2 mapper (which lifts the line from 2.19 to 2.21, docs/27 phase 3) | `build.gradle:76-81` |
-| MCP server (docs/27) | `mcp-core` + `mcp-json-jackson2` 2.0.1, `reactor-core` 3.7.0, `reactive-streams` 1.0.4, `json-schema-validator` 2.0.4 (networknt), `itu` 1.14.0, `jackson-dataformat-yaml` 2.21.1, `snakeyaml` 2.5 | The `god`/`builder` MCP servers ([aigod/mcp-servers.md](../aigod/mcp-servers.md)); the transport is the JDK `HttpServer`, so no servlet container | `build.gradle:86-93` |
-| OkHttp pile | `okhttp` 4.12.0, `okhttp-sse` 4.12.0, `okio` 3.6.0, `okio-jvm` 3.6.0, `kotlin-stdlib`/`-jdk7`/`-jdk8` 1.9.10 | `langchain4j-mcp`'s `HttpMcpTransport` is OkHttp-based; without them the first `/pray` that builds tools NCDFEs on `okhttp3/Interceptor` | `build.gradle:102-108` |
+| LangChain4j | `langchain4j`, `langchain4j-core`, `langchain4j-open-ai`, `langchain4j-http-client`, `langchain4j-http-client-jdk` (all 1.0.0); `langchain4j-mcp`, `langchain4j-anthropic` (1.0.0-beta5) | LLM client + MCP client | `gradle/mod.gradle` |
+| jspecify | `org.jspecify:jspecify:1.0.0` | runtime-retained `@NullMarked`/`@Nullable` from langchain4j-core | `gradle/mod.gradle` |
+| jtokkit | `com.knuddels:jtokkit:1.1.0` | `OpenAiTokenCountEstimator` (ChatBot token budget) — without it: NCDFE `com/knuddels/jtokkit/Encodings` on boot | `gradle/mod.gradle` |
+| Jackson | `jackson-databind` 2.21.1, `jackson-core` 2.21.1, `jackson-bom` 2.21.1, `jackson-annotations` 2.21, `jackson-datatype-jdk8` 2.21.1, `jackson-datatype-jsr310` 2.21.1 | LangChain4j + `@JsonClassDescription`/`@JsonPropertyDescription` on tool POJOs read by `JsonSchemaAdapter`; the MCP SDK's Jackson 2 mapper (which lifts the line from 2.19 to 2.21, docs/27 phase 3) | `gradle/mod.gradle` |
+| MCP server (docs/27) | `mcp-core` + `mcp-json-jackson2` 2.0.1, `reactor-core` 3.7.0, `reactive-streams` 1.0.4, `json-schema-validator` 2.0.4 (networknt), `itu` 1.14.0, `jackson-dataformat-yaml` 2.21.1, `snakeyaml` 2.5 | The `god`/`builder` MCP servers ([aigod/mcp-servers.md](../aigod/mcp-servers.md)); the transport is the JDK `HttpServer`, so no servlet container | `gradle/mod.gradle` |
+| OkHttp pile | `okhttp` 4.12.0, `okhttp-sse` 4.12.0, `okio` 3.6.0, `okio-jvm` 3.6.0, `kotlin-stdlib`/`-jdk7`/`-jdk8` 1.9.10 | `langchain4j-mcp`'s `HttpMcpTransport` is OkHttp-based; without them the first `/pray` that builds tools NCDFEs on `okhttp3/Interceptor` | `gradle/mod.gradle` |
 
 `MCPGateway` really does use `HttpMcpTransport` (`src/main/java/com/paul/brawl/MCPGateway.java:16`,
-`:219`). The comment at `build.gradle:43-47` still says "the stdio transport is part of this module" and
+`:219`). The comment at `gradle/mod.gradle` still says "the stdio transport is part of this module" and
 mentions `StdioMcpTransport` — that comment is stale; the stdio transport is not used.
 
-When bumping `langchain4j-mcp`, the comment at `build.gradle:82-83` says to re-derive the OkHttp pins with
+When bumping `langchain4j-mcp`, the comment at `gradle/mod.gradle` says to re-derive the OkHttp pins with
 `./gradlew dependencyInsight --dependency okhttp`. For the MCP SDK closure, re-derive with
-`gradle dependencies --configuration runtimeClasspath` (`build.gradle:83-85`).
+`gradle dependencies --configuration runtimeClasspath` (`gradle/mod.gradle`).
 
 ## Packaging tasks
 
 | Task / block | Behaviour | Lines |
 |---|---|---|
-| `processResources` | Expands `${version}` in `fabric.mod.json` from `project.version` (`1.0.0`) | `build.gradle:104-110` |
-| `java { withSourcesJar() }` | Also produces a sources jar | `build.gradle:117-125` |
-| `jar` | Bundles `LICENSE` renamed to `LICENSE_paulsbrawls` | `build.gradle:127-133` |
-| `publishing` | `mavenJava` publication, no repositories configured (no-op publish target) | `build.gradle:136-151` |
-| `copyToMods` (Copy) | Copies `remapJar` output into `mods_folder`; `onlyIf` the property exists and is not `path/to/your/mods` | `build.gradle:153-160` |
-| `copyToClientMods` (Copy) | Same for `client_mods_folder` | `build.gradle:162-169` |
-| `build.finalizedBy(...)` | Both copy tasks always run after `build` | `build.gradle:171-172` |
+| `processResources` | Expands `${version}`, `${minecraft_dependency}` and `${java_version}` in `fabric.mod.json` from the version's properties | `gradle/mod.gradle` |
+| `java { withSourcesJar() }` | Also produces a sources jar | `gradle/mod.gradle` |
+| `jar` | Bundles `LICENSE` renamed to `LICENSE_paulsbrawls` | `gradle/mod.gradle` |
+| `publishing` | `mavenJava` publication, no repositories configured (no-op publish target) | `gradle/mod.gradle` |
+| `copyToMods` (Copy) | Copies the shipped jar (`remapJar`'s, or `jar`'s for an unobfuscated version) into the version's `mods_folder`; `onlyIf` the property exists and is not `path/to/your/mods` | `gradle/mod.gradle` |
+| `copyToClientMods` (Copy) | Same for `client_mods_folder` | `gradle/mod.gradle` |
+| `build.finalizedBy(...)` | Both copy tasks always run after `build` | `gradle/mod.gradle` |
 
 Output jar name is `paulsbrawls-1.0.0.jar` (from `archives_base_name` + `mod_version`) under
-`build/libs/` (standard Loom layout; `build/` is gitignored).
+`versions/<version>/build/libs/` (`build/` is gitignored).
 
-Current copy targets (`gradle.properties:23-24`):
+Current copy targets (`versions/1.21.1/gradle.properties`; 26.1.2 has none, so it copies nothing):
 
 | Property | Value |
 |---|---|
@@ -191,7 +210,7 @@ from the repo.
 
 > ⚠ Unverified: CI workflows may exist on Paul's machine (untracked). Nothing in the tracked tree runs them.
 
-`build.gradle` applies no Jacoco plugin, so a `jacocoTestReport` task does not exist.
+`gradle/mod.gradle` applies no Jacoco plugin, so a `jacocoTestReport` task does not exist.
 
 ## Java unit tests (`src/test/java/com/paul/brawl/`)
 
@@ -245,13 +264,14 @@ loopback port against the official MCP Java SDK client ([aigod/mcp-servers.md](.
 0.116.3, the mod, WorldEdit and Simple Voice Chat (Universal Shops was removed on 2026-10-27, docs/29 §16), `run.bat` = `java -Xmx10G -jar server.jar`),
 `node scripts/setup-server.mjs [dir]` builds one from a clone into `server/` (gitignored):
 - **Launcher:** `fabric-server-launch.jar` from `meta.fabricmc.net`, for `minecraft_version` and `loader_version` in
-  `gradle.properties`, installer 1.1.2. On first start it downloads Mojang's server jar and the libraries. Mojang's jar
+  `versions/<mc>/gradle.properties` (`--mc=VERSION`, default the first of `mc_versions`), installer 1.1.2. On first start it downloads Mojang's server jar and the libraries. Mojang's jar
   may not be redistributed, so it is not in git or LFS.
 - **Mods:** Fabric API `fabric_version` from the Fabric Maven, checked against its published `.sha512`; the other three
   pinned to production's versions from the Modrinth CDN, SHA-512 hard-coded (equal to production's jars).
-  `--no-extras` skips those three. Older versions of the same jars are removed.
-- **The mod:** `gradlew remapJar`, not `build`, whose `copyToMods`/`copyToClientMods` finalizers write to
-  `mods_folder`. `--skip-build` reuses `build/libs`.
+  `--no-extras` skips those three; they are 1.21.1's, so another version requires it. Older versions of the same
+  jars are removed.
+- **The mod:** `gradlew -Pmc_versions=<mc> :<mc>:remapJar` (`:<mc>:jar` for 26.x), not `build`, whose
+  `copyToMods`/`copyToClientMods` finalizers write to `mods_folder`. `--skip-build` reuses `versions/<mc>/build/libs`.
 - **Runtime files, never overwritten:** `prompt.txt`, `build_prompt.txt`, `mcp_config.properties` (from `run/`, the
   same as production's), and `god-agent/claude-code/`. `server.properties` is seeded from `run/`'s with port 25565,
   RCON off (its password is public here), `online-mode=false`.
@@ -344,8 +364,8 @@ cannot run from a clean clone.
 
 - No CI workflows are tracked (`.github` is gitignored) — CLAUDE.md's `ci.yml` description is unverifiable.
 - `minecraft-mcp-server/` is vendored since 2026-10-26; the Node-side pages have not been re-verified against it.
-- `build.gradle:43-47` comment about the stdio MCP transport is stale (code uses `HttpMcpTransport`).
-- `jackson-bom` is pinned to 2.18.2 while the other Jackson artifacts are 2.19.1 (`build.gradle:72`).
+- `gradle/mod.gradle` comment about the stdio MCP transport is stale (code uses `HttpMcpTransport`).
+- `jackson-bom` is pinned to 2.18.2 while the other Jackson artifacts are 2.19.1 (`gradle/mod.gradle`).
 - `fabric.mod.json` `contact`/`suggests` are template leftovers.
 - `items/coin.json` is a 1.21.4+ format file; harmless on 1.21.1.
 - The copy tasks run on every `build`; with Paul's paths on another machine you must override them.

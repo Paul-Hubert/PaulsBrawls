@@ -4,7 +4,7 @@ title: Paul's Brawls — system overview
 system: meta
 summary: Start here. The four gameplay systems, the three runtimes, how they connect, what is actually wired today vs only designed, and where to read next.
 tags: [overview, architecture, runtimes, gibber, ctf, aigod, eden, map, wiring-status]
-sources: [src/main/resources/fabric.mod.json, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, eden/src/main.ts, build.gradle, eden/src/config.ts, eden/src/villagers/tools.ts, eden/src/villagers/brain.ts, eden/src/llm/scheduler.ts]
+sources: [src/main/resources/fabric.mod.json, src/main/java/com/paul/brawl/ServerEntryPoint.java, src/client/java/com/paul/brawl/ClientEntryPoint.java, eden/src/main.ts, gradle/mod.gradle, eden/src/config.ts, eden/src/villagers/tools.ts, eden/src/villagers/brain.ts, eden/src/llm/scheduler.ts]
 verified_at: 98cb908
 ---
 
