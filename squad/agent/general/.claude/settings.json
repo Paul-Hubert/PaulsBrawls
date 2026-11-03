@@ -1,0 +1,9 @@
+{
+  "enableAllProjectMcpServers": true,
+  "claudeMdExcludes": ["**/!(general)/CLAUDE.md"],
+  "env": { "MCP_TOOL_TIMEOUT": "120000" },
+  "permissions": {
+    "allow": ["mcp__general"],
+    "deny": ["Bash", "PowerShell", "Edit", "Write", "Read", "Glob", "Grep", "NotebookEdit", "WebFetch", "WebSearch", "Agent"]
+  }
+}

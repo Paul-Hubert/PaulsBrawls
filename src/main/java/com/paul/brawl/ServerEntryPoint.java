@@ -51,6 +51,8 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 		com.paul.brawl.squad.SquadTriggers.register();
 		// Where a commander looks, as far as they can see, on a worker thread (the snapshot of every order and click).
 		com.paul.brawl.squad.SquadLook.register();
+		// A despawned bot's save (playerdata, stats, advancements) is deleted once it has left, so names are reused.
+		com.paul.brawl.squad.Squad.registerSaveCleanup();
 
 		// Track the live server so off-thread callers (idle watchdog) can
 		// reach the bot without holding a player reference.

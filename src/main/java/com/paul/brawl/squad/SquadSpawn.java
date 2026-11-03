@@ -287,4 +287,28 @@ final class SquadSpawn {
             "[Bots] " + gone.get() + " " + what + " de " + owner.get().getName() + " retiré(s)" + (gone.get() < bots.size() ? " sur " + bots.size() : "") + ".")));
         return Command.SINGLE_SUCCESS;
     }
+
+    // -- /bots squad purge --------------------------------------------------------------------------------------------
+
+    /**
+     * {@code /bots squad purge} (admin): delete the saves despawned bots left behind before despawn deleted them
+     * ({@link Squad#purgeSaves}). The roster is asked of the runtime first, so no current bot (a dead one included)
+     * loses its save; with the runtime unreachable nothing is deleted.
+     */
+    static int purge(ServerCommandSource src) {
+        if (!Squad.enabled()) return SquadCommand.reply(src, "[Bots] Squad est désactivé (squad.properties : enabled=false).");
+        MinecraftServer srv = src.getServer();
+        Squad.client().post("/api/state", new JsonObject()).thenAccept(s -> srv.execute(() -> {
+            if (!SquadAuthoring.ok(s) || !s.has("bots") || !s.get("bots").isJsonArray()) {
+                SquadCommand.reply(src, "[Bots] Le runtime ne répond pas : sans la liste des bots, rien n'est supprimé.");
+                return;
+            }
+            java.util.Set<String> roster = new java.util.HashSet<>();
+            for (JsonElement b : s.getAsJsonArray("bots")) roster.add(b.getAsJsonObject().get("name").getAsString().toLowerCase(Locale.ROOT));
+            int[] r = Squad.purgeSaves(srv, roster);
+            SquadCommand.reply(src, r[0] == 0 ? "[Bots] Aucune sauvegarde d'ancien bot à supprimer."
+                : "[Bots] Sauvegardes de " + r[0] + " ancien(s) bot(s) supprimées (" + r[1] + " fichiers) : leurs noms sont de nouveau libres.");
+        }));
+        return Command.SINGLE_SUCCESS;
+    }
 }

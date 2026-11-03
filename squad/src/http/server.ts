@@ -2,7 +2,8 @@
 //   /api/*      the mod's control API (JSON in, `{ ok, text, … }` out)
 //   /events     SSE to the mod: `notice` (a French line for some players) and `state` (refresh your cache)
 //   /mcp/squad  the author agent's tools (src/http/mcp.ts)
-// Every route needs `Authorization: Bearer <token>`. Notices emitted while no mod is listening are kept (200 max)
+//   /mcp/general a General's tools (src/http/general-mcp.ts, docs/38): its `gen-…` ticket is its credential
+// Every other route needs `Authorization: Bearer <token>`. Notices emitted while no mod is listening are kept (200 max)
 // and sent when it connects, so an order that ends during a mod restart is still announced.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -15,6 +16,7 @@ import type { Player } from '../roster';
 import { errorMessage } from '../api/errors';
 import { logger } from '../logger';
 import { handleMcp } from './mcp';
+import { handleGeneralMcp } from './general-mcp';
 
 const MAX_BODY = 1 << 20;
 const MAX_PENDING = 200;
@@ -39,6 +41,15 @@ export class SquadHttp {
     service.deps.runner.on('notice', (n: Notice) => this.notice(n));
     service.deps.runner.on('state', () => this.stateChanged());
     service.deps.pool.on('status', () => this.stateChanged());
+    // A General's spawn and despawn requests reach the mod over SSE; none can be sent while no mod listens.
+    const generals = service.deps.generals;
+    if (generals) {
+      generals.sink = (event, data) => {
+        if (this.clients.size === 0) return false;
+        this.broadcast(event, data);
+        return true;
+      };
+    }
   }
 
   listen(): Promise<number> {
@@ -65,6 +76,9 @@ export class SquadHttp {
 
   /** A notice for the mod; kept while no mod is connected. */
   notice(n: Notice): void {
+    // A General's orders end silently; any other line for its virtual owner (a script's ctx.say) reaches nobody.
+    const generals = this.service.deps.generals;
+    if (generals && n.to.length > 0 && n.to.every((u) => generals.isGeneralOwner(u))) return;
     if (this.clients.size === 0) {
       this.pending.push(n);
       if (this.pending.length > MAX_PENDING) this.pending.shift();
@@ -99,6 +113,10 @@ export class SquadHttp {
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
+      if (url.pathname === '/mcp/general' && this.service.deps.generals) {
+        const body = req.method === 'POST' ? await readJson(req) : undefined;
+        return await handleGeneralMcp(this.service.deps.generals, req, res, body);
+      }
       if (!this.authorized(req)) return send(res, 401, { ok: false, text: 'unauthorized (bearer token)' });
       if (url.pathname === '/events') return this.events(req, res);
       const body = req.method === 'POST' ? await readJson(req) : undefined;
@@ -118,6 +136,12 @@ export class SquadHttp {
     this.clients.add(res);
     for (const n of this.pending.splice(0)) res.write(`event: notice\ndata: ${JSON.stringify(n)}\n\n`);
     req.on('close', () => this.clients.delete(res));
+  }
+
+  private generals(): NonNullable<SquadService['deps']['generals']> {
+    const g = this.service.deps.generals;
+    if (!g) throw new HttpError(404, 'no Generals in this runtime');
+    return g;
   }
 
   private async api(url: URL, b: Record<string, unknown>): Promise<unknown> {
@@ -192,6 +216,31 @@ export class SquadHttp {
         return s.delete(who(), str(b.name));
       case '/api/commands/revert':
         return s.revert(who(), str(b.name), Number(b.version));
+      case '/api/general/create':
+        return this.generals().create({
+          by: who(),
+          admin,
+          name: str(b.name),
+          owner: player(b.owner),
+          spawn: { ...vec(b.spawn), yaw: num(isObj(b.spawn) ? b.spawn.yaw : 0), dimension: isObj(b.spawn) && typeof b.spawn.dimension === 'string' ? b.spawn.dimension : 'overworld' },
+          allowance: counts(b.allowance),
+          ...(b.reinforce !== undefined ? { reinforce: Number(b.reinforce) } : {}),
+          ...(b.range !== undefined ? { range: Number(b.range) } : {}),
+        });
+      case '/api/general/allow':
+        return this.generals().allow(who(), admin, str(b.name), counts(b.allowance), optNum(b.reinforce), optNum(b.range));
+      case '/api/general/tell':
+        return this.generals().tell(who(), admin, str(b.name), typeof b.text === 'string' ? b.text : '');
+      case '/api/general/stop':
+        return this.generals().end(who(), admin, str(b.name));
+      case '/api/general/list':
+        return this.generals().list(admin);
+      case '/api/general/spawned':
+        return this.generals().spawned(str(b.request), str(b.name));
+      case '/api/general/arrived':
+        return this.generals().arrived(str(b.request), str(b.name));
+      case '/api/general/failed':
+        return this.generals().failed(str(b.request), typeof b.text === 'string' ? b.text : 'refusé', typeof b.name === 'string' ? b.name : undefined);
       default:
         throw new HttpError(404, `no route ${url.pathname}`);
     }
@@ -244,6 +293,18 @@ function count(v: unknown): number {
 function strings(v: unknown): string[] {
   if (!Array.isArray(v)) throw new HttpError(400, 'expected an array of strings');
   return v.map(String);
+}
+
+/** `{ archer: 10, guard: 5 }`: kit → count (validated by the Generals). */
+function counts(v: unknown): Record<string, number> {
+  if (!isObj(v)) return {};
+  const out: Record<string, number> = {};
+  for (const [k, n] of Object.entries(v)) out[k] = Number(n);
+  return out;
+}
+
+function optNum(v: unknown): number | undefined {
+  return v === undefined || v === null ? undefined : Number(v);
 }
 
 function player(v: unknown): Player {

@@ -723,6 +723,9 @@ completely, so missed events cannot leave it wrong.
   the user cache. In offline mode the user cache makes up a profile for any name it is asked about, so the first
   version refused every name (found on the production server, 2026-10-27). The real risk is a bot loading a real
   player's save, and the playerdata file is what shows it.
+- **A despawned bot's save is deleted once it has left** (`SquadSaves`, 2026-11-02). Before, it stayed, so the check
+  above skipped its name forever and every `squad spawn` / `raid` took new numbers: 474 saves on production
+  (`Archer134`, `EnnGarde109`…). Now its name is free again; `/bots squad purge` deletes the saves left from before.
 - **Stock commands:** `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`, `raid`, and for bound items
   `mur-de-boucliers`, `epee`, `ligne-archers`, `tir` (`squad/src/stock/`).
 - **A server mod's items can make a bot deaf (found on production, 2026-10-27).** The first live run on `server/`

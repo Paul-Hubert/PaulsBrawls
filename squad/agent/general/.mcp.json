@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "general": {
+      "type": "http",
+      "url": "${PAULSBRAWLS_SQUAD_URL:-http://127.0.0.1:8772}/mcp/general",
+      "headers": { "X-Squad-General": "${SQUAD_GENERAL_TICKET}" }
+    }
+  }
+}

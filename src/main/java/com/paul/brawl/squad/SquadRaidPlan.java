@@ -88,11 +88,19 @@ public final class SquadRaidPlan {
     public static List<String> names(String prefix, int count, Predicate<String> taken) {
         List<String> out = new ArrayList<>();
         for (int i = 1; out.size() < count; i++) {
-            String n = String.format(Locale.ROOT, "%s%02d", prefix, i);
-            if (n.length() > 16 || i > 9_999) throw new IllegalStateException("no free raider name left for " + prefix);
+            String n = numbered(prefix, i);
+            if (n.length() > 16 || i > MAX_NUMBER) throw new IllegalStateException("no free raider name left for " + prefix);
             if (!taken.test(n)) out.add(n);
         }
         return out;
+    }
+
+    /** The highest number {@link #names} gives. */
+    static final int MAX_NUMBER = 9_999;
+
+    /** {@code PREFIX01} … {@code PREFIX99}, {@code PREFIX100} …: the bot name {@link #names} gives for number {@code i}. */
+    static String numbered(String prefix, int i) {
+        return String.format(Locale.ROOT, "%s%02d", prefix, i);
     }
 
     /**

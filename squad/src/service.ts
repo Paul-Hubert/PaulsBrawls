@@ -17,6 +17,7 @@ import type { Notice, Snapshot } from './types';
 import { errorMessage } from './api/errors';
 import type { ClaimRegistry } from './orders/claims';
 import type { Metrics, Vitals } from './vitals/metrics';
+import type { Generals } from './general/general';
 
 export interface Answer {
   ok: boolean;
@@ -36,6 +37,8 @@ export interface ServiceDeps {
   limits: Limits;
   /** The vitals sampler (main.ts); absent in tests that build a service without one. */
   vitals?: Vitals;
+  /** The Generals (docs/38, main.ts); absent in tests that build a service without them. */
+  generals?: Generals;
 }
 
 const ok = (text: string, extra: Record<string, unknown> = {}): Answer => ({ ok: true, text, ...extra });

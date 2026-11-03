@@ -478,7 +478,8 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
 - **`/bots raid [distance] [archers] [guards]`** (admin, run by a player; defaults 200, 10, 10; `SquadRaid`, the
   Minecraft-free part in `SquadRaidPlan`): the point is the caller's position plus their horizontal look direction
   × distance; the chunk is loaded (`getChunk`) and `MOTION_BLOCKING_NO_LEAVES` gives the ground. Raiders
-  `EnnGarde01…` and `EnnArcher01…` (skipping names in the roster, online, reserved, or with a `playerdata` file) are
+  `EnnGarde01…` and `EnnArcher01…` (skipping names in the roster, online, reserved, or with a `playerdata` file; a
+  despawned raider's save is deleted, so `raid clear` frees its name, `SquadSaves`) are
   owned by the virtual player `Envahisseur` (offline UUID), never by the caller: owned by the caller they would be
   its own team. Each goes through `/api/bots/spawn` and the whitelist like `/bots spawn`, one after the other (the
   first refusal, e.g. `limits.maxBots`, stops the spawning). On its first join it is teleported to its place (rows
@@ -489,6 +490,21 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
   the caller's position at the call and `target` = the caller. `/bots raid stop` stops `Envahisseur`'s orders;
   `/bots raid clear` despawns every bot `Envahisseur` owns (and cancels a raid still assembling).
 - **Limits:** 20 defenders + 20 raiders need `limits.maxBots` ≥ 40 in `squad.json` (default 30).
+
+## The General (docs/38, 2026-11-03)
+
+A Claude Code instance commanding a bodiless army; the design and the as-built differences are [docs/38](../../38-squad-general-plan.md)
+(§10). In short:
+- **Runtime** `src/general/` (`general.ts` the service, `perception.ts` enemy clusters X1…, `events.ts` the long-poll
+  ring, `geometry.ts` compass/relative positions) and `src/http/general-mcp.ts` (`/mcp/general`, authorized by the
+  `X-Squad-General: gen-…` header alone). Built in `main.ts`, persisted in `.squad-data/generals.json`, sampled every
+  second. Routes `/api/general/create|allow|tell|stop|list` (admin) and `spawned|arrived|failed` (the mod's reports);
+  SSE `general-spawn` / `general-despawn` to the mod.
+- **Mod** `SquadGeneral` (`/bots general create|allow|tell|stop|list`, the spawn handler) and `SquadGeneralPlan`
+  (Minecraft-free, JUnit). The General's owner is a virtual player named after it; its bots are `<NAME>Arc01`, `Gar01`….
+- **Orders** are the stock `raid`, `epee`, `tir`, `ligne-archers`, `mur-de-boucliers`, started per squad with a written
+  commander snapshot; `advance` chains `raid` legs along the axis (the admin's facing at `create`).
+- **Instance** `squad/agent/general/` (doctrine `CLAUDE.md`, `.mcp.json`, `.claude/settings.json`).
 
 ## A bot that dies (docs/35 F6–F7, Paul's D2–D3)
 
@@ -531,7 +547,8 @@ Three layers now:
 | `SquadDeath`, `mixin/PlayerEntityMixin` | A roster bot drops nothing when it dies (docs/35 F6, D2): the mixin cancels `PlayerEntity.dropInventory()` at HEAD for a roster name (`Squad.botNames()`, case-insensitive, `SquadDeath.dropsNothing`, Minecraft-free, JUnit). Its stacks are lost: the respawned player copies no inventory without `keepInventory`, and `/bots squad respawn` gives the kit again. Players and XP unchanged. Target checked in the named jar (declared by `PlayerEntity`, not overridden by `ServerPlayerEntity`), the intermediary jar (`class_1657.method_16078()V`) and the generated refmap; registered in `paulsbrawls.mixins.json` (`defaultRequire: 1`) |
 | `SquadRaid`, `SquadRaidPlan` | `/bots raid` (above); the plan (arguments, point, names, spread, timeout) is Minecraft-free, JUnit |
 | `SquadSpawn`, `SquadSpawnPlan` | `/bots squad spawn KIT [n] [owner] [others…]` / `squad despawn [KIT] [owner]` / `squad respawn [KIT] [n] [owner]` (admin): `n` bots named after the kit, on a ring around the owner at the owner's height (`standNear`: a floor within 6 blocks, never the roof), kit and tag on arrival like `raid`; despawn by owner and kit tag (dead bots too); respawn (docs/35 F7): `POST /api/bots/respawn { by, admin, owner, kit?, n? }`, then each bot named in the answer is expected on a ring around the caller (`@s`, a datapack function's too; else the owner) and on arrival `Squad.resetToKitLater` clears its whole inventory and gives its kit (`SquadKits.forReset`: the command's kit, else its kit tag; none: empty, « sans kit » in the answer). Kits may be plural (`SquadKits.find`). The plan (arguments, names, ring, the French count) is Minecraft-free, JUnit |
-| `Squad` | Lifecycle, the SSE loop and the cache, notices (kept for offline players), whitelist, join gate (a bot name from a non-loopback address is kicked), arrival teleport (to the admin, or to a given spot with a callback), `hasPlayed` (spawn refuses names with a `playerdata` file), `equip` |
+| `Squad` | Lifecycle, the SSE loop and the cache, notices (kept for offline players), whitelist, join gate (a bot name from a non-loopback address is kicked), arrival teleport (to the admin, or to a given spot with a callback), `hasPlayed` (spawn refuses names with a `playerdata` file), `equip`, a despawned bot's save (below) |
+| `SquadSaves` | A despawned bot's save (`playerdata/<offline uuid>.dat` and `.dat_old`, `stats/`, `advancements/`). Every despawn (`SquadCommand.despawnBot`: `/bots despawn`, `despawn all`, `squad despawn`, `raid clear`) calls `Squad.forgetSave`; an `END_SERVER_TICK` hook (`Squad.registerSaveCleanup`) deletes the files once the bot is offline (the server writes the save while removing the player, on the server thread) and out of the cached roster, waiting at most 2 min (a name spawned again stays a roster bot and keeps its save). The name is then free, so `Garde01…` are given again instead of new numbers (before: 474 saves on production, 2026-11-02). `/bots squad purge` (admin) deletes the backlog: every save of a name the mod generates (kit and raid prefixes, `01`–`9999`) not in the roster (asked of the runtime first; unreachable: nothing deleted), not online, not reserved. The wait list and the names are Minecraft-free, JUnit |
 | `SquadKits` | Kits for archer, guard, miner and farmer (Minecraft-free); an item may carry enchantments (id → level): the archer's bow has Infinity I and Unbreaking III (docs/35 D6; raiders use the archer kit too). `equip` wears armor, holds weapons, puts the shield in the off-hand, and enchants a stack from the server's enchantment registry (`RegistryKeys.ENCHANTMENT`, dynamic since 1.21; `ItemStack.addEnchantment`) |
 | `SquadAuthoring` | One `squad-author` turn: reserve the slot, open, run the agent, close, announce « Commande X prête » |
 | `SquadClient`, `SquadArgs`, `SquadNotice`, `CommanderSnap`, `SquadConfig` | HTTP/1.1 client and SSE framing; argument tokenizing; lines with clicks; the snapshot, `take(player)`: exact position, rotation, dimension and held item at once, then the look target from `SquadLook` (a future completed on the server thread, in order per player through `SquadInOrder`; `lookEntity` with its network `id`, only what a crosshair can target: `canHit()`); `squad.properties` |

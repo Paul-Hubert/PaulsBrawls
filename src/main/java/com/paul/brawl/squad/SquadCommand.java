@@ -67,6 +67,26 @@ public final class SquadCommand {
                     .then(CommandManager.literal("stop").executes(c -> SquadRaid.stop(c.getSource())))
                     .then(CommandManager.argument("args", StringArgumentType.greedyString())
                         .executes(c -> SquadRaid.call(c.getSource(), StringArgumentType.getString(c, "args")))))
+                // A General (docs/38): a Claude Code instance commanding an army, no body.
+                .then(CommandManager.literal("general").requires(s -> s.hasPermissionLevel(2))
+                    .executes(c -> reply(c.getSource(), "[Bots] Usage : " + SquadGeneralPlan.CREATE_USAGE + " · allow NOM … · tell NOM texte · stop NOM [despawn] · list"))
+                    .then(CommandManager.literal("create")
+                        .executes(c -> reply(c.getSource(), "[Bots] Usage : " + SquadGeneralPlan.CREATE_USAGE))
+                        .then(CommandManager.argument("args", StringArgumentType.greedyString()).suggests(GENERAL_TERMS)
+                            .executes(c -> SquadGeneral.create(c.getSource(), StringArgumentType.getString(c, "args")))))
+                    .then(CommandManager.literal("allow")
+                        .then(CommandManager.argument("args", StringArgumentType.greedyString()).suggests(GENERAL_TERMS)
+                            .executes(c -> SquadGeneral.allow(c.getSource(), StringArgumentType.getString(c, "args")))))
+                    .then(CommandManager.literal("tell")
+                        .then(CommandManager.argument("name", StringArgumentType.word())
+                            .then(CommandManager.argument("text", StringArgumentType.greedyString())
+                                .executes(c -> SquadGeneral.tell(c.getSource(), StringArgumentType.getString(c, "name"), StringArgumentType.getString(c, "text"))))))
+                    .then(CommandManager.literal("stop")
+                        .then(CommandManager.argument("name", StringArgumentType.word())
+                            .executes(c -> SquadGeneral.stop(c.getSource(), StringArgumentType.getString(c, "name"), false))
+                            .then(CommandManager.literal("despawn")
+                                .executes(c -> SquadGeneral.stop(c.getSource(), StringArgumentType.getString(c, "name"), true)))))
+                    .then(CommandManager.literal("list").executes(c -> SquadGeneral.list(c.getSource()))))
                 .then(CommandManager.literal("squad").requires(s -> s.hasPermissionLevel(2))
                     .then(CommandManager.literal("spawn")
                         .executes(c -> reply(c.getSource(), "[Bots] Usage : " + SquadSpawnPlan.SPAWN_USAGE))
@@ -79,7 +99,8 @@ public final class SquadCommand {
                     .then(CommandManager.literal("respawn")
                         .executes(c -> SquadSpawn.respawn(c.getSource(), ""))
                         .then(CommandManager.argument("args", StringArgumentType.greedyString()).suggests(SQUAD_LINE)
-                            .executes(c -> SquadSpawn.respawn(c.getSource(), StringArgumentType.getString(c, "args"))))))
+                            .executes(c -> SquadSpawn.respawn(c.getSource(), StringArgumentType.getString(c, "args")))))
+                    .then(CommandManager.literal("purge").executes(c -> SquadSpawn.purge(c.getSource()))))
                 .then(CommandManager.literal("equip").requires(s -> s.hasPermissionLevel(2))
                     .then(CommandManager.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
                         .then(CommandManager.argument("kit", StringArgumentType.word()).suggests(KITS)
@@ -167,6 +188,17 @@ public final class SquadCommand {
     // -- suggestions ------------------------------------------------------------------------------------------------
 
     private static final SuggestionProvider<ServerCommandSource> KITS = (c, b) -> CommandSource.suggestMatching(SquadKits.NAMES, b);
+    /** {@code NAME archer=… guard=…}: the next key=value of {@code /bots general create|allow}. */
+    private static final SuggestionProvider<ServerCommandSource> GENERAL_TERMS = (c, b) -> {
+        String typed = b.getRemaining();
+        int cut = typed.lastIndexOf(' ') + 1;
+        if (cut == 0) return b.buildFuture(); // the General's name first
+        var next = b.createOffset(b.getStart() + cut);
+        for (String k : List.of("archer=", "guard=", "miner=", "farmer=", "reinforce=", "range=")) {
+            if (k.startsWith(typed.substring(cut).toLowerCase(Locale.ROOT)) && !typed.contains(k)) next.suggest(k);
+        }
+        return next.buildFuture();
+    };
     /** {@code /bots squad spawn|despawn|respawn …}: a kit first, then @s and online players (the owners). */
     private static final SuggestionProvider<ServerCommandSource> SQUAD_LINE = (c, b) -> {
         String rem = b.getRemaining();
@@ -233,7 +265,7 @@ public final class SquadCommand {
         };
         for (String l : lines) src.sendFeedback(() -> Text.literal(l), false);
         if (src.hasPermissionLevel(2)) {
-            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · squad spawn KIT [nombre] [propriétaire=@s] [autres…] · squad despawn [KIT] [propriétaire=@s] · squad respawn [KIT] [nombre] [propriétaire=@s] (un bot mort reste déconnecté jusque-là) · equip BOT archer|guard|miner|farmer (il devient aussi à toi) · raid [distance] [archers] [gardes] | clear | stop · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
+            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · squad spawn KIT [nombre] [propriétaire=@s] [autres…] · squad despawn [KIT] [propriétaire=@s] · squad respawn [KIT] [nombre] [propriétaire=@s] (un bot mort reste déconnecté jusque-là) · squad purge (les sauvegardes laissées par d'anciens bots) · equip BOT archer|guard|miner|farmer (il devient aussi à toi) · raid [distance] [archers] [gardes] | clear | stop · general create NOM archer=N guard=N [reinforce=N] [range=N] | allow | tell | stop | list · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
         }
         return Command.SINGLE_SUCCESS;
     }
@@ -347,7 +379,10 @@ public final class SquadCommand {
         return Command.SINGLE_SUCCESS;
     }
 
-    /** Despawn one bot (the runtime first), then on the server thread: unwhitelist and disconnect it. */
+    /**
+     * Despawn one bot (the runtime first), then on the server thread: unwhitelist and disconnect it, and delete its
+     * save once it has left (Squad.forgetSave), so its name is free for the next spawn.
+     */
     static CompletableFuture<JsonObject> despawnBot(ServerCommandSource src, String bot) {
         MinecraftServer srv = src.getServer();
         JsonObject body = base(src);
@@ -360,6 +395,7 @@ public final class SquadCommand {
                     Squad.whitelist(srv, name, false);
                     ServerPlayerEntity p = srv.getPlayerManager().getPlayer(name);
                     if (p != null) p.networkHandler.disconnect(Text.literal("Bot retiré."));
+                    Squad.forgetSave(name);
                 }
             } finally {
                 done.complete(r);

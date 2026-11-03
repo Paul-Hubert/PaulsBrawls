@@ -26,6 +26,7 @@ import { CommandStore } from './store/commands';
 import { loadStock } from './stock';
 import { checkScript } from './script/check';
 import { SquadHttp } from './http/server';
+import { Generals } from './general/general';
 import { errorMessage, isBotLeft, isStopped } from './api/errors';
 import { useBlockSearch } from './api/block-search';
 import { LoopMonitor } from './vitals/lag-monitor';
@@ -108,7 +109,20 @@ export async function start(
   logger.info('squad', `aim: ${aimMode() === 'jobs' ? 'on the reader workers' : 'on the main thread'} (updates at ticks ${cfg.aim.schedule.join(', ')}, release at ${cfg.aim.drawTicks})`);
   const runner = new OrderRunner({ pool, roster, leases, claims, store, journal, limits: cfg.limits });
   const vitals = new Vitals({ pool, journal, skipped: skippedPackets, loop, jobs, paths });
-  const service = new SquadService({ roster, pool, leases, claims, store, journal, runner, limits: cfg.limits, vitals });
+  // The Generals (docs/38): Claude Code instances commanding armies over /mcp/general.
+  const generals = new Generals({
+    roster,
+    pool,
+    poolEvents: pool,
+    runner,
+    limits: cfg.limits,
+    revive: (name) => {
+      roster.setDead(name, false);
+      pool.revive(name);
+    },
+    file: join(cfg.dataDir, 'generals.json'),
+  });
+  const service = new SquadService({ roster, pool, leases, claims, store, journal, runner, limits: cfg.limits, vitals, generals });
   const http = new SquadHttp(service, { port: cfg.port, token: cfg.token });
 
   vitals.start();
@@ -117,7 +131,7 @@ export async function start(
     void runner.botGone(name, reason);
   });
   const port = await http.listen();
-  logger.info('squad', `control API, events and MCP on http://127.0.0.1:${port} (/api, /events, /mcp/squad)`);
+  logger.info('squad', `control API, events and MCP on http://127.0.0.1:${port} (/api, /events, /mcp/squad, /mcp/general)`);
 
   for (const row of interrupted) {
     if (row.trial) continue;
@@ -136,6 +150,7 @@ export async function start(
   const stop = (): Promise<void> =>
     (stopping ??= (async () => {
       await runner.stopAll('interrupted');
+      generals.stop();
       vitals.stop();
       pool.stop();
       dropBlockSearch?.();

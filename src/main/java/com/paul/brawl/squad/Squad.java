@@ -1,11 +1,14 @@
 package com.paul.brawl.squad;
 
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -28,6 +31,7 @@ import com.paul.brawl.AgentClient;
 import com.paul.brawl.ClaudeCodeClient;
 
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.enchantment.Enchantment;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.player.PlayerInventory;
@@ -129,6 +133,15 @@ public final class Squad {
                     switch (event) {
                         case "hello", "state" -> refreshState();
                         case "notice" -> deliver(data);
+                        // A General's army (docs/38): the runtime asks, the server spawns or despawns.
+                        case "general-spawn" -> {
+                            MinecraftServer srv = server;
+                            if (srv != null) SquadGeneral.onSpawn(srv, data);
+                        }
+                        case "general-despawn" -> {
+                            MinecraftServer srv = server;
+                            if (srv != null) SquadGeneral.onDespawn(srv, data);
+                        }
                         default -> { }
                     }
                 });
@@ -307,7 +320,98 @@ public final class Squad {
      */
     static boolean hasPlayed(MinecraftServer srv, String name) {
         Path data = srv.getSavePath(WorldSavePath.PLAYERDATA).resolve(Uuids.getOfflinePlayerUuid(name) + ".dat");
-        return java.nio.file.Files.exists(data);
+        return Files.exists(data);
+    }
+
+    // -- a despawned bot's save (SquadSaves) ------------------------------------------------------------------------
+
+    private static final SquadSaves saves = new SquadSaves();
+
+    /** A bot was despawned: its save is deleted once it has left, so its name can be given again. */
+    static void forgetSave(String bot) {
+        saves.forget(bot, System.currentTimeMillis());
+    }
+
+    /**
+     * Each tick, the saves of the despawned bots that have left. The server writes a player's save while removing it
+     * (one server-thread call), so a bot no longer online has its last save on disk, and nothing writes it again.
+     */
+    public static void registerSaveCleanup() {
+        ServerTickEvents.END_SERVER_TICK.register(srv -> {
+            if (saves.isEmpty()) return;
+            List<String> roster = botNames();
+            SquadSaves.Due due = saves.due(System.currentTimeMillis(), n -> srv.getPlayerManager().getPlayer(n) != null,
+                n -> roster.stream().anyMatch(r -> r.equalsIgnoreCase(n)));
+            for (String name : due.delete()) {
+                int files = deleteSave(srv, name);
+                if (files > 0) LOGGER.info("Squad bot {} despawned: its save is deleted ({} file(s)).", name, files);
+            }
+            for (String name : due.givenUp()) LOGGER.warn("Squad bot {} despawned but still online or in the roster after {} s: its save is kept.", name, SquadSaves.WAIT_MS / 1000);
+        });
+    }
+
+    /** A player's save under a name's offline UUID: the player data and its backup, stats, advancements. */
+    private static List<Path> saveFiles(MinecraftServer srv, UUID id) {
+        Path data = srv.getSavePath(WorldSavePath.PLAYERDATA);
+        return List.of(data.resolve(id + ".dat"), data.resolve(id + ".dat_old"),
+            srv.getSavePath(WorldSavePath.STATS).resolve(id + ".json"),
+            srv.getSavePath(WorldSavePath.ADVANCEMENTS).resolve(id + ".json"));
+    }
+
+    /** Delete the save of a bot that is not online (server thread). Returns how many files went. */
+    static int deleteSave(MinecraftServer srv, String name) {
+        int n = 0;
+        for (Path f : saveFiles(srv, Uuids.getOfflinePlayerUuid(name))) {
+            try {
+                if (Files.deleteIfExists(f)) n++;
+            } catch (IOException e) {
+                LOGGER.warn("Could not delete {} (save of squad bot {}): {}", f, name, e.toString());
+            }
+        }
+        return n;
+    }
+
+    /**
+     * {@code /bots squad purge}: the saves left by despawned bots from before {@link #forgetSave}, i.e. every save of a
+     * name the mod gives bots ({@link SquadSaves#generatedNames}) that is not in {@code roster} (lower-case, fresh from
+     * the runtime), not online and not reserved. Server thread. Returns {names, files}.
+     */
+    static int[] purgeSaves(MinecraftServer srv, Set<String> roster) {
+        Set<UUID> saved = savedUuids(srv);
+        int names = 0, files = 0;
+        for (String name : SquadSaves.generatedNames(SquadSaves.prefixes())) {
+            if (saved.isEmpty()) break;
+            if (!saved.remove(Uuids.getOfflinePlayerUuid(name))) continue;
+            if (roster.contains(name.toLowerCase(Locale.ROOT)) || srv.getPlayerManager().getPlayer(name) != null || SquadCommand.reservedName(name)) continue;
+            int n = deleteSave(srv, name);
+            if (n > 0) {
+                names++;
+                files += n;
+            }
+        }
+        LOGGER.info("Squad purge: deleted the saves of {} despawned bot(s) ({} file(s)).", names, files);
+        return new int[] { names, files };
+    }
+
+    /** The UUIDs that have a save file (player data, stats or advancements). */
+    private static Set<UUID> savedUuids(MinecraftServer srv) {
+        Set<UUID> out = new HashSet<>();
+        for (WorldSavePath dir : List.of(WorldSavePath.PLAYERDATA, WorldSavePath.STATS, WorldSavePath.ADVANCEMENTS)) {
+            try (var list = Files.list(srv.getSavePath(dir))) {
+                list.forEach(f -> {
+                    String n = f.getFileName().toString();
+                    int dot = n.indexOf('.');
+                    try {
+                        out.add(UUID.fromString(dot < 0 ? n : n.substring(0, dot)));
+                    } catch (IllegalArgumentException ignored) {
+                        // not a player's file
+                    }
+                });
+            } catch (IOException | java.io.UncheckedIOException e) {
+                // no such directory (nobody has played yet)
+            }
+        }
+        return out;
     }
 
     /** Remember where to put a bot an admin just spawned (their position). */
