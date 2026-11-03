@@ -16,12 +16,11 @@ import org.slf4j.LoggerFactory;
 import com.google.gson.JsonObject;
 import com.mojang.authlib.GameProfile;
 import com.mojang.brigadier.Command;
-
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.world.Heightmap;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.levelgen.Heightmap;
 
 /**
  * {@code /bots raid [distance] [archers] [guards]} (admin, run by a player): an enemy army, fully equipped, appears
@@ -45,11 +44,11 @@ final class SquadRaid {
 
     /** A raid between `/bots raid` and the start of its order. */
     private static final class Pending {
-        final ServerCommandSource src;
+        final CommandSourceStack src;
         final String caller;
         final double x, y, z;
         final String dimension;
-        final ServerWorld world;
+        final ServerLevel world;
         final XYZ spawn;
         final float yaw;
         final Set<String> waiting = new HashSet<>();
@@ -57,14 +56,14 @@ final class SquadRaid {
         boolean spawning = true;
         boolean launched;
 
-        Pending(ServerCommandSource src, ServerPlayerEntity caller, XYZ spawn, float yaw) {
+        Pending(CommandSourceStack src, ServerPlayer caller, XYZ spawn, float yaw) {
             this.src = src;
             this.caller = caller.getName().getString();
             this.x = caller.getX();
             this.y = caller.getY();
             this.z = caller.getZ();
-            this.dimension = caller.getWorld().getRegistryKey().getValue().getPath();
-            this.world = caller.getServerWorld();
+            this.dimension = caller.level().dimension().location().getPath();
+            this.world = caller.serverLevel();
             this.spawn = spawn;
             this.yaw = yaw;
         }
@@ -78,9 +77,9 @@ final class SquadRaid {
 
     // -- /bots raid ---------------------------------------------------------------------------------------------------
 
-    static int call(ServerCommandSource src, String text) {
+    static int call(CommandSourceStack src, String text) {
         if (!Squad.enabled()) return SquadCommand.reply(src, "[Bots] Squad est désactivé (squad.properties : enabled=false).");
-        ServerPlayerEntity p = src.getPlayer();
+        ServerPlayer p = src.getPlayer();
         if (p == null) return SquadCommand.reply(src, "[Bots] À lancer en jeu, par un joueur (l'armée apparaît devant toi).");
         SquadRaidPlan.Args a;
         try {
@@ -96,15 +95,15 @@ final class SquadRaid {
         // Names nobody uses: not in the roster, not online, never played here (a bot would load that save).
         List<String> roster = Squad.botNames();
         java.util.function.Predicate<String> taken = n -> roster.stream().anyMatch(r -> r.equalsIgnoreCase(n))
-            || srv.getPlayerManager().getPlayer(n) != null || Squad.hasPlayed(srv, n) || SquadCommand.reservedName(n);
+            || srv.getPlayerList().getPlayerByName(n) != null || Squad.hasPlayed(srv, n) || SquadCommand.reservedName(n);
         List<String> archers = SquadRaidPlan.names(SquadRaidPlan.ARCHER_PREFIX, a.archers(), taken);
         List<String> guards = SquadRaidPlan.names(SquadRaidPlan.GUARD_PREFIX, a.guards(), taken);
 
-        ServerWorld world = p.getServerWorld();
-        SquadRaidPlan.XZ point = SquadRaidPlan.point(p.getX(), p.getZ(), p.getYaw(), a.distance());
+        ServerLevel world = p.serverLevel();
+        SquadRaidPlan.XZ point = SquadRaidPlan.point(p.getX(), p.getZ(), p.getYRot(), a.distance());
         XYZ center = surface(world, point.x(), point.z());
         // They face the caller: the look direction turned around.
-        float facing = p.getYaw() + 180;
+        float facing = p.getYRot() + 180;
         List<Raider> raiders = new ArrayList<>();
         int n = a.total();
         SquadKits.Kit archerKit = SquadKits.find("archer").orElseThrow();
@@ -175,7 +174,7 @@ final class SquadRaid {
      * A raider joined and stands at its place: its kit (paced, kitStaggerMs), its role tag; the raid starts once the
      * last one has its kit.
      */
-    private static void arrived(Pending raid, ServerPlayerEntity bot, Raider r) {
+    private static void arrived(Pending raid, ServerPlayer bot, Raider r) {
         String name = bot.getName().getString();
         Squad.equipLater(raid.src.getServer(), name, r.kit(), answer -> {
             LOGGER.info("Raider {} arrived at {} {} {}: {}", name, Math.round(r.at().x()), Math.round(r.at().y()), Math.round(r.at().z()), answer);
@@ -223,7 +222,7 @@ final class SquadRaid {
 
     // -- /bots raid stop, /bots raid clear -------------------------------------------------------------------------
 
-    static int stop(ServerCommandSource src) {
+    static int stop(CommandSourceStack src) {
         if (!Squad.enabled()) return SquadCommand.reply(src, "[Bots] Squad est désactivé (squad.properties : enabled=false).");
         Optional<GameProfile> owner = Squad.profile(src.getServer(), SquadRaidPlan.OWNER);
         if (owner.isEmpty()) return SquadCommand.reply(src, "[Bots] Aucun raid.");
@@ -244,7 +243,7 @@ final class SquadRaid {
         pending = null;
     }
 
-    static int clear(ServerCommandSource src) {
+    static int clear(CommandSourceStack src) {
         if (!Squad.enabled()) return SquadCommand.reply(src, "[Bots] Squad est désactivé (squad.properties : enabled=false).");
         Optional<GameProfile> owner = Squad.profile(src.getServer(), SquadRaidPlan.OWNER);
         List<String> raiders = owner.isEmpty() ? List.of() : Squad.botsOf(owner.get().getId());
@@ -289,11 +288,11 @@ final class SquadRaid {
      * The ground at (x, z): the chunk is loaded (generated if need be) first, then the heightmap gives the first free
      * block above the surface, leaves left out (a bot on a canopy cannot pathfind down, docs/29 §16).
      */
-    private static XYZ surface(ServerWorld world, double x, double z) {
+    private static XYZ surface(ServerLevel world, double x, double z) {
         int bx = (int) Math.floor(x);
         int bz = (int) Math.floor(z);
         world.getChunk(bx >> 4, bz >> 4);
-        int y = world.getTopY(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+        int y = world.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
         return new XYZ(bx + 0.5, y, bz + 0.5);
     }
 

@@ -2,16 +2,15 @@ package com.paul.brawl;
 
 import com.fasterxml.jackson.annotation.JsonClassDescription;
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
-
-import net.minecraft.block.BlockState;
-import net.minecraft.registry.RegistryKey;
-import net.minecraft.registry.entry.RegistryEntry;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.world.Heightmap;
-import net.minecraft.world.World;
-import net.minecraft.world.biome.Biome;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Mth;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap;
 
 /**
  * On-demand relief snapshot for the AI God.
@@ -28,13 +27,13 @@ import net.minecraft.world.biome.Biome;
  *       of {@code radius}; bigger radius just samples coarser. Keeps the token
  *       cost roughly constant (~300–400 tokens per call) so the model isn't
  *       discouraged from calling it.</li>
- *   <li>{@link Heightmap.Type#MOTION_BLOCKING_NO_LEAVES} is the variant that
+ *   <li>{@link Heightmap.Types#MOTION_BLOCKING_NO_LEAVES} is the variant that
  *       matches "ground God can stand or build on" — the same heightmap used
  *       for hostile mob spawn checks.</li>
  *   <li>Water is detected by inspecting the block at the heightmap top: if its
  *       {@link BlockState#getFluidState()} is non-empty it renders as
  *       {@code ~} instead of an elevation glyph.</li>
- *   <li>Calls {@link World#getBlockState(BlockPos)} and {@link World#getBiome},
+ *   <li>Calls {@link Level#getBlockState(BlockPos)} and {@link Level#getBiome},
  *       so the dispatch in {@link ChatBotFunctions} wraps execution in
  *       {@code runOnMain(...)} — consistent with the other world-touching
  *       tools and safe against off-thread chunk loads.</li>
@@ -77,19 +76,19 @@ public class QueryTerrain {
      *  loop runs inside a GodActionQueue action, inline in the tick). */
     private static final int MAX_CENTER_OFFSET = 128;
 
-    public String execute(ServerPlayerEntity player) {
+    public String execute(ServerPlayer player) {
         if (player == null) return "QueryTerrain: aucun joueur lié à l'appel.";
-        World world = player.getWorld();
+        Level world = player.level();
         if (world == null) return "QueryTerrain: monde indisponible.";
 
-        BlockPos playerPos = player.getBlockPos();
+        BlockPos playerPos = player.blockPosition();
         int cx = (centerX != null) ? centerX : playerPos.getX();
         int cz = (centerZ != null) ? centerZ : playerPos.getZ();
-        cx = MathHelper.clamp(cx, playerPos.getX() - MAX_CENTER_OFFSET, playerPos.getX() + MAX_CENTER_OFFSET);
-        cz = MathHelper.clamp(cz, playerPos.getZ() - MAX_CENTER_OFFSET, playerPos.getZ() + MAX_CENTER_OFFSET);
+        cx = Mth.clamp(cx, playerPos.getX() - MAX_CENTER_OFFSET, playerPos.getX() + MAX_CENTER_OFFSET);
+        cz = Mth.clamp(cz, playerPos.getZ() - MAX_CENTER_OFFSET, playerPos.getZ() + MAX_CENTER_OFFSET);
         boolean centerClamped = (centerX != null && centerX != cx) || (centerZ != null && centerZ != cz);
         int r = (radius == null) ? DEFAULT_RADIUS : radius;
-        r = MathHelper.clamp(r, MIN_RADIUS, MAX_RADIUS);
+        r = Mth.clamp(r, MIN_RADIUS, MAX_RADIUS);
         // Step so the 2r-wide sample window maps onto GRID cells. At r=8 step
         // collapses to 1 (full resolution); at r=64 step=8 (coarse overview).
         int step = Math.max(1, (2 * r) / GRID);
@@ -101,7 +100,7 @@ public class QueryTerrain {
         int maxY = Integer.MIN_VALUE;
 
         // Reusable mutable BlockPos avoids 256 allocations per call.
-        BlockPos.Mutable scratch = new BlockPos.Mutable();
+        BlockPos.MutableBlockPos scratch = new BlockPos.MutableBlockPos();
 
         for (int gz = 0; gz < GRID; gz++) {
             for (int gx = 0; gx < GRID; gx++) {
@@ -110,14 +109,14 @@ public class QueryTerrain {
 
                 // Never sample an unloaded chunk — getTopY/getBlockState would
                 // synchronously load (or generate) it on the main thread.
-                if (!world.isChunkLoaded(worldX >> 4, worldZ >> 4)) {
+                if (!world.hasChunk(worldX >> 4, worldZ >> 4)) {
                     unloaded[gz][gx] = true;
                     continue;
                 }
 
                 // getTopY returns the Y of the first non-blocking position above
                 // the heightmap top, so the surface block itself is at result-1.
-                int terrainY = world.getTopY(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, worldX, worldZ) - 1;
+                int terrainY = world.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, worldX, worldZ) - 1;
                 heights[gz][gx] = terrainY;
                 if (terrainY < minY) minY = terrainY;
                 if (terrainY > maxY) maxY = terrainY;
@@ -155,8 +154,8 @@ public class QueryTerrain {
         // Biome at the center column.
         String biome;
         try {
-            RegistryEntry<Biome> entry = world.getBiome(new BlockPos(cx, playerPos.getY(), cz));
-            biome = entry.getKey().map(RegistryKey::getValue).map(Object::toString).orElse("unknown");
+            Holder<Biome> entry = world.getBiome(new BlockPos(cx, playerPos.getY(), cz));
+            biome = entry.unwrapKey().map(ResourceKey::location).map(Object::toString).orElse("unknown");
         } catch (Exception e) {
             biome = "unknown";
         }
@@ -190,7 +189,7 @@ public class QueryTerrain {
                     continue;
                 }
                 int idx = (int) Math.round(((double) (heights[gz][gx] - minY) / span) * rampMax);
-                idx = MathHelper.clamp(idx, 0, rampMax);
+                idx = Mth.clamp(idx, 0, rampMax);
                 sb.append(SHADE[idx]).append(' ');
             }
             sb.append('\n');

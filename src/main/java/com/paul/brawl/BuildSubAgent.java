@@ -4,7 +4,8 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
-
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,9 +17,6 @@ import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
-
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.math.BlockPos;
 
 /**
  * Isolated single-purpose build worker.
@@ -53,7 +51,7 @@ public class BuildSubAgent {
         "Final pass. Look over the whole build once more. Anywhere you see a missing block, asymmetry, or place where weather could get in, place blocks to close it. When the build is truly finished, reply with ONE short French sentence and zero call lines."
     );
 
-    private final ServerPlayerEntity player;
+    private final ServerPlayer player;
     private final BlockPos pivot;
     private final String initialUserMessage;
     private final String label;
@@ -67,7 +65,7 @@ public class BuildSubAgent {
     /** The slot BuildPlan acquired for us is released exactly once, on whichever exit comes first. */
     private boolean released = false;
 
-    public BuildSubAgent(ServerPlayerEntity player,
+    public BuildSubAgent(ServerPlayer player,
                          BlockPos pivot,
                          String fullSystemPrompt,
                          String initialUserMessage,

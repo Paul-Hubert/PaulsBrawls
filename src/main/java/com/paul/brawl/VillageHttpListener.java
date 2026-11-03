@@ -15,15 +15,13 @@ import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
-
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.registry.Registries;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.Identifier;
-
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -213,19 +211,19 @@ public final class VillageHttpListener {
     // -- main-thread trade logic ------------------------------------------------
 
     private static TradeResult executeTrade(MinecraftServer mc, TradeRequest request) {
-        ServerPlayerEntity a = mc.getPlayerManager().getPlayer(request.botA);
-        ServerPlayerEntity b = mc.getPlayerManager().getPlayer(request.botB);
+        ServerPlayer a = mc.getPlayerList().getPlayerByName(request.botA);
+        ServerPlayer b = mc.getPlayerList().getPlayerByName(request.botB);
         if (a == null) return TradeResult.fail(request.botA + " is not online");
         if (b == null) return TradeResult.fail(request.botB + " is not online");
         if (a == b) return TradeResult.fail("botA and botB are the same");
 
-        if (a.getServerWorld() != b.getServerWorld()) {
+        if (a.serverLevel() != b.serverLevel()) {
             return TradeResult.fail(request.botA + " and " + request.botB + " are not in the same dimension");
         }
         double maxDistance = VillageConfig.INSTANCE.maxTradeDistance;
-        if (maxDistance > 0 && a.squaredDistanceTo(b) > maxDistance * maxDistance) {
+        if (maxDistance > 0 && a.distanceToSqr(b) > maxDistance * maxDistance) {
             return TradeResult.fail(String.format(java.util.Locale.ROOT, "%s and %s are too far apart (%.1f > %.1f blocks)",
-                request.botA, request.botB, Math.sqrt(a.squaredDistanceTo(b)), maxDistance));
+                request.botA, request.botB, Math.sqrt(a.distanceToSqr(b)), maxDistance));
         }
 
         // Resolve + sum EVERYTHING per item before mutating anything: two lines
@@ -238,11 +236,11 @@ public final class VillageHttpListener {
 
         Item aShort = TradeMath.firstShortfall(aTotals, item -> countItems(a, item));
         if (aShort != null) {
-            return TradeResult.fail(request.botA + " does not have " + aTotals.get(aShort) + "x " + Registries.ITEM.getId(aShort));
+            return TradeResult.fail(request.botA + " does not have " + aTotals.get(aShort) + "x " + BuiltInRegistries.ITEM.getKey(aShort));
         }
         Item bShort = TradeMath.firstShortfall(bTotals, item -> countItems(b, item));
         if (bShort != null) {
-            return TradeResult.fail(request.botB + " does not have " + bTotals.get(bShort) + "x " + Registries.ITEM.getId(bShort));
+            return TradeResult.fail(request.botB + " does not have " + bTotals.get(bShort) + "x " + BuiltInRegistries.ITEM.getKey(bShort));
         }
 
         // Swap. Same main-thread task as the validation above, so nothing can
@@ -252,10 +250,10 @@ public final class VillageHttpListener {
         // receiver's inventory drops at their feet (still theirs to pick up).
         List<ItemStack> toB = extract(a, aTotals);
         List<ItemStack> toA = extract(b, bTotals);
-        for (ItemStack stack : toB) b.getInventory().offerOrDrop(stack);
-        for (ItemStack stack : toA) a.getInventory().offerOrDrop(stack);
-        a.currentScreenHandler.sendContentUpdates();
-        b.currentScreenHandler.sendContentUpdates();
+        for (ItemStack stack : toB) b.getInventory().placeItemBackInInventory(stack);
+        for (ItemStack stack : toA) a.getInventory().placeItemBackInInventory(stack);
+        a.containerMenu.broadcastChanges();
+        b.containerMenu.broadcastChanges();
         return TradeResult.success();
     }
 
@@ -272,21 +270,21 @@ public final class VillageHttpListener {
     private static Item resolveItem(String name) {
         String n = name.trim().toLowerCase();
         boolean namespaced = n.contains(":");
-        Identifier id = Identifier.tryParse(namespaced ? n : "minecraft:" + n);
-        Item item = id != null ? Registries.ITEM.get(id) : Items.AIR;
+        ResourceLocation id = ResourceLocation.tryParse(namespaced ? n : "minecraft:" + n);
+        Item item = id != null ? BuiltInRegistries.ITEM.get(id) : Items.AIR;
         if (item == Items.AIR && !namespaced) {
             // Mod items — notably the Gibber currency, paulsbrawls:coin.
-            Identifier modId = Identifier.tryParse("paulsbrawls:" + n);
-            if (modId != null) item = Registries.ITEM.get(modId);
+            ResourceLocation modId = ResourceLocation.tryParse("paulsbrawls:" + n);
+            if (modId != null) item = BuiltInRegistries.ITEM.get(modId);
         }
         return item == Items.AIR ? null : item;
     }
 
     /** Main + hotbar only (36 slots) — armour and offhand are never traded. */
-    private static int countItems(ServerPlayerEntity player, Item item) {
+    private static int countItems(ServerPlayer player, Item item) {
         int total = 0;
-        for (ItemStack stack : player.getInventory().main) {
-            if (!stack.isEmpty() && stack.isOf(item)) total += stack.getCount();
+        for (ItemStack stack : player.getInventory().items) {
+            if (!stack.isEmpty() && stack.is(item)) total += stack.getCount();
         }
         return total;
     }
@@ -295,14 +293,14 @@ public final class VillageHttpListener {
      * Splits exactly the validated totals out of the player's main inventory,
      * keeping each stack's components (damage, enchantments, custom name).
      */
-    private static List<ItemStack> extract(ServerPlayerEntity player, Map<Item, Integer> totals) {
+    private static List<ItemStack> extract(ServerPlayer player, Map<Item, Integer> totals) {
         List<ItemStack> extracted = new ArrayList<>();
-        var main = player.getInventory().main;
+        var main = player.getInventory().items;
         for (var entry : totals.entrySet()) {
             int[] available = new int[main.size()];
             for (int i = 0; i < available.length; i++) {
                 ItemStack stack = main.get(i);
-                available[i] = !stack.isEmpty() && stack.isOf(entry.getKey()) ? stack.getCount() : 0;
+                available[i] = !stack.isEmpty() && stack.is(entry.getKey()) ? stack.getCount() : 0;
             }
             int[] takes = TradeMath.planTakes(available, entry.getValue());
             if (takes == null) {
@@ -313,7 +311,7 @@ public final class VillageHttpListener {
                 if (takes[i] > 0) extracted.add(main.get(i).split(takes[i]));
             }
         }
-        player.getInventory().markDirty();
+        player.getInventory().setChanged();
         return extracted;
     }
 

@@ -5,7 +5,7 @@ import java.util.Collection;
 /**
  * What a roster bot's death does that a player's does not (docs/35 D2): it drops nothing. Its inventory is simply
  * lost, because {@code /bots squad respawn} gives it its kit again (D3); the server's other players are unchanged (no
- * {@code keepInventory} gamerule). Minecraft-free (SquadDeathTest); the hook is {@code mixin/PlayerEntityMixin}.
+ * {@code keepInventory} gamerule). Minecraft-free (SquadDeathTest); the hook is {@code mixin/PlayerMixin}.
  */
 public final class SquadDeath {
 

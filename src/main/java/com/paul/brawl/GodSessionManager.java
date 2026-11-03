@@ -5,12 +5,11 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledFuture;
 import java.util.function.Consumer;
+import net.minecraft.server.level.ServerPlayer;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import net.minecraft.server.network.ServerPlayerEntity;
 
 /**
  * Single-owner busy lock for the shared avatar (see GOD_BOT_INTEGRATION_PLAN.md §5).
@@ -62,11 +61,11 @@ public final class GodSessionManager {
      * encounter just resets the timer). Returns false if another player owns
      * it.
      */
-    public static synchronized boolean claim(ServerPlayerEntity player) {
-        return player != null && claim(player.getUuid());
+    public static synchronized boolean claim(ServerPlayer player) {
+        return player != null && claim(player.getUUID());
     }
 
-    /** UUID form of {@link #claim(ServerPlayerEntity)} (Minecraft-free, used by tests and the MCP servers). */
+    /** UUID form of {@link #claim(ServerPlayer)} (Minecraft-free, used by tests and the MCP servers). */
     public static synchronized boolean claim(UUID id) {
         if (id == null) return false;
         UUID prev = owner.get();
@@ -82,8 +81,8 @@ public final class GodSessionManager {
         return true;
     }
 
-    public static boolean isActive(ServerPlayerEntity player) {
-        return player != null && isOwner(player.getUuid());
+    public static boolean isActive(ServerPlayer player) {
+        return player != null && isOwner(player.getUUID());
     }
 
     /** Whether {@code id} holds the avatar session right now. */
@@ -131,11 +130,11 @@ public final class GodSessionManager {
      * for any vanish / restoreAvatar side effects — endSession only manages
      * lock state.
      */
-    public static synchronized void endSession(ServerPlayerEntity player) {
-        endSession(player == null ? null : player.getUuid());
+    public static synchronized void endSession(ServerPlayer player) {
+        endSession(player == null ? null : player.getUUID());
     }
 
-    /** UUID form of {@link #endSession(ServerPlayerEntity)}; null releases unconditionally. */
+    /** UUID form of {@link #endSession(ServerPlayer)}; null releases unconditionally. */
     public static synchronized void endSession(UUID id) {
         if (id != null && !id.equals(owner.get())) {
             // Another player's session is active; don't yank it out from under them.
@@ -169,8 +168,8 @@ public final class GodSessionManager {
      * session mid-chain. The request itself is bounded by the provider timeout, and its completion calls
      * {@link #resetIdleTimer} (the error path ends the session), so the session cannot hang. Owner-only, like reset.
      */
-    public static synchronized void pauseIdleTimer(ServerPlayerEntity player) {
-        if (player == null || !isOwner(player.getUuid())) return;
+    public static synchronized void pauseIdleTimer(ServerPlayer player) {
+        if (player == null || !isOwner(player.getUUID())) return;
         if (watchdog != null) watchdog.cancel(false);
         watchdog = null;
     }
@@ -199,11 +198,11 @@ public final class GodSessionManager {
      * from the per-turn hooks in {@link ChatBot} so a chatty session keeps the
      * body around indefinitely.
      */
-    public static synchronized void resetIdleTimer(ServerPlayerEntity player) {
-        if (player != null) resetIdleTimer(player.getUuid());
+    public static synchronized void resetIdleTimer(ServerPlayer player) {
+        if (player != null) resetIdleTimer(player.getUUID());
     }
 
-    /** UUID form of {@link #resetIdleTimer(ServerPlayerEntity)}. */
+    /** UUID form of {@link #resetIdleTimer(ServerPlayer)}. */
     public static synchronized void resetIdleTimer(UUID id) {
         // Ownership guard: only the session owner may touch the watchdog. A
         // bodiless prayer reaching this via Appear/Wait would otherwise cancel

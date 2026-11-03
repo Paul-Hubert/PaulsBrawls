@@ -11,17 +11,17 @@ import com.google.gson.JsonObject;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
-import net.minecraft.entity.projectile.PersistentProjectileEntity;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.text.Text;
-import net.minecraft.util.TypedActionResult;
-import net.minecraft.util.hit.EntityHitResult;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.entity.projectile.AbstractArrow;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * The clicks of bound items (docs/29 §5.4 items 3–5), on the server thread. Every hook only watches: it never
@@ -33,8 +33,8 @@ import net.minecraft.util.math.Vec3d;
  *   <li><b>Arrow release</b> ({@link ServerEntityEvents#ENTITY_LOAD}): an arrow from a player's bound bow or crossbow,
  *       entering the world within 2 blocks of their eyes (an arrow loaded with its chunk is not a shot), not while
  *       sneaking. It is tracked until its first hit.</li>
- *   <li><b>Arrow hit</b> ({@code PersistentProjectileEntityMixin}, at the head of {@code onEntityHit} and
- *       {@code onBlockHit}): the first hit of a tracked arrow, with the point or the entity it hit.</li>
+ *   <li><b>Arrow hit</b> ({@code AbstractArrowMixin}, at the head of {@code onHitEntity} and
+ *       {@code onHitBlock}): the first hit of a tracked arrow, with the point or the entity it hit.</li>
  * </ul>
  * Nobody triggers from a roster bot (bots use items too, e.g. {@code raiseShield}), a spectator, or while Squad is
  * off. Each trigger takes the snapshot at that moment, goes through the per-player limiter, and is sent
@@ -57,68 +57,68 @@ public final class SquadTriggers {
 
     public static void register() {
         UseItemCallback.EVENT.register((player, world, hand) -> {
-            ItemStack stack = player.getStackInHand(hand);
-            if (!world.isClient() && player instanceof ServerPlayerEntity sp) {
+            ItemStack stack = player.getItemInHand(hand);
+            if (!world.isClientSide() && player instanceof ServerPlayer sp) {
                 try {
                     onUse(sp, stack);
                 } catch (RuntimeException e) {
                     LOGGER.warn("Bound item use by {} failed: {}", sp.getName().getString(), e.toString());
                 }
             }
-            return TypedActionResult.pass(stack);
+            return InteractionResultHolder.pass(stack);
         });
         ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
-            if (!(entity instanceof PersistentProjectileEntity arrow)) return;
+            if (!(entity instanceof AbstractArrow arrow)) return;
             try {
                 onArrowLoad(arrow, world);
             } catch (RuntimeException e) {
                 LOGGER.warn("Bound arrow release failed: {}", e.toString());
             }
         });
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> LIMITER.forget(handler.getPlayer().getUuid()));
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> LIMITER.forget(handler.getPlayer().getUUID()));
     }
 
-    private static void onUse(ServerPlayerEntity sp, ItemStack stack) {
+    private static void onUse(ServerPlayer sp, ItemStack stack) {
         Optional<SquadBinding> b = SquadBinding.read(stack);
         if (b.isEmpty() || !mayTrigger(sp)) return;
-        if (sp.isSneaking()) fire(sp, b.get(), itemId(stack), SquadTriggerJson.Kind.USE, null, true);
+        if (sp.isShiftKeyDown()) fire(sp, b.get(), itemId(stack), SquadTriggerJson.Kind.USE, null, true);
         else if (!SquadBinding.isLauncher(stack)) fire(sp, b.get(), itemId(stack), SquadTriggerJson.Kind.USE, null, false);
     }
 
-    private static void onArrowLoad(PersistentProjectileEntity arrow, ServerWorld world) {
-        if (!(arrow.getOwner() instanceof ServerPlayerEntity sp)) return;
+    private static void onArrowLoad(AbstractArrow arrow, ServerLevel world) {
+        if (!(arrow.getOwner() instanceof ServerPlayer sp)) return;
         // The bow or crossbow it was shot from, copied into the arrow at the shot (null for a dispenser's arrow).
-        ItemStack weapon = arrow.getWeaponStack();
+        ItemStack weapon = arrow.getWeaponItem();
         if (!SquadBinding.isLauncher(weapon)) return;
         Optional<SquadBinding> b = SquadBinding.read(weapon);
-        if (b.isEmpty() || !mayTrigger(sp) || sp.isSneaking()) return;
-        if (arrow.getPos().squaredDistanceTo(sp.getEyePos()) > RELEASE_RADIUS_SQ) return;
-        if (!LIMITER.firstOfShot(sp.getUuid(), world.getTime())) return;
+        if (b.isEmpty() || !mayTrigger(sp) || sp.isShiftKeyDown()) return;
+        if (arrow.position().distanceToSqr(sp.getEyePosition()) > RELEASE_RADIUS_SQ) return;
+        if (!LIMITER.firstOfShot(sp.getUUID(), world.getGameTime())) return;
         String item = itemId(weapon);
         // A release the limiter dropped is not tracked either: the shot is one gesture, its hit goes with it.
         if (fire(sp, b.get(), item, SquadTriggerJson.Kind.ARROW_RELEASE, null, false)) {
-            ARROWS.track(arrow.getUuid(), new Shot(sp.getUuid(), b.get(), item));
+            ARROWS.track(arrow.getUUID(), new Shot(sp.getUUID(), b.get(), item));
         }
     }
 
     /**
-     * From the mixin, at the head of {@code onEntityHit} / {@code onBlockHit}, on both sides and for every arrow:
+     * From the mixin, at the head of {@code onHitEntity} / {@code onHitBlock}, on both sides and for every arrow:
      * it returns at once unless this is a server arrow tracked at its release, and it never throws into vanilla.
      */
-    public static void onArrowHit(PersistentProjectileEntity arrow, HitResult hit) {
-        if (arrow.getWorld().isClient() || ARROWS.isEmpty()) return;
+    public static void onArrowHit(AbstractArrow arrow, HitResult hit) {
+        if (arrow.level().isClientSide() || ARROWS.isEmpty()) return;
         try {
-            Shot s = ARROWS.take(arrow.getUuid());
+            Shot s = ARROWS.take(arrow.getUUID());
             if (s == null) return;
             MinecraftServer srv = arrow.getServer();
-            ServerPlayerEntity sp = srv == null ? null : srv.getPlayerManager().getPlayer(s.player());
+            ServerPlayer sp = srv == null ? null : srv.getPlayerList().getPlayer(s.player());
             if (sp == null || !mayTrigger(sp)) return;
             SquadTriggerJson.Hit where;
             if (hit instanceof EntityHitResult eh) {
                 SquadTriggerJson.EntityRef e = CommanderSnap.entity(eh.getEntity());
                 where = new SquadTriggerJson.Hit(e.x(), e.y(), e.z(), e);
             } else {
-                Vec3d p = hit.getPos();
+                Vec3 p = hit.getLocation();
                 where = new SquadTriggerJson.Hit(p.x, p.y, p.z, null);
             }
             fire(sp, s.binding(), s.item(), SquadTriggerJson.Kind.ARROW_HIT, where, false);
@@ -127,7 +127,7 @@ public final class SquadTriggers {
         }
     }
 
-    private static boolean mayTrigger(ServerPlayerEntity sp) {
+    private static boolean mayTrigger(ServerPlayer sp) {
         if (!Squad.enabled() || sp.isSpectator()) return false;
         String name = sp.getGameProfile().getName();
         for (String bot : Squad.botNames()) if (bot.equalsIgnoreCase(name)) return false;
@@ -135,13 +135,13 @@ public final class SquadTriggers {
     }
 
     /** Send one trigger, the snapshot taken now; false when the limiter dropped it. */
-    private static boolean fire(ServerPlayerEntity sp, SquadBinding binding, String item, SquadTriggerJson.Kind kind,
+    private static boolean fire(ServerPlayer sp, SquadBinding binding, String item, SquadTriggerJson.Kind kind,
                                 SquadTriggerJson.Hit hit, boolean stop) {
-        UUID who = sp.getUuid();
+        UUID who = sp.getUUID();
         if (!LIMITER.tryAcquire(who)) return false;
-        String uuid = sp.getUuidAsString();
+        String uuid = sp.getStringUUID();
         String name = sp.getName().getString();
-        boolean admin = sp.hasPermissionLevel(2);
+        boolean admin = sp.hasPermissions(2);
         MinecraftServer srv = sp.getServer();
         // Sent once the look is found (SquadLook, a tick or more), after this player's earlier triggers.
         CommanderSnap.take(sp).thenCompose(snap -> {
@@ -155,11 +155,11 @@ public final class SquadTriggers {
     private static void answer(MinecraftServer srv, UUID who, JsonObject r) {
         SquadNotice n = SquadNotice.fromJson(r);
         if (n.text().isBlank() || !LIMITER.shouldShow(who, n.text())) return;
-        ServerPlayerEntity p = srv.getPlayerManager().getPlayer(who);
-        if (p != null) for (Text t : Squad.render(n)) p.sendMessage(t, false);
+        ServerPlayer p = srv.getPlayerList().getPlayer(who);
+        if (p != null) for (Component t : Squad.render(n)) p.displayClientMessage(t, false);
     }
 
     static String itemId(ItemStack stack) {
-        return Registries.ITEM.getId(stack.getItem()).getPath();
+        return BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
     }
 }

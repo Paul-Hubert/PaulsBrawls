@@ -98,7 +98,7 @@ Order, every turn:
 | `effects` | array of `{effect: getEffectType().toString(), duration, amplifier}` |
 | `tags` | command tags |
 | `scores` | `{objectiveName: score}` for every scoreboard objective |
-| `world` | `{time: getTimeOfDay(), is_raining, is_thundering}` (only for `ServerWorld`) |
+| `world` | `{time: getDayTime(), is_raining, is_thundering}` (only for `ServerLevel`) |
 
 > ⚠ Unverified: the exact string form of `Item.toString()` / `RegistryEntry.toString()` in MC 1.21.1 (no Minecraft
 > sources in this checkout); effect entries may render as verbose registry-entry strings.

@@ -203,7 +203,7 @@ n itself is not capped, but only as many as fit under `MAX_CONCURRENT_SUB_BUILDS
 | Model / executor | `LLMConfig.INSTANCE.sharedModel()` on `sharedExecutor()` | `BuildSubAgent.java:123-127` |
 | Tools | **None** — `ChatRequest` carries only messages (so no recursive `BuildPlan`) | `BuildSubAgent.java:119-121` |
 | Pivot | Fixed `subPivot`; calls go through `ChatBotFunctions.scanAndExecuteWithPivot(text, player, pivot)` | `BuildSubAgent.java:156` |
-| Player | Holds the `ServerPlayerEntity` of the planner's caller; messages go to that player only | — |
+| Player | Holds the `ServerPlayer` of the planner's caller; messages go to that player only | — |
 | Cancel / slot | Records `BuildGuard.epoch()` at construction; `cancelled()` is checked before every turn and before handling each reply; `finish()` releases the slot once | `BuildSubAgent.java:66-68`, `:93-106` |
 
 Loop (`BuildSubAgent.java:87-185`):

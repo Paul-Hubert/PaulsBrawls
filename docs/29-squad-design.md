@@ -136,7 +136,7 @@ After the copy, `squad/` never imports from `eden/`, and a fix in one is not por
 - **Death** (Paul, 2026-11-01, docs/35 D2–D3): the bot leaves its order (reason `died`); mineflayer respawns it,
   and it then **disconnects and stays offline**, marked dead in the roster (`roster.json`, so across restarts too):
   neither the reconnect backoff, the boot nor the deaf-bot watchdog brings it back. It drops nothing (the mod's
-  `PlayerEntityMixin`; its inventory is lost). `/bots squad respawn [KIT] [n] [owner]` (admin) brings dead bots
+  `PlayerMixin`; its inventory is lost). `/bots squad respawn [KIT] [n] [owner]` (admin) brings dead bots
   back around whoever runs it, each inventory reset to its kit. A dead bot still counts toward `limits.maxBots`, and
   `/bots despawn`, `squad despawn` and `raid clear` remove it like any bot. Until docs/35 F7 a dead bot respawned at
   world spawn and stood there idle. **Disconnect:** it leaves its order (reason `disconnected`), reconnects with
@@ -1033,7 +1033,7 @@ completely, so missed events cannot leave it wrong.
      delivered with the old ones (#221 → #223). Now (Paul, D5) a click whose line differs restarts the order, and a
      delivered one takes back the order's bots (§5.4 item 6). Tests: `item-orders.test.ts`, `leases.test.ts`.
   6. *Dead bots dropped their kits* on the battlefield. A roster bot now drops nothing (Paul, D2): a mixin cancels
-     `PlayerEntity.dropInventory()` for a roster name; its inventory is lost, and `/bots squad respawn` resets it to its
+     `Player.dropEquipment()` for a roster name; its inventory is lost, and `/bots squad respawn` resets it to its
      kit (item 7). Players keep vanilla drops (no `keepInventory`). Tests: `SquadDeathTest`; live, a guard killed over
      RCON leaves no item entity.
   7. *Dead bots respawned at world spawn ("at base") and stood there idle.* Now (Paul, D2–D3) a bot that dies leaves

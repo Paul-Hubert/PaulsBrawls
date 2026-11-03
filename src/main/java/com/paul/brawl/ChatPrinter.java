@@ -1,9 +1,8 @@
 package com.paul.brawl;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.text.Text;
-
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
@@ -17,8 +16,8 @@ public class ChatPrinter {
             ServerTickEvents.START_SERVER_TICK.register(server -> {
                 while (!messageBuffer.isEmpty()) {
                     String msg = messageBuffer.poll();
-                    server.getPlayerManager().broadcast(
-                        net.minecraft.text.Text.literal(msg),
+                    server.getPlayerList().broadcastSystemMessage(
+                        net.minecraft.network.chat.Component.literal(msg),
                         false
                     );
                 }
@@ -27,8 +26,8 @@ public class ChatPrinter {
         }
     }
 
-    public static void sendMessage(ServerPlayerEntity player, String text) {
-        player.sendMessage(Text.literal(text));
+    public static void sendMessage(ServerPlayer player, String text) {
+        player.sendSystemMessage(Component.literal(text));
 
     }
 

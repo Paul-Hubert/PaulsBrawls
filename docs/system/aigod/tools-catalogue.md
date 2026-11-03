@@ -330,7 +330,7 @@ See [mcp-gateway.md](mcp-gateway.md).
 ## How to add a Java tool
 
 1. Add a `static class Foo` in `ChatBotFunctions` with `@JsonClassDescription`, `@JsonPropertyDescription` fields
-   (`@OptionalField` for optional ones), and `public String execute(ServerPlayerEntity player)` that never throws.
+   (`@OptionalField` for optional ones), and `public String execute(ServerPlayer player)` that never throws.
    If it touches world/entity state, put the rule in a `GodService` method and the effect behind a `GodWorld` method
    (implemented in `MinecraftGodWorld` through `MainThread.call`, throwing `WorldRefusal` on failure).
 2. Register it in `buildToolSpecs` under the right flag.

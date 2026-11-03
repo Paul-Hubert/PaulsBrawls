@@ -4,9 +4,9 @@ import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.text.Text;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
 
 /**
  * Admin command surface for {@link MCPGateway}.
@@ -29,25 +29,25 @@ public class MCPCommand {
     public static void register() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("mcp")
+                LiteralArgumentBuilder.<CommandSourceStack>literal("mcp")
                     .executes(ctx -> {
                         printStatus(ctx.getSource());
                         return Command.SINGLE_SUCCESS;
                     })
-                    .then(CommandManager.literal("status")
+                    .then(Commands.literal("status")
                         .executes(ctx -> {
                             printStatus(ctx.getSource());
                             return Command.SINGLE_SUCCESS;
                         })
                     )
-                    .then(CommandManager.literal("reload")
-                        .requires(source -> source.hasPermissionLevel(2))
+                    .then(Commands.literal("reload")
+                        .requires(source -> source.hasPermission(2))
                         .executes(ctx -> {
                             // Bug #18: reload() tears down the client and re-handshakes over HTTP/SSE — on the
                             // server thread that froze the tick for the whole connect timeout. Run it on the LLM
                             // worker pool and report back on the server thread when it is done.
-                            ServerCommandSource source = ctx.getSource();
-                            source.sendFeedback(() -> Text.literal("MCP: rechargement en cours…"), false);
+                            CommandSourceStack source = ctx.getSource();
+                            source.sendSuccess(() -> Component.literal("MCP: rechargement en cours…"), false);
                             LLMConfig.INSTANCE.sharedExecutor().execute(() -> {
                                 MCPGateway.INSTANCE.reload();
                                 source.getServer().execute(() -> printStatus(source));
@@ -59,7 +59,7 @@ public class MCPCommand {
         });
     }
 
-    private static void printStatus(ServerCommandSource source) {
-        source.sendFeedback(() -> Text.literal(MCPGateway.INSTANCE.status()), false);
+    private static void printStatus(CommandSourceStack source) {
+        source.sendSuccess(() -> Component.literal(MCPGateway.INSTANCE.status()), false);
     }
 }

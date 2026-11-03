@@ -4,9 +4,9 @@ import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.command.ServerCommandSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,10 +19,10 @@ public class GibCommand {
         // Gives everyone money
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("gib")
-                    .requires(source -> source.hasPermissionLevel(2)) // Admin only
+                LiteralArgumentBuilder.<CommandSourceStack>literal("gib")
+                    .requires(source -> source.hasPermission(2)) // Admin only
                     // Bug #10: a negative /gib lowered the global total (players already paid kept their coins).
-                    .then(CommandManager.argument("amount", IntegerArgumentType.integer(1))
+                    .then(Commands.argument("amount", IntegerArgumentType.integer(1))
                         .executes(context -> {
 
                             int amount = IntegerArgumentType.getInteger(context, "amount");
@@ -48,9 +48,9 @@ public class GibCommand {
         // Gives everyone money every period
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("gib_salary")
-                    .requires(source -> source.hasPermissionLevel(2)) // Admin only
-                    .then(CommandManager.argument("amount", IntegerArgumentType.integer(0))
+                LiteralArgumentBuilder.<CommandSourceStack>literal("gib_salary")
+                    .requires(source -> source.hasPermission(2)) // Admin only
+                    .then(Commands.argument("amount", IntegerArgumentType.integer(0))
                         .executes(context -> {
 
                             int amount = IntegerArgumentType.getInteger(context, "amount");
@@ -71,9 +71,9 @@ public class GibCommand {
         // Gives everyone money at this period seconds
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("gib_salary_period")
-                    .requires(source -> source.hasPermissionLevel(2)) // Admin only
-                    .then(CommandManager.argument("amount", IntegerArgumentType.integer( 1))
+                LiteralArgumentBuilder.<CommandSourceStack>literal("gib_salary_period")
+                    .requires(source -> source.hasPermission(2)) // Admin only
+                    .then(Commands.argument("amount", IntegerArgumentType.integer( 1))
                         .executes(context -> {
 
                             int amount = IntegerArgumentType.getInteger(context, "amount");

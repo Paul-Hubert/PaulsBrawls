@@ -2,10 +2,9 @@ package com.paul.brawl;
 
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
-import net.minecraft.item.ItemStack;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.ItemStack;
 import java.util.UUID;
 
 import org.slf4j.Logger;
@@ -19,20 +18,20 @@ public class RevenueManager {
 
 	public static void register() {
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
-			ServerPlayerEntity player = handler.getPlayer();
-			UUID uuid = player.getUuid();
+			ServerPlayer player = handler.getPlayer();
+			UUID uuid = player.getUUID();
 
 			updateRevenue(uuid, server);
 		});
 		// A dead player is skipped below (coins would land in the corpse's emptied inventory, lost on respawn);
 		// pay the backlog as soon as they are back.
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) ->
-			updateRevenue(newPlayer.getUuid(), newPlayer.getServer()));
+			updateRevenue(newPlayer.getUUID(), newPlayer.getServer()));
 	}
 
 	public static void updateRevenue(UUID uuid, MinecraftServer server) {
 
-		var player = server.getPlayerManager().getPlayer(uuid);
+		var player = server.getPlayerList().getPlayer(uuid);
 		if(player == null) {
 			LOGGER.info("player is null");
 			return;
@@ -55,17 +54,17 @@ public class RevenueManager {
 		// Credit is the measured rise in the coin count (creative mode voids a stack that does not fit and still
 		// reports success).
 		var inventory = player.getInventory();
-		int before = inventory.count(Money.MONEY);
+		int before = inventory.countItem(Money.MONEY);
 		int left = owed;
 		while (left > 0) {
-			int n = Math.min(left, new ItemStack(Money.MONEY).getMaxCount());
+			int n = Math.min(left, new ItemStack(Money.MONEY).getMaxStackSize());
 			ItemStack stack = new ItemStack(Money.MONEY, n);
-			inventory.insertStack(stack); // shrinks `stack` to what did not fit
+			inventory.add(stack); // shrinks `stack` to what did not fit
 			left -= n;
 			if (!stack.isEmpty()) break; // inventory full
-			if (inventory.count(Money.MONEY) - before < owed - left) break; // voided (creative): stop offering more
+			if (inventory.countItem(Money.MONEY) - before < owed - left) break; // voided (creative): stop offering more
 		}
-		int inserted = GibberMath.landed(before, inventory.count(Money.MONEY), owed);
+		int inserted = GibberMath.landed(before, inventory.countItem(Money.MONEY), owed);
 		if (inserted > 0) state.setPlayerValue(uuid, GibberMath.paidAfter(currentRevenue, inserted));
 		if (inserted < owed) {
 			LOGGER.info("{}: inventory full, {} of {} coin(s) still owed", player.getName().getString(), owed - inserted, owed);
@@ -73,8 +72,8 @@ public class RevenueManager {
 	}
 
 	public static void UpdateRevenueAll(MinecraftServer server) {
-		for (var player : server.getPlayerManager().getPlayerList()) {
-			updateRevenue(player.getUuid(), server);
+		for (var player : server.getPlayerList().getPlayers()) {
+			updateRevenue(player.getUUID(), server);
 		}
 	}
 

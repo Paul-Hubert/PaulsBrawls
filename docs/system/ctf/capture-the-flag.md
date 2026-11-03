@@ -48,11 +48,11 @@ for (var slots : List.of(inv.main, inv.armor, inv.offHand))
 | Name source | `getName()` = custom name (anvil/`custom_name` component) if set, otherwise the default item name resolved on the server; vanilla banner default names do not contain `Flag` |
 | Slots scanned | `main` (hotbar + 27 storage), then `armor` (a banner can be worn on the head), then `offHand` (bug #11 — only `main` used to be scanned) |
 | Result | `findFlags`: every matching stack in that order; `checkInventory`: the first, or `null` |
-| Entities | Only `ServerPlayerEntity` (real players and Mineflayer bots); mobs carrying banners are ignored |
+| Entities | Only `ServerPlayer` (real players and Mineflayer bots); mobs carrying banners are ignored |
 
 ## Drop on damage — `dropOnHit()` / `dropItem()`
 
-On every `ALLOW_DAMAGE` callback for a `ServerPlayerEntity`, for **each** stack in `findFlags(player)`:
+On every `ALLOW_DAMAGE` callback for a `ServerPlayer`, for **each** stack in `findFlags(player)`:
 
 1. A null/empty stack is skipped.
 2. `item.set(DataComponentTypes.UNBREAKABLE, new UnbreakableComponent(true))` (`:99`) — marks the banner
@@ -76,7 +76,7 @@ Properties of this rule:
 
 ## Elytra ban — `banElytra()` (`FlagManager.java:36-45`)
 
-`EntityElytraEvents.ALLOW` handler: if the entity is a `ServerPlayerEntity` and `checkInventory` finds a
+`EntityElytraEvents.ALLOW` handler: if the entity is a `ServerPlayer` and `checkInventory` finds a
 Flag, return `false` (flight not allowed); otherwise `true`. Fabric API consults `ALLOW` when elytra flight
 starts and while it continues, so picking up a Flag mid-glide should end the glide.
 
@@ -87,7 +87,7 @@ starts and while it continues, so picking up a Flag mid-glide should end the gli
 ## Glowing — `glowFlagholders()` / `updateGlow()`
 
 On `START_WORLD_TICK` (called once per loaded world/dimension per server tick — the lambda parameter is
-named `server` but is a `ServerWorld`), for each player in that world:
+named `server` but is a `ServerLevel`), for each player in that world:
 `FlagGlow.update(uuid, hasFlag, player.isGlowing())` (`FlagGlow.java:19-27`) decides and `updateGlow`
 (`FlagManager.java:105-111`) applies it (unit-tested, `FlagGlowTest`):
 
@@ -116,7 +116,7 @@ named `server` but is a `ServerWorld`), for each player in that world:
 - **Village settlement** (`VillageHttpListener`) moves the real stacks, so a traded Flag banner keeps its
   custom name and stays a Flag (only main/hotbar slots are tradeable). See
   [../eden/java-integration.md](../eden/java-integration.md).
-- Mineflayer bots (God avatar, Eden villagers) are `ServerPlayerEntity`s and obey all three rules.
+- Mineflayer bots (God avatar, Eden villagers) are `ServerPlayer`s and obey all three rules.
 - Nothing else in `src/` references `FlagManager` (only `ServerEntryPoint` and a javadoc link in `FlagGlow`).
 
 ## How to modify
@@ -124,7 +124,7 @@ named `server` but is a `ServerWorld`), for each player in that world:
 | Want | Change |
 |---|---|
 | Case-insensitive / exact name | Edit `FlagGlow.isFlagName` (`FlagGlow.java:35-37`; update `FlagGlowTest`) |
-| Drop only on PvP hits | In `dropOnHit`, check `source.getAttacker() instanceof PlayerEntity` before dropping |
+| Drop only on PvP hits | In `dropOnHit`, check `source.getAttacker() instanceof Player` before dropping |
 | Drop one Flag per hit | Use `checkInventory` instead of looping over `findFlags` in `dropOnHit` |
 
 ## Gotchas & known issues

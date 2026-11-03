@@ -1,15 +1,14 @@
 package com.paul.brawl;
 
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.registry.RegistryWrapper;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.world.PersistentState;
-
+import net.minecraft.world.level.saveddata.SavedData;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-public class PlayerPersistentState extends PersistentState {
+public class PlayerPersistentState extends SavedData {
 	private static final String STATE_KEY = "gibbers_state";
     private static final String PLAYER_DATA_KEY = "player_data";
     private static final String GLOBAL_DATA_KEY = "global_data";
@@ -25,16 +24,16 @@ public class PlayerPersistentState extends PersistentState {
     }
 
     public static PlayerPersistentState getState(MinecraftServer server) {
-        return server.getOverworld().getPersistentStateManager().getOrCreate(
+        return server.overworld().getDataStorage().computeIfAbsent(
             PlayerPersistentState.TYPE,
             STATE_KEY
         );
     }
 
-    public static PlayerPersistentState fromNbt(NbtCompound tag, RegistryWrapper.WrapperLookup registryLookup) {
+    public static PlayerPersistentState fromNbt(CompoundTag tag, HolderLookup.Provider registryLookup) {
         PlayerPersistentState state = new PlayerPersistentState();
-        NbtCompound playerData = tag.getCompound(PLAYER_DATA_KEY);
-        for (String key : playerData.getKeys()) {
+        CompoundTag playerData = tag.getCompound(PLAYER_DATA_KEY);
+        for (String key : playerData.getAllKeys()) {
             try {
                 UUID uuid = UUID.fromString(key);
                 int value = playerData.getInt(key);
@@ -42,8 +41,8 @@ public class PlayerPersistentState extends PersistentState {
             } catch (IllegalArgumentException ignored) {}
         }
 
-        NbtCompound globalData = tag.getCompound(GLOBAL_DATA_KEY);
-        for (String key : globalData.getKeys()) {
+        CompoundTag globalData = tag.getCompound(GLOBAL_DATA_KEY);
+        for (String key : globalData.getAllKeys()) {
             try {
                 int value = globalData.getInt(key);
                 state.globalMap.put(key, value);
@@ -52,21 +51,21 @@ public class PlayerPersistentState extends PersistentState {
         return state;
     }
 
-    public static final Type<PlayerPersistentState> TYPE = new Type<>(
+    public static final Factory<PlayerPersistentState> TYPE = new Factory<>(
         PlayerPersistentState::createNew,
         PlayerPersistentState::fromNbt,
         null
     );
 
     @Override
-    public NbtCompound writeNbt(NbtCompound tag, RegistryWrapper.WrapperLookup registryLookup) {
-        NbtCompound playerData = new NbtCompound();
+    public CompoundTag save(CompoundTag tag, HolderLookup.Provider registryLookup) {
+        CompoundTag playerData = new CompoundTag();
         for (Map.Entry<UUID, Integer> entry : playerMap.entrySet()) {
             playerData.putInt(entry.getKey().toString(), entry.getValue());
         }
         tag.put(PLAYER_DATA_KEY, playerData);
 
-        NbtCompound globalData = new NbtCompound();
+        CompoundTag globalData = new CompoundTag();
         for (Map.Entry<String, Integer> entry : globalMap.entrySet()) {
             globalData.putInt(entry.getKey().toString(), entry.getValue());
         }
@@ -81,7 +80,7 @@ public class PlayerPersistentState extends PersistentState {
 
     public void setPlayerValue(UUID uuid, int value) {
         playerMap.put(uuid, value);
-        markDirty();
+        setDirty();
     }
 
     public int getGlobalValue(String str) {
@@ -90,6 +89,6 @@ public class PlayerPersistentState extends PersistentState {
 
     public void setGlobalValue(String str, int value) {
         globalMap.put(str, value);
-        markDirty();
+        setDirty();
     }
 } 

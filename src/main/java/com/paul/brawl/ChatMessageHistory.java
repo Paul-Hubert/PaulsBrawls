@@ -1,13 +1,12 @@
 package com.paul.brawl;
 
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.network.chat.ChatType;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.PlayerChatMessage;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.network.message.MessageType;
-import net.minecraft.network.message.SignedMessage;
-import net.minecraft.text.Text;
-
+import net.minecraft.server.level.ServerPlayer;
 import java.util.LinkedList;
 
 public class ChatMessageHistory {
@@ -29,18 +28,18 @@ public class ChatMessageHistory {
         }
     }
 
-    private static void onChatMessage(SignedMessage message, ServerPlayerEntity sender, MessageType.Parameters parameters) {
-        String content = message.getContent().getString();
+    private static void onChatMessage(PlayerChatMessage message, ServerPlayer sender, ChatType.Bound parameters) {
+        String content = message.decoratedContent().getString();
         addMessageToHistory(sender.getName().getString() + " : " + content);
     }
 
-    private static void onCommandMessage(SignedMessage message, ServerCommandSource source, MessageType.Parameters parameters) {
-        String content = message.getContent().getString();
+    private static void onCommandMessage(PlayerChatMessage message, CommandSourceStack source, ChatType.Bound parameters) {
+        String content = message.decoratedContent().getString();
         // Bug #18: a console /say or /me has no player — source.getName() is "Server" there.
-        addMessageToHistory(source.getName() + " command : " + content);
+        addMessageToHistory(source.getTextName() + " command : " + content);
     }
 
-    private static void onGameMessage(MinecraftServer server, Text text, boolean flag) {
+    private static void onGameMessage(MinecraftServer server, Component text, boolean flag) {
         String content = text.getString();
         addMessageToHistory("Game : " + content);
     }

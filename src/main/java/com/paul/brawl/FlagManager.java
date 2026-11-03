@@ -11,10 +11,10 @@ import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.component.type.UnbreakableComponent;
-import net.minecraft.item.ItemStack;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.Unbreakable;
 
 public class FlagManager {
     
@@ -36,7 +36,7 @@ public class FlagManager {
     // ban elytra
     public static void banElytra() {
         EntityElytraEvents.ALLOW.register((entity) -> {
-            if (entity instanceof net.minecraft.server.network.ServerPlayerEntity player) {
+            if (entity instanceof net.minecraft.server.level.ServerPlayer player) {
                 if(checkInventory(player) != null) {
                     return false;
                 }
@@ -48,7 +48,7 @@ public class FlagManager {
     // drop flag on hit
     public static void dropOnHit() {
         ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
-            if (entity instanceof ServerPlayerEntity player) {
+            if (entity instanceof ServerPlayer player) {
                 // Bug #11: every Flag the player carries drops, wherever it sits.
                 for (ItemStack flag : findFlags(player)) dropItem(player, flag);
             }
@@ -59,7 +59,7 @@ public class FlagManager {
     // make flag holders glow
     public static void glowFlagholders() {
         ServerTickEvents.START_WORLD_TICK.register((server) -> {
-            for(var player : server.getPlayers()) {
+            for(var player : server.players()) {
                 var hasFlag = checkInventory(player) != null;
                 updateGlow(player, hasFlag);
             }
@@ -67,17 +67,17 @@ public class FlagManager {
         // Vanilla saves the glowing flag with the player. Clear a glow the mod owns before that save (DISCONNECT fires
         // before PlayerManager.remove saves; SERVER_STOPPING before saveAllPlayerData), or it comes back unowned.
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
-            if (GLOW.forget(handler.getPlayer().getUuid())) handler.getPlayer().setGlowing(false);
+            if (GLOW.forget(handler.getPlayer().getUUID())) handler.getPlayer().setGlowingTag(false);
         });
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
-            for (var player : server.getPlayerManager().getPlayerList()) {
-                if (GLOW.forget(player.getUuid())) player.setGlowing(false);
+            for (var player : server.getPlayerList().getPlayers()) {
+                if (GLOW.forget(player.getUUID())) player.setGlowingTag(false);
             }
         });
     }
 
     /** The first Flag the player carries, or null. */
-    public static ItemStack checkInventory(ServerPlayerEntity player) {
+    public static ItemStack checkInventory(ServerPlayer player) {
         List<ItemStack> flags = findFlags(player);
         return flags.isEmpty() ? null : flags.get(0);
     }
@@ -87,13 +87,13 @@ public class FlagManager {
      * Bug #11: only {@code main} was scanned, so a Flag in the offhand or on the head bypassed the elytra ban, the
      * drop-on-hit and the glow.
      */
-    public static List<ItemStack> findFlags(ServerPlayerEntity player) {
+    public static List<ItemStack> findFlags(ServerPlayer player) {
         var inv = player.getInventory();
         List<ItemStack> out = new ArrayList<>();
-        for (var slots : List.of(inv.main, inv.armor, inv.offHand)) {
+        for (var slots : List.of(inv.items, inv.armor, inv.offhand)) {
             for (var stack : slots) {
-                if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.item.BannerItem
-                        && FlagGlow.isFlagName(stack.getName().getString())) {
+                if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.world.item.BannerItem
+                        && FlagGlow.isFlagName(stack.getHoverName().getString())) {
                     out.add(stack);
                 }
             }
@@ -101,21 +101,21 @@ public class FlagManager {
         return out;
     }
 
-    public static void dropItem(ServerPlayerEntity player, ItemStack item) {
+    public static void dropItem(ServerPlayer player, ItemStack item) {
         if (item == null || item.isEmpty()) {
             return;
         }
         // Make indestructible
-        item.set(DataComponentTypes.UNBREAKABLE, new UnbreakableComponent(true));
-        player.dropItem(item.copyAndEmpty(), true, false);
+        item.set(DataComponents.UNBREAKABLE, new Unbreakable(true));
+        player.drop(item.copyAndClear(), true, false);
         
     }
 
     /** Bug #11: glow while carrying a Flag; clear only a glow this mod set (never another source's). */
-    public static void updateGlow(ServerPlayerEntity player, boolean hasFlag) {
-        switch (GLOW.update(player.getUuid(), hasFlag, player.isGlowing())) {
-            case SET -> player.setGlowing(true);
-            case CLEAR -> player.setGlowing(false);
+    public static void updateGlow(ServerPlayer player, boolean hasFlag) {
+        switch (GLOW.update(player.getUUID(), hasFlag, player.isCurrentlyGlowing())) {
+            case SET -> player.setGlowingTag(true);
+            case CLEAR -> player.setGlowingTag(false);
             case NONE -> { }
         }
     }

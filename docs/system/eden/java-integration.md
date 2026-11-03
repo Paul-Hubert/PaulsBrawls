@@ -127,7 +127,7 @@ between.
 
 1. `getPlayerManager().getPlayer(botA/botB)` — both must be online: `<name> is not online`; the two lookups
    must be different players (`botA and botB are the same`).
-2. **Proximity**: same `ServerWorld` (`<a> and <b> are not in the same dimension`) and, unless
+2. **Proximity**: same `ServerLevel` (`<a> and <b> are not in the same dimension`) and, unless
    `maxTradeDistance <= 0`, within `maxTradeDistance` blocks
    (`<a> and <b> are too far apart (<d> > <max> blocks)`).
 3. **Aggregate per item, then validate**: every line is resolved (`unknown item: <item>`) and summed into a
@@ -348,7 +348,7 @@ dedicated server (the entrypoint does not run on an integrated server).
   giver hands over whichever sword comes first in slot order (possibly an enchanted one).
 - **Fixed — armour/offhand**: only the 36 main/hotbar slots are counted or taken.
 - **Fixed — overflow loss**: the old `addItems` dropped only when `insertStack` returned `false`, but vanilla
-  `insertStack` returns `true` on a *partial* insert (checked against the 1.21.1 yarn jar), so remainders were
+  `insertStack` returns `true` on a *partial* insert (checked against the 1.21.1 Yarn jar, where it was `insertStack`; Mojang: `Inventory.add`), so remainders were
   silently deleted. Delivery now uses `offerOrDrop`, which drops every leftover.
 - **Who can trade**: the parties must share a dimension and stand within `maxTradeDistance` (16 blocks by
   default). They can still be *any* two online players, humans included — the listener cannot tell a bot

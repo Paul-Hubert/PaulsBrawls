@@ -5,29 +5,28 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
-
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.SpawnReason;
-import net.minecraft.entity.mob.MobEntity;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.StringNbtReader;
-import net.minecraft.registry.Registries;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.TagParser;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.World;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.MobSpawnType;
+import net.minecraft.world.level.Level;
 
 /** The real {@link BuildWorld}: placements and spawns on the {@link GodActionQueue} bulk lane, reads through {@link MainThread}. */
 public final class MinecraftBuildWorld implements BuildWorld {
 
     static final String OFFLINE = "Le joueur n'est plus connecté.";
 
-    static ServerPlayerEntity online(UUID player) {
+    static ServerPlayer online(UUID player) {
         MinecraftServer server = ChatBotActions.server();
-        ServerPlayerEntity p = server == null || player == null ? null : server.getPlayerManager().getPlayer(player);
+        ServerPlayer p = server == null || player == null ? null : server.getPlayerList().getPlayer(player);
         if (p == null) throw new WorldRefusal(OFFLINE);
         return p;
     }
@@ -36,7 +35,7 @@ public final class MinecraftBuildWorld implements BuildWorld {
     public boolean isOnline(UUID player) {
         return MainThread.call(() -> {
             MinecraftServer server = ChatBotActions.server();
-            return server != null && player != null && server.getPlayerManager().getPlayer(player) != null;
+            return server != null && player != null && server.getPlayerList().getPlayer(player) != null;
         });
     }
 
@@ -69,7 +68,7 @@ public final class MinecraftBuildWorld implements BuildWorld {
             int n = ChatBotActions.placeAll(online(player), o, offsets, block);
             return n + " bloc(s) " + block + " placé(s).";
         };
-        if (server == null || server.isOnThread()) {
+        if (server == null || server.isSameThread()) {
             // Waiting on the queue from the thread that drains it would deadlock: run inline.
             try {
                 return CompletableFuture.completedFuture(body.get());
@@ -82,14 +81,14 @@ public final class MinecraftBuildWorld implements BuildWorld {
 
     @Override
     public boolean isKnownEntity(String entity) {
-        Identifier id = Identifier.tryParse(entity);
-        return id != null && Registries.ENTITY_TYPE.getOrEmpty(id).map(EntityType::isSummonable).orElse(false);
+        ResourceLocation id = ResourceLocation.tryParse(entity);
+        return id != null && BuiltInRegistries.ENTITY_TYPE.getOptional(id).map(EntityType::canSummon).orElse(false);
     }
 
     @Override
     public boolean isValidNbt(String nbt) {
         try {
-            StringNbtReader.parse(nbt);
+            TagParser.parseTag(nbt);
             return true;
         } catch (CommandSyntaxException e) {
             return false;
@@ -101,7 +100,7 @@ public final class MinecraftBuildWorld implements BuildWorld {
         BlockPos o = new BlockPos(origin[0], origin[1], origin[2]);
         MinecraftServer server = ChatBotActions.server();
         java.util.function.Supplier<String> body = () -> String.valueOf(spawnAll(online(player), o, offsets, entity, nbt, persistent));
-        if (server == null || server.isOnThread()) {
+        if (server == null || server.isSameThread()) {
             try {
                 return CompletableFuture.completedFuture(Integer.parseInt(body.get()));
             } catch (WorldRefusal r) {
@@ -115,11 +114,11 @@ public final class MinecraftBuildWorld implements BuildWorld {
      * {@code /summon}'s path for each offset: the NBT (passengers dropped, so a rider cannot smuggle in a denied
      * creature), the position, {@code initialize} when no NBT was given, then persistence. Main thread only.
      */
-    static int spawnAll(ServerPlayerEntity player, BlockPos origin, List<int[]> offsets, String entity, String nbt, boolean persistent) {
-        if (!(player.getWorld() instanceof ServerWorld world)) throw new WorldRefusal("Impossible de faire apparaître : monde invalide.");
-        NbtCompound base;
+    static int spawnAll(ServerPlayer player, BlockPos origin, List<int[]> offsets, String entity, String nbt, boolean persistent) {
+        if (!(player.level() instanceof ServerLevel world)) throw new WorldRefusal("Impossible de faire apparaître : monde invalide.");
+        CompoundTag base;
         try {
-            base = nbt == null || nbt.isBlank() ? new NbtCompound() : StringNbtReader.parse(nbt);
+            base = nbt == null || nbt.isBlank() ? new CompoundTag() : TagParser.parseTag(nbt);
         } catch (CommandSyntaxException e) {
             throw new WorldRefusal("NBT mal formé : " + e.getMessage());
         }
@@ -128,19 +127,19 @@ public final class MinecraftBuildWorld implements BuildWorld {
         base.putString("id", entity);
         int spawned = 0;
         for (int[] off : offsets) {
-            BlockPos pos = origin.add(off[0], off[1], off[2]);
-            if (!World.isValid(pos)) continue;
-            Entity e = EntityType.loadEntityWithPassengers(base.copy(), world, en -> {
-                en.refreshPositionAndAngles(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, en.getYaw(), en.getPitch());
+            BlockPos pos = origin.offset(off[0], off[1], off[2]);
+            if (!Level.isInSpawnableBounds(pos)) continue;
+            Entity e = EntityType.loadEntityRecursive(base.copy(), world, en -> {
+                en.moveTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, en.getYRot(), en.getXRot());
                 return en;
             });
             if (e == null) continue;
-            if (!(e instanceof MobEntity mob)) {
+            if (!(e instanceof Mob mob)) {
                 throw new WorldRefusal("Refusé : '" + entity + "' n'est pas une créature (seules les créatures peuvent apparaître).");
             }
-            if (init) mob.initialize(world, world.getLocalDifficulty(pos), SpawnReason.COMMAND, null);
-            if (persistent) mob.setPersistent();
-            if (world.spawnNewEntityAndPassengers(mob)) spawned++;
+            if (init) mob.finalizeSpawn(world, world.getCurrentDifficultyAt(pos), MobSpawnType.COMMAND, null);
+            if (persistent) mob.setPersistenceRequired();
+            if (world.tryAddFreshEntityWithPassengers(mob)) spawned++;
         }
         return spawned;
     }

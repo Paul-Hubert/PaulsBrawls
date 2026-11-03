@@ -101,7 +101,7 @@ The rules are in `GodService.spawnCreature` (`GodService.java:126-144`); the eff
 2. `clamped = clamp(count, 1, max(1, BridgeConfig.spawnCountMax))` — default cap 8 (`BridgeConfig.java:54`);
    `count <= 0` still spawns 1. Each offset is clamped to `±BridgeConfig.spawnOffsetMax` (16) by
    `GodClamps.spawnOffset` (bug #6 — they used to be unclamped); `griefAllowed = BridgeConfig.creatureGriefingAllowed`.
-3. Player null or world not a `ServerWorld` → `"Impossible de spawner : joueur ou monde invalide."`
+3. Player null or world not a `ServerLevel` → `"Impossible de spawner : joueur ou monde invalide."`
 4. `Identifier.tryParse(entityType.trim())` null → `"Spawn annulé : identifiant invalide '<entityType>'."`
    (a bare `zombie` defaults to the `minecraft` namespace).
 5. Not in `Registries.ENTITY_TYPE` → `"Spawn annulé : type d'entité inconnu '<entityType>'."`
@@ -158,7 +158,7 @@ cursor"), it is not the live cursor.
 
 | Method | Lines | Behaviour | Returns |
 |---|---|---|---|
-| `findAvatar(prayingPlayer)` | `:342-348` | Server from the player (or the static `SERVER`), `getPlayerManager().getPlayer(BridgeConfig.botUsername)` (default `LLMBot`). | `ServerPlayerEntity` or `null` |
+| `findAvatar(prayingPlayer)` | `:342-348` | Server from the player (or the static `SERVER`), `getPlayerManager().getPlayer(BridgeConfig.botUsername)` (default `LLMBot`). | `ServerPlayer` or `null` |
 | `buffAvatar(prayingPlayer)` | `:355-364` | `bot.setInvulnerable(true)` + `bot.extinguish()`. Called on `Appear` inside `MinecraftGodWorld.appear`'s `MainThread.run`. | `"Avatar rendu invincible."` / `"Avatar introuvable (pas de buff)."` (logs `buffAvatar: bot '<name>' not found (not joined?)`) |
 | `restoreAvatar(prayingPlayer)` | `:366-371` | `bot.setInvulnerable(false)`. Called on `Vanish` (`MinecraftGodWorld.vanish`, `restoreAvatar(null)` through `MainThread.run`) and `endPrayerSession`. | `"Avatar redevenu mortel."` / `"Avatar introuvable."` |
 | `restoreAvatarOnMain(server)` | `:380-386` | Bug #5: `setInvulnerable(false)` directly, for server-thread callers that just cleared the queue — `/godbody off` (`ChatCommand.java:67`) and `SERVER_STOPPING` (`ServerEntryPoint.java:55`). An avatar offline at that moment keeps its saved flag. | `"Avatar redevenu mortel."` / `"Avatar introuvable."` / `"Serveur indisponible."` |

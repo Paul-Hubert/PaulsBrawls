@@ -5,16 +5,15 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.regex.Pattern;
-
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.component.type.LoreComponent;
-import net.minecraft.component.type.NbtComponent;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.RangedWeaponItem;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.NbtElement;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
+import net.minecraft.ChatFormatting;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.Tag;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.ProjectileWeaponItem;
+import net.minecraft.world.item.component.CustomData;
+import net.minecraft.world.item.component.ItemLore;
 
 /**
  * An order bound to an item stack (docs/29 §5.4 item 1), stored in {@code minecraft:custom_data} as
@@ -78,8 +77,8 @@ public record SquadBinding(String order, String line, boolean glint, String lore
         return out;
     }
 
-    NbtCompound toNbt() {
-        NbtCompound n = new NbtCompound();
+    CompoundTag toNbt() {
+        CompoundTag n = new CompoundTag();
         n.putString("order", order);
         n.putString("line", line);
         n.putBoolean("glint", glint);
@@ -88,9 +87,9 @@ public record SquadBinding(String order, String line, boolean glint, String lore
     }
 
     /** The binding in a custom-data compound, if it has a {@code squad} compound with an order. */
-    static Optional<SquadBinding> fromCustomData(NbtCompound data) {
-        if (data == null || !data.contains(KEY, NbtElement.COMPOUND_TYPE)) return Optional.empty();
-        NbtCompound n = data.getCompound(KEY);
+    static Optional<SquadBinding> fromCustomData(CompoundTag data) {
+        if (data == null || !data.contains(KEY, Tag.TAG_COMPOUND)) return Optional.empty();
+        CompoundTag n = data.getCompound(KEY);
         String order = n.getString("order");
         if (order.isBlank()) return Optional.empty();
         return Optional.of(new SquadBinding(order, n.getString("line"), n.getBoolean("glint"), n.getString("lore")));
@@ -101,9 +100,9 @@ public record SquadBinding(String order, String line, boolean glint, String lore
     /** The stack's binding, if any (empty stacks and stacks without custom data have none). */
     public static Optional<SquadBinding> read(ItemStack stack) {
         if (stack == null || stack.isEmpty()) return Optional.empty();
-        NbtComponent data = stack.get(DataComponentTypes.CUSTOM_DATA);
+        CustomData data = stack.get(DataComponents.CUSTOM_DATA);
         if (data == null || !data.contains(KEY)) return Optional.empty();
-        return fromCustomData(data.copyNbt());
+        return fromCustomData(data.copyTag());
     }
 
     /**
@@ -113,16 +112,16 @@ public record SquadBinding(String order, String line, boolean glint, String lore
     public static SquadBinding write(ItemStack stack, String order, String line) {
         clear(stack);
         String lore = loreFor(order, line);
-        boolean glint = !stack.contains(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE);
-        if (glint) stack.set(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE, true);
-        LoreComponent old = stack.getOrDefault(DataComponentTypes.LORE, LoreComponent.DEFAULT);
-        if (old.lines().size() < LoreComponent.MAX_LORES) {
-            stack.set(DataComponentTypes.LORE, old.with(Text.literal(lore).styled(s -> s.withColor(Formatting.GOLD).withItalic(false))));
+        boolean glint = !stack.has(DataComponents.ENCHANTMENT_GLINT_OVERRIDE);
+        if (glint) stack.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true);
+        ItemLore old = stack.getOrDefault(DataComponents.LORE, ItemLore.EMPTY);
+        if (old.lines().size() < ItemLore.MAX_LINES) {
+            stack.set(DataComponents.LORE, old.withLineAdded(Component.literal(lore).withStyle(s -> s.withColor(ChatFormatting.GOLD).withItalic(false))));
         } else {
             lore = ""; // no room for our line: record none, so unbind removes none of the item's own
         }
         SquadBinding b = new SquadBinding(order, line == null ? "" : line.trim(), glint, lore);
-        NbtComponent.set(DataComponentTypes.CUSTOM_DATA, stack, nbt -> nbt.put(KEY, b.toNbt()));
+        CustomData.update(DataComponents.CUSTOM_DATA, stack, nbt -> nbt.put(KEY, b.toNbt()));
         return b;
     }
 
@@ -133,20 +132,20 @@ public record SquadBinding(String order, String line, boolean glint, String lore
     public static Optional<SquadBinding> clear(ItemStack stack) {
         Optional<SquadBinding> b = read(stack);
         if (b.isEmpty()) return b;
-        NbtComponent.set(DataComponentTypes.CUSTOM_DATA, stack, nbt -> nbt.remove(KEY));
-        LoreComponent old = stack.get(DataComponentTypes.LORE);
+        CustomData.update(DataComponents.CUSTOM_DATA, stack, nbt -> nbt.remove(KEY));
+        ItemLore old = stack.get(DataComponents.LORE);
         if (old != null) {
-            List<Text> lines = withoutLore(old.lines(), Text::getString, b.get().lore());
+            List<Component> lines = withoutLore(old.lines(), Component::getString, b.get().lore());
             // Setting the item's default (no lines) drops the lore from the stack's changes, rather than marking it removed.
-            if (lines.size() != old.lines().size()) stack.set(DataComponentTypes.LORE, lines.isEmpty() ? LoreComponent.DEFAULT : new LoreComponent(lines));
+            if (lines.size() != old.lines().size()) stack.set(DataComponents.LORE, lines.isEmpty() ? ItemLore.EMPTY : new ItemLore(lines));
         }
-        if (b.get().glint()) stack.remove(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE);
+        if (b.get().glint()) stack.remove(DataComponents.ENCHANTMENT_GLINT_OVERRIDE);
         return b;
     }
 
     /** A bow or a crossbow: its trigger is the arrow it shoots, not the right-click (§5.4 item 4). */
     public static boolean isLauncher(ItemStack stack) {
-        return stack != null && stack.getItem() instanceof RangedWeaponItem;
+        return stack != null && stack.getItem() instanceof ProjectileWeaponItem;
     }
 
     private static int indexOfSpace(String s) {

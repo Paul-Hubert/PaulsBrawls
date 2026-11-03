@@ -10,7 +10,7 @@ import java.util.function.Function;
 
 import org.junit.jupiter.api.Test;
 
-import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.CompoundTag;
 
 /** The binding's pure parts: the bind line, the lore line and its removal, the custom-data form (no bootstrap). */
 class SquadBindingTest {
@@ -65,7 +65,7 @@ class SquadBindingTest {
     @Test
     void customDataRoundTripsAndKeepsOtherKeys() {
         SquadBinding b = new SquadBinding("PUALHubert:garde", "radius=8 @Guard1 --reclaim", true, "Ordre : PUALHubert:garde radius=8 @Guard1 --reclaim");
-        NbtCompound data = new NbtCompound();
+        CompoundTag data = new CompoundTag();
         data.putString("other", "kept");
         data.put(SquadBinding.KEY, b.toNbt());
         assertEquals(Optional.of(b), SquadBinding.fromCustomData(data));
@@ -79,18 +79,18 @@ class SquadBindingTest {
     @Test
     void customDataWithoutAnOrderIsNoBinding() {
         assertTrue(SquadBinding.fromCustomData(null).isEmpty());
-        assertTrue(SquadBinding.fromCustomData(new NbtCompound()).isEmpty());
-        NbtCompound wrongType = new NbtCompound();
+        assertTrue(SquadBinding.fromCustomData(new CompoundTag()).isEmpty());
+        CompoundTag wrongType = new CompoundTag();
         wrongType.putString(SquadBinding.KEY, "epee");
         assertTrue(SquadBinding.fromCustomData(wrongType).isEmpty());
-        NbtCompound blank = new NbtCompound();
-        NbtCompound inner = new NbtCompound();
+        CompoundTag blank = new CompoundTag();
+        CompoundTag inner = new CompoundTag();
         inner.putString("order", " ");
         blank.put(SquadBinding.KEY, inner);
         assertTrue(SquadBinding.fromCustomData(blank).isEmpty());
         // Missing fields read as defaults: a hand-edited binding with only an order still works.
-        NbtCompound minimal = new NbtCompound();
-        NbtCompound only = new NbtCompound();
+        CompoundTag minimal = new CompoundTag();
+        CompoundTag only = new CompoundTag();
         only.putString("order", "epee");
         minimal.put(SquadBinding.KEY, only);
         assertEquals(Optional.of(new SquadBinding("epee", "", false, "")), SquadBinding.fromCustomData(minimal));

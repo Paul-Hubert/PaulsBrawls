@@ -46,8 +46,11 @@ features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 ./gradlew clean
 ```
 
-The Gradle wrapper is tracked (`gradlew`, `gradlew.bat`, `gradle/wrapper/`, Gradle 9.1.0), so the commands above
-work on a clean clone; the first run downloads Gradle. `run/` holds no server jar: Loom fetches the server for
+The Gradle wrapper is tracked (`gradlew`, `gradlew.bat`, `gradle/wrapper/`, Gradle 9.4.0), so the commands above
+work on a clean clone; the first run downloads Gradle. **The code uses Mojang's official names** (`Player`,
+`ServerLevel`, `AbstractArrow`; `mappings loom.officialMojangMappings()`, Loom 1.15.5 `net.fabricmc.fabric-loom-remap`),
+not Yarn's: it was migrated on 2026-11-03 so that 26.x, which ships unobfuscated, uses the same names. Older docs may
+still cite Yarn names. `run/` holds no server jar: Loom fetches the server for
 `runServer` ([run/README.md](run/README.md)).
 
 **A standalone server** (a Fabric launcher and jar instead of `./gradlew runServer`) from a clone: `node scripts/setup-server.mjs [dir]`

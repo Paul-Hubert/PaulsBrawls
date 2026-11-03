@@ -18,16 +18,16 @@ import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
-import net.minecraft.command.CommandSource;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
+import net.minecraft.ChatFormatting;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.text.MutableText;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 
 /**
  * {@code /bots} (docs/29 §9). Admins: spawn, despawn, owners, stop all, list all. Owners: create, fix, order, stop,
@@ -44,152 +44,152 @@ public final class SquadCommand {
 
     public static void register() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> dispatcher.register(
-            CommandManager.literal("bots")
+            Commands.literal("bots")
                 .executes(c -> help(c.getSource()))
                 // -- admin --------------------------------------------------------------------------------------
-                .then(CommandManager.literal("spawn").requires(s -> s.hasPermissionLevel(2))
-                    .then(CommandManager.argument("bot", StringArgumentType.word())
-                        .then(CommandManager.argument("owners", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
+                .then(Commands.literal("spawn").requires(s -> s.hasPermission(2))
+                    .then(Commands.argument("bot", StringArgumentType.word())
+                        .then(Commands.argument("owners", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
                             .executes(c -> spawn(c, StringArgumentType.getString(c, "bot"), StringArgumentType.getString(c, "owners"))))))
-                .then(CommandManager.literal("despawn").requires(s -> s.hasPermissionLevel(2))
-                    .then(CommandManager.literal("all").executes(c -> despawnAll(c.getSource())))
-                    .then(CommandManager.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
+                .then(Commands.literal("despawn").requires(s -> s.hasPermission(2))
+                    .then(Commands.literal("all").executes(c -> despawnAll(c.getSource())))
+                    .then(Commands.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
                         .executes(c -> despawn(c, StringArgumentType.getString(c, "bot")))))
-                .then(CommandManager.literal("owners").requires(s -> s.hasPermissionLevel(2))
-                    .then(CommandManager.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
-                        .then(CommandManager.literal("add").then(CommandManager.argument("players", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
+                .then(Commands.literal("owners").requires(s -> s.hasPermission(2))
+                    .then(Commands.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
+                        .then(Commands.literal("add").then(Commands.argument("players", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
                             .executes(c -> owners(c, true))))
-                        .then(CommandManager.literal("remove").then(CommandManager.argument("players", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
+                        .then(Commands.literal("remove").then(Commands.argument("players", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
                             .executes(c -> owners(c, false))))))
-                .then(CommandManager.literal("raid").requires(s -> s.hasPermissionLevel(2))
+                .then(Commands.literal("raid").requires(s -> s.hasPermission(2))
                     .executes(c -> SquadRaid.call(c.getSource(), ""))
-                    .then(CommandManager.literal("clear").executes(c -> SquadRaid.clear(c.getSource())))
-                    .then(CommandManager.literal("stop").executes(c -> SquadRaid.stop(c.getSource())))
-                    .then(CommandManager.argument("args", StringArgumentType.greedyString())
+                    .then(Commands.literal("clear").executes(c -> SquadRaid.clear(c.getSource())))
+                    .then(Commands.literal("stop").executes(c -> SquadRaid.stop(c.getSource())))
+                    .then(Commands.argument("args", StringArgumentType.greedyString())
                         .executes(c -> SquadRaid.call(c.getSource(), StringArgumentType.getString(c, "args")))))
                 // A General (docs/38): a Claude Code instance commanding an army, no body.
-                .then(CommandManager.literal("general").requires(s -> s.hasPermissionLevel(2))
+                .then(Commands.literal("general").requires(s -> s.hasPermission(2))
                     .executes(c -> reply(c.getSource(), "[Bots] Usage : " + SquadGeneralPlan.CREATE_USAGE + " · allow NOM … · tell NOM texte · stop NOM [despawn] · list"))
-                    .then(CommandManager.literal("create")
+                    .then(Commands.literal("create")
                         .executes(c -> reply(c.getSource(), "[Bots] Usage : " + SquadGeneralPlan.CREATE_USAGE))
-                        .then(CommandManager.argument("args", StringArgumentType.greedyString()).suggests(GENERAL_TERMS)
+                        .then(Commands.argument("args", StringArgumentType.greedyString()).suggests(GENERAL_TERMS)
                             .executes(c -> SquadGeneral.create(c.getSource(), StringArgumentType.getString(c, "args")))))
-                    .then(CommandManager.literal("allow")
-                        .then(CommandManager.argument("args", StringArgumentType.greedyString()).suggests(GENERAL_TERMS)
+                    .then(Commands.literal("allow")
+                        .then(Commands.argument("args", StringArgumentType.greedyString()).suggests(GENERAL_TERMS)
                             .executes(c -> SquadGeneral.allow(c.getSource(), StringArgumentType.getString(c, "args")))))
-                    .then(CommandManager.literal("tell")
-                        .then(CommandManager.argument("name", StringArgumentType.word())
-                            .then(CommandManager.argument("text", StringArgumentType.greedyString())
+                    .then(Commands.literal("tell")
+                        .then(Commands.argument("name", StringArgumentType.word())
+                            .then(Commands.argument("text", StringArgumentType.greedyString())
                                 .executes(c -> SquadGeneral.tell(c.getSource(), StringArgumentType.getString(c, "name"), StringArgumentType.getString(c, "text"))))))
-                    .then(CommandManager.literal("stop")
-                        .then(CommandManager.argument("name", StringArgumentType.word())
+                    .then(Commands.literal("stop")
+                        .then(Commands.argument("name", StringArgumentType.word())
                             .executes(c -> SquadGeneral.stop(c.getSource(), StringArgumentType.getString(c, "name"), false))
-                            .then(CommandManager.literal("despawn")
+                            .then(Commands.literal("despawn")
                                 .executes(c -> SquadGeneral.stop(c.getSource(), StringArgumentType.getString(c, "name"), true)))))
-                    .then(CommandManager.literal("list").executes(c -> SquadGeneral.list(c.getSource()))))
-                .then(CommandManager.literal("squad").requires(s -> s.hasPermissionLevel(2))
-                    .then(CommandManager.literal("spawn")
+                    .then(Commands.literal("list").executes(c -> SquadGeneral.list(c.getSource()))))
+                .then(Commands.literal("squad").requires(s -> s.hasPermission(2))
+                    .then(Commands.literal("spawn")
                         .executes(c -> reply(c.getSource(), "[Bots] Usage : " + SquadSpawnPlan.SPAWN_USAGE))
-                        .then(CommandManager.argument("args", StringArgumentType.greedyString()).suggests(SQUAD_LINE)
+                        .then(Commands.argument("args", StringArgumentType.greedyString()).suggests(SQUAD_LINE)
                             .executes(c -> SquadSpawn.spawn(c.getSource(), StringArgumentType.getString(c, "args")))))
-                    .then(CommandManager.literal("despawn")
+                    .then(Commands.literal("despawn")
                         .executes(c -> SquadSpawn.despawn(c.getSource(), ""))
-                        .then(CommandManager.argument("args", StringArgumentType.greedyString()).suggests(SQUAD_LINE)
+                        .then(Commands.argument("args", StringArgumentType.greedyString()).suggests(SQUAD_LINE)
                             .executes(c -> SquadSpawn.despawn(c.getSource(), StringArgumentType.getString(c, "args")))))
-                    .then(CommandManager.literal("respawn")
+                    .then(Commands.literal("respawn")
                         .executes(c -> SquadSpawn.respawn(c.getSource(), ""))
-                        .then(CommandManager.argument("args", StringArgumentType.greedyString()).suggests(SQUAD_LINE)
+                        .then(Commands.argument("args", StringArgumentType.greedyString()).suggests(SQUAD_LINE)
                             .executes(c -> SquadSpawn.respawn(c.getSource(), StringArgumentType.getString(c, "args")))))
-                    .then(CommandManager.literal("purge").executes(c -> SquadSpawn.purge(c.getSource()))))
-                .then(CommandManager.literal("equip").requires(s -> s.hasPermissionLevel(2))
-                    .then(CommandManager.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
-                        .then(CommandManager.argument("kit", StringArgumentType.word()).suggests(KITS)
+                    .then(Commands.literal("purge").executes(c -> SquadSpawn.purge(c.getSource()))))
+                .then(Commands.literal("equip").requires(s -> s.hasPermission(2))
+                    .then(Commands.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
+                        .then(Commands.argument("kit", StringArgumentType.word()).suggests(KITS)
                             .executes(c -> equip(c, StringArgumentType.getString(c, "bot"), StringArgumentType.getString(c, "kit"))))))
                 // -- owners -------------------------------------------------------------------------------------
-                .then(CommandManager.literal("create")
-                    .then(CommandManager.argument("name", StringArgumentType.word())
+                .then(Commands.literal("create")
+                    .then(Commands.argument("name", StringArgumentType.word())
                         .executes(c -> reply(c.getSource(), "[Bots] Dis ce que la commande doit faire : /bots create "
                             + StringArgumentType.getString(c, "name") + " <description>"))
-                        .then(CommandManager.argument("request", StringArgumentType.greedyString())
+                        .then(Commands.argument("request", StringArgumentType.greedyString())
                             .executes(c -> author(c, "create", StringArgumentType.getString(c, "request"))))))
-                .then(CommandManager.literal("fix")
-                    .then(CommandManager.argument("name", StringArgumentType.word()).suggests(OWN_COMMANDS)
+                .then(Commands.literal("fix")
+                    .then(Commands.argument("name", StringArgumentType.word()).suggests(OWN_COMMANDS)
                         .executes(c -> author(c, "fix", ""))
-                        .then(CommandManager.argument("feedback", StringArgumentType.greedyString())
+                        .then(Commands.argument("feedback", StringArgumentType.greedyString())
                             .executes(c -> author(c, "fix", StringArgumentType.getString(c, "feedback"))))))
-                .then(CommandManager.literal("order")
+                .then(Commands.literal("order")
                     // Greedy: "owner:NAME" has a colon, which a Brigadier word refuses. First token = the command.
-                    .then(CommandManager.argument("command", StringArgumentType.greedyString()).suggests(ORDER_LINE)
+                    .then(Commands.argument("command", StringArgumentType.greedyString()).suggests(ORDER_LINE)
                         .executes(c -> order(c, StringArgumentType.getString(c, "command")))))
-                .then(CommandManager.literal("stop")
+                .then(Commands.literal("stop")
                     .executes(c -> stop(c, ""))
-                    .then(CommandManager.argument("target", StringArgumentType.greedyString()).suggests(STOP_TARGETS)
+                    .then(Commands.argument("target", StringArgumentType.greedyString()).suggests(STOP_TARGETS)
                         .executes(c -> stop(c, StringArgumentType.getString(c, "target")))))
-                .then(CommandManager.literal("list")
+                .then(Commands.literal("list")
                     .executes(c -> call(c, "/api/bots/list", b -> b))
-                    .then(CommandManager.literal("all").requires(s -> s.hasPermissionLevel(2))
+                    .then(Commands.literal("all").requires(s -> s.hasPermission(2))
                         .executes(c -> call(c, "/api/bots/list", b -> {
                             b.addProperty("all", true);
                             return b;
                         }))))
-                .then(CommandManager.literal("orders").executes(c -> call(c, "/api/orders/list", b -> b))
+                .then(Commands.literal("orders").executes(c -> call(c, "/api/orders/list", b -> b))
                     // Bound items (docs/29 §5.4): anyone, a captain may bind items to hand out. Greedy like `order`.
-                    .then(CommandManager.literal("bind")
+                    .then(Commands.literal("bind")
                         .executes(c -> reply(c.getSource(), BIND_USAGE))
-                        .then(CommandManager.argument("line", StringArgumentType.greedyString()).suggests(ORDER_LINE)
+                        .then(Commands.argument("line", StringArgumentType.greedyString()).suggests(ORDER_LINE)
                             .executes(c -> bind(c, StringArgumentType.getString(c, "line")))))
-                    .then(CommandManager.literal("unbind").executes(SquadCommand::unbind))
-                    .then(CommandManager.literal("bound").executes(SquadCommand::bound)))
-                .then(CommandManager.literal("status").executes(SquadCommand::status))
-                .then(CommandManager.literal("tag")
-                    .then(CommandManager.argument("bot", StringArgumentType.word()).suggests(MY_BOTS)
-                        .then(CommandManager.argument("changes", StringArgumentType.greedyString())
+                    .then(Commands.literal("unbind").executes(SquadCommand::unbind))
+                    .then(Commands.literal("bound").executes(SquadCommand::bound)))
+                .then(Commands.literal("status").executes(SquadCommand::status))
+                .then(Commands.literal("tag")
+                    .then(Commands.argument("bot", StringArgumentType.word()).suggests(MY_BOTS)
+                        .then(Commands.argument("changes", StringArgumentType.greedyString())
                             .executes(c -> call(c, "/api/bots/tag", b -> {
                                 b.addProperty("name", StringArgumentType.getString(c, "bot"));
                                 b.add("changes", array(SquadArgs.tokenize(StringArgumentType.getString(c, "changes"))));
                                 return b;
                             })))))
-                .then(CommandManager.literal("commands").executes(c -> call(c, "/api/commands/list", b -> b)))
-                .then(CommandManager.literal("show")
-                    .then(CommandManager.argument("name", StringArgumentType.greedyString()).suggests(MY_COMMANDS)
+                .then(Commands.literal("commands").executes(c -> call(c, "/api/commands/list", b -> b)))
+                .then(Commands.literal("show")
+                    .then(Commands.argument("name", StringArgumentType.greedyString()).suggests(MY_COMMANDS)
                         .executes(c -> call(c, "/api/commands/show", b -> {
                             b.addProperty("name", StringArgumentType.getString(c, "name").trim());
                             return b;
                         }))))
-                .then(CommandManager.literal("share")
-                    .then(CommandManager.argument("name", StringArgumentType.word()).suggests(OWN_COMMANDS)
-                        .then(CommandManager.argument("players", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
+                .then(Commands.literal("share")
+                    .then(Commands.argument("name", StringArgumentType.word()).suggests(OWN_COMMANDS)
+                        .then(Commands.argument("players", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
                             .executes(c -> share(c, false)))))
-                .then(CommandManager.literal("unshare")
-                    .then(CommandManager.argument("name", StringArgumentType.word()).suggests(OWN_COMMANDS)
-                        .then(CommandManager.argument("players", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
+                .then(Commands.literal("unshare")
+                    .then(Commands.argument("name", StringArgumentType.word()).suggests(OWN_COMMANDS)
+                        .then(Commands.argument("players", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
                             .executes(c -> share(c, true)))))
-                .then(CommandManager.literal("delete")
-                    .then(CommandManager.argument("name", StringArgumentType.word()).suggests(OWN_COMMANDS)
+                .then(Commands.literal("delete")
+                    .then(Commands.argument("name", StringArgumentType.word()).suggests(OWN_COMMANDS)
                         .executes(c -> call(c, "/api/commands/delete", b -> {
                             b.addProperty("name", StringArgumentType.getString(c, "name"));
                             return b;
                         }))))
-                .then(CommandManager.literal("revert")
-                    .then(CommandManager.argument("name", StringArgumentType.word()).suggests(OWN_COMMANDS)
-                        .then(CommandManager.argument("version", IntegerArgumentType.integer(1))
+                .then(Commands.literal("revert")
+                    .then(Commands.argument("name", StringArgumentType.word()).suggests(OWN_COMMANDS)
+                        .then(Commands.argument("version", IntegerArgumentType.integer(1))
                             .executes(c -> call(c, "/api/commands/revert", b -> {
                                 b.addProperty("name", StringArgumentType.getString(c, "name"));
                                 b.addProperty("version", IntegerArgumentType.getInteger(c, "version"));
                                 return b;
                             })))))
-                .then(CommandManager.literal("ticket")
-                    .then(CommandManager.literal("revoke").executes(c -> call(c, "/api/authoring/revoke", b -> b)))
-                    .then(CommandManager.argument("name", StringArgumentType.word()).suggests(OWN_COMMANDS)
+                .then(Commands.literal("ticket")
+                    .then(Commands.literal("revoke").executes(c -> call(c, "/api/authoring/revoke", b -> b)))
+                    .then(Commands.argument("name", StringArgumentType.word()).suggests(OWN_COMMANDS)
                         .executes(SquadCommand::ticket)))
         ));
     }
 
     // -- suggestions ------------------------------------------------------------------------------------------------
 
-    private static final SuggestionProvider<ServerCommandSource> KITS = (c, b) -> CommandSource.suggestMatching(SquadKits.NAMES, b);
+    private static final SuggestionProvider<CommandSourceStack> KITS = (c, b) -> SharedSuggestionProvider.suggest(SquadKits.NAMES, b);
     /** {@code NAME archer=… guard=…}: the next key=value of {@code /bots general create|allow}. */
-    private static final SuggestionProvider<ServerCommandSource> GENERAL_TERMS = (c, b) -> {
+    private static final SuggestionProvider<CommandSourceStack> GENERAL_TERMS = (c, b) -> {
         String typed = b.getRemaining();
         int cut = typed.lastIndexOf(' ') + 1;
         if (cut == 0) return b.buildFuture(); // the General's name first
@@ -200,59 +200,59 @@ public final class SquadCommand {
         return next.buildFuture();
     };
     /** {@code /bots squad spawn|despawn|respawn …}: a kit first, then @s and online players (the owners). */
-    private static final SuggestionProvider<ServerCommandSource> SQUAD_LINE = (c, b) -> {
+    private static final SuggestionProvider<CommandSourceStack> SQUAD_LINE = (c, b) -> {
         String rem = b.getRemaining();
         int cut = rem.lastIndexOf(' ') + 1;
-        if (cut == 0) return CommandSource.suggestMatching(SquadKits.NAMES, b);
+        if (cut == 0) return SharedSuggestionProvider.suggest(SquadKits.NAMES, b);
         List<String> opts = new ArrayList<>(List.of("@s"));
         opts.addAll(List.of(c.getSource().getServer().getPlayerNames()));
-        return CommandSource.suggestMatching(opts, b.createOffset(b.getStart() + cut));
+        return SharedSuggestionProvider.suggest(opts, b.createOffset(b.getStart() + cut));
     };
-    private static final SuggestionProvider<ServerCommandSource> ALL_BOTS = (c, b) -> CommandSource.suggestMatching(Squad.botNames(), b);
-    private static final SuggestionProvider<ServerCommandSource> MY_BOTS = (c, b) -> {
-        ServerPlayerEntity p = c.getSource().getPlayer();
-        return CommandSource.suggestMatching(p == null || c.getSource().hasPermissionLevel(2) ? Squad.botNames() : Squad.botsOf(p.getUuid()), b);
+    private static final SuggestionProvider<CommandSourceStack> ALL_BOTS = (c, b) -> SharedSuggestionProvider.suggest(Squad.botNames(), b);
+    private static final SuggestionProvider<CommandSourceStack> MY_BOTS = (c, b) -> {
+        ServerPlayer p = c.getSource().getPlayer();
+        return SharedSuggestionProvider.suggest(p == null || c.getSource().hasPermission(2) ? Squad.botNames() : Squad.botsOf(p.getUUID()), b);
     };
     /** {@code /bots order …}: the command name first, then {@code @bot} filters and the take flags. */
-    private static final SuggestionProvider<ServerCommandSource> ORDER_LINE = (c, b) -> {
-        ServerPlayerEntity p = c.getSource().getPlayer();
+    private static final SuggestionProvider<CommandSourceStack> ORDER_LINE = (c, b) -> {
+        ServerPlayer p = c.getSource().getPlayer();
         if (p == null) return b.buildFuture();
         String rem = b.getRemaining();
         int cut = rem.lastIndexOf(' ') + 1;
-        if (cut == 0) return CommandSource.suggestMatching(Squad.commandsOf(p.getUuid(), false), b);
+        if (cut == 0) return SharedSuggestionProvider.suggest(Squad.commandsOf(p.getUUID(), false), b);
         List<String> opts = new ArrayList<>();
-        for (String n : Squad.botsOf(p.getUuid())) opts.add("@" + n);
+        for (String n : Squad.botsOf(p.getUUID())) opts.add("@" + n);
         opts.add("--reclaim");
         opts.add("--free");
-        return CommandSource.suggestMatching(opts, b.createOffset(b.getStart() + cut));
+        return SharedSuggestionProvider.suggest(opts, b.createOffset(b.getStart() + cut));
     };
-    private static final SuggestionProvider<ServerCommandSource> MY_COMMANDS = (c, b) -> {
-        ServerPlayerEntity p = c.getSource().getPlayer();
-        return CommandSource.suggestMatching(p == null ? List.of() : Squad.commandsOf(p.getUuid(), false), b);
+    private static final SuggestionProvider<CommandSourceStack> MY_COMMANDS = (c, b) -> {
+        ServerPlayer p = c.getSource().getPlayer();
+        return SharedSuggestionProvider.suggest(p == null ? List.of() : Squad.commandsOf(p.getUUID(), false), b);
     };
-    private static final SuggestionProvider<ServerCommandSource> OWN_COMMANDS = (c, b) -> {
-        ServerPlayerEntity p = c.getSource().getPlayer();
-        return CommandSource.suggestMatching(p == null ? List.of() : Squad.commandsOf(p.getUuid(), true), b);
+    private static final SuggestionProvider<CommandSourceStack> OWN_COMMANDS = (c, b) -> {
+        ServerPlayer p = c.getSource().getPlayer();
+        return SharedSuggestionProvider.suggest(p == null ? List.of() : Squad.commandsOf(p.getUUID(), true), b);
     };
-    private static final SuggestionProvider<ServerCommandSource> ONLINE_PLAYERS = (c, b) -> {
+    private static final SuggestionProvider<CommandSourceStack> ONLINE_PLAYERS = (c, b) -> {
         String rem = b.getRemaining();
         int cut = Math.max(rem.lastIndexOf(' '), rem.lastIndexOf(',')) + 1;
-        return CommandSource.suggestMatching(c.getSource().getServer().getPlayerNames(), b.createOffset(b.getStart() + cut));
+        return SharedSuggestionProvider.suggest(c.getSource().getServer().getPlayerNames(), b.createOffset(b.getStart() + cut));
     };
-    private static final SuggestionProvider<ServerCommandSource> STOP_TARGETS = (c, b) -> {
-        ServerPlayerEntity p = c.getSource().getPlayer();
+    private static final SuggestionProvider<CommandSourceStack> STOP_TARGETS = (c, b) -> {
+        ServerPlayer p = c.getSource().getPlayer();
         List<String> opts = new ArrayList<>(List.of("all"));
         opts.addAll(Squad.orderIds());
         if (p != null) {
-            for (String n : Squad.botsOf(p.getUuid())) opts.add("@" + n);
-            opts.addAll(Squad.commandsOf(p.getUuid(), false));
+            for (String n : Squad.botsOf(p.getUUID())) opts.add("@" + n);
+            opts.addAll(Squad.commandsOf(p.getUUID(), false));
         }
-        return CommandSource.suggestMatching(opts, b);
+        return SharedSuggestionProvider.suggest(opts, b);
     };
 
     // -- handlers ---------------------------------------------------------------------------------------------------
 
-    private static int help(ServerCommandSource src) {
+    private static int help(CommandSourceStack src) {
         String[] lines = {
             "[Bots] Tes bots exécutent des commandes écrites sur demande :",
             " /bots create NOM <ce qu'elle doit faire> — faire écrire une commande",
@@ -263,19 +263,19 @@ public final class SquadCommand {
             " /bots list · orders · commands · show NOM · tag BOT +étiquette -étiquette · status",
             " /bots share NOM JOUEUR… · unshare · delete NOM · revert NOM VERSION · ticket NOM",
         };
-        for (String l : lines) src.sendFeedback(() -> Text.literal(l), false);
-        if (src.hasPermissionLevel(2)) {
-            src.sendFeedback(() -> Text.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · squad spawn KIT [nombre] [propriétaire=@s] [autres…] · squad despawn [KIT] [propriétaire=@s] · squad respawn [KIT] [nombre] [propriétaire=@s] (un bot mort reste déconnecté jusque-là) · squad purge (les sauvegardes laissées par d'anciens bots) · equip BOT archer|guard|miner|farmer (il devient aussi à toi) · raid [distance] [archers] [gardes] | clear | stop · general create NOM archer=N guard=N [reinforce=N] [range=N] | allow | tell | stop | list · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
+        for (String l : lines) src.sendSuccess(() -> Component.literal(l), false);
+        if (src.hasPermission(2)) {
+            src.sendSuccess(() -> Component.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · squad spawn KIT [nombre] [propriétaire=@s] [autres…] · squad despawn [KIT] [propriétaire=@s] · squad respawn [KIT] [nombre] [propriétaire=@s] (un bot mort reste déconnecté jusque-là) · squad purge (les sauvegardes laissées par d'anciens bots) · equip BOT archer|guard|miner|farmer (il devient aussi à toi) · raid [distance] [archers] [gardes] | clear | stop · general create NOM archer=N guard=N [reinforce=N] [range=N] | allow | tell | stop | list · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
         }
         return Command.SINGLE_SUCCESS;
     }
 
-    private static int spawn(CommandContext<ServerCommandSource> c, String bot, String ownersText) {
+    private static int spawn(CommandContext<CommandSourceStack> c, String bot, String ownersText) {
         if (!Squad.enabled()) return reply(c.getSource(), DISABLED);
-        ServerCommandSource src = c.getSource();
+        CommandSourceStack src = c.getSource();
         MinecraftServer srv = src.getServer();
         if (!SquadArgs.BOT_NAME.matcher(bot).matches()) return reply(src, "[Bots] Nom de bot invalide (3 à 16 caractères : lettres, chiffres, _).");
-        if (srv.getPlayerManager().getPlayer(bot) != null || Squad.hasPlayed(srv, bot)) {
+        if (srv.getPlayerList().getPlayerByName(bot) != null || Squad.hasPlayed(srv, bot)) {
             return reply(src, "[Bots] " + bot + " est le nom d'un joueur qui a déjà joué ici (le bot hériterait de son inventaire) : choisis-en un autre.");
         }
         if (reservedName(bot)) return reply(src, "[Bots] " + bot + " est réservé (avatar de Dieu ou villageois).");
@@ -287,7 +287,7 @@ public final class SquadCommand {
             if (p.isEmpty()) return reply(src, "[Bots] Joueur inconnu : " + name);
             owners.add(Squad.player(p.get()));
         }
-        ServerPlayerEntity admin = src.getPlayer();
+        ServerPlayer admin = src.getPlayer();
         JsonObject body = base(src);
         body.addProperty("name", bot);
         body.add("owners", owners);
@@ -306,9 +306,9 @@ public final class SquadCommand {
      * caller, when a player, also becomes one of the bot's owners (its other owners keep it), so the bot they just
      * armed is theirs to order (the world's datapack function squad:equiper relies on it).
      */
-    private static int equip(CommandContext<ServerCommandSource> c, String bot, String kitName) {
+    private static int equip(CommandContext<CommandSourceStack> c, String bot, String kitName) {
         if (!Squad.enabled()) return reply(c.getSource(), DISABLED);
-        ServerCommandSource src = c.getSource();
+        CommandSourceStack src = c.getSource();
         Optional<SquadKits.Kit> kit = SquadKits.find(kitName);
         if (kit.isEmpty()) return reply(src, "[Bots] Kit inconnu : " + kitName + " (" + String.join(", ", SquadKits.NAMES) + ").");
         Optional<String> name = Squad.botNames().stream().filter(n -> n.equalsIgnoreCase(bot)).findFirst();
@@ -320,8 +320,8 @@ public final class SquadCommand {
         Squad.client().post("/api/bots/tag", body).thenAccept(r -> {
             if (!SquadAuthoring.ok(r)) src.getServer().execute(() -> show(src, r));
         });
-        ServerPlayerEntity caller = src.getPlayer();
-        if (caller != null && !Squad.botsOf(caller.getUuid()).contains(name.get())) {
+        ServerPlayer caller = src.getPlayer();
+        if (caller != null && !Squad.botsOf(caller.getUUID()).contains(name.get())) {
             JsonObject own = base(src);
             own.addProperty("name", name.get());
             JsonArray add = new JsonArray();
@@ -337,9 +337,9 @@ public final class SquadCommand {
      * player typing it, or the player running a datapack function such as the world's squad:armee), else
      * {@link Squad#profile}.
      */
-    static Optional<GameProfile> owner(ServerCommandSource src, String name) {
+    static Optional<GameProfile> owner(CommandSourceStack src, String name) {
         if (name.equals("@s")) {
-            ServerPlayerEntity self = src.getPlayer();
+            ServerPlayer self = src.getPlayer();
             return self == null ? Optional.empty() : Optional.of(self.getGameProfile());
         }
         return Squad.profile(src.getServer(), name);
@@ -352,9 +352,9 @@ public final class SquadCommand {
             || com.paul.brawl.VillagersCommand.activeScenarioBots.stream().anyMatch(v -> v.equalsIgnoreCase(bot));
     }
 
-    private static int despawn(CommandContext<ServerCommandSource> c, String bot) {
+    private static int despawn(CommandContext<CommandSourceStack> c, String bot) {
         if (!Squad.enabled()) return reply(c.getSource(), DISABLED);
-        ServerCommandSource src = c.getSource();
+        CommandSourceStack src = c.getSource();
         despawnBot(src, bot).thenAccept(r -> src.getServer().execute(() -> show(src, r)));
         return Command.SINGLE_SUCCESS;
     }
@@ -363,7 +363,7 @@ public final class SquadCommand {
      * {@code /bots despawn all} (admin): every roster bot, each through {@link #despawnBot} (stopped, disconnected,
      * unwhitelisted, forgotten), and a raid still assembling is cancelled so it spawns no more. One line at the end.
      */
-    private static int despawnAll(ServerCommandSource src) {
+    private static int despawnAll(CommandSourceStack src) {
         if (!Squad.enabled()) return reply(src, DISABLED);
         SquadRaid.cancelAssembling();
         List<String> bots = Squad.botNames();
@@ -383,7 +383,7 @@ public final class SquadCommand {
      * Despawn one bot (the runtime first), then on the server thread: unwhitelist and disconnect it, and delete its
      * save once it has left (Squad.forgetSave), so its name is free for the next spawn.
      */
-    static CompletableFuture<JsonObject> despawnBot(ServerCommandSource src, String bot) {
+    static CompletableFuture<JsonObject> despawnBot(CommandSourceStack src, String bot) {
         MinecraftServer srv = src.getServer();
         JsonObject body = base(src);
         body.addProperty("name", bot);
@@ -393,8 +393,8 @@ public final class SquadCommand {
                 if (SquadAuthoring.ok(r) && r.has("bot")) {
                     String name = r.getAsJsonObject("bot").get("name").getAsString();
                     Squad.whitelist(srv, name, false);
-                    ServerPlayerEntity p = srv.getPlayerManager().getPlayer(name);
-                    if (p != null) p.networkHandler.disconnect(Text.literal("Bot retiré."));
+                    ServerPlayer p = srv.getPlayerList().getPlayerByName(name);
+                    if (p != null) p.connection.disconnect(Component.literal("Bot retiré."));
                     Squad.forgetSave(name);
                 }
             } finally {
@@ -404,8 +404,8 @@ public final class SquadCommand {
         return done;
     }
 
-    private static int owners(CommandContext<ServerCommandSource> c, boolean add) {
-        ServerCommandSource src = c.getSource();
+    private static int owners(CommandContext<CommandSourceStack> c, boolean add) {
+        CommandSourceStack src = c.getSource();
         JsonArray players = new JsonArray();
         for (String name : SquadArgs.names(StringArgumentType.getString(c, "players"))) {
             Optional<GameProfile> p = owner(src, name);
@@ -419,20 +419,20 @@ public final class SquadCommand {
         });
     }
 
-    private static int author(CommandContext<ServerCommandSource> c, String mode, String text) {
+    private static int author(CommandContext<CommandSourceStack> c, String mode, String text) {
         if (!Squad.enabled()) return reply(c.getSource(), DISABLED);
-        ServerPlayerEntity p = c.getSource().getPlayer();
+        ServerPlayer p = c.getSource().getPlayer();
         if (p == null) return reply(c.getSource(), "[Bots] À lancer en jeu, par un joueur.");
         String name = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
         if (!SquadArgs.COMMAND_NAME.matcher(name).matches()) return reply(c.getSource(), "[Bots] Nom de commande invalide (a-z, 0-9 et -, 2 à 32 caractères).");
         String playerName = p.getName().getString();
-        CommanderSnap.take(p).thenAccept(snap -> Squad.authoring().start(mode, p.getUuid(), playerName, name, text, snap));
+        CommanderSnap.take(p).thenAccept(snap -> Squad.authoring().start(mode, p.getUUID(), playerName, name, text, snap));
         return Command.SINGLE_SUCCESS;
     }
 
-    private static int order(CommandContext<ServerCommandSource> c, String line) {
+    private static int order(CommandContext<CommandSourceStack> c, String line) {
         if (!Squad.enabled()) return reply(c.getSource(), DISABLED);
-        ServerPlayerEntity p = c.getSource().getPlayer();
+        ServerPlayer p = c.getSource().getPlayer();
         if (p == null) return reply(c.getSource(), "[Bots] À lancer en jeu, par un joueur (les bots ont besoin de ta position).");
         String trimmed = line.trim();
         int sp = trimmed.indexOf(' ');
@@ -455,18 +455,18 @@ public final class SquadCommand {
      * on the server thread, the binding is written on the held stack, if it is still the one held when the command
      * was typed (same hotbar slot, same item).
      */
-    private static int bind(CommandContext<ServerCommandSource> c, String typed) {
-        ServerCommandSource src = c.getSource();
+    private static int bind(CommandContext<CommandSourceStack> c, String typed) {
+        CommandSourceStack src = c.getSource();
         if (!Squad.enabled()) return reply(src, DISABLED);
-        ServerPlayerEntity p = src.getPlayer();
+        ServerPlayer p = src.getPlayer();
         if (p == null) return reply(src, "[Bots] À lancer en jeu, par un joueur (l'objet en main est lié).");
         Optional<SquadBinding.BindLine> line = SquadBinding.parse(typed);
         if (line.isEmpty()) return reply(src, BIND_USAGE);
         String order = line.get().order();
         if (!SquadBinding.validOrder(order)) return reply(src, "[Bots] Nom de commande invalide : " + order + " (NOM ou auteur:NOM).");
-        ItemStack held = p.getMainHandStack();
+        ItemStack held = p.getMainHandItem();
         if (held.isEmpty()) return reply(src, "[Bots] Prends en main l'objet à lier (un bouclier, une épée, un arc…).");
-        int slot = p.getInventory().selectedSlot;
+        int slot = p.getInventory().selected;
         Item item = held.getItem();
         String rest = line.get().rest();
         SquadArgs.OrderArgs a = SquadArgs.order(rest);
@@ -480,8 +480,8 @@ public final class SquadCommand {
                 show(src, r);
                 return;
             }
-            ItemStack now = p.getMainHandStack();
-            if (p.isRemoved() || now.isEmpty() || p.getInventory().selectedSlot != slot || !now.isOf(item)) {
+            ItemStack now = p.getMainHandItem();
+            if (p.isRemoved() || now.isEmpty() || p.getInventory().selected != slot || !now.is(item)) {
                 reply(src, "[Bots] Tu n'as plus le même objet en main : rien n'a été lié.");
                 return;
             }
@@ -489,58 +489,58 @@ public final class SquadCommand {
             SquadBinding.write(now, canonical, rest);
             String how = SquadBinding.isLauncher(now) ? "tire une flèche" : "clic droit";
             // "Ordre … lié" rather than "<item> lié": the item's name may be feminine (Épée, Arbalète, Flèche).
-            Text t = prefix().append(Text.literal("Ordre « " + canonical + " » lié à ton objet (")).append(now.getName())
-                .append(Text.literal(") : " + how + " pour lancer ou réorienter, accroupi + clic droit pour arrêter."));
-            src.sendFeedback(() -> t, false);
+            Component t = prefix().append(Component.literal("Ordre « " + canonical + " » lié à ton objet (")).append(now.getHoverName())
+                .append(Component.literal(") : " + how + " pour lancer ou réorienter, accroupi + clic droit pour arrêter."));
+            src.sendSuccess(() -> t, false);
         }));
         return Command.SINGLE_SUCCESS;
     }
 
     /** {@code /bots orders unbind}: local, so it works with Squad off too (an item can always be cleaned). */
-    private static int unbind(CommandContext<ServerCommandSource> c) {
-        ServerCommandSource src = c.getSource();
-        ServerPlayerEntity p = src.getPlayer();
+    private static int unbind(CommandContext<CommandSourceStack> c) {
+        CommandSourceStack src = c.getSource();
+        ServerPlayer p = src.getPlayer();
         if (p == null) return reply(src, "[Bots] À lancer en jeu, par un joueur.");
-        ItemStack held = p.getMainHandStack();
+        ItemStack held = p.getMainHandItem();
         Optional<SquadBinding> b = SquadBinding.clear(held);
         if (b.isEmpty()) return reply(src, "[Bots] Cet objet n'est lié à aucun ordre.");
-        Text t = prefix().append(Text.literal("Ordre « " + b.get().order() + " » délié de ton objet (")).append(held.getName()).append(Text.literal(")."));
-        src.sendFeedback(() -> t, false);
+        Component t = prefix().append(Component.literal("Ordre « " + b.get().order() + " » délié de ton objet (")).append(held.getHoverName()).append(Component.literal(")."));
+        src.sendSuccess(() -> t, false);
         return Command.SINGLE_SUCCESS;
     }
 
     /** {@code /bots orders bound}: the bound stacks of the main inventory and the off-hand, one line each. */
-    private static int bound(CommandContext<ServerCommandSource> c) {
-        ServerCommandSource src = c.getSource();
-        ServerPlayerEntity p = src.getPlayer();
+    private static int bound(CommandContext<CommandSourceStack> c) {
+        CommandSourceStack src = c.getSource();
+        ServerPlayer p = src.getPlayer();
         if (p == null) return reply(src, "[Bots] À lancer en jeu, par un joueur.");
-        List<Text> lines = new ArrayList<>();
-        List<ItemStack> stacks = new ArrayList<>(p.getInventory().main);
-        stacks.addAll(p.getInventory().offHand);
+        List<Component> lines = new ArrayList<>();
+        List<ItemStack> stacks = new ArrayList<>(p.getInventory().items);
+        stacks.addAll(p.getInventory().offhand);
         for (ItemStack s : stacks) {
-            SquadBinding.read(s).ifPresent(b -> lines.add(Text.literal(" • ").append(s.getName())
-                .append(Text.literal(" : " + b.order() + (b.line().isBlank() ? "" : " " + b.line())))));
+            SquadBinding.read(s).ifPresent(b -> lines.add(Component.literal(" • ").append(s.getHoverName())
+                .append(Component.literal(" : " + b.order() + (b.line().isBlank() ? "" : " " + b.line())))));
         }
         if (lines.isEmpty()) return reply(src, "[Bots] Aucun objet lié dans ton inventaire (/bots orders bind NOM, l'objet en main).");
         reply(src, "[Bots] Objets liés :");
-        for (Text t : lines) src.sendFeedback(() -> t, false);
+        for (Component t : lines) src.sendSuccess(() -> t, false);
         return Command.SINGLE_SUCCESS;
     }
 
     /** "[Bots] " styled as {@link Squad#render} styles it, for a line that carries an item's (translated) name. */
-    private static MutableText prefix() {
-        return Text.literal("[Bots]").formatted(Formatting.AQUA).append(Text.literal(" "));
+    private static MutableComponent prefix() {
+        return Component.literal("[Bots]").withStyle(ChatFormatting.AQUA).append(Component.literal(" "));
     }
 
-    private static int stop(CommandContext<ServerCommandSource> c, String target) {
+    private static int stop(CommandContext<CommandSourceStack> c, String target) {
         return call(c, "/api/orders/stop", b -> {
             b.addProperty("target", target.trim());
             return b;
         });
     }
 
-    private static int share(CommandContext<ServerCommandSource> c, boolean remove) {
-        ServerCommandSource src = c.getSource();
+    private static int share(CommandContext<CommandSourceStack> c, boolean remove) {
+        CommandSourceStack src = c.getSource();
         JsonArray players = new JsonArray();
         for (String name : SquadArgs.names(StringArgumentType.getString(c, "players"))) {
             Optional<GameProfile> p = owner(src, name);
@@ -556,11 +556,11 @@ public final class SquadCommand {
     }
 
     /** {@code /bots ticket NAME}: a manual authoring ticket for the player's own Claude Code session. */
-    private static int ticket(CommandContext<ServerCommandSource> c) {
+    private static int ticket(CommandContext<CommandSourceStack> c) {
         if (!Squad.enabled()) return reply(c.getSource(), DISABLED);
-        ServerPlayerEntity p = c.getSource().getPlayer();
+        ServerPlayer p = c.getSource().getPlayer();
         if (p == null) return reply(c.getSource(), "[Bots] À lancer en jeu, par un joueur.");
-        ServerCommandSource src = c.getSource();
+        CommandSourceStack src = c.getSource();
         JsonObject body = base(src);
         body.addProperty("mode", "manual");
         body.addProperty("name", StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT));
@@ -574,11 +574,11 @@ public final class SquadCommand {
                 return;
             }
             String id = r.get("ticket").getAsString();
-            Text t = Text.literal(id).styled(s -> s.withColor(Formatting.GOLD).withUnderline(true)
-                .withClickEvent(new net.minecraft.text.ClickEvent(net.minecraft.text.ClickEvent.Action.COPY_TO_CLIPBOARD, id))
-                .withHoverEvent(new net.minecraft.text.HoverEvent(net.minecraft.text.HoverEvent.Action.SHOW_TEXT, Text.literal("Clique pour copier le ticket"))));
-            src.sendFeedback(() -> Text.literal("[Bots] Ticket d'écriture (2 h) : ").append(t), false);
-            src.sendFeedback(() -> Text.literal("Serveur MCP : " + SquadConfig.INSTANCE.url + "/mcp/squad — donne ce ticket à ton agent ; /bots ticket revoke l'annule."), false);
+            Component t = Component.literal(id).withStyle(s -> s.withColor(ChatFormatting.GOLD).withUnderlined(true)
+                .withClickEvent(new net.minecraft.network.chat.ClickEvent(net.minecraft.network.chat.ClickEvent.Action.COPY_TO_CLIPBOARD, id))
+                .withHoverEvent(new net.minecraft.network.chat.HoverEvent(net.minecraft.network.chat.HoverEvent.Action.SHOW_TEXT, Component.literal("Clique pour copier le ticket"))));
+            src.sendSuccess(() -> Component.literal("[Bots] Ticket d'écriture (2 h) : ").append(t), false);
+            src.sendSuccess(() -> Component.literal("Serveur MCP : " + SquadConfig.INSTANCE.url + "/mcp/squad — donne ce ticket à ton agent ; /bots ticket revoke l'annule."), false);
         }));
         return Command.SINGLE_SUCCESS;
     }
@@ -587,8 +587,8 @@ public final class SquadCommand {
      * {@code /bots status} (anyone, docs/32 C): the runtime's load over its last 10 s window — ELU, the loop's p99
      * and the slowest bot's ticks per second. The line is built by {@link SquadStatusFormat}.
      */
-    private static int status(CommandContext<ServerCommandSource> c) {
-        ServerCommandSource src = c.getSource();
+    private static int status(CommandContext<CommandSourceStack> c) {
+        CommandSourceStack src = c.getSource();
         if (!Squad.enabled()) return reply(src, DISABLED);
         Squad.client().post("/api/metrics", base(src)).thenAccept(r -> src.getServer().execute(() -> reply(src, SquadStatusFormat.format(r))));
         return Command.SINGLE_SUCCESS;
@@ -597,8 +597,8 @@ public final class SquadCommand {
     // -- plumbing ---------------------------------------------------------------------------------------------------
 
     /** POST with {@code by}/{@code admin} added; show the runtime's answer to the source. */
-    private static int call(CommandContext<ServerCommandSource> c, String path, Function<JsonObject, JsonObject> fill) {
-        ServerCommandSource src = c.getSource();
+    private static int call(CommandContext<CommandSourceStack> c, String path, Function<JsonObject, JsonObject> fill) {
+        CommandSourceStack src = c.getSource();
         if (!Squad.enabled()) return reply(src, DISABLED);
         JsonObject body = fill.apply(base(src));
         CompletableFuture<JsonObject> f = Squad.client().post(path, body);
@@ -613,25 +613,25 @@ public final class SquadCommand {
     }
 
     /** {@code by} (the player, or the console as an admin) and {@code admin}. */
-    static JsonObject base(ServerCommandSource src) {
+    static JsonObject base(CommandSourceStack src) {
         JsonObject b = new JsonObject();
-        ServerPlayerEntity p = src.getPlayer();
+        ServerPlayer p = src.getPlayer();
         JsonObject by = new JsonObject();
-        by.addProperty("uuid", p != null ? p.getUuidAsString() : "00000000-0000-0000-0000-00000000c0de");
+        by.addProperty("uuid", p != null ? p.getStringUUID() : "00000000-0000-0000-0000-00000000c0de");
         by.addProperty("name", p != null ? p.getName().getString() : "Console");
         b.add("by", by);
-        b.addProperty("admin", src.hasPermissionLevel(2));
+        b.addProperty("admin", src.hasPermission(2));
         return b;
     }
 
-    static void show(ServerCommandSource src, JsonObject r) {
+    static void show(CommandSourceStack src, JsonObject r) {
         SquadNotice n = SquadNotice.fromJson(r);
         if (n.text().isBlank()) return;
-        for (Text t : Squad.render(n)) src.sendFeedback(() -> t, false);
+        for (Component t : Squad.render(n)) src.sendSuccess(() -> t, false);
     }
 
-    static int reply(ServerCommandSource src, String text) {
-        for (Text t : Squad.render(SquadNotice.of(text))) src.sendFeedback(() -> t, false);
+    static int reply(CommandSourceStack src, String text) {
+        for (Component t : Squad.render(SquadNotice.of(text))) src.sendSuccess(() -> t, false);
         return 0;
     }
 

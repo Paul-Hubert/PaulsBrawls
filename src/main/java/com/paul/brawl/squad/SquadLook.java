@@ -17,29 +17,29 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.block.ShapeContext;
-import net.minecraft.block.entity.BlockEntity;
-import net.minecraft.entity.Entity;
-import net.minecraft.fluid.FluidState;
-import net.minecraft.registry.Registries;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ChunkFilter;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.ChunkPos;
-import net.minecraft.util.math.ChunkSectionPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.BlockView;
-import net.minecraft.world.RaycastContext;
-import net.minecraft.world.chunk.ChunkSection;
-import net.minecraft.world.chunk.PalettedContainer;
-import net.minecraft.world.chunk.WorldChunk;
+import net.minecraft.server.level.ChunkTrackingView;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.chunk.PalettedContainer;
+import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 
 /**
  * Where the commander looks, as far as they can see (docs/29 §7.1): the block and the entity their crosshair points at,
@@ -113,8 +113,8 @@ public final class SquadLook {
     }
 
     /** Cast {@code p}'s look as it is now (server thread). The future completes on the server thread, a tick or more later. */
-    public static CompletableFuture<Look> cast(ServerPlayerEntity p) {
-        if (stopped || !(p.getWorld() instanceof ServerWorld)) return CompletableFuture.completedFuture(Look.NONE);
+    public static CompletableFuture<Look> cast(ServerPlayer p) {
+        if (stopped || !(p.level() instanceof ServerLevel)) return CompletableFuture.completedFuture(Look.NONE);
         Ray r = new Ray(p, ticks);
         if (r.end <= 0) return CompletableFuture.completedFuture(Look.NONE);
         RAYS.add(r);
@@ -190,14 +190,14 @@ public final class SquadLook {
 
     /** The next stretch of the look, copied: the sections from where it got to (and the ones it asked for), its entities. */
     private static Copy copy(Ray r, long budgetEnd) {
-        CopiedView view = new CopiedView(r.world.getBottomY(), r.world.getTopY(), r.view);
-        for (long key : r.missing) copySection(r, view, ChunkSectionPos.unpackX(key), ChunkSectionPos.unpackY(key), ChunkSectionPos.unpackZ(key));
+        CopiedView view = new CopiedView(r.world.getMinBuildHeight(), r.world.getMaxBuildHeight(), r.view);
+        for (long key : r.missing) copySection(r, view, SectionPos.x(key), SectionPos.y(key), SectionPos.z(key));
         r.missing.clear();
         double from = Math.max(0, r.t - EPS); // the backward overlap of the walk's first piece
         double[] to = { from };
         int[] n = { 0 };
         SquadLookPlan.sections(r.eye.x, r.eye.y, r.eye.z, r.dir.x, r.dir.y, r.dir.z, from, r.end, (cx, sy, cz, tIn, tOut) -> {
-            if (!r.view.isWithinDistance(cx, cz)) {
+            if (!r.view.contains(cx, cz)) {
                 r.end = Math.max(r.t, Math.min(r.end, tIn)); // the player sees nothing past here
                 return false;
             }
@@ -212,20 +212,20 @@ public final class SquadLook {
     }
 
     private static void copySection(Ray r, CopiedView view, int cx, int sy, int cz) {
-        if (sy < r.world.getBottomSectionCoord() || sy >= r.world.getTopSectionCoord()) return; // VOID_AIR, read without a copy
-        long key = ChunkSectionPos.asLong(cx, sy, cz);
+        if (sy < r.world.getMinSection() || sy >= r.world.getMaxSection()) return; // VOID_AIR, read without a copy
+        long key = SectionPos.asLong(cx, sy, cz);
         if (view.has(key)) return;
         if (cx != r.lastCx || cz != r.lastCz || r.lastChunk == null) {
             // Never loads a chunk: one the server does not hold is one the player cannot see.
-            r.lastChunk = r.world.getChunkManager().getWorldChunk(cx, cz);
+            r.lastChunk = r.world.getChunkSource().getChunkNow(cx, cz);
             r.lastCx = cx;
             r.lastCz = cz;
             if (r.lastChunk == null) r.lastCx = Integer.MIN_VALUE;
         }
-        WorldChunk chunk = r.lastChunk;
-        ChunkSection s = chunk == null ? null : chunk.getSection(chunk.sectionCoordToIndex(sy));
-        if (s == null || s.isEmpty()) view.air(key);
-        else view.put(key, s.getBlockStateContainer().copy());
+        LevelChunk chunk = r.lastChunk;
+        LevelChunkSection s = chunk == null ? null : chunk.getSection(chunk.getSectionIndexFromSectionY(sy));
+        if (s == null || s.hasOnlyAir()) view.air(key);
+        else view.put(key, s.getStates().copy());
     }
 
     /** The entities a crosshair could target along {@code [t0, t1]} of the look, that the player's client shows. */
@@ -234,10 +234,10 @@ public final class SquadLook {
         IntOpenHashSet seen = new IntOpenHashSet();
         Entity root = r.player.getRootVehicle();
         for (double a = t0; a < t1; a += ENTITY_PIECE) {
-            Box q = new Box(r.at(a), r.at(Math.min(t1, a + ENTITY_PIECE))).expand(1.0);
-            for (Entity e : r.world.getOtherEntities(r.player, q, e -> !e.isSpectator() && e.canHit() && shown(r, e))) {
+            AABB q = new AABB(r.at(a), r.at(Math.min(t1, a + ENTITY_PIECE))).inflate(1.0);
+            for (Entity e : r.world.getEntities(r.player, q, e -> !e.isSpectator() && e.isPickable() && shown(r, e))) {
                 if (!seen.add(e.getId())) continue;
-                out.add(new SquadLookTargets.Target<>(e.getBoundingBox().expand(e.getTargetingMargin()), e.getRootVehicle() == root, CommanderSnap.entity(e)));
+                out.add(new SquadLookTargets.Target<>(e.getBoundingBox().inflate(e.getPickRadius()), e.getRootVehicle() == root, CommanderSnap.entity(e)));
             }
         }
         return out;
@@ -245,11 +245,11 @@ public final class SquadLook {
 
     /** As vanilla's entity tracker: within the entity's tracking range of the player, in a chunk of the player's view. */
     private static boolean shown(Ray r, Entity e) {
-        int range = r.server.adjustTrackingDistance(e.getType().getMaxTrackDistance() * 16);
+        int range = r.server.getScaledTrackingDistance(e.getType().clientTrackingRange() * 16);
         double dx = e.getX() - r.player.getX();
         double dz = e.getZ() - r.player.getZ();
-        ChunkPos c = e.getChunkPos();
-        return dx * dx + dz * dz <= (double) range * range && r.view.isWithinDistance(c.x, c.z);
+        ChunkPos c = e.chunkPosition();
+        return dx * dx + dz * dz <= (double) range * range && r.view.contains(c.x, c.z);
     }
 
     // -- the worker's walk ----------------------------------------------------------------------------------------
@@ -262,13 +262,13 @@ public final class SquadLook {
         while (a < end) {
             double b = Math.min(end, a + SEGMENT);
             try {
-                BlockHitResult h = c.view.raycast(new RaycastContext(r.at(Math.max(0, a - EPS)), r.at(b), RaycastContext.ShapeType.OUTLINE,
-                    RaycastContext.FluidHandling.NONE, r.shape));
+                BlockHitResult h = c.view.clip(new ClipContext(r.at(Math.max(0, a - EPS)), r.at(b), ClipContext.Block.OUTLINE,
+                    ClipContext.Fluid.NONE, r.shape));
                 if (h.getType() == HitResult.Type.BLOCK) {
-                    double tb = h.getPos().distanceTo(r.eye);
+                    double tb = h.getLocation().distanceTo(r.eye);
                     BlockPos bp = h.getBlockPos();
-                    String name = Registries.BLOCK.getId(c.view.getBlockState(bp).getBlock()).getPath();
-                    return new Walked(tb, bp.toImmutable(), name, entityBefore(r, c, tb), Long.MIN_VALUE);
+                    String name = BuiltInRegistries.BLOCK.getKey(c.view.getBlockState(bp).getBlock()).getPath();
+                    return new Walked(tb, bp.immutable(), name, entityBefore(r, c, tb), Long.MIN_VALUE);
                 }
             } catch (Missing m) {
                 return new Walked(a, null, null, entityBefore(r, c, a), m.key);
@@ -288,14 +288,14 @@ public final class SquadLook {
 
     /** One look in flight. The worker reads only the final fields (and its Copy). */
     private static final class Ray {
-        final ServerPlayerEntity player;
-        final ServerWorld world;
+        final ServerPlayer player;
+        final ServerLevel world;
         final MinecraftServer server;
-        final Vec3d eye;
-        final Vec3d dir;
-        final ShapeContext shape;
+        final Vec3 eye;
+        final Vec3 dir;
+        final CollisionContext shape;
         /** The chunks the server sends the player (a record: safe to read anywhere). */
-        final ChunkFilter view;
+        final ChunkTrackingView view;
         final int startTick;
         final CompletableFuture<Look> done = new CompletableFuture<>();
         /** Walked up to here: no block before it. */
@@ -312,22 +312,22 @@ public final class SquadLook {
         CompletableFuture<Walked> step;
         int lastCx = Integer.MIN_VALUE;
         int lastCz;
-        WorldChunk lastChunk;
+        LevelChunk lastChunk;
 
-        Ray(ServerPlayerEntity p, int tick) {
+        Ray(ServerPlayer p, int tick) {
             player = p;
-            world = (ServerWorld) p.getWorld();
+            world = (ServerLevel) p.level();
             server = world.getServer();
-            eye = p.getCameraPosVec(1.0f);
-            dir = p.getRotationVec(1.0f);
-            shape = ShapeContext.of(p);
-            view = p.getChunkFilter();
+            eye = p.getEyePosition(1.0f);
+            dir = p.getViewVector(1.0f);
+            shape = CollisionContext.of(p);
+            view = p.getChunkTrackingView();
             startTick = tick;
-            end = SquadLookPlan.clipHeight(eye.y, dir.y, world.getBottomY(), world.getTopY(), REACH);
+            end = SquadLookPlan.clipHeight(eye.y, dir.y, world.getMinBuildHeight(), world.getMaxBuildHeight(), REACH);
         }
 
-        Vec3d at(double d) {
-            return eye.add(dir.multiply(d));
+        Vec3 at(double d) {
+            return eye.add(dir.scale(d));
         }
 
         void apply(Walked w) {
@@ -368,16 +368,16 @@ public final class SquadLook {
      * The world as copied for one step: the copied sections, air where a section is empty or its chunk not loaded,
      * void air outside the height, air outside the player's view; any other section throws {@link Missing}.
      */
-    private static final class CopiedView implements BlockView {
-        private static final BlockState AIR = Blocks.AIR.getDefaultState();
-        private static final BlockState VOID_AIR = Blocks.VOID_AIR.getDefaultState();
+    private static final class CopiedView implements BlockGetter {
+        private static final BlockState AIR = Blocks.AIR.defaultBlockState();
+        private static final BlockState VOID_AIR = Blocks.VOID_AIR.defaultBlockState();
         private final Long2ObjectOpenHashMap<PalettedContainer<BlockState>> sections = new Long2ObjectOpenHashMap<>();
         private final LongOpenHashSet airSections = new LongOpenHashSet();
         private final int bottomY;
         private final int topY;
-        private final ChunkFilter view;
+        private final ChunkTrackingView view;
 
-        CopiedView(int bottomY, int topY, ChunkFilter view) {
+        CopiedView(int bottomY, int topY, ChunkTrackingView view) {
             this.bottomY = bottomY;
             this.topY = topY;
             this.view = view;
@@ -401,10 +401,10 @@ public final class SquadLook {
             if (y < bottomY || y >= topY) return VOID_AIR;
             int cx = pos.getX() >> 4;
             int cz = pos.getZ() >> 4;
-            long key = ChunkSectionPos.asLong(cx, y >> 4, cz);
+            long key = SectionPos.asLong(cx, y >> 4, cz);
             PalettedContainer<BlockState> s = sections.get(key);
             if (s != null) return s.get(pos.getX() & 15, y & 15, pos.getZ() & 15);
-            if (airSections.contains(key) || !view.isWithinDistance(cx, cz)) return AIR;
+            if (airSections.contains(key) || !view.contains(cx, cz)) return AIR;
             throw new Missing(key);
         }
 
@@ -424,7 +424,7 @@ public final class SquadLook {
         }
 
         @Override
-        public int getBottomY() {
+        public int getMinBuildHeight() {
             return bottomY;
         }
     }

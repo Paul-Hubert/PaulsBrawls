@@ -10,12 +10,13 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.texture.NativeImage;
-import net.minecraft.client.util.ScreenshotRecorder;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.Screenshot;
+import net.minecraft.network.chat.Component;
 
 import static com.mojang.brigadier.arguments.StringArgumentType.*;
+
+import com.mojang.blaze3d.platform.NativeImage;
 
 public class Screenshotter {
 
@@ -82,7 +83,7 @@ public class Screenshotter {
 
 	public static void sendScreenshot(String text) {
 
-		MinecraftClient.getInstance().inGameHud.getChatHud().addMessage(Text.literal("Capture d'écran dans 1 seconde"));
+		Minecraft.getInstance().gui.getChat().addMessage(Component.literal("Capture d'écran dans 1 seconde"));
 
 		Screenshotter.text = text;
 
@@ -98,16 +99,16 @@ public class Screenshotter {
 
 	private static void sendScreenshotAfterDelay() {
 
-		MinecraftClient.getInstance().inGameHud.getChatHud().addMessage(Text.literal("Capture d'écran prise, envoi à Dieu..."));
+		Minecraft.getInstance().gui.getChat().addMessage(Component.literal("Capture d'écran prise, envoi à Dieu..."));
 
-		NativeImage nativeImage = ScreenshotRecorder.takeScreenshot(MinecraftClient.getInstance().getFramebuffer());
+		NativeImage nativeImage = Screenshot.takeScreenshot(Minecraft.getInstance().getMainRenderTarget());
 		
 		var img2 = new NativeImage(854, 480, true);
 		
 		nativeImage.resizeSubRectTo(0, 0, nativeImage.getWidth(), nativeImage.getHeight(), img2);
 
 		try {
-			ImagePayload payload =  new ImagePayload (img2.getBytes(), text);
+			ImagePayload payload =  new ImagePayload (img2.asByteArray(), text);
 			ClientPlayNetworking.send(payload);
 		} catch (IOException e) {
 			e.printStackTrace();

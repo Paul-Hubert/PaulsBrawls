@@ -1,9 +1,9 @@
 package com.paul.brawl;
 
-import net.minecraft.item.Item;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.util.Identifier;
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.Item;
 
 public class Money {
     
@@ -17,9 +17,9 @@ public class Money {
 
     public static void registerCoinItem() {
         MONEY = Registry.register(
-			Registries.ITEM,
-			Identifier.of("paulsbrawls", "coin"),
-			new Item(new Item.Settings().maxCount(99))
+			BuiltInRegistries.ITEM,
+			ResourceLocation.fromNamespaceAndPath("paulsbrawls", "coin"),
+			new Item(new Item.Properties().stacksTo(99))
 		);
     }
 

@@ -23,12 +23,11 @@ import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.StringArgumentType;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.text.Text;
-import net.minecraft.util.math.Vec3d;
-
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -75,38 +74,38 @@ public class VillagersCommand {
     public static void register() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
             dispatcher.register(
-                CommandManager.literal("villagers")
-                    .requires(source -> source.hasPermissionLevel(2))
-                    .then(CommandManager.literal("start")
-                        .then(CommandManager.argument("name", StringArgumentType.word())
+                Commands.literal("villagers")
+                    .requires(source -> source.hasPermission(2))
+                    .then(Commands.literal("start")
+                        .then(Commands.argument("name", StringArgumentType.word())
                             .executes(ctx -> {
                                 String name = StringArgumentType.getString(ctx, "name");
-                                ServerPlayerEntity player = ctx.getSource().getPlayer();
+                                ServerPlayer player = ctx.getSource().getPlayer();
                                 if (player == null) {
-                                    ctx.getSource().sendFeedback(() -> Text.literal(
+                                    ctx.getSource().sendSuccess(() -> Component.literal(
                                         "[villagers] /villagers start must be run by a player — it scatters bots around your position."), false);
                                     return 0;
                                 }
-                                Vec3d pos = player.getPos();
+                                Vec3 pos = player.position();
                                 postScenario(ctx.getSource(), "start", name, (int) pos.x, (int) pos.z);
                                 return Command.SINGLE_SUCCESS;
                             })))
-                    .then(CommandManager.literal("stop")
+                    .then(Commands.literal("stop")
                         .executes(ctx -> {
                             stopScenario(ctx.getSource());
                             return Command.SINGLE_SUCCESS;
                         }))
-                    .then(CommandManager.literal("restart")
-                        .then(CommandManager.argument("name", StringArgumentType.word())
+                    .then(Commands.literal("restart")
+                        .then(Commands.argument("name", StringArgumentType.word())
                             .executes(ctx -> {
                                 String name = StringArgumentType.getString(ctx, "name");
-                                ServerPlayerEntity player = ctx.getSource().getPlayer();
+                                ServerPlayer player = ctx.getSource().getPlayer();
                                 if (player == null) {
-                                    ctx.getSource().sendFeedback(() -> Text.literal(
+                                    ctx.getSource().sendSuccess(() -> Component.literal(
                                         "[villagers] /villagers restart must be run by a player — it scatters bots around your position."), false);
                                     return 0;
                                 }
-                                Vec3d pos = player.getPos();
+                                Vec3 pos = player.position();
                                 postScenario(ctx.getSource(), "restart", name, (int) pos.x, (int) pos.z);
                                 return Command.SINGLE_SUCCESS;
                             })))
@@ -115,7 +114,7 @@ public class VillagersCommand {
 
     // ── Eden HTTP helpers ─────────────────────────────────────────────────────
 
-    private static void postScenario(ServerCommandSource source, String action,
+    private static void postScenario(CommandSourceStack source, String action,
                                      String name, int cx, int cz) {
         JsonObject body = new JsonObject();
         body.addProperty("name", name);
@@ -152,18 +151,18 @@ public class VillagersCommand {
                     }
                     final String feedback = "[villagers] " + message;
                     source.getServer().execute(() ->
-                        source.sendFeedback(() -> Text.literal(feedback), true));
+                        source.sendSuccess(() -> Component.literal(feedback), true));
                 } catch (Exception e) {
                     LOGGER.warn("VillagersCommand: failed to parse Eden response: {}", e.getMessage());
                     source.getServer().execute(() ->
-                        source.sendFeedback(() ->
-                            Text.literal("[villagers] Eden error (HTTP " + resp.statusCode() + ")"), true));
+                        source.sendSuccess(() ->
+                            Component.literal("[villagers] Eden error (HTTP " + resp.statusCode() + ")"), true));
                 }
                 return null;
             });
     }
 
-    private static void stopScenario(ServerCommandSource source) {
+    private static void stopScenario(CommandSourceStack source) {
         String url = VillageConfig.INSTANCE.edenAdminUrl + "/scenario/stop";
         LOGGER.info("VillagersCommand: POST {}", url);
         HttpRequest req = HttpRequest.newBuilder(URI.create(url))
@@ -188,7 +187,7 @@ public class VillagersCommand {
                 }
                 final String feedback = "[villagers] " + message;
                 source.getServer().execute(() ->
-                    source.sendFeedback(() -> Text.literal(feedback), true));
+                    source.sendSuccess(() -> Component.literal(feedback), true));
                 return null;
             });
     }
@@ -239,7 +238,7 @@ public class VillagersCommand {
      * tailored to the exception type so it's accurate rather than alarming. Only called
      * once every retry has been exhausted.
      */
-    private static void reportUnreachable(ServerCommandSource source, Throwable ex) {
+    private static void reportUnreachable(CommandSourceStack source, Throwable ex) {
         Throwable cause = rootCause(ex);
         String url = VillageConfig.INSTANCE.edenAdminUrl;
         final String chat;
@@ -251,7 +250,7 @@ public class VillagersCommand {
         LOGGER.warn("VillagersCommand: Eden unreachable at {} after {} attempt(s): {}",
             url, MAX_RETRIES + 1, describeChain(ex));
         source.getServer().execute(() ->
-            source.sendFeedback(() -> Text.literal(chat), true));
+            source.sendSuccess(() -> Component.literal(chat), true));
     }
 
     /** Unwrap CompletionException/ExecutionException so callers see the real I/O cause. */

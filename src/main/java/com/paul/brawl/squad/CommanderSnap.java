@@ -2,15 +2,13 @@ package com.paul.brawl.squad;
 
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.Vec3;
 import com.google.gson.JsonObject;
-
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.registry.Registries;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
 
 /**
  * Where the commander stands and looks when they give an order or ask for a command (docs/29 §7.1): the exact
@@ -30,14 +28,14 @@ public final class CommanderSnap {
      * The snapshot of {@code p} now (server thread). It completes on the server thread once the look is found, after
      * every earlier snapshot of the same player: send the order then.
      */
-    public static CompletableFuture<JsonObject> take(ServerPlayerEntity p) {
+    public static CompletableFuture<JsonObject> take(ServerPlayer p) {
         JsonObject o = new JsonObject();
-        o.add("position", vec(p.getPos()));
-        o.addProperty("yaw", p.getYaw());
-        o.addProperty("pitch", p.getPitch());
-        o.addProperty("dimension", p.getWorld().getRegistryKey().getValue().getPath());
-        var held = p.getMainHandStack();
-        if (!held.isEmpty()) o.addProperty("heldItem", Registries.ITEM.getId(held.getItem()).getPath());
+        o.add("position", vec(p.position()));
+        o.addProperty("yaw", p.getYRot());
+        o.addProperty("pitch", p.getXRot());
+        o.addProperty("dimension", p.level().dimension().location().getPath());
+        var held = p.getMainHandItem();
+        if (!held.isEmpty()) o.addProperty("heldItem", BuiltInRegistries.ITEM.getKey(held.getItem()).getPath());
         CompletableFuture<JsonObject> look = SquadLook.cast(p).thenApply(l -> {
             if (l.block() != null) {
                 BlockPos bp = l.block();
@@ -51,7 +49,7 @@ public final class CommanderSnap {
             if (l.entity() != null) o.add("lookEntity", l.entity().toJson());
             return o;
         });
-        return IN_ORDER.after(p.getUuid(), look);
+        return IN_ORDER.after(p.getUUID(), look);
     }
 
     /**
@@ -59,13 +57,13 @@ public final class CommanderSnap {
      * network id: the id is the same for every client, so a bot finds it in {@code bot.entities} (docs/29 §5.4).
      */
     static SquadTriggerJson.EntityRef entity(Entity e) {
-        Vec3d pos = e.getPos();
-        boolean player = e instanceof PlayerEntity;
-        return new SquadTriggerJson.EntityRef(e.getId(), Registries.ENTITY_TYPE.getId(e.getType()).getPath(), player,
+        Vec3 pos = e.position();
+        boolean player = e instanceof Player;
+        return new SquadTriggerJson.EntityRef(e.getId(), BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).getPath(), player,
             player ? e.getName().getString() : null, pos.x, pos.y, pos.z);
     }
 
-    private static JsonObject vec(Vec3d v) {
+    private static JsonObject vec(Vec3 v) {
         return SquadTriggerJson.vec(v.x, v.y, v.z);
     }
 }

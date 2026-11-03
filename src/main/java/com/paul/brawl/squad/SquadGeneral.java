@@ -15,16 +15,15 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.authlib.GameProfile;
 import com.mojang.brigadier.Command;
-
+import net.minecraft.ChatFormatting;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.text.ClickEvent;
-import net.minecraft.text.HoverEvent;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
-import net.minecraft.world.Heightmap;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.levelgen.Heightmap;
 
 /**
  * {@code /bots general …} (admin, docs/38): a Claude Code instance commanding an army of squads, with no body. The
@@ -43,9 +42,9 @@ final class SquadGeneral {
 
     // -- /bots general create|allow|tell|stop|list --------------------------------------------------------------------
 
-    static int create(ServerCommandSource src, String text) {
+    static int create(CommandSourceStack src, String text) {
         if (!Squad.enabled()) return SquadCommand.reply(src, DISABLED);
-        ServerPlayerEntity p = src.getPlayer();
+        ServerPlayer p = src.getPlayer();
         if (p == null) return SquadCommand.reply(src, "[Bots] À lancer en jeu, par un joueur : ta position est le point d'apparition, ton regard l'axe d'attaque.");
         List<String> parts = SquadArgs.tokenize(text == null ? "" : text.trim());
         if (parts.isEmpty()) return SquadCommand.reply(src, "[Bots] Usage : " + SquadGeneralPlan.CREATE_USAGE);
@@ -58,7 +57,7 @@ final class SquadGeneral {
             return SquadCommand.reply(src, "[Bots] " + e.getMessage() + ". Usage : " + SquadGeneralPlan.CREATE_USAGE);
         }
         MinecraftServer srv = src.getServer();
-        if (srv.getPlayerManager().getPlayer(name) != null) return SquadCommand.reply(src, "[Bots] " + name + " est un joueur en ligne : choisis un autre nom.");
+        if (srv.getPlayerList().getPlayerByName(name) != null) return SquadCommand.reply(src, "[Bots] " + name + " est un joueur en ligne : choisis un autre nom.");
         Optional<GameProfile> owner = Squad.profile(srv, name);
         if (owner.isEmpty()) return SquadCommand.reply(src, "[Bots] Le propriétaire virtuel " + name + " est introuvable (le serveur doit être en mode hors ligne).");
 
@@ -69,8 +68,8 @@ final class SquadGeneral {
         spawn.addProperty("x", p.getX());
         spawn.addProperty("y", p.getY());
         spawn.addProperty("z", p.getZ());
-        spawn.addProperty("yaw", p.getYaw());
-        spawn.addProperty("dimension", p.getWorld().getRegistryKey().getValue().getPath());
+        spawn.addProperty("yaw", p.getYRot());
+        spawn.addProperty("dimension", p.level().dimension().location().getPath());
         body.add("spawn", spawn);
         body.add("allowance", allowance(terms));
         if (terms.reinforce() != null) body.addProperty("reinforce", terms.reinforce());
@@ -79,18 +78,18 @@ final class SquadGeneral {
             SquadCommand.show(src, r);
             if (!SquadAuthoring.ok(r) || !r.has("ticket")) return;
             String ticket = r.get("ticket").getAsString();
-            src.sendFeedback(() -> Text.literal("[Bots] Ticket : ").append(copyable(ticket, ticket)), false);
+            src.sendSuccess(() -> Component.literal("[Bots] Ticket : ").append(copyable(ticket, ticket)), false);
             String ps = SquadGeneralPlan.launchLine(ticket);
-            src.sendFeedback(() -> Text.literal("Lance l'instance depuis le dépôt (PowerShell) : ").append(copyable(ps, ps)), false);
+            src.sendSuccess(() -> Component.literal("Lance l'instance depuis le dépôt (PowerShell) : ").append(copyable(ps, ps)), false);
             String sh = SquadGeneralPlan.launchLinePosix(ticket);
-            src.sendFeedback(() -> Text.literal("ou (bash) : ").append(copyable("[copier]", sh)), false);
-            src.sendFeedback(() -> Text.literal("Dis-lui sa mission (objectif et/ou stratégie) ; sans objectif, il attaque le long de l'axe. "
+            src.sendSuccess(() -> Component.literal("ou (bash) : ").append(copyable("[copier]", sh)), false);
+            src.sendSuccess(() -> Component.literal("Dis-lui sa mission (objectif et/ou stratégie) ; sans objectif, il attaque le long de l'axe. "
                 + "/bots general tell " + name + " … lui parle d'ici ; /bots general stop " + name + " [despawn] l'arrête."), false);
         }));
         return Command.SINGLE_SUCCESS;
     }
 
-    static int allow(ServerCommandSource src, String text) {
+    static int allow(CommandSourceStack src, String text) {
         if (!Squad.enabled()) return SquadCommand.reply(src, DISABLED);
         List<String> parts = SquadArgs.tokenize(text == null ? "" : text.trim());
         if (parts.size() < 2) return SquadCommand.reply(src, "[Bots] Usage : " + SquadGeneralPlan.ALLOW_USAGE);
@@ -109,7 +108,7 @@ final class SquadGeneral {
         return Command.SINGLE_SUCCESS;
     }
 
-    static int tell(ServerCommandSource src, String name, String text) {
+    static int tell(CommandSourceStack src, String name, String text) {
         if (!Squad.enabled()) return SquadCommand.reply(src, DISABLED);
         JsonObject body = SquadCommand.base(src);
         body.addProperty("name", name);
@@ -119,7 +118,7 @@ final class SquadGeneral {
     }
 
     /** Revoke the ticket and stop the orders; with {@code despawn}, every bot of the General leaves too. */
-    static int stop(ServerCommandSource src, String name, boolean despawn) {
+    static int stop(CommandSourceStack src, String name, boolean despawn) {
         if (!Squad.enabled()) return SquadCommand.reply(src, DISABLED);
         JsonObject body = SquadCommand.base(src);
         body.addProperty("name", name);
@@ -134,7 +133,7 @@ final class SquadGeneral {
         return Command.SINGLE_SUCCESS;
     }
 
-    static int list(ServerCommandSource src) {
+    static int list(CommandSourceStack src) {
         if (!Squad.enabled()) return SquadCommand.reply(src, DISABLED);
         post(src, "/api/general/list", SquadCommand.base(src));
         return Command.SINGLE_SUCCESS;
@@ -160,7 +159,7 @@ final class SquadGeneral {
     /** {@code general-despawn}: a disbanded squad's bots leave, like {@code /bots despawn}. */
     static void onDespawn(MinecraftServer srv, JsonObject data) {
         srv.execute(() -> {
-            ServerCommandSource console = srv.getCommandSource();
+            CommandSourceStack console = srv.createCommandSourceStack();
             for (String b : strings(data.get("bots"))) SquadCommand.despawnBot(console, b);
         });
     }
@@ -168,7 +167,7 @@ final class SquadGeneral {
     private static void spawn(MinecraftServer srv, JsonObject d) {
         String request = d.get("request").getAsString();
         JsonObject s = d.getAsJsonObject("spawn");
-        ServerWorld world = world(srv, s.has("dimension") ? s.get("dimension").getAsString() : "overworld");
+        ServerLevel world = world(srv, s.has("dimension") ? s.get("dimension").getAsString() : "overworld");
         double x = s.get("x").getAsDouble(), z = s.get("z").getAsDouble();
         float yaw = s.get("yaw").getAsFloat();
         JsonObject ownerJson = d.getAsJsonObject("owner");
@@ -198,7 +197,7 @@ final class SquadGeneral {
         }
         List<String> roster = Squad.botNames();
         Predicate<String> taken = name -> roster.stream().anyMatch(r -> r.equalsIgnoreCase(name))
-            || srv.getPlayerManager().getPlayer(name) != null || Squad.hasPlayed(srv, name) || SquadCommand.reservedName(name);
+            || srv.getPlayerList().getPlayerByName(name) != null || Squad.hasPlayed(srv, name) || SquadCommand.reservedName(name);
         List<String> names;
         try {
             names = SquadRaidPlan.names(d.get("prefix").getAsString(), n, taken);
@@ -217,7 +216,7 @@ final class SquadGeneral {
     private record Bot(String name, double x, double y, double z) {}
 
     /** One after the other, as the runtime answers; the first refusal (the bot limit) fails the rest. */
-    private static void spawnNext(MinecraftServer srv, String request, JsonObject owner, ServerWorld world, float yaw, SquadKits.Kit kit, List<Bot> bots, int i) {
+    private static void spawnNext(MinecraftServer srv, String request, JsonObject owner, ServerLevel world, float yaw, SquadKits.Kit kit, List<Bot> bots, int i) {
         if (i >= bots.size()) return;
         Bot b = bots.get(i);
         JsonObject body = new JsonObject();
@@ -271,7 +270,7 @@ final class SquadGeneral {
 
     // -- plumbing -------------------------------------------------------------------------------------------------------
 
-    private static void post(ServerCommandSource src, String path, JsonObject body) {
+    private static void post(CommandSourceStack src, String path, JsonObject body) {
         Squad.client().post(path, body).thenAccept(r -> src.getServer().execute(() -> SquadCommand.show(src, r)));
     }
 
@@ -287,25 +286,25 @@ final class SquadGeneral {
         return out;
     }
 
-    private static Text copyable(String shown, String copied) {
-        return Text.literal(shown).styled(s -> s.withColor(Formatting.GOLD).withUnderline(true)
+    private static Component copyable(String shown, String copied) {
+        return Component.literal(shown).withStyle(s -> s.withColor(ChatFormatting.GOLD).withUnderlined(true)
             .withClickEvent(new ClickEvent(ClickEvent.Action.COPY_TO_CLIPBOARD, copied))
-            .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal("Clique pour copier"))));
+            .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Component.literal("Clique pour copier"))));
     }
 
     /** The world of a dimension name ("overworld", "the_nether"…), the overworld when unknown. */
-    private static ServerWorld world(MinecraftServer srv, String dimension) {
-        for (ServerWorld w : srv.getWorlds()) {
-            if (w.getRegistryKey().getValue().getPath().equals(dimension.toLowerCase(Locale.ROOT))) return w;
+    private static ServerLevel world(MinecraftServer srv, String dimension) {
+        for (ServerLevel w : srv.getAllLevels()) {
+            if (w.dimension().location().getPath().equals(dimension.toLowerCase(Locale.ROOT))) return w;
         }
-        return srv.getOverworld();
+        return srv.overworld();
     }
 
     /** The first free block above the ground at (x, z), leaves left out (the chunk is loaded first), as SquadRaid. */
-    private static double surface(ServerWorld world, double x, double z) {
+    private static double surface(ServerLevel world, double x, double z) {
         int bx = (int) Math.floor(x);
         int bz = (int) Math.floor(z);
         world.getChunk(bx >> 4, bz >> 4);
-        return world.getTopY(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+        return world.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
     }
 }

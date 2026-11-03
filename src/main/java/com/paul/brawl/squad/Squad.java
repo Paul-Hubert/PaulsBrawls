@@ -32,26 +32,26 @@ import com.paul.brawl.ClaudeCodeClient;
 
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import net.minecraft.enchantment.Enchantment;
-import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.registry.entry.RegistryEntry;
+import net.minecraft.ChatFormatting;
+import net.minecraft.core.Holder;
+import net.minecraft.core.Registry;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.HoverEvent;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.WhitelistEntry;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.text.ClickEvent;
-import net.minecraft.text.HoverEvent;
-import net.minecraft.text.MutableText;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.Uuids;
-import net.minecraft.util.WorldSavePath;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.players.UserWhiteListEntry;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.level.storage.LevelResource;
 
 /**
  * The mod's side of Squad (docs/29 §2): a thin front over the squad runtime. It holds no squad state of its own,
@@ -79,7 +79,7 @@ public final class Squad {
     private static final Map<String, Spot> arrivals = new ConcurrentHashMap<>();
 
     /** Where a new bot goes on its first join; `then` (may be null) runs on the next tick, once it stands there. */
-    private record Spot(ServerWorld world, double x, double y, double z, float yaw, float pitch, Consumer<ServerPlayerEntity> then) {}
+    private record Spot(ServerLevel world, double x, double y, double z, float yaw, float pitch, Consumer<ServerPlayer> then) {}
 
     private Squad() {}
 
@@ -186,9 +186,9 @@ public final class Squad {
      */
     public static void registerFriendlyFire() {
         ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
-            if (!(entity instanceof ServerPlayerEntity victim)) return true;
-            if (!(source.getAttacker() instanceof ServerPlayerEntity attacker) || attacker == victim) return true;
-            return !friends.spare(attacker.getGameProfile().getName(), victim.getGameProfile().getName(), victim.getUuid());
+            if (!(entity instanceof ServerPlayer victim)) return true;
+            if (!(source.getEntity() instanceof ServerPlayer attacker) || attacker == victim) return true;
+            return !friends.spare(attacker.getGameProfile().getName(), victim.getGameProfile().getName(), victim.getUUID());
         });
     }
 
@@ -263,13 +263,13 @@ public final class Squad {
         MinecraftServer srv = server;
         if (srv == null) return;
         srv.execute(() -> {
-            ServerPlayerEntity p = srv.getPlayerManager().getPlayer(player);
+            ServerPlayer p = srv.getPlayerList().getPlayer(player);
             if (p == null) {
                 List<SquadNotice> q = pending.computeIfAbsent(player, k -> new CopyOnWriteArrayList<>());
                 if (q.size() < 50) q.add(line);
                 return;
             }
-            for (Text t : render(line)) p.sendMessage(t, false);
+            for (Component t : render(line)) p.displayClientMessage(t, false);
         });
     }
 
@@ -287,19 +287,19 @@ public final class Squad {
     }
 
     /** One chat line per text line; the click (if any) on the last one. */
-    public static List<Text> render(SquadNotice n) {
+    public static List<Component> render(SquadNotice n) {
         String[] lines = n.text().split("\n", -1);
-        List<Text> out = new ArrayList<>();
+        List<Component> out = new ArrayList<>();
         for (int i = 0; i < lines.length; i++) {
-            MutableText t = Text.literal(lines[i]);
-            if (i == 0 && lines[i].startsWith("[Bots]")) t = Text.literal("[Bots]").formatted(Formatting.AQUA).append(Text.literal(lines[i].substring(6)));
+            MutableComponent t = Component.literal(lines[i]);
+            if (i == 0 && lines[i].startsWith("[Bots]")) t = Component.literal("[Bots]").withStyle(ChatFormatting.AQUA).append(Component.literal(lines[i].substring(6)));
             if (i == lines.length - 1 && n.hasClick()) {
                 String hover = n.hover() != null ? n.hover() : (n.run() ? "Clique pour lancer" : "Clique pour préparer la commande");
-                t.append(Text.literal(n.clickLabel()).styled(s -> s
-                    .withColor(Formatting.GOLD)
-                    .withUnderline(true)
+                t.append(Component.literal(n.clickLabel()).withStyle(s -> s
+                    .withColor(ChatFormatting.GOLD)
+                    .withUnderlined(true)
                     .withClickEvent(new ClickEvent(n.run() ? ClickEvent.Action.RUN_COMMAND : ClickEvent.Action.SUGGEST_COMMAND, n.clickCommand()))
-                    .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal(hover)))));
+                    .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Component.literal(hover)))));
             }
             out.add(t);
         }
@@ -310,7 +310,7 @@ public final class Squad {
 
     /** A bot's profile in offline mode (the only mode bots can join, docs/29 §4). */
     static GameProfile botProfile(String name) {
-        return new GameProfile(Uuids.getOfflinePlayerUuid(name), name);
+        return new GameProfile(UUIDUtil.createOfflinePlayerUUID(name), name);
     }
 
     /**
@@ -319,7 +319,7 @@ public final class Squad {
      * name it is asked about.
      */
     static boolean hasPlayed(MinecraftServer srv, String name) {
-        Path data = srv.getSavePath(WorldSavePath.PLAYERDATA).resolve(Uuids.getOfflinePlayerUuid(name) + ".dat");
+        Path data = srv.getWorldPath(LevelResource.PLAYER_DATA_DIR).resolve(UUIDUtil.createOfflinePlayerUUID(name) + ".dat");
         return Files.exists(data);
     }
 
@@ -340,7 +340,7 @@ public final class Squad {
         ServerTickEvents.END_SERVER_TICK.register(srv -> {
             if (saves.isEmpty()) return;
             List<String> roster = botNames();
-            SquadSaves.Due due = saves.due(System.currentTimeMillis(), n -> srv.getPlayerManager().getPlayer(n) != null,
+            SquadSaves.Due due = saves.due(System.currentTimeMillis(), n -> srv.getPlayerList().getPlayerByName(n) != null,
                 n -> roster.stream().anyMatch(r -> r.equalsIgnoreCase(n)));
             for (String name : due.delete()) {
                 int files = deleteSave(srv, name);
@@ -352,16 +352,16 @@ public final class Squad {
 
     /** A player's save under a name's offline UUID: the player data and its backup, stats, advancements. */
     private static List<Path> saveFiles(MinecraftServer srv, UUID id) {
-        Path data = srv.getSavePath(WorldSavePath.PLAYERDATA);
+        Path data = srv.getWorldPath(LevelResource.PLAYER_DATA_DIR);
         return List.of(data.resolve(id + ".dat"), data.resolve(id + ".dat_old"),
-            srv.getSavePath(WorldSavePath.STATS).resolve(id + ".json"),
-            srv.getSavePath(WorldSavePath.ADVANCEMENTS).resolve(id + ".json"));
+            srv.getWorldPath(LevelResource.PLAYER_STATS_DIR).resolve(id + ".json"),
+            srv.getWorldPath(LevelResource.PLAYER_ADVANCEMENTS_DIR).resolve(id + ".json"));
     }
 
     /** Delete the save of a bot that is not online (server thread). Returns how many files went. */
     static int deleteSave(MinecraftServer srv, String name) {
         int n = 0;
-        for (Path f : saveFiles(srv, Uuids.getOfflinePlayerUuid(name))) {
+        for (Path f : saveFiles(srv, UUIDUtil.createOfflinePlayerUUID(name))) {
             try {
                 if (Files.deleteIfExists(f)) n++;
             } catch (IOException e) {
@@ -381,8 +381,8 @@ public final class Squad {
         int names = 0, files = 0;
         for (String name : SquadSaves.generatedNames(SquadSaves.prefixes())) {
             if (saved.isEmpty()) break;
-            if (!saved.remove(Uuids.getOfflinePlayerUuid(name))) continue;
-            if (roster.contains(name.toLowerCase(Locale.ROOT)) || srv.getPlayerManager().getPlayer(name) != null || SquadCommand.reservedName(name)) continue;
+            if (!saved.remove(UUIDUtil.createOfflinePlayerUUID(name))) continue;
+            if (roster.contains(name.toLowerCase(Locale.ROOT)) || srv.getPlayerList().getPlayerByName(name) != null || SquadCommand.reservedName(name)) continue;
             int n = deleteSave(srv, name);
             if (n > 0) {
                 names++;
@@ -396,8 +396,8 @@ public final class Squad {
     /** The UUIDs that have a save file (player data, stats or advancements). */
     private static Set<UUID> savedUuids(MinecraftServer srv) {
         Set<UUID> out = new HashSet<>();
-        for (WorldSavePath dir : List.of(WorldSavePath.PLAYERDATA, WorldSavePath.STATS, WorldSavePath.ADVANCEMENTS)) {
-            try (var list = Files.list(srv.getSavePath(dir))) {
+        for (LevelResource dir : List.of(LevelResource.PLAYER_DATA_DIR, LevelResource.PLAYER_STATS_DIR, LevelResource.PLAYER_ADVANCEMENTS_DIR)) {
+            try (var list = Files.list(srv.getWorldPath(dir))) {
                 list.forEach(f -> {
                     String n = f.getFileName().toString();
                     int dot = n.indexOf('.');
@@ -415,15 +415,15 @@ public final class Squad {
     }
 
     /** Remember where to put a bot an admin just spawned (their position). */
-    static void expectArrival(String bot, ServerPlayerEntity admin) {
-        expectArrival(bot, admin.getServerWorld(), admin.getX(), admin.getY(), admin.getZ(), admin.getYaw(), null);
+    static void expectArrival(String bot, ServerPlayer admin) {
+        expectArrival(bot, admin.serverLevel(), admin.getX(), admin.getY(), admin.getZ(), admin.getYRot(), null);
     }
 
     /**
      * Remember where to put a new bot on its first join, and what to do with it once there (`/bots raid`: its kit
      * and the start of the raid). `then` runs on the server thread, the tick after the teleport.
      */
-    static void expectArrival(String bot, ServerWorld world, double x, double y, double z, float yaw, Consumer<ServerPlayerEntity> then) {
+    static void expectArrival(String bot, ServerLevel world, double x, double y, double z, float yaw, Consumer<ServerPlayer> then) {
         arrivals.put(bot.toLowerCase(Locale.ROOT), new Spot(world, x, y, z, yaw, 0, then));
     }
 
@@ -433,10 +433,10 @@ public final class Squad {
     }
 
     static void whitelist(MinecraftServer srv, String bot, boolean add) {
-        var list = srv.getPlayerManager().getWhitelist();
+        var list = srv.getPlayerList().getWhiteList();
         GameProfile profile = botProfile(bot);
         if (add) {
-            if (!list.isAllowed(profile)) list.add(new WhitelistEntry(profile));
+            if (!list.isWhiteListed(profile)) list.add(new UserWhiteListEntry(profile));
         } else {
             list.remove(profile);
         }
@@ -457,22 +457,22 @@ public final class Squad {
      * On join: a roster name from a non-allowed address is kicked (offline mode trusts names); a bot an admin just
      * spawned is teleported to them; a player gets the lines they missed.
      */
-    public static void onJoin(ServerPlayerEntity player, Consumer<Text> disconnect) {
+    public static void onJoin(ServerPlayer player, Consumer<Component> disconnect) {
         String name = player.getName().getString();
         boolean isBot = botNames().stream().anyMatch(n -> n.equalsIgnoreCase(name));
-        if (isBot && SquadConfig.INSTANCE.joinGate && !allowedAddress(player.networkHandler.getConnectionAddress())) {
-            LOGGER.warn("Kicked {}: a squad bot name joining from {}.", name, player.networkHandler.getConnectionAddress());
-            disconnect.accept(Text.literal("Ce nom est réservé à un bot."));
+        if (isBot && SquadConfig.INSTANCE.joinGate && !allowedAddress(player.connection.getRemoteAddress())) {
+            LOGGER.warn("Kicked {}: a squad bot name joining from {}.", name, player.connection.getRemoteAddress());
+            disconnect.accept(Component.literal("Ce nom est réservé à un bot."));
             return;
         }
         Spot spot = arrivals.remove(name.toLowerCase(Locale.ROOT));
         if (spot != null) {
-            player.teleport(spot.world(), spot.x(), spot.y(), spot.z(), spot.yaw(), spot.pitch());
+            player.teleportTo(spot.world(), spot.x(), spot.y(), spot.z(), spot.yaw(), spot.pitch());
             MinecraftServer srv = server;
             if (spot.then() != null && srv != null) srv.execute(() -> spot.then().accept(player));
         }
-        List<SquadNotice> missed = pending.remove(player.getUuid());
-        if (missed != null) for (SquadNotice n : missed) for (Text t : render(n)) player.sendMessage(t, false);
+        List<SquadNotice> missed = pending.remove(player.getUUID());
+        if (missed != null) for (SquadNotice n : missed) for (Component t : render(n)) player.displayClientMessage(t, false);
     }
 
     static boolean allowedAddress(SocketAddress addr) {
@@ -517,23 +517,23 @@ public final class Squad {
      * the bot's feet when full), never lost. Returns the French answer.
      */
     static String equip(MinecraftServer srv, String botName, SquadKits.Kit kit) {
-        ServerPlayerEntity p = srv.getPlayerManager().getPlayer(botName);
+        ServerPlayer p = srv.getPlayerList().getPlayerByName(botName);
         if (p == null) return "[Bots] " + botName + " n'est pas connecté : impossible de l'équiper.";
         List<String> given = new ArrayList<>();
         for (SquadKits.Item it : kit.items()) {
-            Identifier id = Identifier.of("minecraft", it.id());
-            if (!Registries.ITEM.containsId(id)) {
+            ResourceLocation id = ResourceLocation.fromNamespaceAndPath("minecraft", it.id());
+            if (!BuiltInRegistries.ITEM.containsKey(id)) {
                 LOGGER.warn("Kit {}: unknown item {}", kit.name(), id);
                 continue;
             }
-            ItemStack stack = new ItemStack(Registries.ITEM.get(id), it.count());
+            ItemStack stack = new ItemStack(BuiltInRegistries.ITEM.get(id), it.count());
             List<String> enchants = enchant(srv, stack, it);
             switch (it.slot()) {
                 case INVENTORY -> give(p, stack);
                 case MAINHAND -> {
-                    PlayerInventory inv = p.getInventory();
-                    ItemStack old = inv.getStack(inv.selectedSlot);
-                    inv.setStack(inv.selectedSlot, stack);
+                    Inventory inv = p.getInventory();
+                    ItemStack old = inv.getItem(inv.selected);
+                    inv.setItem(inv.selected, stack);
                     if (!old.isEmpty()) give(p, old);
                 }
                 default -> {
@@ -544,8 +544,8 @@ public final class Squad {
                         case FEET -> EquipmentSlot.FEET;
                         default -> EquipmentSlot.OFFHAND;
                     };
-                    ItemStack old = p.getEquippedStack(slot).copy();
-                    p.equipStack(slot, stack);
+                    ItemStack old = p.getItemBySlot(slot).copy();
+                    p.setItemSlot(slot, stack);
                     if (!old.isEmpty()) give(p, old);
                 }
             }
@@ -563,14 +563,14 @@ public final class Squad {
     private static List<String> enchant(MinecraftServer srv, ItemStack stack, SquadKits.Item it) {
         List<String> out = new ArrayList<>();
         if (it.enchantments().isEmpty()) return out;
-        Registry<Enchantment> registry = srv.getRegistryManager().get(RegistryKeys.ENCHANTMENT);
+        Registry<Enchantment> registry = srv.registryAccess().registryOrThrow(Registries.ENCHANTMENT);
         for (Map.Entry<String, Integer> e : new java.util.TreeMap<>(it.enchantments()).entrySet()) {
-            Optional<RegistryEntry.Reference<Enchantment>> entry = registry.getEntry(Identifier.of("minecraft", e.getKey()));
+            Optional<Holder.Reference<Enchantment>> entry = registry.getHolder(ResourceLocation.fromNamespaceAndPath("minecraft", e.getKey()));
             if (entry.isEmpty()) {
                 LOGGER.warn("Kit item {}: unknown enchantment {}", it.id(), e.getKey());
                 continue;
             }
-            stack.addEnchantment(entry.get(), e.getValue());
+            stack.enchant(entry.get(), e.getValue());
             out.add(e.getKey() + " " + e.getValue());
         }
         return out;
@@ -582,9 +582,9 @@ public final class Squad {
      * with no kit tag) leaves it empty. {@code /bots equip} is unchanged: it keeps what the bot carries. Main thread.
      */
     static String resetToKit(MinecraftServer srv, String botName, SquadKits.Kit kit) {
-        ServerPlayerEntity p = srv.getPlayerManager().getPlayer(botName);
+        ServerPlayer p = srv.getPlayerList().getPlayerByName(botName);
         if (p == null) return "[Bots] " + botName + " n'est pas connecté : impossible de le rééquiper.";
-        p.getInventory().clear();
+        p.getInventory().clearContent();
         if (kit == null) {
             LOGGER.info("Squad bot {} back without a kit: inventory cleared", p.getName().getString());
             return "[Bots] " + p.getName().getString() + " revient sans kit.";
@@ -592,22 +592,22 @@ public final class Squad {
         return equip(srv, botName, kit);
     }
 
-    private static void give(ServerPlayerEntity p, ItemStack stack) {
-        if (!p.getInventory().insertStack(stack) && !stack.isEmpty()) p.dropItem(stack, false);
+    private static void give(ServerPlayer p, ItemStack stack) {
+        if (!p.getInventory().add(stack) && !stack.isEmpty()) p.drop(stack, false);
     }
 
     // -- players by name ------------------------------------------------------------------------------------------
 
     /** A player named in a command: online, or known to the user cache, or (offline mode) by the offline UUID. */
     static Optional<GameProfile> profile(MinecraftServer srv, String name) {
-        ServerPlayerEntity online = srv.getPlayerManager().getPlayer(name);
+        ServerPlayer online = srv.getPlayerList().getPlayerByName(name);
         if (online != null) return Optional.of(online.getGameProfile());
-        var cache = srv.getUserCache();
+        var cache = srv.getProfileCache();
         if (cache != null) {
-            Optional<GameProfile> known = cache.findByName(name);
+            Optional<GameProfile> known = cache.get(name);
             if (known.isPresent()) return known;
         }
-        if (!srv.isOnlineMode() && SquadArgs.BOT_NAME.matcher(name).matches()) return Optional.of(new GameProfile(Uuids.getOfflinePlayerUuid(name), name));
+        if (!srv.usesAuthentication() && SquadArgs.BOT_NAME.matcher(name).matches()) return Optional.of(new GameProfile(UUIDUtil.createOfflinePlayerUUID(name), name));
         return Optional.empty();
     }
 

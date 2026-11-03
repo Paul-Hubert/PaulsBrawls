@@ -2,26 +2,24 @@ package com.paul.brawl;
 
 import java.util.HashMap;
 import java.util.UUID;
-
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.projectile.ProjectileUtil;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 import org.joml.Vector3f;
-
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.projectile.ProjectileUtil;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.EntityHitResult;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.RaycastContext;
 
 public class Raycaster {
     
     private static HashMap<UUID, BlockPos> lastPos = new HashMap<>();
 
-    public static BlockPos raycast(ServerPlayerEntity player, float x, float y) {
-        var c = player.getRotationVec(0.1f);
+    public static BlockPos raycast(ServerPlayer player, float x, float y) {
+        var c = player.getViewVector(0.1f);
         Vector3f cameraDirection = new Vector3f((float) c.x,(float) c.y,(float) c.z);
         System.out.println(cameraDirection);
         
@@ -47,7 +45,7 @@ public class Raycaster {
                 x,
                 y
         );
-        var dir = new Vec3d(direction.x, direction.y, direction.z);
+        var dir = new Vec3(direction.x, direction.y, direction.z);
         HitResult nextHit = raycastInDirection(player, dir);
 
         if(nextHit == null) {
@@ -88,8 +86,8 @@ public class Raycaster {
         return temp2;
     }
 
-    private static HitResult raycastInDirection(ServerPlayerEntity player, Vec3d direction) {
-        Entity entity = player.getCameraEntity();
+    private static HitResult raycastInDirection(ServerPlayer player, Vec3 direction) {
+        Entity entity = player.getCamera();
         if (entity == null) {
             return null;
         }
@@ -98,20 +96,20 @@ public class Raycaster {
 
         HitResult target = raycast(entity, reachDistance, false, direction);
 
-        Vec3d cameraPos = entity.getCameraPosVec(0.1f);
+        Vec3 cameraPos = entity.getEyePosition(0.1f);
      
      
-        Vec3d vec3d3 = cameraPos.add(direction.multiply(reachDistance));
-        Box box = entity
+        Vec3 vec3d3 = cameraPos.add(direction.scale(reachDistance));
+        AABB box = entity
                 .getBoundingBox()
-                .stretch(entity.getRotationVec(1.0F).multiply(reachDistance))
-                .expand(1.0D, 1.0D, 1.0D);
-        EntityHitResult entityHitResult = ProjectileUtil.raycast(
+                .expandTowards(entity.getViewVector(1.0F).scale(reachDistance))
+                .inflate(1.0D, 1.0D, 1.0D);
+        EntityHitResult entityHitResult = ProjectileUtil.getEntityHitResult(
                 entity,
                 cameraPos,
                 vec3d3,
                 box,
-                (entityx) -> !entityx.isSpectator() && (entityx.groundCollision || entityx.verticalCollision || entityx.horizontalCollision),
+                (entityx) -> !entityx.isSpectator() && (entityx.verticalCollisionBelow || entityx.verticalCollision || entityx.horizontalCollision),
                 reachDistance
         );
      
@@ -126,14 +124,14 @@ public class Raycaster {
             Entity entity,
             double maxDistance,
             boolean includeFluids,
-            Vec3d direction
+            Vec3 direction
     ) {
-        Vec3d end = entity.getCameraPosVec(0.1f).add(direction.multiply(maxDistance));
-        return entity.getWorld().raycast(new RaycastContext(
-                entity.getCameraPosVec(0.1f),
+        Vec3 end = entity.getEyePosition(0.1f).add(direction.scale(maxDistance));
+        return entity.level().clip(new ClipContext(
+                entity.getEyePosition(0.1f),
                 end,
-                RaycastContext.ShapeType.OUTLINE,
-                includeFluids ? RaycastContext.FluidHandling.ANY : RaycastContext.FluidHandling.NONE,
+                ClipContext.Block.OUTLINE,
+                includeFluids ? ClipContext.Fluid.ANY : ClipContext.Fluid.NONE,
                 entity
         ));
     }
@@ -142,8 +140,8 @@ public class Raycaster {
         return lastPos.get(uuid);
     }
 
-    public static void setLastPos(ServerPlayerEntity player) {
-        lastPos.put(player.getUuid(), raycast(player, 0, 0));
+    public static void setLastPos(ServerPlayer player) {
+        lastPos.put(player.getUUID(), raycast(player, 0, 0));
     }
 
 }

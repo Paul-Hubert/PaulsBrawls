@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
+import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,8 +19,6 @@ import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
-
-import net.minecraft.server.network.ServerPlayerEntity;
 
 public class ChatBotFunctions {
 
@@ -41,8 +39,8 @@ public class ChatBotFunctions {
         @JsonPropertyDescription("The number of items to give (clamped server-side, default max 64).")
         public int amount;
 
-        public String execute(ServerPlayerEntity player) {
-            return GodService.live().reward(player.getUuid(), itemName, amount).text();
+        public String execute(ServerPlayer player) {
+            return GodService.live().reward(player.getUUID(), itemName, amount).text();
         }
     }
 
@@ -57,9 +55,9 @@ public class ChatBotFunctions {
         @JsonPropertyDescription("The number of items to take from the player in the trade (1-512).")
         public int takeAmount;
 
-        public String execute(ServerPlayerEntity player) {
+        public String execute(ServerPlayer player) {
             // GodService checks both amounts first (a negative takeAmount used to duplicate items on /accept).
-            return GodService.live().offerTrade(player.getUuid(), giveItemName, giveAmount, takeItemName, takeAmount).text();
+            return GodService.live().offerTrade(player.getUUID(), giveItemName, giveAmount, takeItemName, takeAmount).text();
         }
     }
 
@@ -68,8 +66,8 @@ public class ChatBotFunctions {
         @JsonPropertyDescription("The number of punishments (lightning strikes) to inflict to the player (clamped server-side, default max 3).")
         public int amount;
 
-        public String execute(ServerPlayerEntity player) {
-            return GodService.live().punish(player.getUuid(), amount).text();
+        public String execute(ServerPlayer player) {
+            return GodService.live().punish(player.getUUID(), amount).text();
         }
     }
 
@@ -80,8 +78,8 @@ public class ChatBotFunctions {
         @JsonPropertyDescription("Weather duration in seconds. 0 for permanent.")
         public int durationSeconds;
 
-        public String execute(ServerPlayerEntity player) {
-            return GodService.live().changeWeather(player.getUuid(), weatherType, durationSeconds).text();
+        public String execute(ServerPlayer player) {
+            return GodService.live().changeWeather(player.getUUID(), weatherType, durationSeconds).text();
         }
     }
 
@@ -97,16 +95,16 @@ public class ChatBotFunctions {
         @JsonPropertyDescription("Whether to turn and face the player after appearing (default true).")
         public Boolean lookAtPlayer;
 
-        public String execute(ServerPlayerEntity player) {
+        public String execute(ServerPlayer player) {
             // GodService gates on the session owner (a bodiless prayer must not move the shared body) and clamps.
-            return GodService.live().appear(player.getUuid(), distance, height, lookAtPlayer).text();
+            return GodService.live().appear(player.getUUID(), distance, height, lookAtPlayer).text();
         }
     }
 
     @JsonClassDescription("Send God's physical body away. Call this to disappear deliberately when the encounter is over. Optional — if you stop calling tools the body vanishes automatically.")
     static class Vanish {
-        public String execute(ServerPlayerEntity player) {
-            return GodService.live().vanish(player.getUuid()).text();
+        public String execute(ServerPlayer player) {
+            return GodService.live().vanish(player.getUUID()).text();
         }
     }
 
@@ -115,7 +113,7 @@ public class ChatBotFunctions {
         @JsonPropertyDescription("Seconds to wait before continuing.")
         public int seconds;
 
-        public String execute(ServerPlayerEntity player) {
+        public String execute(ServerPlayer player) {
             return GodService.waitMessage(GodService.live().waitSeconds(seconds));
         }
     }
@@ -169,8 +167,8 @@ public class ChatBotFunctions {
         @JsonPropertyDescription("Block offset from the player on the Z axis (south+/north-).")
         public int z;
 
-        public String execute(ServerPlayerEntity player) {
-            return GodService.live().spawnCreature(player.getUuid(), entityType, count, x, y, z).text();
+        public String execute(ServerPlayer player) {
+            return GodService.live().spawnCreature(player.getUUID(), entityType, count, x, y, z).text();
         }
     }
 
@@ -197,8 +195,8 @@ public class ChatBotFunctions {
         @JsonPropertyDescription("The list of independent sub-builds. Each becomes a separate isolated sub-agent. Order does not matter — they all run in parallel.")
         public java.util.List<SubBuild> builds;
 
-        public String execute(ServerPlayerEntity player) {
-            net.minecraft.util.math.BlockPos basePivot = Raycaster.getLastPos(player.getUuid());
+        public String execute(ServerPlayer player) {
+            net.minecraft.core.BlockPos basePivot = Raycaster.getLastPos(player.getUUID());
             if (basePivot == null) {
                 return "Aucun point de référence : l'admin doit lancer /construction avant d'utiliser BuildPlan.";
             }
@@ -226,8 +224,8 @@ public class ChatBotFunctions {
                 if (!BuildGuard.tryAcquire()) break;
                 SubBuild sb = live.get(i);
 
-                net.minecraft.util.math.BlockPos subPivot =
-                    basePivot.add(sb.anchorX, sb.anchorY, sb.anchorZ);
+                net.minecraft.core.BlockPos subPivot =
+                    basePivot.offset(sb.anchorX, sb.anchorY, sb.anchorZ);
 
                 String label = (i + 1) + "/" + n + " " + safe(sb.purpose, "structure");
 
@@ -332,7 +330,7 @@ public class ChatBotFunctions {
     /** Pairs the original tool-call request with the JSON string we send back as its result. */
     public record FunctionResult(ToolExecutionRequest call, String result) {}
 
-    public static boolean checkForFunctions(ChatResponse r, ServerPlayerEntity player, ChatBot chatBot) {
+    public static boolean checkForFunctions(ChatResponse r, ServerPlayer player, ChatBot chatBot) {
         AiMessage aiMessage = (r == null) ? null : r.aiMessage();
         if (aiMessage == null || !aiMessage.hasToolExecutionRequests()) return false;
 
@@ -395,7 +393,7 @@ public class ChatBotFunctions {
      * It may be null when called from a test or legacy path; ListTools then
      * sees every flag as false and lists nothing.</p>
      */
-    private static String executeFunction(ToolExecutionRequest req, ServerPlayerEntity player, ChatBot chatBot) {
+    private static String executeFunction(ToolExecutionRequest req, ServerPlayer player, ChatBot chatBot) {
         // Contract: never throw. The assistant turn carrying this tool_call is
         // already in memory (addAssistantToHistory ran before checkForFunctions).
         // Throwing here aborts the dispatch loop before sendFunctionOutputs adds
@@ -422,7 +420,7 @@ public class ChatBotFunctions {
                 // so it never loads chunks off-thread.
                 case "QueryTerrain" -> {
                     QueryTerrain q = parseArgs(req, QueryTerrain.class);
-                    yield GodService.live().queryTerrain(player.getUuid(), q.centerX, q.centerZ, q.radius).text();
+                    yield GodService.live().queryTerrain(player.getUUID(), q.centerX, q.centerZ, q.radius).text();
                 }
                 // Pure introspection — no world state, no main-thread hop.
                 // Reads the calling bot's flags directly and rebuilds the same
@@ -522,13 +520,13 @@ public class ChatBotFunctions {
         return text.trim();
     }
 
-    public static int checkForTextualFunctions(ChatResponse r, ServerPlayerEntity player, ChatBot chatBot) {
+    public static int checkForTextualFunctions(ChatResponse r, ServerPlayer player, ChatBot chatBot) {
         String text = extractResponseText(r);
         if (text.isEmpty()) return 0;
         return scanAndExecute(text, player, null);
     }
 
-    public static int scanAndExecuteWithPivot(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot) {
+    public static int scanAndExecuteWithPivot(String text, ServerPlayer player, net.minecraft.core.BlockPos pivot) {
         if (text == null || text.isEmpty()) return 0;
         return scanAndExecute(text, player, pivot);
     }
@@ -548,7 +546,7 @@ public class ChatBotFunctions {
      * (bounded) so the next turn sees the blocks. On the server thread itself it runs inline (waiting on the
      * queue from the thread that drains it would deadlock).
      */
-    private static int scanAndExecute(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot) {
+    private static int scanAndExecute(String text, ServerPlayer player, net.minecraft.core.BlockPos pivot) {
         java.util.List<java.util.concurrent.CompletableFuture<WorldOutcome>> pending = new java.util.ArrayList<>();
         int total = 0;
         total += scanPlaceBlock(text, player, pivot, pending);
@@ -559,12 +557,12 @@ public class ChatBotFunctions {
     }
 
     /** Queue one textual call through {@link BuildService} at {@code pivot} (or the admin's /construction pivot). */
-    private static void placeVia(ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot, List<int[]> offsets,
+    private static void placeVia(ServerPlayer player, net.minecraft.core.BlockPos pivot, List<int[]> offsets,
             String blockType, java.util.List<java.util.concurrent.CompletableFuture<WorldOutcome>> pending) {
-        net.minecraft.util.math.BlockPos origin = pivot != null ? pivot : Raycaster.getLastPos(player.getUuid());
+        net.minecraft.core.BlockPos origin = pivot != null ? pivot : Raycaster.getLastPos(player.getUUID());
         if (origin == null) return; // no pivot: nothing to place against (unchanged)
         int[] o = { origin.getX(), origin.getY(), origin.getZ() };
-        pending.add(BuildService.live().submit(player.getUuid(), o, offsets, blockType));
+        pending.add(BuildService.live().submit(player.getUUID(), o, offsets, blockType));
     }
 
     private static void awaitPlacements(java.util.List<java.util.concurrent.CompletableFuture<WorldOutcome>> pending) {
@@ -581,7 +579,7 @@ public class ChatBotFunctions {
         }
     }
 
-    private static int scanPlaceBlock(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot, java.util.List<java.util.concurrent.CompletableFuture<WorldOutcome>> pending) {
+    private static int scanPlaceBlock(String text, ServerPlayer player, net.minecraft.core.BlockPos pivot, java.util.List<java.util.concurrent.CompletableFuture<WorldOutcome>> pending) {
         Matcher m = PLACE_BLOCK_PATTERN.matcher(text);
         int count = 0;
         while (m.find()) {
@@ -601,7 +599,7 @@ public class ChatBotFunctions {
         return count;
     }
 
-    private static int scanPlaceLine(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot, java.util.List<java.util.concurrent.CompletableFuture<WorldOutcome>> pending) {
+    private static int scanPlaceLine(String text, ServerPlayer player, net.minecraft.core.BlockPos pivot, java.util.List<java.util.concurrent.CompletableFuture<WorldOutcome>> pending) {
         Matcher m = PLACE_LINE_PATTERN.matcher(text);
         int count = 0;
         while (m.find()) {
@@ -629,7 +627,7 @@ public class ChatBotFunctions {
         return count;
     }
 
-    private static int scanPlaceBlocks(String text, ServerPlayerEntity player, net.minecraft.util.math.BlockPos pivot, java.util.List<java.util.concurrent.CompletableFuture<WorldOutcome>> pending) {
+    private static int scanPlaceBlocks(String text, ServerPlayer player, net.minecraft.core.BlockPos pivot, java.util.List<java.util.concurrent.CompletableFuture<WorldOutcome>> pending) {
         Matcher m = PLACE_BLOCKS_PATTERN.matcher(text);
         int count = 0;
         while (m.find()) {

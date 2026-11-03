@@ -10,7 +10,7 @@ verified_at: 98cb908
 
 # Build, packaging and runtime layout of the Fabric mod
 
-**TL;DR** — `paulsbrawls` is a Fabric Loom project (Minecraft 1.21.1, Java 21, yarn mappings, split
+**TL;DR** — `paulsbrawls` is a Fabric Loom project (Minecraft 1.21.1, Java 21, Mojang's official mappings, split
 client/main source sets). LangChain4j + Jackson + OkHttp/Okio/Kotlin stdlib are shipped jar-in-jar via
 `include`. `build` is finalized by two `Copy` tasks that drop the remapped jar into Paul's local mods
 folders. The Gradle wrapper is tracked, there is **no `.github/` directory** (gitignored),
@@ -24,13 +24,13 @@ All versions come from `gradle.properties` and are interpolated into `build.grad
 | Property | Value | Where |
 |---|---|---|
 | `minecraft_version` | `1.21.1` | `gradle.properties:7` |
-| `yarn_mappings` | `1.21.1+build.3` (used as `net.fabricmc:yarn:…:v2`) | `gradle.properties:8`, `build.gradle:32` |
-| `loader_version` (Fabric Loader) | `0.17.3` | `gradle.properties:9` |
-| `loom_version` (plugin `fabric-loom`) | `1.11-SNAPSHOT` | `gradle.properties:10`, `build.gradle:2` |
-| `fabric_version` (Fabric API) | `0.116.7+1.21.1` | `gradle.properties:18` |
-| `mod_version` | `1.0.0` | `gradle.properties:13` |
-| `maven_group` | `com.paul.paulsbrawls` | `gradle.properties:14` |
-| `archives_base_name` | `paulsbrawls` | `gradle.properties:15` |
+| Mappings | Mojang's official names, `mappings loom.officialMojangMappings()` (Yarn until 2026-11-03: the code was migrated with Loom's `migrateMappings`, so 26.x, which ships unobfuscated, uses the same names) | `build.gradle:42` |
+| `loader_version` (Fabric Loader) | `0.17.3` | `gradle.properties:8` |
+| `loom_version` (plugin `net.fabricmc.fabric-loom-remap`, the remapping Loom for obfuscated versions) | `1.15.5` (Gradle ≥ 9.2, runs on Java 21) | `gradle.properties:9`, `build.gradle:2` |
+| `fabric_version` (Fabric API) | `0.116.7+1.21.1` | `gradle.properties:17` |
+| `mod_version` | `1.0.0` | `gradle.properties:12` |
+| `maven_group` | `com.paul.paulsbrawls` | `gradle.properties:13` |
+| `archives_base_name` | `paulsbrawls` | `gradle.properties:14` |
 | Gradle JVM | `-Xmx4G`, `org.gradle.parallel=true` | `gradle.properties:2-3` |
 | Java release | `options.release = 21`, source/target `VERSION_21` | `build.gradle:113`, `build.gradle:123-124` |
 
@@ -59,7 +59,7 @@ Client code may reference `main` classes (e.g. `ClientEntryPoint` calls `Money.r
 | Configuration | Artifact | Version |
 |---|---|---|
 | `minecraft` | `com.mojang:minecraft` | 1.21.1 |
-| `mappings` | `net.fabricmc:yarn` | 1.21.1+build.3:v2 |
+| `mappings` | `loom.officialMojangMappings()` | 1.21.1 |
 | `modImplementation` | `net.fabricmc:fabric-loader` | 0.17.3 |
 | `modImplementation` | `net.fabricmc.fabric-api:fabric-api` | 0.116.7+1.21.1 |
 | `implementation` | `dev.langchain4j:langchain4j` | 1.0.0 |
@@ -175,7 +175,7 @@ The item itself is registered in code (`Money.java:18-23`); see
 
 ## The Gradle wrapper is tracked; IDE files are not
 
-`gradlew` (executable), `gradlew.bat` and `gradle/wrapper/` (Gradle 9.1.0) are tracked since 2026-10-26, so
+`gradlew` (executable), `gradlew.bat` and `gradle/wrapper/` (Gradle 9.4.0 since 2026-11-03) are tracked since 2026-10-26, so
 `./gradlew …` works on a fresh clone (`!gradle-wrapper.jar` exempts the wrapper from `*.jar`).
 `.gitattributes` declares `/gradlew text eol=lf` and `*.bat text eol=crlf`. `.gitignore` (CRLF line endings)
 still ignores, among others: `.github` (line 1), `.gradle`, `.vscode`, `build`, `bin/`, `out/`, `.idea/`,

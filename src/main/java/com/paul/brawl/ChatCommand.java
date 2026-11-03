@@ -4,11 +4,10 @@ import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
-import net.minecraft.command.argument.MessageArgumentType;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.text.Text;
-
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.commands.arguments.MessageArgument;
+import net.minecraft.network.chat.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,21 +24,21 @@ public class ChatCommand {
     public static void chatCommand() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("pray")
-                    .requires(source -> source.hasPermissionLevel(0)) // Open to everyone
-                    .then(CommandManager.literal("reset")
+                LiteralArgumentBuilder.<CommandSourceStack>literal("pray")
+                    .requires(source -> source.hasPermission(0)) // Open to everyone
+                    .then(Commands.literal("reset")
                         .executes(context -> {
                             // docs/27: forget the player's agent conversation (external) or memory (builtin).
                             var player = context.getSource().getPlayer();
                             if (player != null) {
-                                if (ExternalAgent.enabled()) ExternalAgent.resetGod(player.getUuid());
+                                if (ExternalAgent.enabled()) ExternalAgent.resetGod(player.getUUID());
                                 else ChatBot.godBot.clearMemory(player);
                                 ChatPrinter.sendMessage(player, "Dieu : (je t'oublie. Prie à nouveau.)");
                             }
                             return Command.SINGLE_SUCCESS;
                         })
                     )
-                    .then(CommandManager.literal("stop")
+                    .then(Commands.literal("stop")
                         .executes(context -> {
                             // Player can end their own active session.
                             var player = context.getSource().getPlayer();
@@ -50,9 +49,9 @@ public class ChatCommand {
                             return Command.SINGLE_SUCCESS;
                         })
                     )
-                    .then(CommandManager.argument("text", MessageArgumentType.message())
+                    .then(Commands.argument("text", MessageArgument.message())
                         .executes(context -> {
-                            Text input = MessageArgumentType.getMessage(context, "text");
+                            Component input = MessageArgument.getMessage(context, "text");
                             onChatCommand(context.getSource(), input.getString());
                             return Command.SINGLE_SUCCESS;
                         })
@@ -69,9 +68,9 @@ public class ChatCommand {
     public static void registerKillSwitch() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("godbody")
-                    .requires(source -> source.hasPermissionLevel(2))
-                    .then(CommandManager.literal("off")
+                LiteralArgumentBuilder.<CommandSourceStack>literal("godbody")
+                    .requires(source -> source.hasPermission(2))
+                    .then(Commands.literal("off")
                         .executes(ctx -> {
                             int dropped = GodActionQueue.clear();
                             // Bug #5: commands run on the server thread, so restore directly —
@@ -83,17 +82,17 @@ public class ChatCommand {
                             GodSessionManager.forceEndSession();
                             BridgeConfig.INSTANCE.enabled = false;
                             BridgeConfig.INSTANCE.save();
-                            ctx.getSource().sendFeedback(
-                                () -> Text.literal("Killed god-body: " + dropped + " queued action(s) dropped, session released, bridge disabled."),
+                            ctx.getSource().sendSuccess(
+                                () -> Component.literal("Killed god-body: " + dropped + " queued action(s) dropped, session released, bridge disabled."),
                                 true);
                             return Command.SINGLE_SUCCESS;
                         })
                     )
-                    .then(CommandManager.literal("on")
+                    .then(Commands.literal("on")
                         .executes(ctx -> {
                             BridgeConfig.INSTANCE.enabled = true;
                             BridgeConfig.INSTANCE.save();
-                            ctx.getSource().sendFeedback(() -> Text.literal("Bridge re-enabled."), true);
+                            ctx.getSource().sendSuccess(() -> Component.literal("Bridge re-enabled."), true);
                             return Command.SINGLE_SUCCESS;
                         })
                     )
@@ -101,7 +100,7 @@ public class ChatCommand {
         });
     }
 
-    public static void onChatCommand(ServerCommandSource source, String input) {
+    public static void onChatCommand(CommandSourceStack source, String input) {
 
         try {
             var player = source.getPlayer();
@@ -110,7 +109,7 @@ public class ChatCommand {
             if (ExternalAgent.enabled()) {
                 // docs/27 §6: the external agent answers. A busy avatar is a French refusal and the
                 // prayer never reaches the agent (so no god tool can run for this player).
-                ExternalAgent.pray(player.getUuid(), player.getName().getString(), input, null);
+                ExternalAgent.pray(player.getUUID(), player.getName().getString(), input, null);
                 return;
             }
 
@@ -138,18 +137,18 @@ public class ChatCommand {
         // /prompt text
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("prompt")
-                    .requires(source -> source.hasPermissionLevel(2)) // Admin only
-                    .then(CommandManager.argument("text", MessageArgumentType.message())
+                LiteralArgumentBuilder.<CommandSourceStack>literal("prompt")
+                    .requires(source -> source.hasPermission(2)) // Admin only
+                    .then(Commands.argument("text", MessageArgument.message())
                         .executes(context -> {
-                            Text text = MessageArgumentType.getMessage(context, "text");
+                            Component text = MessageArgument.getMessage(context, "text");
 
                             ChatBot.godBot.prompt = text.getString();
                             ChatBot.buildBot.prompt = text.getString();
 
                             var message = "Changed prompt " + text;
                             // Bug #18: getPlayer() is null from the console — reply through the source instead.
-                            context.getSource().sendFeedback(() -> Text.literal(message), false);
+                            context.getSource().sendSuccess(() -> Component.literal(message), false);
                             LOGGER.info(message);
                             return Command.SINGLE_SUCCESS;
                         })
@@ -159,13 +158,13 @@ public class ChatCommand {
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("prompt")
-                    .requires(source -> source.hasPermissionLevel(2)) // Admin only
+                LiteralArgumentBuilder.<CommandSourceStack>literal("prompt")
+                    .requires(source -> source.hasPermission(2)) // Admin only
                         .executes(context -> {
                             ChatBot.godBot.readPrompt();
                             ChatBot.buildBot.readPrompt();
-                            Text text = Text.literal("Hardcoded prompt : ").append(ChatBot.godBot.hardcodedPrompt).append("\nCustom Prompt : ").append(ChatBot.godBot.prompt);
-                            context.getSource().sendFeedback(() -> text, false); // bug #18: console-safe
+                            Component text = Component.literal("Hardcoded prompt : ").append(ChatBot.godBot.hardcodedPrompt).append("\nCustom Prompt : ").append(ChatBot.godBot.prompt);
+                            context.getSource().sendSuccess(() -> text, false); // bug #18: console-safe
                             return Command.SINGLE_SUCCESS;
                         })
                     );

@@ -12,30 +12,30 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.command.CommandRegistryAccess;
-import net.minecraft.command.argument.BlockArgumentParser;
-import net.minecraft.command.argument.ItemStackArgument;
-import net.minecraft.command.argument.ItemStackArgumentType;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.LightningEntity;
-import net.minecraft.entity.mob.MobEntity;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.registry.RegistryWrapper;
+import net.minecraft.commands.CommandBuildContext;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.commands.arguments.blocks.BlockStateParser;
+import net.minecraft.commands.arguments.item.ItemArgument;
+import net.minecraft.commands.arguments.item.ItemInput;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.core.Vec3i;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3i;
-import net.minecraft.world.World;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LightningBolt;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 
 
 public class ChatBotActions {
@@ -61,7 +61,7 @@ public class ChatBotActions {
      * Store the offer for {@code /accept} and show it to the player. Amounts were checked by {@link GodService};
      * an unknown item comes back as a {@link WorldRefusal}. Main thread only.
      */
-    public static void sendTradeOffer(ServerPlayerEntity player, String giveItemName, int giveAmount, String takeItemName, int takeAmount) {
+    public static void sendTradeOffer(ServerPlayer player, String giveItemName, int giveAmount, String takeItemName, int takeAmount) {
         var error = TradeOffers.updateOffer(player, giveItemName, giveAmount, takeItemName, takeAmount);
         if (error != null) throw new WorldRefusal(error);
         var message = "God has offered you a trade: \n You receive " + giveAmount + " " + giveItemName + " for " + takeAmount + " " + takeItemName + "\n Type /accept within " + (TradeOffers.OFFER_TTL_MILLIS / 60_000) + " minutes.";
@@ -74,15 +74,15 @@ public class ChatBotActions {
      * ({@code minecraft:enchanted_book[minecraft:enchantments={…}]}) and a bare {@code diamond} both work. Stacks are
      * split to the item's max size and anything that does not fit drops at the player's feet. Main thread only.
      */
-    public static void giveItemStacks(ServerPlayerEntity player, String itemName, int amount) {
+    public static void giveItemStacks(ServerPlayer player, String itemName, int amount) {
         ItemStack template = parseItemStack(player.getServer(), itemName);
         if (template == null) {
             throw new WorldRefusal("Reward cancelled, item " + itemName + " does not exist or is malformed, please try again.");
         }
         int left = amount;
         while (left > 0) {
-            int n = Math.min(left, Math.max(1, template.getMaxCount()));
-            player.getInventory().offerOrDrop(template.copyWithCount(n));
+            int n = Math.min(left, Math.max(1, template.getMaxStackSize()));
+            player.getInventory().placeItemBackInInventory(template.copyWithCount(n));
             left -= n;
         }
     }
@@ -91,31 +91,31 @@ public class ChatBotActions {
     public static ItemStack parseItemStack(MinecraftServer server, String itemString) {
         if (server == null || itemString == null || itemString.isBlank()) return null;
         try {
-            CommandRegistryAccess access = CommandRegistryAccess.of(
-                server.getRegistryManager(), server.getSaveProperties().getEnabledFeatures());
-            ItemStackArgument arg = ItemStackArgumentType.itemStack(access).parse(new StringReader(itemString.trim()));
-            return arg.createStack(1, false);
+            CommandBuildContext access = CommandBuildContext.simple(
+                server.registryAccess(), server.getWorldData().enabledFeatures());
+            ItemInput arg = ItemArgument.item(access).parse(new StringReader(itemString.trim()));
+            return arg.createItemStack(1, false);
         } catch (CommandSyntaxException e) {
             LOGGER.warn("Invalid item string {}: {}", itemString, e.getMessage());
             return null;
         }
     }
 
-    public static String giveItemWithCommand(ServerPlayerEntity player, String item, int amount) {
+    public static String giveItemWithCommand(ServerPlayer player, String item, int amount) {
 
         var command = "/give " + player.getName().getString() + " " + item + " " + amount;
         
-        var manager = player.getServer().getCommandManager();
-        var source = player.getServer().getCommandSource();
+        var manager = player.getServer().getCommands();
+        var source = player.getServer().createCommandSourceStack();
 
-        manager.executeWithPrefix(source, command);
+        manager.performPrefixedCommand(source, command);
         return "";
 
     }
 
 
-    public static void giveItem(ServerPlayerEntity player, Item item, int amount) {
-        player.giveItemStack(new ItemStack(item, amount));
+    public static void giveItem(ServerPlayer player, Item item, int amount) {
+        player.addItem(new ItemStack(item, amount));
     }
 
     public static String[] stripArguments(String str, String commandName) {
@@ -136,13 +136,13 @@ public class ChatBotActions {
         // Bug #6: the registry id only — components/NBT stripped, namespace defaulted (ItemIds, unit-tested).
         // Splitting on ':' broke "ns:item[ns:component=…]" and a bare "diamond".
         String base = ItemIds.baseId(str);
-        Identifier id = base == null ? null : Identifier.tryParse(base);
+        ResourceLocation id = base == null ? null : ResourceLocation.tryParse(base);
         if (id == null) {
             LOGGER.error("Invalid item string: " + str);
             return null;
         }
         try {
-            return Registries.ITEM.getOrEmpty(id).orElse(null);
+            return BuiltInRegistries.ITEM.getOptional(id).orElse(null);
         } catch (Exception e) {
             LOGGER.error("Invalid item string: " + str + " Exception " + e);
             return null;
@@ -150,20 +150,20 @@ public class ChatBotActions {
     }
 
     /** {@code strikes} lightning bolts on the player (already clamped by {@link GodService}). Main thread only. */
-    public static void smite(ServerPlayerEntity player, int strikes) {
+    public static void smite(ServerPlayer player, int strikes) {
         for (int i = 0; i < strikes; i++) {
             smite(player);
         }
     }
 
-    public static void smite(ServerPlayerEntity player) {
-        if (player == null || player.getWorld() == null) return;
-        World world = player.getWorld();
-        BlockPos pos = player.getBlockPos();
-        LightningEntity lightning = EntityType.LIGHTNING_BOLT.create(world);
+    public static void smite(ServerPlayer player) {
+        if (player == null || player.level() == null) return;
+        Level world = player.level();
+        BlockPos pos = player.blockPosition();
+        LightningBolt lightning = EntityType.LIGHTNING_BOLT.create(world);
         if (lightning != null) {
-            lightning.refreshPositionAfterTeleport(pos.getX(), pos.getY(), pos.getZ());
-            world.spawnEntity(lightning);
+            lightning.moveTo(pos.getX(), pos.getY(), pos.getZ());
+            world.addFreshEntity(lightning);
         }
     }
 
@@ -171,17 +171,17 @@ public class ChatBotActions {
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("block")
-                    .requires(source -> source.hasPermissionLevel(2)) // Admin only
-                    .then(CommandManager.argument("x", IntegerArgumentType.integer())
-                    .then(CommandManager.argument("y", IntegerArgumentType.integer())
-                    .then(CommandManager.argument("z", IntegerArgumentType.integer())
+                LiteralArgumentBuilder.<CommandSourceStack>literal("block")
+                    .requires(source -> source.hasPermission(2)) // Admin only
+                    .then(Commands.argument("x", IntegerArgumentType.integer())
+                    .then(Commands.argument("y", IntegerArgumentType.integer())
+                    .then(Commands.argument("z", IntegerArgumentType.integer())
                         .executes(context -> {
                             int x = IntegerArgumentType.getInteger(context, "x");
                             int y = IntegerArgumentType.getInteger(context, "y");
                             int z = IntegerArgumentType.getInteger(context, "z");
                             // Bug #18: player-only — getPlayerOrThrow gives the console a readable error, not an NPE.
-                            placeBlock(context.getSource().getPlayerOrThrow(), x, y, z, "minecraft:stone");
+                            placeBlock(context.getSource().getPlayerOrException(), x, y, z, "minecraft:stone");
                             return Command.SINGLE_SUCCESS;
                         }))))
             );
@@ -189,25 +189,25 @@ public class ChatBotActions {
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("construction")
-                    .requires(source -> source.hasPermissionLevel(2)) // Admin only
+                LiteralArgumentBuilder.<CommandSourceStack>literal("construction")
+                    .requires(source -> source.hasPermission(2)) // Admin only
                     .executes(context -> {
                         // Bug #18: player-only (it raycasts from the player's eyes) — the console gets a readable error.
-                        ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+                        ServerPlayer player = context.getSource().getPlayerOrException();
                         Raycaster.setLastPos(player);
                         // Under LangChain4j the per-player conversation lives in the
                         // mod, so clearing the chain is just dropping the memory window.
                         ChatBot.buildBot.clearMemory(player);
-                        ExternalAgent.resetBuild(player.getUuid()); // docs/27: a new site, a new builder conversation
+                        ExternalAgent.resetBuild(player.getUUID()); // docs/27: a new site, a new builder conversation
                         return Command.SINGLE_SUCCESS;
                     })
                     // A builder ticket for the admin's own MCP client (e.g. an interactive Claude Code session).
-                    .then(CommandManager.literal("ticket")
-                        .executes(context -> manualTicket(context.getSource().getPlayerOrThrow(), null))
-                        .then(CommandManager.literal("revoke")
-                            .executes(context -> revokeTickets(context.getSource().getPlayerOrThrow())))
-                        .then(CommandManager.argument("minutes", IntegerArgumentType.integer(1, AgentTurns.MANUAL_TICKET_MAX_MINUTES))
-                            .executes(context -> manualTicket(context.getSource().getPlayerOrThrow(),
+                    .then(Commands.literal("ticket")
+                        .executes(context -> manualTicket(context.getSource().getPlayerOrException(), null))
+                        .then(Commands.literal("revoke")
+                            .executes(context -> revokeTickets(context.getSource().getPlayerOrException())))
+                        .then(Commands.argument("minutes", IntegerArgumentType.integer(1, AgentTurns.MANUAL_TICKET_MAX_MINUTES))
+                            .executes(context -> manualTicket(context.getSource().getPlayerOrException(),
                                 IntegerArgumentType.getInteger(context, "minutes")))))
             );
         });
@@ -218,38 +218,38 @@ public class ChatBotActions {
      * {@code /construction ticket [minutes]}: shown to this admin only (never logged, never broadcast), with a click
      * that copies the ticket. The ticket is the same kind {@code /build} mints: bound to this admin and their pivot.
      */
-    private static int manualTicket(ServerPlayerEntity player, Integer minutes) {
-        AgentTurns.ManualTicket m = ExternalAgent.mintManualBuilderTicket(player.getUuid(), minutes);
+    private static int manualTicket(ServerPlayer player, Integer minutes) {
+        AgentTurns.ManualTicket m = ExternalAgent.mintManualBuilderTicket(player.getUUID(), minutes);
         if (m.ticket() == null) {
-            player.sendMessage(net.minecraft.text.Text.literal("Dieu : (" + m.refusal() + ")"), false);
+            player.displayClientMessage(net.minecraft.network.chat.Component.literal("Dieu : (" + m.refusal() + ")"), false);
             return 0;
         }
         String id = m.ticket().id();
-        net.minecraft.text.Text ticket = net.minecraft.text.Text.literal(id).styled(s -> s
-            .withColor(net.minecraft.util.Formatting.GOLD)
-            .withUnderline(true)
-            .withClickEvent(new net.minecraft.text.ClickEvent(net.minecraft.text.ClickEvent.Action.COPY_TO_CLIPBOARD, id))
-            .withHoverEvent(new net.minecraft.text.HoverEvent(net.minecraft.text.HoverEvent.Action.SHOW_TEXT,
-                net.minecraft.text.Text.literal("Clique pour copier le ticket"))));
+        net.minecraft.network.chat.Component ticket = net.minecraft.network.chat.Component.literal(id).withStyle(s -> s
+            .withColor(net.minecraft.ChatFormatting.GOLD)
+            .withUnderlined(true)
+            .withClickEvent(new net.minecraft.network.chat.ClickEvent(net.minecraft.network.chat.ClickEvent.Action.COPY_TO_CLIPBOARD, id))
+            .withHoverEvent(new net.minecraft.network.chat.HoverEvent(net.minecraft.network.chat.HoverEvent.Action.SHOW_TEXT,
+                net.minecraft.network.chat.Component.literal("Clique pour copier le ticket"))));
         int[] p = m.pivot();
-        player.sendMessage(net.minecraft.text.Text.literal("Ticket de construction (" + m.minutes() + " min, pivot "
+        player.displayClientMessage(net.minecraft.network.chat.Component.literal("Ticket de construction (" + m.minutes() + " min, pivot "
             + p[0] + " " + p[1] + " " + p[2] + ") : ").append(ticket), false);
-        player.sendMessage(net.minecraft.text.Text.literal("Serveur MCP : " + ExternalAgent.builderUrl()
+        player.displayClientMessage(net.minecraft.network.chat.Component.literal("Serveur MCP : " + ExternalAgent.builderUrl()
             + " — donne ce ticket à ton agent ; /construction ticket revoke l'annule."), false);
         LOGGER.info("Manual builder ticket minted for {} ({} min).", player.getName().getString(), m.minutes());
         return Command.SINGLE_SUCCESS;
     }
 
-    private static int revokeTickets(ServerPlayerEntity player) {
-        int n = ExternalAgent.revokeBuilderTickets(player.getUuid());
-        player.sendMessage(net.minecraft.text.Text.literal(n < 0 ? "Dieu : (" + ExternalAgent.NOT_RUNNING + ")"
+    private static int revokeTickets(ServerPlayer player) {
+        int n = ExternalAgent.revokeBuilderTickets(player.getUUID());
+        player.displayClientMessage(net.minecraft.network.chat.Component.literal(n < 0 ? "Dieu : (" + ExternalAgent.NOT_RUNNING + ")"
             : n == 0 ? "Aucun ticket de construction actif." : "Ticket de construction annulé ; tes sous-constructions sont fermées."), false);
         return n < 0 ? 0 : Command.SINGLE_SUCCESS;
     }
 
     /** {@code /block}: one block at an offset from the admin's {@code /construction} pivot (no pivot → nothing). */
-    public static void placeBlock(ServerPlayerEntity player, int x, int y, int z, String blockType) {
-        BlockPos pos = Raycaster.getLastPos(player.getUuid());
+    public static void placeBlock(ServerPlayer player, int x, int y, int z, String blockType) {
+        BlockPos pos = Raycaster.getLastPos(player.getUUID());
         if (pos == null) return;
         placeAll(player, pos, java.util.List.of(new int[] { x, y, z }), blockType);
     }
@@ -259,13 +259,13 @@ public class ChatBotActions {
      * {@link BuildGuard}) were applied by {@link BuildService}; an unparseable block is a {@link WorldRefusal}.
      * Main thread only. Returns how many blocks were set.
      */
-    public static int placeAll(ServerPlayerEntity player, BlockPos origin, java.util.List<int[]> offsets, String blockType) {
+    public static int placeAll(ServerPlayer player, BlockPos origin, java.util.List<int[]> offsets, String blockType) {
         BlockState state = parseBlockState(player.getServer(), blockType);
         if (state == null) throw new WorldRefusal("Bloc inconnu ou mal formé : '" + blockType + "'.");
-        World world = player.getWorld();
+        Level world = player.level();
         for (int[] o : offsets) {
             // BlockPos.add(int, int, int) already returns a new BlockPos — no copy needed.
-            world.setBlockState(origin.add(o[0], o[1], o[2]), state);
+            world.setBlockAndUpdate(origin.offset(o[0], o[1], o[2]), state);
         }
         return offsets.size();
     }
@@ -275,8 +275,8 @@ public class ChatBotActions {
      * offsets from it. Bug #18: this used to emit unparseable pseudo-JSON; {@link BlockInfoJson} builds a real array
      * of {@code {"x","y","z","block"}} objects, and the id is the block's registry id (not its item's).
      */
-    public static String getBlockInfo(ServerPlayerEntity player) {
-        BlockPos pos = Raycaster.getLastPos(player.getUuid());
+    public static String getBlockInfo(ServerPlayer player) {
+        BlockPos pos = Raycaster.getLastPos(player.getUUID());
 
         if(pos == null) return "";
 
@@ -286,12 +286,12 @@ public class ChatBotActions {
             for(int j = 0; j<zone; j++) {
                 for(int k = zone-1; k>-zone+1; k--) {
                     Vec3i v = new Vec3i(i - zone/2, k - zone/2, j - zone/2);
-                    var p = pos.add(v);
-                    BlockState state = player.getWorld().getBlockState(p);
+                    var p = pos.offset(v);
+                    BlockState state = player.level().getBlockState(p);
                     if(state.isAir()) {
                         continue;
                     }
-                    json.add(v.getX(), v.getY(), v.getZ(), Registries.BLOCK.getId(state.getBlock()).toString());
+                    json.add(v.getX(), v.getY(), v.getZ(), BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
                     break;
                 }
             }
@@ -308,10 +308,10 @@ public class ChatBotActions {
 
     private static BlockState parseBlockState(MinecraftServer server, String blockType) {
         if (blockType == null || server == null) return null;
-        RegistryWrapper<Block> wrapper = server.getRegistryManager()
-            .getWrapperOrThrow(RegistryKeys.BLOCK);
+        HolderLookup<Block> wrapper = server.registryAccess()
+            .lookupOrThrow(Registries.BLOCK);
         try {
-            return BlockArgumentParser.block(wrapper, blockType, false).blockState();
+            return BlockStateParser.parseForBlock(wrapper, blockType, false).blockState();
         } catch (CommandSyntaxException e) {
             int bracket = blockType.indexOf('[');
             if (bracket < 0) {
@@ -322,7 +322,7 @@ public class ChatBotActions {
             LOGGER.warn("Failed to parse blockstate {}, falling back to {}: {}",
                 blockType, base, e.getMessage());
             try {
-                return BlockArgumentParser.block(wrapper, base, false).blockState();
+                return BlockStateParser.parseForBlock(wrapper, base, false).blockState();
             } catch (CommandSyntaxException ex) {
                 LOGGER.warn("Fallback also failed for {}: {}", base, ex.getMessage());
                 return null;
@@ -332,12 +332,12 @@ public class ChatBotActions {
 
 
     /** {@code /weather <type> <seconds>}; type and duration were validated by {@link GodService}. Main thread only. */
-    public static void changeWeather(ServerPlayerEntity player, String weatherType, int durationSeconds) {
+    public static void changeWeather(ServerPlayer player, String weatherType, int durationSeconds) {
         if (player == null || player.getServer() == null) {
             throw new WorldRefusal("Impossible de changer la météo : joueur ou serveur invalide.");
         }
         String command = "/weather " + weatherType.toLowerCase(java.util.Locale.ROOT) + " " + durationSeconds;
-        player.getServer().getCommandManager().executeWithPrefix(player.getServer().getCommandSource(), command);
+        player.getServer().getCommands().performPrefixedCommand(player.getServer().createCommandSourceStack(), command);
     }
 
     /**
@@ -346,47 +346,47 @@ public class ChatBotActions {
      * /summon tool and a single canonical path avoids drift. Main thread only (GOD_BOT_INTEGRATION_PLAN.md §6a,
      * §7). Returns how many spawned.
      */
-    public static int spawnCreature(ServerPlayerEntity player, String entityType, int count, int x, int y, int z, boolean griefAllowed) {
-        if (player == null || !(player.getWorld() instanceof ServerWorld world)) {
+    public static int spawnCreature(ServerPlayer player, String entityType, int count, int x, int y, int z, boolean griefAllowed) {
+        if (player == null || !(player.level() instanceof ServerLevel world)) {
             throw new WorldRefusal("Impossible de spawner : joueur ou monde invalide.");
         }
-        Identifier id = Identifier.tryParse(entityType.trim());
+        ResourceLocation id = ResourceLocation.tryParse(entityType.trim());
         if (id == null) {
             throw new WorldRefusal("Spawn annulé : identifiant invalide '" + entityType + "'.");
         }
-        EntityType<?> type = Registries.ENTITY_TYPE.getOrEmpty(id).orElse(null);
+        EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getOptional(id).orElse(null);
         if (type == null) {
             throw new WorldRefusal("Spawn annulé : type d'entité inconnu '" + entityType + "'.");
         }
-        BlockPos basePos = player.getBlockPos().add(x, y, z);
+        BlockPos basePos = player.blockPosition().offset(x, y, z);
         int spawned = 0;
         for (int i = 0; i < count; i++) {
             // Fan creatures out by ±1 block so a count > 1 doesn't stack at one pos.
-            BlockPos spawnPos = basePos.add((i % 3) - 1, 0, (i / 3) % 3 - 1);
+            BlockPos spawnPos = basePos.offset((i % 3) - 1, 0, (i / 3) % 3 - 1);
             Entity entity = type.create(world);
             if (entity == null) continue;
-            entity.refreshPositionAndAngles(
+            entity.moveTo(
                 spawnPos.getX() + 0.5,
                 spawnPos.getY(),
                 spawnPos.getZ() + 0.5,
-                player.getYaw() + 180f, 0f);
-            if (entity instanceof MobEntity mob && !griefAllowed) {
+                player.getYRot() + 180f, 0f);
+            if (entity instanceof Mob mob && !griefAllowed) {
                 // Vanilla flag for "can pick up blocks / break grass"; only some
                 // mobs honour it, but it's the cheapest knob we have.
                 mob.setCanPickUpLoot(false);
             }
-            if (world.spawnEntity(entity)) spawned++;
+            if (world.addFreshEntity(entity)) spawned++;
         }
         return spawned;
     }
 
     /** Looks up the bot avatar by the configured username, or null if not joined. */
-    public static ServerPlayerEntity findAvatar(ServerPlayerEntity prayingPlayer) {
+    public static ServerPlayer findAvatar(ServerPlayer prayingPlayer) {
         MinecraftServer s = (prayingPlayer != null && prayingPlayer.getServer() != null)
             ? prayingPlayer.getServer()
             : SERVER;
         if (s == null) return null;
-        return s.getPlayerManager().getPlayer(BridgeConfig.INSTANCE.botUsername);
+        return s.getPlayerList().getPlayerByName(BridgeConfig.INSTANCE.botUsername);
     }
 
     /**
@@ -394,19 +394,19 @@ public class ChatBotActions {
      * race-free under the busy lock — exactly one session sets/clears the
      * flag. Must run on the main thread; caller wraps via {@link GodActionQueue}.
      */
-    public static String buffAvatar(ServerPlayerEntity prayingPlayer) {
-        ServerPlayerEntity bot = findAvatar(prayingPlayer);
+    public static String buffAvatar(ServerPlayer prayingPlayer) {
+        ServerPlayer bot = findAvatar(prayingPlayer);
         if (bot == null) {
             LOGGER.info("buffAvatar: bot '{}' not found (not joined?)", BridgeConfig.INSTANCE.botUsername);
             return "Avatar introuvable (pas de buff).";
         }
         bot.setInvulnerable(true);
-        bot.extinguish();
+        bot.clearFire();
         return "Avatar rendu invincible.";
     }
 
-    public static String restoreAvatar(ServerPlayerEntity prayingPlayer) {
-        ServerPlayerEntity bot = findAvatar(prayingPlayer);
+    public static String restoreAvatar(ServerPlayer prayingPlayer) {
+        ServerPlayer bot = findAvatar(prayingPlayer);
         if (bot == null) return "Avatar introuvable.";
         bot.setInvulnerable(false);
         return "Avatar redevenu mortel.";
@@ -421,7 +421,7 @@ public class ChatBotActions {
      */
     public static String restoreAvatarOnMain(MinecraftServer server) {
         if (server == null) return "Serveur indisponible.";
-        ServerPlayerEntity bot = server.getPlayerManager().getPlayer(BridgeConfig.INSTANCE.botUsername);
+        ServerPlayer bot = server.getPlayerList().getPlayerByName(BridgeConfig.INSTANCE.botUsername);
         if (bot == null) return "Avatar introuvable.";
         bot.setInvulnerable(false);
         return "Avatar redevenu mortel.";
@@ -435,7 +435,7 @@ public class ChatBotActions {
         MinecraftServer s = SERVER;
         if (s == null) return;
         GodActionQueue.submit(() -> {
-            ServerPlayerEntity bot = s.getPlayerManager().getPlayer(BridgeConfig.INSTANCE.botUsername);
+            ServerPlayer bot = s.getPlayerList().getPlayerByName(BridgeConfig.INSTANCE.botUsername);
             if (bot != null) bot.setInvulnerable(false);
             return "watchdog cleared invuln";
         });

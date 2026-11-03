@@ -67,7 +67,7 @@ incomplete command and bare `/prove` threw on `getString(context, "text")`. Both
 | Item | Value | Line |
 |---|---|---|
 | Type | `record ImagePayload(byte[] image, String text) implements CustomPayload` | `:9` |
-| Channel id | `Identifier.of("screenshot", "image")` → `screenshot:image` | `:11` |
+| Channel id | `ResourceLocation.fromNamespaceAndPath("screenshot", "image")` → `screenshot:image` | `:11` |
 | `ID` | `new CustomPayload.Id<>(identifier)` | `:13` |
 | `CODEC` | `PacketCodec.tuple(PacketCodecs.BYTE_ARRAY, image, PacketCodecs.STRING, text, ImagePayload::new)` | `:14-17` |
 | Direction | C2S only — `PayloadTypeRegistry.playC2S().register(ID, CODEC)` in `ImageReceiver.commonRegister()` (`ImageReceiver.java:14-16`) | |

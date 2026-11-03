@@ -7,7 +7,7 @@ import java.nio.file.StandardOpenOption;
 
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.level.ServerPlayer;
 
 public class ImageReceiver {
     
@@ -25,14 +25,14 @@ public class ImageReceiver {
         });
     }
 
-    private static void checkProof(byte[] bytes, ServerPlayerEntity player, String text) {
+    private static void checkProof(byte[] bytes, ServerPlayer player, String text) {
         ChatBot bot = ChatBot.getCorrectChatBot(text);
         if (ExternalAgent.enabled()) {
             // docs/27 §6: /build goes to the builder agent, /prove to the god agent (same claim rules as /pray).
             if (bot == ChatBot.buildBot) {
-                ExternalAgent.build(player.getUuid(), player.getName().getString(), text, bytes);
+                ExternalAgent.build(player.getUUID(), player.getName().getString(), text, bytes);
             } else {
-                ExternalAgent.pray(player.getUuid(), player.getName().getString(), text, bytes);
+                ExternalAgent.pray(player.getUUID(), player.getName().getString(), text, bytes);
             }
             return;
         }

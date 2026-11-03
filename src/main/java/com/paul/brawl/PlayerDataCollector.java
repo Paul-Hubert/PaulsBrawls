@@ -2,27 +2,27 @@ package com.paul.brawl;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import net.minecraft.entity.effect.StatusEffectInstance;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.scoreboard.Scoreboard;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.item.ItemStack;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.scores.Scoreboard;
 
 public class PlayerDataCollector {
 
-    public static JsonObject collect(ServerPlayerEntity player) {
+    public static JsonObject collect(ServerPlayer player) {
         JsonObject data = new JsonObject();
 
         // 📛 Player name
         data.addProperty("name", player.getName().getString());
 
         // 📍 Position and dimension
-        BlockPos pos = player.getBlockPos();
+        BlockPos pos = player.blockPosition();
         data.addProperty("x", pos.getX());
         data.addProperty("y", pos.getY());
         data.addProperty("z", pos.getZ());
-        data.addProperty("dimension", player.getWorld().getRegistryKey().getValue().toString());
+        data.addProperty("dimension", player.level().dimension().location().toString());
 
         // ❤️ Health and ⚡️XP
         data.addProperty("health", player.getHealth());
@@ -30,7 +30,7 @@ public class PlayerDataCollector {
 
         // 🎒 Inventory
         JsonArray inventory = new JsonArray();
-        for (ItemStack item : player.getInventory().main) {
+        for (ItemStack item : player.getInventory().items) {
             if (!item.isEmpty()) {
                 JsonObject itemJson = new JsonObject();
                 itemJson.addProperty("item", item.getItem().toString());
@@ -42,9 +42,9 @@ public class PlayerDataCollector {
 
         // 🧪 Potion effects
         JsonArray effects = new JsonArray();
-        for (StatusEffectInstance effect : player.getStatusEffects()) {
+        for (MobEffectInstance effect : player.getActiveEffects()) {
             JsonObject eff = new JsonObject();
-            eff.addProperty("effect", effect.getEffectType().toString());
+            eff.addProperty("effect", effect.getEffect().toString());
             eff.addProperty("duration", effect.getDuration());
             eff.addProperty("amplifier", effect.getAmplifier());
             effects.add(eff);
@@ -53,7 +53,7 @@ public class PlayerDataCollector {
 
         // 🏷️ Tags
         JsonArray tags = new JsonArray();
-        for (String tag : player.getCommandTags()) {
+        for (String tag : player.getTags()) {
             tags.add(tag);
         }
         data.add("tags", tags);
@@ -62,20 +62,20 @@ public class PlayerDataCollector {
         JsonObject scores = new JsonObject();
         Scoreboard scoreboard = player.getScoreboard();
         scoreboard.getObjectiveNames().forEach(objective -> {
-            var obj = scoreboard.getNullableObjective(objective);
+            var obj = scoreboard.getObjective(objective);
             if (obj != null) {
-                var score = scoreboard.getScore(player, obj);
+                var score = scoreboard.getPlayerScoreInfo(player, obj);
                 if (score != null) {
-                    scores.addProperty(objective, score.getScore());
+                    scores.addProperty(objective, score.value());
                 }
             }
         });
         data.add("scores", scores);
 
         // ☀️ Time and weather
-        if (player.getWorld() instanceof ServerWorld sw) {
+        if (player.level() instanceof ServerLevel sw) {
             JsonObject worldData = new JsonObject();
-            worldData.addProperty("time", sw.getTimeOfDay());
+            worldData.addProperty("time", sw.getDayTime());
             worldData.addProperty("is_raining", sw.isRaining());
             worldData.addProperty("is_thundering", sw.isThundering());
             data.add("world", worldData);

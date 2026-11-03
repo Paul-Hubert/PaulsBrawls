@@ -508,7 +508,7 @@ A Claude Code instance commanding a bodiless army; the design and the as-built d
 
 ## A bot that dies (docs/35 F6–F7, Paul's D2–D3)
 
-- **The mod:** it drops nothing (`mixin/PlayerEntityMixin` cancels `PlayerEntity.dropInventory()` for a roster
+- **The mod:** it drops nothing (`mixin/PlayerMixin` cancels `Player.dropEquipment()` for a roster
   name); its stacks are lost, XP is vanilla's.
 - **The runtime:** mineflayer's `death` → the pool marks the record dead and emits `gone … died` (its orders lose it,
   `leases.drop`), the service marks it `dead` in `roster.json`. On mineflayer's automatic respawn (its next `spawn`)
@@ -540,11 +540,11 @@ Three layers now:
 |---|---|
 | `SquadCommand` | `/bots …` (Brigadier), permissions, tab completion from the cache, async calls; `/bots status` (perm 0); `/bots orders bind\|unbind\|bound` (perm 0, below) |
 | `SquadBinding` | An order bound to an item stack: `custom_data` `squad: {order, line, glint, lore}`, the lore line and the glint override it adds and removes, the bind line's parsing. The record, its NBT form and the lore edit are JUnit-tested (no bootstrap) |
-| `SquadTriggers` | The bound items' clicks on the server thread: `UseItemCallback` (always `PASS`), `ServerEntityEvents.ENTITY_LOAD` for a bound bow's arrow, and the hit from `mixin/PersistentProjectileEntityMixin`; the snapshot with `trigger`, the async `/api/orders/trigger` call, the answer |
+| `SquadTriggers` | The bound items' clicks on the server thread: `UseItemCallback` (always `PASS`), `ServerEntityEvents.ENTITY_LOAD` for a bound bow's arrow, and the hit from `mixin/AbstractArrowMixin`; the snapshot with `trigger`, the async `/api/orders/trigger` call, the answer |
 | `SquadTriggerLimiter`, `SquadArrows`, `SquadTriggerJson` | Minecraft-free, JUnit: the per-player bucket (4, refilled at 4/s), one release per shot, a repeated answer shown once per 2 s; the tracked arrows (first hit only, 10 s); the trigger's JSON and the entity shape it shares with `CommanderSnap` |
 | `SquadStatusFormat` | The `/bots status` line from `/api/metrics` (Minecraft-free, JUnit) |
 | `SquadFriends` | Friendly fire: which roster bot must not hurt whom (shared owner, or its own owner). Minecraft-free, JUnit; the hook is `Squad.registerFriendlyFire` |
-| `SquadDeath`, `mixin/PlayerEntityMixin` | A roster bot drops nothing when it dies (docs/35 F6, D2): the mixin cancels `PlayerEntity.dropInventory()` at HEAD for a roster name (`Squad.botNames()`, case-insensitive, `SquadDeath.dropsNothing`, Minecraft-free, JUnit). Its stacks are lost: the respawned player copies no inventory without `keepInventory`, and `/bots squad respawn` gives the kit again. Players and XP unchanged. Target checked in the named jar (declared by `PlayerEntity`, not overridden by `ServerPlayerEntity`), the intermediary jar (`class_1657.method_16078()V`) and the generated refmap; registered in `paulsbrawls.mixins.json` (`defaultRequire: 1`) |
+| `SquadDeath`, `mixin/PlayerMixin` | A roster bot drops nothing when it dies (docs/35 F6, D2): the mixin cancels `Player.dropEquipment()` at HEAD for a roster name (`Squad.botNames()`, case-insensitive, `SquadDeath.dropsNothing`, Minecraft-free, JUnit). Its stacks are lost: the respawned player copies no inventory without `keepInventory`, and `/bots squad respawn` gives the kit again. Players and XP unchanged. Target checked with `javap` in the Mojang-named jar (declared by `Player`, not overridden by `ServerPlayer`); intermediary `class_1657.method_16078()V`, which Loom writes into the remapped jar's mixin; registered in `paulsbrawls.mixins.json` (`defaultRequire: 1`) |
 | `SquadRaid`, `SquadRaidPlan` | `/bots raid` (above); the plan (arguments, point, names, spread, timeout) is Minecraft-free, JUnit |
 | `SquadSpawn`, `SquadSpawnPlan` | `/bots squad spawn KIT [n] [owner] [others…]` / `squad despawn [KIT] [owner]` / `squad respawn [KIT] [n] [owner]` (admin): `n` bots named after the kit, on a ring around the owner at the owner's height (`standNear`: a floor within 6 blocks, never the roof), kit and tag on arrival like `raid`; despawn by owner and kit tag (dead bots too); respawn (docs/35 F7): `POST /api/bots/respawn { by, admin, owner, kit?, n? }`, then each bot named in the answer is expected on a ring around the caller (`@s`, a datapack function's too; else the owner) and on arrival `Squad.resetToKitLater` clears its whole inventory and gives its kit (`SquadKits.forReset`: the command's kit, else its kit tag; none: empty, « sans kit » in the answer). Kits may be plural (`SquadKits.find`). The plan (arguments, names, ring, the French count) is Minecraft-free, JUnit |
 | `Squad` | Lifecycle, the SSE loop and the cache, notices (kept for offline players), whitelist, join gate (a bot name from a non-loopback address is kicked), arrival teleport (to the admin, or to a given spot with a callback), `hasPlayed` (spawn refuses names with a `playerdata` file), `equip`, a despawned bot's save (below) |
@@ -588,7 +588,7 @@ clicks and sends each one; it decides nothing about what a click does.
     any bound item, a bow too. A bow or crossbow (`RangedWeaponItem`) not sneaking: nothing (its arrow is the trigger).
     Anything else: `use`.
   - `ServerEntityEvents.ENTITY_LOAD` (fired at the tail of `ServerEntityHandler.startTracking`, so inside
-    `world.spawnEntity` of `RangedWeaponItem.shootAll`, after the velocity is set): a `PersistentProjectileEntity`
+    `level.addFreshEntity` of `ProjectileWeaponItem.shoot`, after the velocity is set): a `AbstractArrow`
     whose owner is a player (not sneaking), whose `getWeaponStack()` is a bound bow or crossbow, and which is within 2
     blocks of the owner's eyes (an arrow loaded with its chunk is not a shot). `getWeaponStack()` (intermediary
     `class_1665.method_59958`) returns the `weapon` field: a copy of the bow or crossbow stack made in the arrow's
@@ -596,10 +596,10 @@ clicks and sends each one; it decides nothing about what a click does.
     arrow. One release per player per server tick, so a multishot crossbow's three arrows are one trigger. An
     `arrow-release` trigger, and the arrow is tracked (`SquadArrows`: by its UUID, 10 s, first hit only) unless the
     limiter dropped the release.
-  - The mixin `PersistentProjectileEntityMixin` injects at HEAD of `onEntityHit(EntityHitResult)` and
-    `onBlockHit(BlockHitResult)`, both declared by `PersistentProjectileEntity` (yarn 1.21.1+build.3; intermediary
-    `class_1665.method_7454(Lclass_3966;)V` and `method_24920(Lclass_3965;)V`, checked in the named and the
-    intermediary jars, and in the generated refmap). `SquadTriggers.onArrowHit` returns at once for a client arrow or an
+  - The mixin `AbstractArrowMixin` injects at HEAD of `onHitEntity(EntityHitResult)` and
+    `onHitBlock(BlockHitResult)`, both declared by `AbstractArrow` (Mojang names; intermediary
+    `class_1665.method_7454(Lclass_3966;)V` and `method_24920(Lclass_3965;)V`, which Loom writes into the
+    remapped jar's mixin; checked with `javap` in the Mojang-named jar). `SquadTriggers.onArrowHit` returns at once for a client arrow or an
     untracked one, and never throws into vanilla. A tracked arrow's first hit, with its shooter online: an `arrow-hit`
     trigger, `hit.position` = the exact point on the block (`BlockHitResult.getPos()`) or the entity's position, and
     `hit.entity` for an entity.
@@ -720,7 +720,7 @@ clicks and sends each one; it decides nothing about what a click does.
   `pointedTarget` (`helpers.test.ts`: the point and the target by trigger, `near`, pending, and what does not qualify)).
 - **Mod:** 54 JUnit tests in `src/test/java/com/paul/brawl/squad/` (incl. `SquadStatusFormatTest`, `SquadFriendsTest`,
   `SquadRaidPlanTest`; for bound items `SquadBindingTest`: the bind line, order names, the lore line and its removal,
-  the custom-data round trip on a real `NbtCompound`; `SquadTriggerLimiterTest`: the burst, the refill, per-player
+  the custom-data round trip on a real `CompoundTag`; `SquadTriggerLimiterTest`: the burst, the refill, per-player
   buckets, the bound map, one release per shot, the repeated answer; `SquadArrowsTest`; `SquadTriggerJsonTest`: the
   trigger, hit and entity JSON and the request body). The stack edits themselves (`ItemStack` needs a bootstrap), the
   hooks and the mixin are checked only in game.

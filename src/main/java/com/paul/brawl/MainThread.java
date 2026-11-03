@@ -30,7 +30,7 @@ public final class MainThread {
      */
     public static <T> T call(Supplier<T> body) {
         var server = ChatBotActions.server();
-        if (server != null && server.isOnThread()) return body.get();
+        if (server != null && server.isSameThread()) return body.get();
         Object[] box = new Object[1];
         var future = GodActionQueue.submit(() -> {
             box[0] = body.get();

@@ -1,19 +1,19 @@
 package com.paul.brawl;
 
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.codec.PacketCodecs;
-import net.minecraft.network.packet.CustomPayload;
-import net.minecraft.util.Identifier;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.ResourceLocation;
 
-public record ImagePayload(byte[] image, String text) implements CustomPayload {
+public record ImagePayload(byte[] image, String text) implements CustomPacketPayload {
 
-    public static final Identifier identifier = Identifier.of("screenshot", "image");
+    public static final ResourceLocation identifier = ResourceLocation.fromNamespaceAndPath("screenshot", "image");
 
-    public static final CustomPayload.Id<ImagePayload> ID = new CustomPayload.Id<>(identifier);
-    public static final PacketCodec<RegistryByteBuf, ImagePayload> CODEC = PacketCodec.tuple(
-        PacketCodecs.BYTE_ARRAY, ImagePayload::image,
-        PacketCodecs.STRING, ImagePayload::text,
+    public static final CustomPacketPayload.Type<ImagePayload> ID = new CustomPacketPayload.Type<>(identifier);
+    public static final StreamCodec<RegistryFriendlyByteBuf, ImagePayload> CODEC = StreamCodec.composite(
+        ByteBufCodecs.BYTE_ARRAY, ImagePayload::image,
+        ByteBufCodecs.STRING_UTF8, ImagePayload::text,
          ImagePayload::new);
     // should you need to send more data, add the appropriate record parameters and change your codec:
     // public static final PacketCodec<RegistryByteBuf, BlockHighlightPayload> CODEC = PacketCodec.tuple(
@@ -24,7 +24,7 @@ public record ImagePayload(byte[] image, String text) implements CustomPayload {
     // );
  
     @Override
-    public CustomPayload.Id<? extends CustomPayload> getId() {
+    public CustomPacketPayload.Type<? extends CustomPacketPayload> type() {
         return ID;
     }
 }

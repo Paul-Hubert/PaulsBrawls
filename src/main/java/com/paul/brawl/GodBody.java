@@ -1,8 +1,7 @@
 package com.paul.brawl;
 
 import java.util.concurrent.CompletableFuture;
-
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.level.ServerPlayer;
 
 /**
  * Semantic layer between God's tools and the dumb bridge RPC. Translates
@@ -25,7 +24,7 @@ public class GodBody {
      * pitch — looking down at the ground shouldn't drop God between your feet.
      */
     public static CompletableFuture<Boolean> appear(
-            ServerPlayerEntity player,
+            ServerPlayer player,
             double distance,
             double height,
             boolean lookAtPlayer) {
@@ -34,7 +33,7 @@ public class GodBody {
         // Yaw 0 in vanilla MC points along +Z, increasing clockwise — so the
         // unit vector is (-sin(yaw), 0, cos(yaw)). Picking the same convention
         // here means the bot lands in the player's actual field of view.
-        double yaw  = Math.toRadians(player.getYaw());
+        double yaw  = Math.toRadians(player.getYRot());
         double dirX = -Math.sin(yaw);
         double dirZ =  Math.cos(yaw);
 
@@ -53,7 +52,7 @@ public class GodBody {
     }
 
     /** Re-aim the bot at the player without teleporting. */
-    public static CompletableFuture<Boolean> lookAt(ServerPlayerEntity player) {
+    public static CompletableFuture<Boolean> lookAt(ServerPlayer player) {
         if (player == null) return CompletableFuture.completedFuture(false);
         return BotBridgeClient.INSTANCE.look(player.getX(), player.getY() + 1.6, player.getZ());
     }

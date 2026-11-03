@@ -96,8 +96,8 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 				|| VillagersCommand.activeScenarioBots.contains(name);
 			if (!shouldOp) return;
 			GameProfile profile = player.getGameProfile();
-			if (!server.getPlayerManager().isOperator(profile)) {
-				server.getPlayerManager().addToOperators(profile);
+			if (!server.getPlayerList().isOp(profile)) {
+				server.getPlayerList().op(profile);
 				LOGGER.info("Opped bot '{}' on join.", name);
 			}
 		});

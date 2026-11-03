@@ -15,12 +15,11 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.authlib.GameProfile;
 import com.mojang.brigadier.Command;
-
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 
 /**
  * {@code /bots squad spawn KIT [number] [owner] [other owners…]}, {@code /bots squad despawn [KIT] [owner]} and
@@ -37,24 +36,24 @@ final class SquadSpawn {
 
     /** One spawn call: who asked, the kit, the owners, where they face, who came. */
     private static final class Muster {
-        final ServerCommandSource src;
+        final CommandSourceStack src;
         final SquadKits.Kit kit;
         final JsonArray owners;
         final String ownerNames;
-        final ServerWorld world;
+        final ServerLevel world;
         final float yaw;
         final List<String> spawned = new ArrayList<>();
         final AtomicInteger arrived = new AtomicInteger();
         boolean spawning = true;
 
-        Muster(ServerCommandSource src, SquadKits.Kit kit, List<GameProfile> owners, ServerPlayerEntity center) {
+        Muster(CommandSourceStack src, SquadKits.Kit kit, List<GameProfile> owners, ServerPlayer center) {
             this.src = src;
             this.kit = kit;
             this.owners = new JsonArray();
             for (GameProfile p : owners) this.owners.add(Squad.player(p));
             this.ownerNames = String.join(" + ", owners.stream().map(GameProfile::getName).toList());
-            this.world = center.getServerWorld();
-            this.yaw = center.getYaw();
+            this.world = center.serverLevel();
+            this.yaw = center.getYRot();
         }
     }
 
@@ -62,7 +61,7 @@ final class SquadSpawn {
 
     // -- /bots squad spawn --------------------------------------------------------------------------------------------
 
-    static int spawn(ServerCommandSource src, String text) {
+    static int spawn(CommandSourceStack src, String text) {
         if (!Squad.enabled()) return SquadCommand.reply(src, "[Bots] Squad est désactivé (squad.properties : enabled=false).");
         SquadSpawnPlan.SpawnArgs a;
         try {
@@ -84,13 +83,13 @@ final class SquadSpawn {
             if (owners.stream().noneMatch(x -> x.getId().equals(p.get().getId()))) owners.add(p.get());
         }
         // The squad stands around its owner, who must be in game: that is where it appears.
-        ServerPlayerEntity center = srv.getPlayerManager().getPlayer(owner.get().getId());
+        ServerPlayer center = srv.getPlayerList().getPlayer(owner.get().getId());
         if (center == null) return SquadCommand.reply(src, "[Bots] " + owner.get().getName() + " n'est pas en jeu : l'escouade apparaît autour de son propriétaire.");
 
         // Names nobody uses: not in the roster, not online, never played here (a bot would load that save).
         List<String> roster = Squad.botNames();
         java.util.function.Predicate<String> taken = n -> roster.stream().anyMatch(r -> r.equalsIgnoreCase(n))
-            || srv.getPlayerManager().getPlayer(n) != null || Squad.hasPlayed(srv, n) || SquadCommand.reservedName(n);
+            || srv.getPlayerList().getPlayerByName(n) != null || Squad.hasPlayed(srv, n) || SquadCommand.reservedName(n);
         List<String> names = SquadRaidPlan.names(SquadSpawnPlan.prefix(a.kit()), a.count(), taken);
 
         Muster m = new Muster(src, a.kit(), owners, center);
@@ -141,7 +140,7 @@ final class SquadSpawn {
     }
 
     /** A recruit joined and stands at its place: its kit (paced, kitStaggerMs) and its role tag; ready once all have theirs. */
-    private static void arrived(Muster m, ServerPlayerEntity bot) {
+    private static void arrived(Muster m, ServerPlayer bot) {
         String name = bot.getName().getString();
         Squad.equipLater(m.src.getServer(), name, m.kit, answer -> {
             LOGGER.info("Squad bot {} arrived: {}", name, answer);
@@ -164,16 +163,16 @@ final class SquadSpawn {
      * it and room for a body. The heightmap would put a bot on the roof when the owner is indoors or underground.
      * Null when there is none (the caller puts the bot at the owner's own spot).
      */
-    static BlockPos standNear(ServerWorld world, double x, double y, double z) {
+    static BlockPos standNear(ServerLevel world, double x, double y, double z) {
         int bx = (int) Math.floor(x), by = (int) Math.floor(y), bz = (int) Math.floor(z);
         world.getChunk(bx >> 4, bz >> 4);
         for (int k = 0; k <= 12; k++) {
             int dy = (k % 2 == 0) ? k / 2 : -(k + 1) / 2;
             BlockPos feet = new BlockPos(bx, by + dy, bz);
-            BlockPos floor = feet.down();
-            if (world.getBlockState(floor).isSolidBlock(world, floor)
+            BlockPos floor = feet.below();
+            if (world.getBlockState(floor).isRedstoneConductor(world, floor)
                 && world.getBlockState(feet).getCollisionShape(world, feet).isEmpty()
-                && world.getBlockState(feet.up()).getCollisionShape(world, feet.up()).isEmpty()
+                && world.getBlockState(feet.above()).getCollisionShape(world, feet.above()).isEmpty()
                 && world.getFluidState(feet).isEmpty()) {
                 return feet;
             }
@@ -189,7 +188,7 @@ final class SquadSpawn {
      * and logs them in again; each is expected around whoever runs it ({@code @s}, also from a datapack function; else
      * around the owner), and on arrival its inventory is reset to its kit (the command's, else its kit tag; none: empty).
      */
-    static int respawn(ServerCommandSource src, String text) {
+    static int respawn(CommandSourceStack src, String text) {
         if (!Squad.enabled()) return SquadCommand.reply(src, "[Bots] Squad est désactivé (squad.properties : enabled=false).");
         SquadSpawnPlan.RespawnArgs a;
         try {
@@ -204,14 +203,14 @@ final class SquadSpawn {
                 ? "[Bots] Lance-la en jeu, ou nomme le propriétaire : " + SquadSpawnPlan.RESPAWN_USAGE
                 : "[Bots] Joueur inconnu : " + a.owner());
         }
-        ServerPlayerEntity caller = src.getPlayer();
-        ServerPlayerEntity center = caller != null ? caller : srv.getPlayerManager().getPlayer(owner.get().getId());
+        ServerPlayer caller = src.getPlayer();
+        ServerPlayer center = caller != null ? caller : srv.getPlayerList().getPlayer(owner.get().getId());
         if (center == null) {
             return SquadCommand.reply(src, "[Bots] Lance-la en jeu (ou avec " + owner.get().getName() + " en jeu) : les bots reviennent autour de toi.");
         }
-        ServerWorld world = center.getServerWorld();
+        ServerLevel world = center.serverLevel();
         double cx = center.getX(), cy = center.getY(), cz = center.getZ();
-        float yaw = center.getYaw();
+        float yaw = center.getYRot();
         JsonObject body = SquadCommand.base(src);
         body.add("owner", Squad.player(owner.get()));
         a.kit().ifPresent(k -> body.addProperty("kit", k.name()));
@@ -224,7 +223,7 @@ final class SquadSpawn {
             List<String> names = new ArrayList<>();
             if (res.has("bots") && res.get("bots").isJsonArray()) for (JsonElement e : res.getAsJsonArray("bots")) names.add(e.getAsString());
             if (names.isEmpty()) {
-                boolean self = caller != null && caller.getUuid().equals(owner.get().getId());
+                boolean self = caller != null && caller.getUUID().equals(owner.get().getId());
                 SquadCommand.reply(src, "[Bots] Aucun " + a.kit().map(SquadKits.Kit::label).orElse("bot") + " mort"
                     + (self ? "" : " pour " + owner.get().getName()) + ".");
                 return;
@@ -251,7 +250,7 @@ final class SquadSpawn {
 
     // -- /bots squad despawn ------------------------------------------------------------------------------------------
 
-    static int despawn(ServerCommandSource src, String text) {
+    static int despawn(CommandSourceStack src, String text) {
         if (!Squad.enabled()) return SquadCommand.reply(src, "[Bots] Squad est désactivé (squad.properties : enabled=false).");
         SquadSpawnPlan.DespawnArgs a;
         try {
@@ -295,7 +294,7 @@ final class SquadSpawn {
      * ({@link Squad#purgeSaves}). The roster is asked of the runtime first, so no current bot (a dead one included)
      * loses its save; with the runtime unreachable nothing is deleted.
      */
-    static int purge(ServerCommandSource src) {
+    static int purge(CommandSourceStack src) {
         if (!Squad.enabled()) return SquadCommand.reply(src, "[Bots] Squad est désactivé (squad.properties : enabled=false).");
         MinecraftServer srv = src.getServer();
         Squad.client().post("/api/state", new JsonObject()).thenAccept(s -> srv.execute(() -> {

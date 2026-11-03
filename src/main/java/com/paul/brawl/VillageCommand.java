@@ -13,10 +13,9 @@ import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.text.Text;
-
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,37 +41,37 @@ public class VillageCommand {
     public static void register() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
-                LiteralArgumentBuilder.<ServerCommandSource>literal("village")
-                    .requires(source -> source.hasPermissionLevel(2))
-                    .then(CommandManager.literal("status").executes(ctx -> {
+                LiteralArgumentBuilder.<CommandSourceStack>literal("village")
+                    .requires(source -> source.hasPermission(2))
+                    .then(Commands.literal("status").executes(ctx -> {
                         fetchStatus(ctx.getSource());
                         return Command.SINGLE_SUCCESS;
                     }))
-                    .then(CommandManager.literal("pause").executes(ctx -> {
+                    .then(Commands.literal("pause").executes(ctx -> {
                         post(ctx.getSource(), "/village/pause", "Village LLM scheduling paused.");
                         return Command.SINGLE_SUCCESS;
                     }))
-                    .then(CommandManager.literal("resume").executes(ctx -> {
+                    .then(Commands.literal("resume").executes(ctx -> {
                         post(ctx.getSource(), "/village/resume", "Village LLM scheduling resumed.");
                         return Command.SINGLE_SUCCESS;
                     }))
-                    .then(CommandManager.literal("on").executes(ctx -> {
+                    .then(Commands.literal("on").executes(ctx -> {
                         VillageConfig.INSTANCE.enabled = true;
                         VillageConfig.INSTANCE.save();
                         VillageHttpListener.start(ctx.getSource().getServer());
-                        ctx.getSource().sendFeedback(() -> Text.literal(
+                        ctx.getSource().sendSuccess(() -> Component.literal(
                             "Village settlement listener enabled (" + VillageConfig.INSTANCE.describe() + ")"), true);
                         return Command.SINGLE_SUCCESS;
                     }))
-                    .then(CommandManager.literal("off").executes(ctx -> {
+                    .then(Commands.literal("off").executes(ctx -> {
                         VillageConfig.INSTANCE.enabled = false;
                         VillageConfig.INSTANCE.save();
                         VillageHttpListener.stop();
-                        ctx.getSource().sendFeedback(() -> Text.literal("Village settlement listener disabled."), true);
+                        ctx.getSource().sendSuccess(() -> Component.literal("Village settlement listener disabled."), true);
                         return Command.SINGLE_SUCCESS;
                     }))
                     .executes(ctx -> {
-                        ctx.getSource().sendFeedback(() -> Text.literal(
+                        ctx.getSource().sendSuccess(() -> Component.literal(
                             VillageConfig.INSTANCE.describe()
                             + " listener=" + (VillageHttpListener.isRunning() ? "RUNNING" : "stopped")), false);
                         return Command.SINGLE_SUCCESS;
@@ -81,7 +80,7 @@ public class VillageCommand {
         });
     }
 
-    private static void fetchStatus(ServerCommandSource source) {
+    private static void fetchStatus(CommandSourceStack source) {
         HttpRequest request = HttpRequest.newBuilder(URI.create(VillageConfig.INSTANCE.nodeAdminUrl + "/village/status"))
             .timeout(Duration.ofSeconds(4))
             .GET()
@@ -98,7 +97,7 @@ public class VillageCommand {
                 }
                 final String finalMessage = message;
                 source.getServer().execute(() ->
-                    source.sendFeedback(() -> Text.literal(finalMessage), false));
+                    source.sendSuccess(() -> Component.literal(finalMessage), false));
                 return null;
             });
     }
@@ -137,7 +136,7 @@ public class VillageCommand {
         }
     }
 
-    private static void post(ServerCommandSource source, String path, String successMessage) {
+    private static void post(CommandSourceStack source, String path, String successMessage) {
         HttpRequest request = HttpRequest.newBuilder(URI.create(VillageConfig.INSTANCE.nodeAdminUrl + path))
             .timeout(Duration.ofSeconds(4))
             .POST(HttpRequest.BodyPublishers.noBody())
@@ -148,7 +147,7 @@ public class VillageCommand {
                     ? "Village process unreachable — is `npm run village` running?"
                     : successMessage;
                 source.getServer().execute(() ->
-                    source.sendFeedback(() -> Text.literal(message), true));
+                    source.sendSuccess(() -> Component.literal(message), true));
                 return null;
             });
     }

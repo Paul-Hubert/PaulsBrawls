@@ -3,7 +3,7 @@ package com.paul.brawl;
 import java.util.UUID;
 
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.level.ServerPlayer;
 
 /**
  * The real {@link GodWorld}: every effect resolves the player by UUID and runs on the main thread through
@@ -11,7 +11,7 @@ import net.minecraft.server.network.ServerPlayerEntity;
  */
 public final class MinecraftGodWorld implements GodWorld {
 
-    private static ServerPlayerEntity online(UUID player) {
+    private static ServerPlayer online(UUID player) {
         return MinecraftBuildWorld.online(player);
     }
 
@@ -19,7 +19,7 @@ public final class MinecraftGodWorld implements GodWorld {
     public boolean isOnline(UUID player) {
         return MainThread.call(() -> {
             MinecraftServer server = ChatBotActions.server();
-            return server != null && player != null && server.getPlayerManager().getPlayer(player) != null;
+            return server != null && player != null && server.getPlayerList().getPlayer(player) != null;
         });
     }
 
@@ -51,7 +51,7 @@ public final class MinecraftGodWorld implements GodWorld {
     @Override
     public void appear(UUID player, double distance, double height, boolean facePlayer) {
         MainThread.run(() -> {
-            ServerPlayerEntity p = online(player);
+            ServerPlayer p = online(player);
             GodBody.appear(p, distance, height, facePlayer); // bridge, async
             ChatBotActions.buffAvatar(p);
         });

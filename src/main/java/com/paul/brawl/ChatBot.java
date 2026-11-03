@@ -13,7 +13,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
-
+import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,8 +32,6 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiTokenCountEstimator;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
-
-import net.minecraft.server.network.ServerPlayerEntity;
 
 public class ChatBot {
 
@@ -201,12 +199,12 @@ public class ChatBot {
     /** Clears the player's conversation memory, depth guard, session flag, and
      *  any pending Wait deferral (its memory is being wiped — a continuation
      *  would submit orphaned tool results into a fresh conversation). */
-    public void clearMemory(ServerPlayerEntity player) {
-        PendingDeferral pd = pendingDeferrals.remove(player.getUuid());
+    public void clearMemory(ServerPlayer player) {
+        PendingDeferral pd = pendingDeferrals.remove(player.getUUID());
         if (pd != null) pd.handle().cancel(false);
-        memories.remove(player.getUuid());
-        functionCallDepth.remove(player.getUuid());
-        sessionBound.remove(player.getUuid());
+        memories.remove(player.getUUID());
+        functionCallDepth.remove(player.getUUID());
+        sessionBound.remove(player.getUUID());
     }
 
     private void cancelAllDeferrals() {
@@ -215,21 +213,21 @@ public class ChatBot {
     }
 
     /** Returns the player's {@link ChatMemory}, creating a fresh token window if needed. */
-    public ChatMemory memoryFor(ServerPlayerEntity player) {
-        return memories.computeIfAbsent(player.getUuid(),
+    public ChatMemory memoryFor(ServerPlayer player) {
+        return memories.computeIfAbsent(player.getUUID(),
             k -> TokenWindowChatMemory.withMaxTokens(MAX_MEMORY_TOKENS, TOKEN_ESTIMATOR));
     }
 
 
-    public CompletableFuture<ChatResponse> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player) {
+    public CompletableFuture<ChatResponse> sendImageChatRequest(String input, byte[] bytes, ServerPlayer player) {
         return sendImageChatRequest(input, bytes, player, null);
     }
 
-    public CompletableFuture<ChatResponse> sendImageChatRequest(String input, byte[] bytes, ServerPlayerEntity player, BiConsumer<? super ChatResponse, String> callback) {
+    public CompletableFuture<ChatResponse> sendImageChatRequest(String input, byte[] bytes, ServerPlayer player, BiConsumer<? super ChatResponse, String> callback) {
 
         flushPendingDeferral(player);
-        functionCallDepth.put(player.getUuid(), 0);
-        if (needsGodTools) sessionBound.put(player.getUuid(), GodSessionManager.isActive(player));
+        functionCallDepth.put(player.getUUID(), 0);
+        if (needsGodTools) sessionBound.put(player.getUUID(), GodSessionManager.isActive(player));
 
         ChatMemory memory = memoryFor(player);
 
@@ -252,14 +250,14 @@ public class ChatBot {
         return doRequest(player, callback);
     }
 
-    public CompletableFuture<ChatResponse> sendChatRequest(String input, ServerPlayerEntity player) {
+    public CompletableFuture<ChatResponse> sendChatRequest(String input, ServerPlayer player) {
         return sendChatRequest(input, player, null);
     }
 
-    public CompletableFuture<ChatResponse> sendChatRequest(String input, ServerPlayerEntity player, BiConsumer<? super ChatResponse, String> callback) {
+    public CompletableFuture<ChatResponse> sendChatRequest(String input, ServerPlayer player, BiConsumer<? super ChatResponse, String> callback) {
         flushPendingDeferral(player);
-        functionCallDepth.put(player.getUuid(), 0);
-        if (needsGodTools) sessionBound.put(player.getUuid(), GodSessionManager.isActive(player));
+        functionCallDepth.put(player.getUUID(), 0);
+        if (needsGodTools) sessionBound.put(player.getUUID(), GodSessionManager.isActive(player));
 
         ChatMemory memory = memoryFor(player);
         synchronized (memory) {
@@ -270,7 +268,7 @@ public class ChatBot {
     }
 
 
-    public CompletableFuture<ChatResponse> sendFunctionOutputs(List<ChatBotFunctions.FunctionResult> results, ServerPlayerEntity player) {
+    public CompletableFuture<ChatResponse> sendFunctionOutputs(List<ChatBotFunctions.FunctionResult> results, ServerPlayer player) {
 
         // A deferred Wait continuation can land after its session ended
         // (/pray stop, idle watchdog, /godbody off). The response callback
@@ -279,7 +277,7 @@ public class ChatBot {
         // tool_calls would otherwise sit unanswered at the tail. Bodiless
         // conversations (sessionBound == false) pass through untouched.
         if (this.needsGodTools
-                && sessionBound.getOrDefault(player.getUuid(), false)
+                && sessionBound.getOrDefault(player.getUUID(), false)
                 && !GodSessionManager.isActive(player)) {
             LOGGER.info("Skipping function outputs for player {} — session ended while waiting.",
                 player.getName().getString());
@@ -287,7 +285,7 @@ public class ChatBot {
             return CompletableFuture.completedFuture(null);
         }
 
-        int depth = functionCallDepth.merge(player.getUuid(), 1, Integer::sum);
+        int depth = functionCallDepth.merge(player.getUUID(), 1, Integer::sum);
         if (depth > MAX_FUNCTION_CALL_DEPTH) {
             LOGGER.warn("Reached max function call depth ({}) for player {}, stopping chain and resetting it.",
                 MAX_FUNCTION_CALL_DEPTH, player.getName().getString());
@@ -320,8 +318,8 @@ public class ChatBot {
      * {@link #flushPendingDeferral}). Falls back to running the outputs
      * immediately if the scheduler is down.
      */
-    public void deferFunctionOutputs(List<ChatBotFunctions.FunctionResult> results, ServerPlayerEntity player, int seconds) {
-        final UUID id = player.getUuid();
+    public void deferFunctionOutputs(List<ChatBotFunctions.FunctionResult> results, ServerPlayer player, int seconds) {
+        final UUID id = player.getUUID();
         ScheduledFuture<?> handle = null;
         try {
             handle = GodScheduler.schedule(() -> {
@@ -348,8 +346,8 @@ public class ChatBot {
      * race the task is already mid-flight — the exposure shrinks back to the
      * milliseconds it was before Wait existed.
      */
-    private void flushPendingDeferral(ServerPlayerEntity player) {
-        PendingDeferral pd = pendingDeferrals.remove(player.getUuid());
+    private void flushPendingDeferral(ServerPlayer player) {
+        PendingDeferral pd = pendingDeferrals.remove(player.getUUID());
         if (pd == null) return;
         if (!pd.handle().cancel(false)) return;
         ChatMemory memory = memoryFor(player);
@@ -362,9 +360,9 @@ public class ChatBot {
             pd.results().size(), player.getName().getString());
     }
 
-    public CompletableFuture<ChatResponse> sendTextualContinuation(int placedCount, ServerPlayerEntity player) {
+    public CompletableFuture<ChatResponse> sendTextualContinuation(int placedCount, ServerPlayer player) {
 
-        int depth = functionCallDepth.merge(player.getUuid(), 1, Integer::sum);
+        int depth = functionCallDepth.merge(player.getUUID(), 1, Integer::sum);
         if (depth > MAX_FUNCTION_CALL_DEPTH) {
             LOGGER.warn("Reached max function call depth ({}) for player {}, stopping textual chain and resetting it.",
                 MAX_FUNCTION_CALL_DEPTH, player.getName().getString());
@@ -400,7 +398,7 @@ public class ChatBot {
      * window and trip every connected client's keepalive. Doing the assembly on
      * the worker keeps the main thread free; the worker just stalls for itself.
      */
-    private CompletableFuture<ChatResponse> doRequest(ServerPlayerEntity player, BiConsumer<? super ChatResponse, String> callback) {
+    private CompletableFuture<ChatResponse> doRequest(ServerPlayer player, BiConsumer<? super ChatResponse, String> callback) {
         ChatModel model = LLMConfig.INSTANCE.sharedModel();
         // Review fix (bug #8): the watchdog must not fire while the owner's request is in flight.
         if (needsGodTools) GodSessionManager.pauseIdleTimer(player);
@@ -430,7 +428,7 @@ public class ChatBot {
         return response;
     }
 
-    private void logApiError(Throwable ex, ServerPlayerEntity player) {
+    private void logApiError(Throwable ex, ServerPlayer player) {
         Throwable root = ex;
         while (root.getCause() != null && root.getCause() != root) root = root.getCause();
 
@@ -451,7 +449,7 @@ public class ChatBot {
      * the OpenAI server retained the persona via the response-id chain; LangChain4j
      * requires the full list every call, so we always send it.
      */
-    public List<ChatMessage> buildMessageList(ServerPlayerEntity player) {
+    public List<ChatMessage> buildMessageList(ServerPlayer player) {
         List<ChatMessage> messages = new ArrayList<>();
 
         messages.add(SystemMessage.from(hardcodedPrompt + "\n" + prompt));
@@ -499,7 +497,7 @@ public class ChatBot {
      * {@code ChatBotFunctions.runOnMain}. On timeout/failure the turn degrades
      * to empty context instead of failing.
      */
-    private static String[] collectDynamicContext(ServerPlayerEntity player) {
+    private static String[] collectDynamicContext(ServerPlayer player) {
         final String[] ctx = { "", "", "" };
         Supplier<String> body = () -> {
             ctx[0] = PlayerDataCollector.collect(player).toString();
@@ -508,7 +506,7 @@ public class ChatBot {
             return "ok";
         };
         var server = player.getServer();
-        if (server != null && server.isOnThread()) {
+        if (server != null && server.isSameThread()) {
             // Defensive: never queue-and-join from the main thread (deadlock
             // against the END_SERVER_TICK drain). Collect directly.
             body.get();
@@ -525,7 +523,7 @@ public class ChatBot {
         }
     }
 
-    public void setupGeneralCallback(CompletableFuture<ChatResponse> response, ServerPlayerEntity player) {
+    public void setupGeneralCallback(CompletableFuture<ChatResponse> response, ServerPlayer player) {
         response.thenAccept(r -> {
             try {
                 if (r == null) return;
@@ -543,7 +541,7 @@ public class ChatBot {
                 // orphaned tool_call(s) and the next /pray would 400 on
                 // "tool_call without tool_result". Wipe and bail.
                 if (this.needsGodTools
-                        && sessionBound.getOrDefault(player.getUuid(), false)
+                        && sessionBound.getOrDefault(player.getUUID(), false)
                         && !GodSessionManager.isActive(player)) {
                     LOGGER.info("Dropping LLM response for player {} — session no longer active (idle watchdog / kill switch).",
                         player.getName().getString());
@@ -583,7 +581,7 @@ public class ChatBot {
      * busy lock. Idempotent — safe to call from depth-cap, error exits, the
      * kill switch, and the natural zero-tool-call terminal.
      */
-    public static void endPrayerSession(ServerPlayerEntity player) {
+    public static void endPrayerSession(ServerPlayer player) {
         if (player == null) return;
         if (GodSessionManager.hasManifested()) {
             GodActionQueue.submit(() -> ChatBotActions.restoreAvatar(player));
@@ -592,7 +590,7 @@ public class ChatBot {
         GodSessionManager.endSession(player);
     }
 
-    private void logResponseShape(ChatResponse r, ServerPlayerEntity player) {
+    private void logResponseShape(ChatResponse r, ServerPlayer player) {
         AiMessage msg = r.aiMessage();
         boolean hasText = msg != null && msg.text() != null && !msg.text().isEmpty();
         int calls = (msg != null && msg.hasToolExecutionRequests()) ? msg.toolExecutionRequests().size() : 0;
@@ -615,7 +613,7 @@ public class ChatBot {
      * memory must keep each {@code assistant tool_call} immediately followed by its
      * matching tool result, or the next request is malformed.
      */
-    private void addAssistantToHistory(ChatResponse response, ServerPlayerEntity player) {
+    private void addAssistantToHistory(ChatResponse response, ServerPlayer player) {
         AiMessage aiMessage = response.aiMessage();
         if (aiMessage == null) return;
         ChatMemory memory = memoryFor(player);
@@ -624,7 +622,7 @@ public class ChatBot {
         }
     }
 
-    private void printOutputs(ChatResponse response, ServerPlayerEntity player) {
+    private void printOutputs(ChatResponse response, ServerPlayer player) {
         var text = ChatBotFunctions.extractResponseText(response);
         if(needsBuildTools) {
             text = ChatBotFunctions.stripTextualFunctionCalls(text);
