@@ -9,6 +9,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
 import com.google.gson.JsonObject;
+import com.paul.brawl.compat.Compat;
 
 /**
  * Where the commander stands and looks when they give an order or ask for a command (docs/29 §7.1): the exact
@@ -33,7 +34,7 @@ public final class CommanderSnap {
         o.add("position", vec(p.position()));
         o.addProperty("yaw", p.getYRot());
         o.addProperty("pitch", p.getXRot());
-        o.addProperty("dimension", p.level().dimension().location().getPath());
+        o.addProperty("dimension", Compat.path(p.level().dimension()));
         var held = p.getMainHandItem();
         if (!held.isEmpty()) o.addProperty("heldItem", BuiltInRegistries.ITEM.getKey(held.getItem()).getPath());
         CompletableFuture<JsonObject> look = SquadLook.cast(p).thenApply(l -> {

@@ -29,26 +29,23 @@ import com.mojang.authlib.GameProfile;
 import com.paul.brawl.AgentBackend;
 import com.paul.brawl.AgentClient;
 import com.paul.brawl.ClaudeCodeClient;
+import com.paul.brawl.compat.Compat;
 
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.Holder;
-import net.minecraft.core.Registry;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.core.UUIDUtil;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.players.UserWhiteListEntry;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.enchantment.Enchantment;
 import net.minecraft.world.level.storage.LevelResource;
@@ -188,7 +185,7 @@ public final class Squad {
         ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
             if (!(entity instanceof ServerPlayer victim)) return true;
             if (!(source.getEntity() instanceof ServerPlayer attacker) || attacker == victim) return true;
-            return !friends.spare(attacker.getGameProfile().getName(), victim.getGameProfile().getName(), victim.getUUID());
+            return !friends.spare(Compat.name(attacker.getGameProfile()), Compat.name(victim.getGameProfile()), victim.getUUID());
         });
     }
 
@@ -269,7 +266,7 @@ public final class Squad {
                 if (q.size() < 50) q.add(line);
                 return;
             }
-            for (Component t : render(line)) p.displayClientMessage(t, false);
+            for (Component t : render(line)) p.sendSystemMessage(t);
         });
     }
 
@@ -298,8 +295,8 @@ public final class Squad {
                 t.append(Component.literal(n.clickLabel()).withStyle(s -> s
                     .withColor(ChatFormatting.GOLD)
                     .withUnderlined(true)
-                    .withClickEvent(new ClickEvent(n.run() ? ClickEvent.Action.RUN_COMMAND : ClickEvent.Action.SUGGEST_COMMAND, n.clickCommand()))
-                    .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Component.literal(hover)))));
+                    .withClickEvent(n.run() ? Compat.runCommand(n.clickCommand()) : Compat.suggestCommand(n.clickCommand()))
+                    .withHoverEvent(Compat.showText(Component.literal(hover)))));
             }
             out.add(t);
         }
@@ -416,7 +413,7 @@ public final class Squad {
 
     /** Remember where to put a bot an admin just spawned (their position). */
     static void expectArrival(String bot, ServerPlayer admin) {
-        expectArrival(bot, admin.serverLevel(), admin.getX(), admin.getY(), admin.getZ(), admin.getYRot(), null);
+        expectArrival(bot, ((ServerLevel) admin.level()), admin.getX(), admin.getY(), admin.getZ(), admin.getYRot(), null);
     }
 
     /**
@@ -433,13 +430,7 @@ public final class Squad {
     }
 
     static void whitelist(MinecraftServer srv, String bot, boolean add) {
-        var list = srv.getPlayerList().getWhiteList();
-        GameProfile profile = botProfile(bot);
-        if (add) {
-            if (!list.isWhiteListed(profile)) list.add(new UserWhiteListEntry(profile));
-        } else {
-            list.remove(profile);
-        }
+        Compat.whitelist(srv.getPlayerList(), botProfile(bot), add);
     }
 
     /** Every roster bot is whitelisted (a bot spawned while the server was down, a whitelist edited by hand). */
@@ -467,12 +458,12 @@ public final class Squad {
         }
         Spot spot = arrivals.remove(name.toLowerCase(Locale.ROOT));
         if (spot != null) {
-            player.teleportTo(spot.world(), spot.x(), spot.y(), spot.z(), spot.yaw(), spot.pitch());
+            Compat.teleport(player, spot.world(), spot.x(), spot.y(), spot.z(), spot.yaw(), spot.pitch());
             MinecraftServer srv = server;
             if (spot.then() != null && srv != null) srv.execute(() -> spot.then().accept(player));
         }
         List<SquadNotice> missed = pending.remove(player.getUUID());
-        if (missed != null) for (SquadNotice n : missed) for (Component t : render(n)) player.displayClientMessage(t, false);
+        if (missed != null) for (SquadNotice n : missed) for (Component t : render(n)) player.sendSystemMessage(t);
     }
 
     static boolean allowedAddress(SocketAddress addr) {
@@ -521,19 +512,20 @@ public final class Squad {
         if (p == null) return "[Bots] " + botName + " n'est pas connecté : impossible de l'équiper.";
         List<String> given = new ArrayList<>();
         for (SquadKits.Item it : kit.items()) {
-            ResourceLocation id = ResourceLocation.fromNamespaceAndPath("minecraft", it.id());
-            if (!BuiltInRegistries.ITEM.containsKey(id)) {
-                LOGGER.warn("Kit {}: unknown item {}", kit.name(), id);
+            Optional<Item> item = Compat.item("minecraft:" + it.id());
+            if (item.isEmpty()) {
+                LOGGER.warn("Kit {}: unknown item minecraft:{}", kit.name(), it.id());
                 continue;
             }
-            ItemStack stack = new ItemStack(BuiltInRegistries.ITEM.get(id), it.count());
+            ItemStack stack = new ItemStack(item.get(), it.count());
             List<String> enchants = enchant(srv, stack, it);
             switch (it.slot()) {
                 case INVENTORY -> give(p, stack);
                 case MAINHAND -> {
                     Inventory inv = p.getInventory();
-                    ItemStack old = inv.getItem(inv.selected);
-                    inv.setItem(inv.selected, stack);
+                    int selected = Compat.selectedSlot(inv);
+                    ItemStack old = inv.getItem(selected);
+                    inv.setItem(selected, stack);
                     if (!old.isEmpty()) give(p, old);
                 }
                 default -> {
@@ -563,9 +555,9 @@ public final class Squad {
     private static List<String> enchant(MinecraftServer srv, ItemStack stack, SquadKits.Item it) {
         List<String> out = new ArrayList<>();
         if (it.enchantments().isEmpty()) return out;
-        Registry<Enchantment> registry = srv.registryAccess().registryOrThrow(Registries.ENCHANTMENT);
+        HolderLookup.RegistryLookup<Enchantment> registry = srv.registryAccess().lookupOrThrow(Registries.ENCHANTMENT);
         for (Map.Entry<String, Integer> e : new java.util.TreeMap<>(it.enchantments()).entrySet()) {
-            Optional<Holder.Reference<Enchantment>> entry = registry.getHolder(ResourceLocation.fromNamespaceAndPath("minecraft", e.getKey()));
+            Optional<Holder.Reference<Enchantment>> entry = registry.get(Compat.key(Registries.ENCHANTMENT, "minecraft", e.getKey()));
             if (entry.isEmpty()) {
                 LOGGER.warn("Kit item {}: unknown enchantment {}", it.id(), e.getKey());
                 continue;
@@ -602,19 +594,16 @@ public final class Squad {
     static Optional<GameProfile> profile(MinecraftServer srv, String name) {
         ServerPlayer online = srv.getPlayerList().getPlayerByName(name);
         if (online != null) return Optional.of(online.getGameProfile());
-        var cache = srv.getProfileCache();
-        if (cache != null) {
-            Optional<GameProfile> known = cache.get(name);
-            if (known.isPresent()) return known;
-        }
+        Optional<GameProfile> known = Compat.cachedProfile(srv, name);
+        if (known.isPresent()) return known;
         if (!srv.usesAuthentication() && SquadArgs.BOT_NAME.matcher(name).matches()) return Optional.of(new GameProfile(UUIDUtil.createOfflinePlayerUUID(name), name));
         return Optional.empty();
     }
 
     static JsonObject player(GameProfile p) {
         JsonObject o = new JsonObject();
-        o.addProperty("uuid", p.getId().toString());
-        o.addProperty("name", p.getName());
+        o.addProperty("uuid", Compat.id(p).toString());
+        o.addProperty("name", Compat.name(p));
         return o;
     }
 }

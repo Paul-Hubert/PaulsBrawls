@@ -1,22 +1,17 @@
 package com.paul.brawl;
 
-import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import com.mojang.brigadier.Command;
+import com.paul.brawl.compat.ClientCompat;
 
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.Screenshot;
 import net.minecraft.network.chat.Component;
 
 import static com.mojang.brigadier.arguments.StringArgumentType.*;
-
-import com.mojang.blaze3d.platform.NativeImage;
 
 public class Screenshotter {
 
@@ -50,8 +45,8 @@ public class Screenshotter {
 			// argument, and both commands take the rest of the line (greedyString),
 			// so "/prove j'ai fini la tour" works without quotes.
 			dispatcher.register(
-				ClientCommandManager.literal("prove")
-						.then(ClientCommandManager.argument("text", greedyString())
+				ClientCompat.literal("prove")
+						.then(ClientCompat.argument("text", greedyString())
 						.executes(context -> {
 							var s = getString(context, "text");
 							sendProofScreenshot(s);
@@ -62,8 +57,8 @@ public class Screenshotter {
 
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
 			dispatcher.register(
-				ClientCommandManager.literal("build")
-						.then(ClientCommandManager.argument("text", greedyString())
+				ClientCompat.literal("build")
+						.then(ClientCompat.argument("text", greedyString())
 						.executes(context -> {
 							var s = getString(context, "text");
 							sendBuildScreenshot(s);
@@ -83,7 +78,7 @@ public class Screenshotter {
 
 	public static void sendScreenshot(String text) {
 
-		Minecraft.getInstance().gui.getChat().addMessage(Component.literal("Capture d'écran dans 1 seconde"));
+		ClientCompat.chat(Component.literal("Capture d'écran dans 1 seconde"));
 
 		Screenshotter.text = text;
 
@@ -99,23 +94,11 @@ public class Screenshotter {
 
 	private static void sendScreenshotAfterDelay() {
 
-		Minecraft.getInstance().gui.getChat().addMessage(Component.literal("Capture d'écran prise, envoi à Dieu..."));
+		ClientCompat.chat(Component.literal("Capture d'écran prise, envoi à Dieu..."));
 
-		NativeImage nativeImage = Screenshot.takeScreenshot(Minecraft.getInstance().getMainRenderTarget());
-		
-		var img2 = new NativeImage(854, 480, true);
-		
-		nativeImage.resizeSubRectTo(0, 0, nativeImage.getWidth(), nativeImage.getHeight(), img2);
-
-		try {
-			ImagePayload payload =  new ImagePayload (img2.asByteArray(), text);
-			ClientPlayNetworking.send(payload);
-		} catch (IOException e) {
-			e.printStackTrace();
-		} finally {
-			nativeImage.close();
-			img2.close();
-		}
+		// The text now: on 26.x the capture finishes a frame later, when another /prove may have set it.
+		String caption = text;
+		ClientCompat.screenshot(854, 480, png -> ClientPlayNetworking.send(new ImagePayload(png, caption)));
 
 	}
 

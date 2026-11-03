@@ -1,16 +1,15 @@
 package com.paul.brawl;
 
+import com.paul.brawl.compat.Compat;
+
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.ResourceLocation;
 
 public record ImagePayload(byte[] image, String text) implements CustomPacketPayload {
 
-    public static final ResourceLocation identifier = ResourceLocation.fromNamespaceAndPath("screenshot", "image");
-
-    public static final CustomPacketPayload.Type<ImagePayload> ID = new CustomPacketPayload.Type<>(identifier);
+    public static final CustomPacketPayload.Type<ImagePayload> ID = Compat.payloadType("screenshot", "image");
     public static final StreamCodec<RegistryFriendlyByteBuf, ImagePayload> CODEC = StreamCodec.composite(
         ByteBufCodecs.BYTE_ARRAY, ImagePayload::image,
         ByteBufCodecs.STRING_UTF8, ImagePayload::text,

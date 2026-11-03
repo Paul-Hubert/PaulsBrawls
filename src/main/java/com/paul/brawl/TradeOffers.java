@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.paul.brawl.compat.Compat;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.commands.CommandSourceStack;
@@ -57,7 +58,7 @@ public class TradeOffers {
 
             // Match by registry item (stack.isOf), not by translated display
             // name — two items sharing a name must not be interchangeable.
-            var main = player.getInventory().items;
+            var main = Compat.mainItems(player.getInventory());
             int[] available = new int[main.size()];
             int amount = 0;
             for (int i = 0; i < available.length; i++) {

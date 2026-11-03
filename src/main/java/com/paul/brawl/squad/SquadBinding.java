@@ -5,10 +5,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.regex.Pattern;
+
+import com.paul.brawl.compat.Compat;
+
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.ProjectileWeaponItem;
@@ -88,11 +90,12 @@ public record SquadBinding(String order, String line, boolean glint, String lore
 
     /** The binding in a custom-data compound, if it has a {@code squad} compound with an order. */
     static Optional<SquadBinding> fromCustomData(CompoundTag data) {
-        if (data == null || !data.contains(KEY, Tag.TAG_COMPOUND)) return Optional.empty();
-        CompoundTag n = data.getCompound(KEY);
-        String order = n.getString("order");
+        Optional<CompoundTag> found = data == null ? Optional.empty() : Compat.getCompound(data, KEY);
+        if (found.isEmpty()) return Optional.empty();
+        CompoundTag n = found.get();
+        String order = Compat.getString(n, "order");
         if (order.isBlank()) return Optional.empty();
-        return Optional.of(new SquadBinding(order, n.getString("line"), n.getBoolean("glint"), n.getString("lore")));
+        return Optional.of(new SquadBinding(order, Compat.getString(n, "line"), Compat.getBoolean(n, "glint"), Compat.getString(n, "lore")));
     }
 
     // -- the stack ----------------------------------------------------------------------------------------------------
@@ -101,8 +104,7 @@ public record SquadBinding(String order, String line, boolean glint, String lore
     public static Optional<SquadBinding> read(ItemStack stack) {
         if (stack == null || stack.isEmpty()) return Optional.empty();
         CustomData data = stack.get(DataComponents.CUSTOM_DATA);
-        if (data == null || !data.contains(KEY)) return Optional.empty();
-        return fromCustomData(data.copyTag());
+        return data == null ? Optional.empty() : fromCustomData(data.copyTag());
     }
 
     /**

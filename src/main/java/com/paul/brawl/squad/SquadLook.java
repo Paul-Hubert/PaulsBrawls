@@ -15,6 +15,8 @@ import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
+import com.paul.brawl.compat.Compat;
+
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
@@ -26,8 +28,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.BlockGetter;
-import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.LevelHeightAccessor;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -188,9 +190,14 @@ public final class SquadLook {
 
     // -- the server thread's copy ---------------------------------------------------------------------------------
 
+    /** One above the world's highest block y. */
+    private static int topY(LevelHeightAccessor world) {
+        return Compat.minY(world) + world.getHeight();
+    }
+
     /** The next stretch of the look, copied: the sections from where it got to (and the ones it asked for), its entities. */
     private static Copy copy(Ray r, long budgetEnd) {
-        CopiedView view = new CopiedView(r.world.getMinBuildHeight(), r.world.getMaxBuildHeight(), r.view);
+        CopiedView view = new CopiedView(Compat.minY(r.world), topY(r.world), r.view);
         for (long key : r.missing) copySection(r, view, SectionPos.x(key), SectionPos.y(key), SectionPos.z(key));
         r.missing.clear();
         double from = Math.max(0, r.t - EPS); // the backward overlap of the walk's first piece
@@ -212,7 +219,7 @@ public final class SquadLook {
     }
 
     private static void copySection(Ray r, CopiedView view, int cx, int sy, int cz) {
-        if (sy < r.world.getMinSection() || sy >= r.world.getMaxSection()) return; // VOID_AIR, read without a copy
+        if (sy < SectionPos.blockToSectionCoord(Compat.minY(r.world)) || sy > SectionPos.blockToSectionCoord(topY(r.world) - 1)) return; // VOID_AIR, read without a copy
         long key = SectionPos.asLong(cx, sy, cz);
         if (view.has(key)) return;
         if (cx != r.lastCx || cz != r.lastCz || r.lastChunk == null) {
@@ -248,8 +255,8 @@ public final class SquadLook {
         int range = r.server.getScaledTrackingDistance(e.getType().clientTrackingRange() * 16);
         double dx = e.getX() - r.player.getX();
         double dz = e.getZ() - r.player.getZ();
-        ChunkPos c = e.chunkPosition();
-        return dx * dx + dz * dz <= (double) range * range && r.view.contains(c.x, c.z);
+        return dx * dx + dz * dz <= (double) range * range
+            && r.view.contains(SectionPos.blockToSectionCoord(e.getBlockX()), SectionPos.blockToSectionCoord(e.getBlockZ()));
     }
 
     // -- the worker's walk ----------------------------------------------------------------------------------------
@@ -323,7 +330,7 @@ public final class SquadLook {
             shape = CollisionContext.of(p);
             view = p.getChunkTrackingView();
             startTick = tick;
-            end = SquadLookPlan.clipHeight(eye.y, dir.y, world.getMinBuildHeight(), world.getMaxBuildHeight(), REACH);
+            end = SquadLookPlan.clipHeight(eye.y, dir.y, Compat.minY(world), topY(world), REACH);
         }
 
         Vec3 at(double d) {
@@ -423,8 +430,13 @@ public final class SquadLook {
             return topY - bottomY;
         }
 
-        @Override
+        // The lowest y: getMinBuildHeight on 1.21.1, getMinY on 26.x. Both are declared, without @Override, so the
+        // class compiles on each; the other one is unused.
         public int getMinBuildHeight() {
+            return bottomY;
+        }
+
+        public int getMinY() {
             return bottomY;
         }
     }

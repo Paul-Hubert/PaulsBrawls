@@ -2,6 +2,7 @@ package com.paul.brawl;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.paul.brawl.compat.Compat;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -22,7 +23,7 @@ public class PlayerDataCollector {
         data.addProperty("x", pos.getX());
         data.addProperty("y", pos.getY());
         data.addProperty("z", pos.getZ());
-        data.addProperty("dimension", player.level().dimension().location().toString());
+        data.addProperty("dimension", Compat.id(player.level().dimension()));
 
         // ❤️ Health and ⚡️XP
         data.addProperty("health", player.getHealth());
@@ -30,7 +31,7 @@ public class PlayerDataCollector {
 
         // 🎒 Inventory
         JsonArray inventory = new JsonArray();
-        for (ItemStack item : player.getInventory().items) {
+        for (ItemStack item : Compat.mainItems(player.getInventory())) {
             if (!item.isEmpty()) {
                 JsonObject itemJson = new JsonObject();
                 itemJson.addProperty("item", item.getItem().toString());
@@ -53,14 +54,14 @@ public class PlayerDataCollector {
 
         // 🏷️ Tags
         JsonArray tags = new JsonArray();
-        for (String tag : player.getTags()) {
+        for (String tag : Compat.tags(player)) {
             tags.add(tag);
         }
         data.add("tags", tags);
 
         // 📊 Scoreboard (if used for quests)
         JsonObject scores = new JsonObject();
-        Scoreboard scoreboard = player.getScoreboard();
+        Scoreboard scoreboard = player.level().getServer().getScoreboard();
         scoreboard.getObjectiveNames().forEach(objective -> {
             var obj = scoreboard.getObjective(objective);
             if (obj != null) {
@@ -75,7 +76,7 @@ public class PlayerDataCollector {
         // ☀️ Time and weather
         if (player.level() instanceof ServerLevel sw) {
             JsonObject worldData = new JsonObject();
-            worldData.addProperty("time", sw.getDayTime());
+            worldData.addProperty("time", Compat.dayTime(sw));
             worldData.addProperty("is_raining", sw.isRaining());
             worldData.addProperty("is_thundering", sw.isThundering());
             data.add("world", worldData);

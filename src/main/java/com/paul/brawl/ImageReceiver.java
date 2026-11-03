@@ -5,14 +5,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
-import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import com.paul.brawl.compat.Compat;
+
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.server.level.ServerPlayer;
 
 public class ImageReceiver {
     
     public static void commonRegister() {
-		PayloadTypeRegistry.playC2S().register(ImagePayload.ID, ImagePayload.CODEC);
+		Compat.registerServerboundPayload(ImagePayload.ID, ImagePayload.CODEC);
 	}
     
     public static void register() {

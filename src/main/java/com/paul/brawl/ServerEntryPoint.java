@@ -1,6 +1,7 @@
 package com.paul.brawl;
 
 import com.mojang.authlib.GameProfile;
+import com.paul.brawl.compat.Compat;
 
 import net.fabricmc.api.DedicatedServerModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -96,8 +97,8 @@ public class ServerEntryPoint implements DedicatedServerModInitializer {
 				|| VillagersCommand.activeScenarioBots.contains(name);
 			if (!shouldOp) return;
 			GameProfile profile = player.getGameProfile();
-			if (!server.getPlayerList().isOp(profile)) {
-				server.getPlayerList().op(profile);
+			if (!Compat.isOp(server.getPlayerList(), profile)) {
+				Compat.op(server.getPlayerList(), profile);
 				LOGGER.info("Opped bot '{}' on join.", name);
 			}
 		});

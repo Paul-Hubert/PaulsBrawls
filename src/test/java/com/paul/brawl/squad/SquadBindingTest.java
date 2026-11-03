@@ -10,6 +10,8 @@ import java.util.function.Function;
 
 import org.junit.jupiter.api.Test;
 
+import com.paul.brawl.compat.Compat;
+
 import net.minecraft.nbt.CompoundTag;
 
 /** The binding's pure parts: the bind line, the lore line and its removal, the custom-data form (no bootstrap). */
@@ -69,7 +71,7 @@ class SquadBindingTest {
         data.putString("other", "kept");
         data.put(SquadBinding.KEY, b.toNbt());
         assertEquals(Optional.of(b), SquadBinding.fromCustomData(data));
-        assertEquals("kept", data.getString("other"));
+        assertEquals("kept", Compat.getString(data, "other"));
 
         data.remove(SquadBinding.KEY); // what clear() does, through NbtComponent.set
         assertTrue(SquadBinding.fromCustomData(data).isEmpty());

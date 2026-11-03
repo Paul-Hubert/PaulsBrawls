@@ -505,7 +505,7 @@ public class ChatBot {
             ctx[2] = ChatBotActions.getBlockInfo(player);
             return "ok";
         };
-        var server = player.getServer();
+        var server = player.level().getServer();
         if (server != null && server.isSameThread()) {
             // Defensive: never queue-and-join from the main thread (deadlock
             // against the END_SERVER_TICK drain). Collect directly.

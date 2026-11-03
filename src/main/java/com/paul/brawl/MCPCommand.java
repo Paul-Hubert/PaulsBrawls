@@ -2,6 +2,7 @@ package com.paul.brawl;
 
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.paul.brawl.compat.Compat;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.commands.CommandSourceStack;
@@ -41,7 +42,7 @@ public class MCPCommand {
                         })
                     )
                     .then(Commands.literal("reload")
-                        .requires(source -> source.hasPermission(2))
+                        .requires(source -> Compat.hasPermission(source, 2))
                         .executes(ctx -> {
                             // Bug #18: reload() tears down the client and re-handshakes over HTTP/SSE — on the
                             // server thread that froze the tick for the whole connect timeout. Run it on the LLM

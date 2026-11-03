@@ -13,10 +13,10 @@ import java.util.concurrent.Executors;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
+import com.paul.brawl.compat.Compat;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.Item;
@@ -217,7 +217,7 @@ public final class VillageHttpListener {
         if (b == null) return TradeResult.fail(request.botB + " is not online");
         if (a == b) return TradeResult.fail("botA and botB are the same");
 
-        if (a.serverLevel() != b.serverLevel()) {
+        if (a.level() != b.level()) {
             return TradeResult.fail(request.botA + " and " + request.botB + " are not in the same dimension");
         }
         double maxDistance = VillageConfig.INSTANCE.maxTradeDistance;
@@ -270,12 +270,10 @@ public final class VillageHttpListener {
     private static Item resolveItem(String name) {
         String n = name.trim().toLowerCase();
         boolean namespaced = n.contains(":");
-        ResourceLocation id = ResourceLocation.tryParse(namespaced ? n : "minecraft:" + n);
-        Item item = id != null ? BuiltInRegistries.ITEM.get(id) : Items.AIR;
+        Item item = Compat.item(namespaced ? n : "minecraft:" + n).orElse(Items.AIR);
         if (item == Items.AIR && !namespaced) {
             // Mod items — notably the Gibber currency, paulsbrawls:coin.
-            ResourceLocation modId = ResourceLocation.tryParse("paulsbrawls:" + n);
-            if (modId != null) item = BuiltInRegistries.ITEM.get(modId);
+            item = Compat.item("paulsbrawls:" + n).orElse(Items.AIR);
         }
         return item == Items.AIR ? null : item;
     }
@@ -283,7 +281,7 @@ public final class VillageHttpListener {
     /** Main + hotbar only (36 slots) — armour and offhand are never traded. */
     private static int countItems(ServerPlayer player, Item item) {
         int total = 0;
-        for (ItemStack stack : player.getInventory().items) {
+        for (ItemStack stack : Compat.mainItems(player.getInventory())) {
             if (!stack.isEmpty() && stack.is(item)) total += stack.getCount();
         }
         return total;
@@ -295,7 +293,7 @@ public final class VillageHttpListener {
      */
     private static List<ItemStack> extract(ServerPlayer player, Map<Item, Integer> totals) {
         List<ItemStack> extracted = new ArrayList<>();
-        var main = player.getInventory().items;
+        var main = Compat.mainItems(player.getInventory());
         for (var entry : totals.entrySet()) {
             int[] available = new int[main.size()];
             for (int i = 0; i < available.length; i++) {

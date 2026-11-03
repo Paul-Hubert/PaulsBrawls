@@ -16,6 +16,7 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
+import com.paul.brawl.compat.Compat;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.ChatFormatting;
@@ -47,28 +48,28 @@ public final class SquadCommand {
             Commands.literal("bots")
                 .executes(c -> help(c.getSource()))
                 // -- admin --------------------------------------------------------------------------------------
-                .then(Commands.literal("spawn").requires(s -> s.hasPermission(2))
+                .then(Commands.literal("spawn").requires(s -> Compat.hasPermission(s, 2))
                     .then(Commands.argument("bot", StringArgumentType.word())
                         .then(Commands.argument("owners", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
                             .executes(c -> spawn(c, StringArgumentType.getString(c, "bot"), StringArgumentType.getString(c, "owners"))))))
-                .then(Commands.literal("despawn").requires(s -> s.hasPermission(2))
+                .then(Commands.literal("despawn").requires(s -> Compat.hasPermission(s, 2))
                     .then(Commands.literal("all").executes(c -> despawnAll(c.getSource())))
                     .then(Commands.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
                         .executes(c -> despawn(c, StringArgumentType.getString(c, "bot")))))
-                .then(Commands.literal("owners").requires(s -> s.hasPermission(2))
+                .then(Commands.literal("owners").requires(s -> Compat.hasPermission(s, 2))
                     .then(Commands.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
                         .then(Commands.literal("add").then(Commands.argument("players", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
                             .executes(c -> owners(c, true))))
                         .then(Commands.literal("remove").then(Commands.argument("players", StringArgumentType.greedyString()).suggests(ONLINE_PLAYERS)
                             .executes(c -> owners(c, false))))))
-                .then(Commands.literal("raid").requires(s -> s.hasPermission(2))
+                .then(Commands.literal("raid").requires(s -> Compat.hasPermission(s, 2))
                     .executes(c -> SquadRaid.call(c.getSource(), ""))
                     .then(Commands.literal("clear").executes(c -> SquadRaid.clear(c.getSource())))
                     .then(Commands.literal("stop").executes(c -> SquadRaid.stop(c.getSource())))
                     .then(Commands.argument("args", StringArgumentType.greedyString())
                         .executes(c -> SquadRaid.call(c.getSource(), StringArgumentType.getString(c, "args")))))
                 // A General (docs/38): a Claude Code instance commanding an army, no body.
-                .then(Commands.literal("general").requires(s -> s.hasPermission(2))
+                .then(Commands.literal("general").requires(s -> Compat.hasPermission(s, 2))
                     .executes(c -> reply(c.getSource(), "[Bots] Usage : " + SquadGeneralPlan.CREATE_USAGE + " · allow NOM … · tell NOM texte · stop NOM [despawn] · list"))
                     .then(Commands.literal("create")
                         .executes(c -> reply(c.getSource(), "[Bots] Usage : " + SquadGeneralPlan.CREATE_USAGE))
@@ -87,7 +88,7 @@ public final class SquadCommand {
                             .then(Commands.literal("despawn")
                                 .executes(c -> SquadGeneral.stop(c.getSource(), StringArgumentType.getString(c, "name"), true)))))
                     .then(Commands.literal("list").executes(c -> SquadGeneral.list(c.getSource()))))
-                .then(Commands.literal("squad").requires(s -> s.hasPermission(2))
+                .then(Commands.literal("squad").requires(s -> Compat.hasPermission(s, 2))
                     .then(Commands.literal("spawn")
                         .executes(c -> reply(c.getSource(), "[Bots] Usage : " + SquadSpawnPlan.SPAWN_USAGE))
                         .then(Commands.argument("args", StringArgumentType.greedyString()).suggests(SQUAD_LINE)
@@ -101,7 +102,7 @@ public final class SquadCommand {
                         .then(Commands.argument("args", StringArgumentType.greedyString()).suggests(SQUAD_LINE)
                             .executes(c -> SquadSpawn.respawn(c.getSource(), StringArgumentType.getString(c, "args")))))
                     .then(Commands.literal("purge").executes(c -> SquadSpawn.purge(c.getSource()))))
-                .then(Commands.literal("equip").requires(s -> s.hasPermission(2))
+                .then(Commands.literal("equip").requires(s -> Compat.hasPermission(s, 2))
                     .then(Commands.argument("bot", StringArgumentType.word()).suggests(ALL_BOTS)
                         .then(Commands.argument("kit", StringArgumentType.word()).suggests(KITS)
                             .executes(c -> equip(c, StringArgumentType.getString(c, "bot"), StringArgumentType.getString(c, "kit"))))))
@@ -127,7 +128,7 @@ public final class SquadCommand {
                         .executes(c -> stop(c, StringArgumentType.getString(c, "target")))))
                 .then(Commands.literal("list")
                     .executes(c -> call(c, "/api/bots/list", b -> b))
-                    .then(Commands.literal("all").requires(s -> s.hasPermission(2))
+                    .then(Commands.literal("all").requires(s -> Compat.hasPermission(s, 2))
                         .executes(c -> call(c, "/api/bots/list", b -> {
                             b.addProperty("all", true);
                             return b;
@@ -211,7 +212,7 @@ public final class SquadCommand {
     private static final SuggestionProvider<CommandSourceStack> ALL_BOTS = (c, b) -> SharedSuggestionProvider.suggest(Squad.botNames(), b);
     private static final SuggestionProvider<CommandSourceStack> MY_BOTS = (c, b) -> {
         ServerPlayer p = c.getSource().getPlayer();
-        return SharedSuggestionProvider.suggest(p == null || c.getSource().hasPermission(2) ? Squad.botNames() : Squad.botsOf(p.getUUID()), b);
+        return SharedSuggestionProvider.suggest(p == null || Compat.hasPermission(c.getSource(), 2) ? Squad.botNames() : Squad.botsOf(p.getUUID()), b);
     };
     /** {@code /bots order …}: the command name first, then {@code @bot} filters and the take flags. */
     private static final SuggestionProvider<CommandSourceStack> ORDER_LINE = (c, b) -> {
@@ -264,7 +265,7 @@ public final class SquadCommand {
             " /bots share NOM JOUEUR… · unshare · delete NOM · revert NOM VERSION · ticket NOM",
         };
         for (String l : lines) src.sendSuccess(() -> Component.literal(l), false);
-        if (src.hasPermission(2)) {
+        if (Compat.hasPermission(src, 2)) {
             src.sendSuccess(() -> Component.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · squad spawn KIT [nombre] [propriétaire=@s] [autres…] · squad despawn [KIT] [propriétaire=@s] · squad respawn [KIT] [nombre] [propriétaire=@s] (un bot mort reste déconnecté jusque-là) · squad purge (les sauvegardes laissées par d'anciens bots) · equip BOT archer|guard|miner|farmer (il devient aussi à toi) · raid [distance] [archers] [gardes] | clear | stop · general create NOM archer=N guard=N [reinforce=N] [range=N] | allow | tell | stop | list · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
         }
         return Command.SINGLE_SUCCESS;
@@ -466,7 +467,7 @@ public final class SquadCommand {
         if (!SquadBinding.validOrder(order)) return reply(src, "[Bots] Nom de commande invalide : " + order + " (NOM ou auteur:NOM).");
         ItemStack held = p.getMainHandItem();
         if (held.isEmpty()) return reply(src, "[Bots] Prends en main l'objet à lier (un bouclier, une épée, un arc…).");
-        int slot = p.getInventory().selected;
+        int slot = Compat.selectedSlot(p.getInventory());
         Item item = held.getItem();
         String rest = line.get().rest();
         SquadArgs.OrderArgs a = SquadArgs.order(rest);
@@ -481,7 +482,7 @@ public final class SquadCommand {
                 return;
             }
             ItemStack now = p.getMainHandItem();
-            if (p.isRemoved() || now.isEmpty() || p.getInventory().selected != slot || !now.is(item)) {
+            if (p.isRemoved() || now.isEmpty() || Compat.selectedSlot(p.getInventory()) != slot || !now.is(item)) {
                 reply(src, "[Bots] Tu n'as plus le même objet en main : rien n'a été lié.");
                 return;
             }
@@ -515,8 +516,8 @@ public final class SquadCommand {
         ServerPlayer p = src.getPlayer();
         if (p == null) return reply(src, "[Bots] À lancer en jeu, par un joueur.");
         List<Component> lines = new ArrayList<>();
-        List<ItemStack> stacks = new ArrayList<>(p.getInventory().items);
-        stacks.addAll(p.getInventory().offhand);
+        List<ItemStack> stacks = new ArrayList<>(Compat.mainItems(p.getInventory()));
+        stacks.add(p.getOffhandItem());
         for (ItemStack s : stacks) {
             SquadBinding.read(s).ifPresent(b -> lines.add(Component.literal(" • ").append(s.getHoverName())
                 .append(Component.literal(" : " + b.order() + (b.line().isBlank() ? "" : " " + b.line())))));
@@ -575,8 +576,8 @@ public final class SquadCommand {
             }
             String id = r.get("ticket").getAsString();
             Component t = Component.literal(id).withStyle(s -> s.withColor(ChatFormatting.GOLD).withUnderlined(true)
-                .withClickEvent(new net.minecraft.network.chat.ClickEvent(net.minecraft.network.chat.ClickEvent.Action.COPY_TO_CLIPBOARD, id))
-                .withHoverEvent(new net.minecraft.network.chat.HoverEvent(net.minecraft.network.chat.HoverEvent.Action.SHOW_TEXT, Component.literal("Clique pour copier le ticket"))));
+                .withClickEvent(Compat.copyToClipboard(id))
+                .withHoverEvent(Compat.showText(Component.literal("Clique pour copier le ticket"))));
             src.sendSuccess(() -> Component.literal("[Bots] Ticket d'écriture (2 h) : ").append(t), false);
             src.sendSuccess(() -> Component.literal("Serveur MCP : " + SquadConfig.INSTANCE.url + "/mcp/squad — donne ce ticket à ton agent ; /bots ticket revoke l'annule."), false);
         }));
@@ -620,7 +621,7 @@ public final class SquadCommand {
         by.addProperty("uuid", p != null ? p.getStringUUID() : "00000000-0000-0000-0000-00000000c0de");
         by.addProperty("name", p != null ? p.getName().getString() : "Console");
         b.add("by", by);
-        b.addProperty("admin", src.hasPermission(2));
+        b.addProperty("admin", Compat.hasPermission(src, 2));
         return b;
     }
 

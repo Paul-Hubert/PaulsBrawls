@@ -19,11 +19,13 @@ import net.minecraft.world.entity.player.Player;
  * {@code inventory.dropAll()}), not overridden by {@code ServerPlayer}; intermediary {@code
  * class_1657.method_16078()V}, which Loom writes into the remapped jar's mixin. {@code LivingEntity.dropAllDeathLoot}
  * calls it on a death. The respawned player copies no inventory without {@code keepInventory}, so the stacks are gone.
+ * On 26.x it is {@code dropEquipment(ServerLevel)} with the same body (26.1.2 sources), so the target is the name
+ * alone, which each version's {@code Player} declares once; the handler takes no target arguments.
  */
 @Mixin(Player.class)
 public abstract class PlayerMixin {
 
-	@Inject(method = "dropEquipment()V", at = @At("HEAD"), cancellable = true)
+	@Inject(method = "dropEquipment", at = @At("HEAD"), cancellable = true)
 	private void paulsbrawls$squadBotDropsNothing(CallbackInfo ci) {
 		Player self = (Player) (Object) this;
 		if (self.level().isClientSide()) return;

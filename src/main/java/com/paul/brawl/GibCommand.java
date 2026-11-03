@@ -3,6 +3,7 @@ package com.paul.brawl;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.paul.brawl.compat.Compat;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -20,7 +21,7 @@ public class GibCommand {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
                 LiteralArgumentBuilder.<CommandSourceStack>literal("gib")
-                    .requires(source -> source.hasPermission(2)) // Admin only
+                    .requires(source -> Compat.hasPermission(source, 2)) // Admin only
                     // Bug #10: a negative /gib lowered the global total (players already paid kept their coins).
                     .then(Commands.argument("amount", IntegerArgumentType.integer(1))
                         .executes(context -> {
@@ -49,7 +50,7 @@ public class GibCommand {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
                 LiteralArgumentBuilder.<CommandSourceStack>literal("gib_salary")
-                    .requires(source -> source.hasPermission(2)) // Admin only
+                    .requires(source -> Compat.hasPermission(source, 2)) // Admin only
                     .then(Commands.argument("amount", IntegerArgumentType.integer(0))
                         .executes(context -> {
 
@@ -72,7 +73,7 @@ public class GibCommand {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
                 LiteralArgumentBuilder.<CommandSourceStack>literal("gib_salary_period")
-                    .requires(source -> source.hasPermission(2)) // Admin only
+                    .requires(source -> Compat.hasPermission(source, 2)) // Admin only
                     .then(Commands.argument("amount", IntegerArgumentType.integer( 1))
                         .executes(context -> {
 

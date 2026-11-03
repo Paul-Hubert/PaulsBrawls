@@ -15,11 +15,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.authlib.GameProfile;
 import com.mojang.brigadier.Command;
+import com.paul.brawl.compat.Compat;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
-import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -69,7 +68,7 @@ final class SquadGeneral {
         spawn.addProperty("y", p.getY());
         spawn.addProperty("z", p.getZ());
         spawn.addProperty("yaw", p.getYRot());
-        spawn.addProperty("dimension", p.level().dimension().location().getPath());
+        spawn.addProperty("dimension", Compat.path(p.level().dimension()));
         body.add("spawn", spawn);
         body.add("allowance", allowance(terms));
         if (terms.reinforce() != null) body.addProperty("reinforce", terms.reinforce());
@@ -288,14 +287,14 @@ final class SquadGeneral {
 
     private static Component copyable(String shown, String copied) {
         return Component.literal(shown).withStyle(s -> s.withColor(ChatFormatting.GOLD).withUnderlined(true)
-            .withClickEvent(new ClickEvent(ClickEvent.Action.COPY_TO_CLIPBOARD, copied))
-            .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Component.literal("Clique pour copier"))));
+            .withClickEvent(Compat.copyToClipboard(copied))
+            .withHoverEvent(Compat.showText(Component.literal("Clique pour copier"))));
     }
 
     /** The world of a dimension name ("overworld", "the_nether"…), the overworld when unknown. */
     private static ServerLevel world(MinecraftServer srv, String dimension) {
         for (ServerLevel w : srv.getAllLevels()) {
-            if (w.dimension().location().getPath().equals(dimension.toLowerCase(Locale.ROOT))) return w;
+            if (Compat.path(w.dimension()).equals(dimension.toLowerCase(Locale.ROOT))) return w;
         }
         return srv.overworld();
     }

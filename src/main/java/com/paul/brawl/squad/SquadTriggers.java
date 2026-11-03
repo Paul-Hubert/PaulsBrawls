@@ -7,17 +7,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.gson.JsonObject;
+import com.paul.brawl.compat.Compat;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
-import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.InteractionResultHolder;
-import net.minecraft.world.entity.projectile.AbstractArrow;
+import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -27,9 +26,9 @@ import net.minecraft.world.phys.Vec3;
  * The clicks of bound items (docs/29 §5.4 items 3–5), on the server thread. Every hook only watches: it never
  * cancels vanilla, so the shield still blocks and the bow still draws.
  * <ul>
- *   <li><b>Use</b> ({@link UseItemCallback}, always {@code PASS}): the right-click of a bound item is a {@code use}
- *       trigger; sneaking, any bound item (a bow too) stops its order. A bow or crossbow's right-click is not a
- *       trigger: its arrow is.</li>
+ *   <li><b>Use</b> (Fabric's {@code UseItemCallback} through {@link Compat#watchItemUse}, always {@code PASS}): the
+ *       right-click of a bound item is a {@code use} trigger; sneaking, any bound item (a bow too) stops its order.
+ *       A bow or crossbow's right-click is not a trigger: its arrow is.</li>
  *   <li><b>Arrow release</b> ({@link ServerEntityEvents#ENTITY_LOAD}): an arrow from a player's bound bow or crossbow,
  *       entering the world within 2 blocks of their eyes (an arrow loaded with its chunk is not a shot), not while
  *       sneaking. It is tracked until its first hit.</li>
@@ -56,19 +55,17 @@ public final class SquadTriggers {
     private SquadTriggers() {}
 
     public static void register() {
-        UseItemCallback.EVENT.register((player, world, hand) -> {
-            ItemStack stack = player.getItemInHand(hand);
+        Compat.watchItemUse((player, world, hand) -> {
             if (!world.isClientSide() && player instanceof ServerPlayer sp) {
                 try {
-                    onUse(sp, stack);
+                    onUse(sp, player.getItemInHand(hand));
                 } catch (RuntimeException e) {
                     LOGGER.warn("Bound item use by {} failed: {}", sp.getName().getString(), e.toString());
                 }
             }
-            return InteractionResultHolder.pass(stack);
         });
         ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
-            if (!(entity instanceof AbstractArrow arrow)) return;
+            if (!Compat.isArrow(entity) || !(entity instanceof Projectile arrow)) return;
             try {
                 onArrowLoad(arrow, world);
             } catch (RuntimeException e) {
@@ -85,7 +82,7 @@ public final class SquadTriggers {
         else if (!SquadBinding.isLauncher(stack)) fire(sp, b.get(), itemId(stack), SquadTriggerJson.Kind.USE, null, false);
     }
 
-    private static void onArrowLoad(AbstractArrow arrow, ServerLevel world) {
+    private static void onArrowLoad(Projectile arrow, ServerLevel world) {
         if (!(arrow.getOwner() instanceof ServerPlayer sp)) return;
         // The bow or crossbow it was shot from, copied into the arrow at the shot (null for a dispenser's arrow).
         ItemStack weapon = arrow.getWeaponItem();
@@ -105,12 +102,12 @@ public final class SquadTriggers {
      * From the mixin, at the head of {@code onHitEntity} / {@code onHitBlock}, on both sides and for every arrow:
      * it returns at once unless this is a server arrow tracked at its release, and it never throws into vanilla.
      */
-    public static void onArrowHit(AbstractArrow arrow, HitResult hit) {
+    public static void onArrowHit(Projectile arrow, HitResult hit) {
         if (arrow.level().isClientSide() || ARROWS.isEmpty()) return;
         try {
             Shot s = ARROWS.take(arrow.getUUID());
             if (s == null) return;
-            MinecraftServer srv = arrow.getServer();
+            MinecraftServer srv = arrow.level().getServer();
             ServerPlayer sp = srv == null ? null : srv.getPlayerList().getPlayer(s.player());
             if (sp == null || !mayTrigger(sp)) return;
             SquadTriggerJson.Hit where;
@@ -129,7 +126,7 @@ public final class SquadTriggers {
 
     private static boolean mayTrigger(ServerPlayer sp) {
         if (!Squad.enabled() || sp.isSpectator()) return false;
-        String name = sp.getGameProfile().getName();
+        String name = Compat.name(sp.getGameProfile());
         for (String bot : Squad.botNames()) if (bot.equalsIgnoreCase(name)) return false;
         return true;
     }
@@ -141,8 +138,8 @@ public final class SquadTriggers {
         if (!LIMITER.tryAcquire(who)) return false;
         String uuid = sp.getStringUUID();
         String name = sp.getName().getString();
-        boolean admin = sp.hasPermissions(2);
-        MinecraftServer srv = sp.getServer();
+        boolean admin = Compat.hasPermission(sp, 2);
+        MinecraftServer srv = sp.level().getServer();
         // Sent once the look is found (SquadLook, a tick or more), after this player's earlier triggers.
         CommanderSnap.take(sp).thenCompose(snap -> {
             snap.add("trigger", SquadTriggerJson.trigger(kind, item, hit));
@@ -156,7 +153,7 @@ public final class SquadTriggers {
         SquadNotice n = SquadNotice.fromJson(r);
         if (n.text().isBlank() || !LIMITER.shouldShow(who, n.text())) return;
         ServerPlayer p = srv.getPlayerList().getPlayer(who);
-        if (p != null) for (Component t : Squad.render(n)) p.displayClientMessage(t, false);
+        if (p != null) for (Component t : Squad.render(n)) p.sendSystemMessage(t);
     }
 
     static String itemId(ItemStack stack) {

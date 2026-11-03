@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-A Fabric mod for Minecraft 1.21.1 (Java 21; 26.1.2 being ported, [docs/39](docs/39-cross-version.md)), `paulsbrawls`, bundling three loosely-coupled gameplay
+A Fabric mod for Minecraft 1.21.1 (Java 21; a 26.1.2 build compiles and tests, not run yet, [docs/39](docs/39-cross-version.md)), `paulsbrawls`, bundling three loosely-coupled gameplay
 features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 
 - **Gibber** — server-wide money system (a custom `coin` item) with admin gift commands and a periodic salary scheduler.
@@ -58,9 +58,12 @@ shared `src/` (with [gradle/mod.gradle](gradle/mod.gradle)) plus its own `versio
 `gradle.properties` holds its Minecraft, loader, Fabric API and Java versions. `mc_versions` in the root
 [gradle.properties](gradle.properties) picks which versions build (default `1.21.1`, the production version; its jar
 is `versions/1.21.1/build/libs/`). The first is the primary one: only it has `runServer`/`runDevServer`/`runClient`/
-`mcpProbe`, because Gradle runs a command-line task in every project that has it. **26.1.2 is being ported**
-(`-Pmc_versions=1.21.1,26.1.2 :26.1.2:compileJava`, Java 25, fetched into `~/.gradle/jdks` by the foojay resolver);
-don't add it to `mc_versions` until it compiles, or `./gradlew build` fails.
+`mcpProbe`, because Gradle runs a command-line task in every project that has it. **Where the Minecraft or Fabric API
+differs between versions, shared code calls `com.paul.brawl.compat.Compat` / `ClientCompat`**, one copy per version in
+`versions/<v>/src/` with the same signatures (add a method to both; never name `ResourceLocation`/`Identifier` in
+shared code). **26.1.2 compiles and passes the tests but has not run yet**
+(`-Pmc_versions=1.21.1,26.1.2 :26.1.2:test :26.1.2:jar`, Java 25, fetched into `~/.gradle/jdks` by the foojay
+resolver); it stays out of `mc_versions` until a 26.1.2 server has run it (docs/39 §5).
 
 **A standalone server** (a Fabric launcher and jar instead of `./gradlew runServer`) from a clone: `node scripts/setup-server.mjs [dir]`
 (default `server/`, gitignored). It downloads the Fabric server launcher for the versions in `versions/<mc>/gradle.properties`

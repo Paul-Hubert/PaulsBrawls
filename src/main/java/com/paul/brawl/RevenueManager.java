@@ -26,7 +26,7 @@ public class RevenueManager {
 		// A dead player is skipped below (coins would land in the corpse's emptied inventory, lost on respawn);
 		// pay the backlog as soon as they are back.
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) ->
-			updateRevenue(newPlayer.getUUID(), newPlayer.getServer()));
+			updateRevenue(newPlayer.getUUID(), newPlayer.level().getServer()));
 	}
 
 	public static void updateRevenue(UUID uuid, MinecraftServer server) {

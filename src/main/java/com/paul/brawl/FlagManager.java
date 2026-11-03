@@ -6,15 +6,14 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.paul.brawl.compat.Compat;
+
 import net.fabricmc.fabric.api.entity.event.v1.EntityElytraEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
-import net.minecraft.core.component.DataComponents;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.component.Unbreakable;
 
 public class FlagManager {
     
@@ -58,8 +57,8 @@ public class FlagManager {
 
     // make flag holders glow
     public static void glowFlagholders() {
-        ServerTickEvents.START_WORLD_TICK.register((server) -> {
-            for(var player : server.players()) {
+        Compat.onLevelTickStart(world -> {
+            for(var player : world.players()) {
                 var hasFlag = checkInventory(player) != null;
                 updateGlow(player, hasFlag);
             }
@@ -85,17 +84,16 @@ public class FlagManager {
     /**
      * Every Flag banner in the main inventory, the armour slots (a banner can be worn on the head) and the offhand.
      * Bug #11: only {@code main} was scanned, so a Flag in the offhand or on the head bypassed the elytra ban, the
-     * drop-on-hit and the glow.
+     * drop-on-hit and the glow. The inventory's slots are those, in that order, on both versions.
      */
     public static List<ItemStack> findFlags(ServerPlayer player) {
         var inv = player.getInventory();
         List<ItemStack> out = new ArrayList<>();
-        for (var slots : List.of(inv.items, inv.armor, inv.offhand)) {
-            for (var stack : slots) {
-                if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.world.item.BannerItem
-                        && FlagGlow.isFlagName(stack.getHoverName().getString())) {
-                    out.add(stack);
-                }
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            var stack = inv.getItem(i);
+            if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.world.item.BannerItem
+                    && FlagGlow.isFlagName(stack.getHoverName().getString())) {
+                out.add(stack);
             }
         }
         return out;
@@ -106,7 +104,7 @@ public class FlagManager {
             return;
         }
         // Make indestructible
-        item.set(DataComponents.UNBREAKABLE, new Unbreakable(true));
+        Compat.makeUnbreakable(item);
         player.drop(item.copyAndClear(), true, false);
         
     }

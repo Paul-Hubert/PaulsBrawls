@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import com.google.gson.JsonObject;
 import com.mojang.authlib.GameProfile;
 import com.mojang.brigadier.Command;
+import com.paul.brawl.compat.Compat;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -62,8 +63,8 @@ final class SquadRaid {
             this.x = caller.getX();
             this.y = caller.getY();
             this.z = caller.getZ();
-            this.dimension = caller.level().dimension().location().getPath();
-            this.world = caller.serverLevel();
+            this.dimension = Compat.path(caller.level().dimension());
+            this.world = (ServerLevel) caller.level();
             this.spawn = spawn;
             this.yaw = yaw;
         }
@@ -99,7 +100,7 @@ final class SquadRaid {
         List<String> archers = SquadRaidPlan.names(SquadRaidPlan.ARCHER_PREFIX, a.archers(), taken);
         List<String> guards = SquadRaidPlan.names(SquadRaidPlan.GUARD_PREFIX, a.guards(), taken);
 
-        ServerLevel world = p.serverLevel();
+        ServerLevel world = (ServerLevel) p.level();
         SquadRaidPlan.XZ point = SquadRaidPlan.point(p.getX(), p.getZ(), p.getYRot(), a.distance());
         XYZ center = surface(world, point.x(), point.z());
         // They face the caller: the look direction turned around.
@@ -246,7 +247,7 @@ final class SquadRaid {
     static int clear(CommandSourceStack src) {
         if (!Squad.enabled()) return SquadCommand.reply(src, "[Bots] Squad est désactivé (squad.properties : enabled=false).");
         Optional<GameProfile> owner = Squad.profile(src.getServer(), SquadRaidPlan.OWNER);
-        List<String> raiders = owner.isEmpty() ? List.of() : Squad.botsOf(owner.get().getId());
+        List<String> raiders = owner.isEmpty() ? List.of() : Squad.botsOf(Compat.id(owner.get()));
         cancelAssembling();
         if (raiders.isEmpty()) return SquadCommand.reply(src, "[Bots] Aucun envahisseur à retirer.");
         AtomicInteger gone = new AtomicInteger();

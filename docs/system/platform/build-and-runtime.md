@@ -20,8 +20,10 @@ for its Minecraft-free helpers (`./gradlew test`).
 ## One project per Minecraft version (since 2026-11-03, docs/39)
 
 The root project only aggregates. Each Minecraft version is a project, `versions/<version>/` (project path
-`:<version>`), that builds the **shared** sources in the root's `src/` plus its own `versions/<version>/src/`
-(absent until a file differs between versions; a class lives in one or the other, never both):
+`:<version>`), that builds the **shared** sources in the root's `src/` plus its own `versions/<version>/src/` (a class
+lives in one or the other, never both). Each version's own sources are `compat/Compat.java` (server side) and
+`compat/ClientCompat.java` (client), the same methods with that version's bodies, and `mixin/AbstractArrowMixin.java`
+(its target moved package in 26.x); the shared code calls `Compat` where the API changed (docs/39 §3, §4):
 
 | File | Holds |
 |---|---|
@@ -39,7 +41,7 @@ of `mc_versions`) answers `runServer`, `runDevServer`, `runClient` and `mcpProbe
 | Version | Loom plugin | Mappings | Java | Fabric Loader / API | Status |
 |---|---|---|---|---|---|
 | `1.21.1` | `net.fabricmc.fabric-loom-remap` (obfuscated: the jar is remapped to intermediary) | `loom.officialMojangMappings()` (Yarn until 2026-11-03) | 21 | `0.17.3` / `0.116.7+1.21.1` | Production |
-| `26.1.2` | `net.fabricmc.fabric-loom` (unobfuscated: nothing remapped, `implementation` not `modImplementation`, `jar` not `remapJar`) | none | 25 | `0.20.1` / `0.155.3+26.1.2` | Being ported: not in `mc_versions` |
+| `26.1.2` | `net.fabricmc.fabric-loom` (unobfuscated: nothing remapped, `implementation` not `modImplementation`, `jar` not `remapJar`) | none | 25 | `0.20.1` / `0.155.3+26.1.2` | Compiles, 1137 tests pass; not run on a server or client yet, so not in `mc_versions` |
 
 Shared values (root `gradle.properties`):
 

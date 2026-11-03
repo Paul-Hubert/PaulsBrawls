@@ -2,9 +2,9 @@ package com.paul.brawl;
 
 import com.fasterxml.jackson.annotation.JsonClassDescription;
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
+import com.paul.brawl.compat.Compat;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
@@ -155,7 +155,7 @@ public class QueryTerrain {
         String biome;
         try {
             Holder<Biome> entry = world.getBiome(new BlockPos(cx, playerPos.getY(), cz));
-            biome = entry.unwrapKey().map(ResourceKey::location).map(Object::toString).orElse("unknown");
+            biome = entry.unwrapKey().map(Compat::id).orElse("unknown");
         } catch (Exception e) {
             biome = "unknown";
         }

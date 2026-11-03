@@ -5,6 +5,7 @@ import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.paul.brawl.compat.Compat;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.commands.CommandSourceStack;
@@ -21,7 +22,7 @@ public class LLMCommand {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
                 LiteralArgumentBuilder.<CommandSourceStack>literal("llm")
-                    .requires(source -> source.hasPermission(2))
+                    .requires(source -> Compat.hasPermission(source, 2))
                     .executes(ctx -> {
                         printStatus(ctx.getSource());
                         return Command.SINGLE_SUCCESS;

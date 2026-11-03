@@ -11,6 +11,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.paul.brawl.compat.Compat;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.commands.CommandSourceStack;
@@ -42,7 +43,7 @@ public class VillageCommand {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
                 LiteralArgumentBuilder.<CommandSourceStack>literal("village")
-                    .requires(source -> source.hasPermission(2))
+                    .requires(source -> Compat.hasPermission(source, 2))
                     .then(Commands.literal("status").executes(ctx -> {
                         fetchStatus(ctx.getSource());
                         return Command.SINGLE_SUCCESS;

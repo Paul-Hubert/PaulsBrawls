@@ -15,6 +15,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.authlib.GameProfile;
 import com.mojang.brigadier.Command;
+import com.paul.brawl.compat.Compat;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
@@ -51,8 +52,8 @@ final class SquadSpawn {
             this.kit = kit;
             this.owners = new JsonArray();
             for (GameProfile p : owners) this.owners.add(Squad.player(p));
-            this.ownerNames = String.join(" + ", owners.stream().map(GameProfile::getName).toList());
-            this.world = center.serverLevel();
+            this.ownerNames = String.join(" + ", owners.stream().map(Compat::name).toList());
+            this.world = (ServerLevel) center.level();
             this.yaw = center.getYRot();
         }
     }
@@ -80,11 +81,11 @@ final class SquadSpawn {
         for (String o : a.others()) {
             Optional<GameProfile> p = SquadCommand.owner(src, o);
             if (p.isEmpty()) return SquadCommand.reply(src, "[Bots] Joueur inconnu : " + o);
-            if (owners.stream().noneMatch(x -> x.getId().equals(p.get().getId()))) owners.add(p.get());
+            if (owners.stream().noneMatch(x -> Compat.id(x).equals(Compat.id(p.get())))) owners.add(p.get());
         }
         // The squad stands around its owner, who must be in game: that is where it appears.
-        ServerPlayer center = srv.getPlayerList().getPlayer(owner.get().getId());
-        if (center == null) return SquadCommand.reply(src, "[Bots] " + owner.get().getName() + " n'est pas en jeu : l'escouade apparaît autour de son propriétaire.");
+        ServerPlayer center = srv.getPlayerList().getPlayer(Compat.id(owner.get()));
+        if (center == null) return SquadCommand.reply(src, "[Bots] " + Compat.name(owner.get()) + " n'est pas en jeu : l'escouade apparaît autour de son propriétaire.");
 
         // Names nobody uses: not in the roster, not online, never played here (a bot would load that save).
         List<String> roster = Squad.botNames();
@@ -204,11 +205,11 @@ final class SquadSpawn {
                 : "[Bots] Joueur inconnu : " + a.owner());
         }
         ServerPlayer caller = src.getPlayer();
-        ServerPlayer center = caller != null ? caller : srv.getPlayerList().getPlayer(owner.get().getId());
+        ServerPlayer center = caller != null ? caller : srv.getPlayerList().getPlayer(Compat.id(owner.get()));
         if (center == null) {
-            return SquadCommand.reply(src, "[Bots] Lance-la en jeu (ou avec " + owner.get().getName() + " en jeu) : les bots reviennent autour de toi.");
+            return SquadCommand.reply(src, "[Bots] Lance-la en jeu (ou avec " + Compat.name(owner.get()) + " en jeu) : les bots reviennent autour de toi.");
         }
-        ServerLevel world = center.serverLevel();
+        ServerLevel world = (ServerLevel) center.level();
         double cx = center.getX(), cy = center.getY(), cz = center.getZ();
         float yaw = center.getYRot();
         JsonObject body = SquadCommand.base(src);
@@ -223,9 +224,9 @@ final class SquadSpawn {
             List<String> names = new ArrayList<>();
             if (res.has("bots") && res.get("bots").isJsonArray()) for (JsonElement e : res.getAsJsonArray("bots")) names.add(e.getAsString());
             if (names.isEmpty()) {
-                boolean self = caller != null && caller.getUUID().equals(owner.get().getId());
+                boolean self = caller != null && caller.getUUID().equals(Compat.id(owner.get()));
                 SquadCommand.reply(src, "[Bots] Aucun " + a.kit().map(SquadKits.Kit::label).orElse("bot") + " mort"
-                    + (self ? "" : " pour " + owner.get().getName()) + ".");
+                    + (self ? "" : " pour " + Compat.name(owner.get())) + ".");
                 return;
             }
             List<String> shown = new ArrayList<>();
@@ -264,7 +265,7 @@ final class SquadSpawn {
                 ? "[Bots] Lance-la en jeu, ou nomme le propriétaire : " + SquadSpawnPlan.DESPAWN_USAGE
                 : "[Bots] Joueur inconnu : " + a.owner());
         }
-        String uuid = owner.get().getId().toString();
+        String uuid = Compat.id(owner.get()).toString();
         List<String> bots = new ArrayList<>();
         for (JsonElement el : Squad.stateArray("bots")) {
             JsonObject b = el.getAsJsonObject();
@@ -275,7 +276,7 @@ final class SquadSpawn {
             if (owned && kitted) bots.add(b.get("name").getAsString());
         }
         String what = a.kit().map(k -> k.label() + "s").orElse("bots");
-        if (bots.isEmpty()) return SquadCommand.reply(src, "[Bots] " + owner.get().getName() + " n'a aucun bot à retirer (" + what + ").");
+        if (bots.isEmpty()) return SquadCommand.reply(src, "[Bots] " + Compat.name(owner.get()) + " n'a aucun bot à retirer (" + what + ").");
         AtomicInteger gone = new AtomicInteger();
         CompletableFuture<?>[] all = bots.stream()
             .map(n -> SquadCommand.despawnBot(src, n).thenAccept(r -> {
@@ -283,7 +284,7 @@ final class SquadSpawn {
             }))
             .toArray(CompletableFuture[]::new);
         CompletableFuture.allOf(all).thenRun(() -> src.getServer().execute(() -> SquadCommand.reply(src,
-            "[Bots] " + gone.get() + " " + what + " de " + owner.get().getName() + " retiré(s)" + (gone.get() < bots.size() ? " sur " + bots.size() : "") + ".")));
+            "[Bots] " + gone.get() + " " + what + " de " + Compat.name(owner.get()) + " retiré(s)" + (gone.get() < bots.size() ? " sur " + bots.size() : "") + ".")));
         return Command.SINGLE_SUCCESS;
     }
 

@@ -2,6 +2,7 @@ package com.paul.brawl;
 
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.paul.brawl.compat.Compat;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.commands.CommandSourceStack;
@@ -25,7 +26,7 @@ public class ChatCommand {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
                 LiteralArgumentBuilder.<CommandSourceStack>literal("pray")
-                    .requires(source -> source.hasPermission(0)) // Open to everyone
+                    .requires(source -> Compat.hasPermission(source, 0)) // Open to everyone
                     .then(Commands.literal("reset")
                         .executes(context -> {
                             // docs/27: forget the player's agent conversation (external) or memory (builtin).
@@ -69,7 +70,7 @@ public class ChatCommand {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
                 LiteralArgumentBuilder.<CommandSourceStack>literal("godbody")
-                    .requires(source -> source.hasPermission(2))
+                    .requires(source -> Compat.hasPermission(source, 2))
                     .then(Commands.literal("off")
                         .executes(ctx -> {
                             int dropped = GodActionQueue.clear();
@@ -138,7 +139,7 @@ public class ChatCommand {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
                 LiteralArgumentBuilder.<CommandSourceStack>literal("prompt")
-                    .requires(source -> source.hasPermission(2)) // Admin only
+                    .requires(source -> Compat.hasPermission(source, 2)) // Admin only
                     .then(Commands.argument("text", MessageArgument.message())
                         .executes(context -> {
                             Component text = MessageArgument.getMessage(context, "text");
@@ -159,7 +160,7 @@ public class ChatCommand {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(
                 LiteralArgumentBuilder.<CommandSourceStack>literal("prompt")
-                    .requires(source -> source.hasPermission(2)) // Admin only
+                    .requires(source -> Compat.hasPermission(source, 2)) // Admin only
                         .executes(context -> {
                             ChatBot.godBot.readPrompt();
                             ChatBot.buildBot.readPrompt();

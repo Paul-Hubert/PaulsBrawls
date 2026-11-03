@@ -1,5 +1,7 @@
 package com.paul.brawl;
 
+import com.paul.brawl.compat.Compat;
+
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.MinecraftServer;
@@ -15,7 +17,7 @@ public class PlayerPersistentState extends SavedData {
     private final Map<UUID, Integer> playerMap = new HashMap<>();
     private final Map<String, Integer> globalMap = new HashMap<>();
 
-    
+
 
     public PlayerPersistentState() {}
 
@@ -24,40 +26,32 @@ public class PlayerPersistentState extends SavedData {
     }
 
     public static PlayerPersistentState getState(MinecraftServer server) {
-        return server.overworld().getDataStorage().computeIfAbsent(
-            PlayerPersistentState.TYPE,
-            STATE_KEY
-        );
+        return Compat.savedData(server, STATE_KEY, PlayerPersistentState::createNew,
+            PlayerPersistentState::fromNbt, state -> state.save(new CompoundTag(), null));
     }
 
-    public static PlayerPersistentState fromNbt(CompoundTag tag, HolderLookup.Provider registryLookup) {
+    public static PlayerPersistentState fromNbt(CompoundTag tag) {
         PlayerPersistentState state = new PlayerPersistentState();
-        CompoundTag playerData = tag.getCompound(PLAYER_DATA_KEY);
-        for (String key : playerData.getAllKeys()) {
+        CompoundTag playerData = Compat.getCompound(tag, PLAYER_DATA_KEY).orElseGet(CompoundTag::new);
+        for (String key : Compat.keys(playerData)) {
             try {
                 UUID uuid = UUID.fromString(key);
-                int value = playerData.getInt(key);
+                int value = Compat.getInt(playerData, key);
                 state.playerMap.put(uuid, value);
             } catch (IllegalArgumentException ignored) {}
         }
 
-        CompoundTag globalData = tag.getCompound(GLOBAL_DATA_KEY);
-        for (String key : globalData.getAllKeys()) {
+        CompoundTag globalData = Compat.getCompound(tag, GLOBAL_DATA_KEY).orElseGet(CompoundTag::new);
+        for (String key : Compat.keys(globalData)) {
             try {
-                int value = globalData.getInt(key);
+                int value = Compat.getInt(globalData, key);
                 state.globalMap.put(key, value);
             } catch (IllegalArgumentException ignored) {}
         }
         return state;
     }
 
-    public static final Factory<PlayerPersistentState> TYPE = new Factory<>(
-        PlayerPersistentState::createNew,
-        PlayerPersistentState::fromNbt,
-        null
-    );
-
-    @Override
+    /** The state as a tag: 1.21.1's SavedData calls it (an override there, not on 26.x), and 26.x's codec through getState. */
     public CompoundTag save(CompoundTag tag, HolderLookup.Provider registryLookup) {
         CompoundTag playerData = new CompoundTag();
         for (Map.Entry<UUID, Integer> entry : playerMap.entrySet()) {
@@ -91,4 +85,4 @@ public class PlayerPersistentState extends SavedData {
         globalMap.put(str, value);
         setDirty();
     }
-} 
+}
