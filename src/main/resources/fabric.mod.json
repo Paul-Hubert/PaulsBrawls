@@ -24,6 +24,7 @@
 	},
 	"mixins": [
 		"paulsbrawls.mixins.json",
+		"paulsbrawls.version.mixins.json",
 		{
 			"config": "paulsbrawls.client.mixins.json",
 			"environment": "client"

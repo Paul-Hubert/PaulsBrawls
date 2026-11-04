@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-A Fabric mod for Minecraft 1.21.1 (Java 21; a 26.1.2 build compiles and tests, not run yet, [docs/39](docs/39-cross-version.md)), `paulsbrawls`, bundling three loosely-coupled gameplay
+A Fabric mod for Minecraft 1.21.1 (Java 21; a 26.1.2 build runs on its own dev server, bots not yet, [docs/39](docs/39-cross-version.md)), `paulsbrawls`, bundling three loosely-coupled gameplay
 features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 
 - **Gibber** — server-wide money system (a custom `coin` item) with admin gift commands and a periodic salary scheduler.
@@ -41,6 +41,7 @@ features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 ./gradlew build                # compile + remap; auto-copies the jar to mods folders (see below)
 ./gradlew runServer            # the PRODUCTION server (cwd run/, port 25565, RCON 25575; run/README.md)
 ./gradlew runDevServer         # the dev-test server (cwd dev/, port 25599, RCON 25576, own ports; dev/README.md)
+./gradlew -Pmc_versions=1.21.1,26.1.2 :26.1.2:runDevServer26   # the 26.1.2 dev server (cwd dev-26.1.2/, port 25602)
 ./gradlew runClient            # launch dev client
 ./gradlew genSources           # generate Minecraft sources for IDE navigation
 ./gradlew clean
@@ -61,9 +62,10 @@ is `versions/1.21.1/build/libs/`). The first is the primary one: only it has `ru
 `mcpProbe`, because Gradle runs a command-line task in every project that has it. **Where the Minecraft or Fabric API
 differs between versions, shared code calls `com.paul.brawl.compat.Compat` / `ClientCompat`**, one copy per version in
 `versions/<v>/src/` with the same signatures (add a method to both; never name `ResourceLocation`/`Identifier` in
-shared code). **26.1.2 compiles and passes the tests but has not run yet**
-(`-Pmc_versions=1.21.1,26.1.2 :26.1.2:test :26.1.2:jar`, Java 25, fetched into `~/.gradle/jdks` by the foojay
-resolver); it stays out of `mc_versions` until a 26.1.2 server has run it (docs/39 §5).
+shared code; a mixin that exists per version goes in each `versions/<v>/src/main/resources/paulsbrawls.version.mixins.json`).
+**26.1.2 compiles, passes the tests and runs on its dev server** (`-Pmc_versions=1.21.1,26.1.2 :26.1.2:test :26.1.2:jar`;
+`:26.1.2:runDevServer26` runs `dev-26.1.2/`, [dev-26.1.2/README.md](dev-26.1.2/README.md); Java 25, fetched into
+`~/.gradle/jdks` by the foojay resolver). It stays out of `mc_versions` until the bots and a client run it (docs/39 §5).
 
 **A standalone server** (a Fabric launcher and jar instead of `./gradlew runServer`) from a clone: `node scripts/setup-server.mjs [dir]`
 (default `server/`, gitignored). It downloads the Fabric server launcher for the versions in `versions/<mc>/gradle.properties`
@@ -177,7 +179,8 @@ settings persist to `llm_config.properties`; God-Body bridge settings to `bridge
 > old production folder, kept but unused). That is where the runtime configs (`llm_config.properties`,
 > `bridge_config.properties`, …) and logs live. Dev tests run in `dev/` (`./gradlew runDevServer`, port 25599, its
 > own world, RCON 25576, settlement 8777, God MCP 8781, Squad off). **Two servers, two cwds**; the live tests default
-> to `dev/`.
+> to `dev/`. The 26.1.2 dev server is a third, in `dev-26.1.2/` (port 25602, RCON 25579, settlement 8778, God MCP 8782,
+> Squad and the God-Body bridge off).
 
 ---
 
@@ -199,7 +202,7 @@ Designed so offline players still "earn" salary and receive coins on next login:
 1. A single global int `total_revenue` (everyone is *entitled* to it) lives in [PlayerPersistentState](src/main/java/com/paul/brawl/PlayerPersistentState.java).
 2. Each player's *paid-out* revenue is stored per-UUID in the same persistent state.
 3. `SalaryScheduler` ticks every `salary_period` seconds (default 10; the first tick fires immediately), incrementing `total_revenue` by `salary_per_day` — via `RevenueManager.UpdateRevenueAll`, not by iterating players. **`salary_per_day` defaults to 0**, so nothing is paid until an admin runs `/gib_salary`.
-4. `RevenueManager.updateRevenue(uuid)` computes `totalRevenue - currentRevenue`, inserts that many `coin` items, and credits only what fit (the rest stays owed — bug #10). Totals saturate instead of wrapping; `/gib` takes `≥ 1`. Same path runs on `ServerPlayConnectionEvents.JOIN`, so offline players get their backlog at login.
+4. `RevenueManager.updateRevenue(player)` computes `totalRevenue - currentRevenue`, inserts that many `coin` items, and credits only what fit (the rest stays owed — bug #10). Totals saturate instead of wrapping; `/gib` takes `≥ 1`. Same path runs on `ServerPlayConnectionEvents.JOIN` with the joining player (`handler.getPlayer()`: at `JOIN` it is not in the player list yet, so a lookup by UUID finds nothing), so offline players get their backlog at login.
 
 `PlayerPersistentState` uses Minecraft's `PersistentState` API. NBT keys: `gibbers_state` → `player_data` (UUID→int), `global_data` (string→int).
 
@@ -435,7 +438,7 @@ run by `npm run check`) — imports run **strictly downward**, an upward import 
 
 - **Config:** [eden/eden.example.json](eden/eden.example.json) → `eden.json` (gitignored). Holds NO key (env-only). Sections: `minecraft`, `provider`, `villagers` (roster: `name`/`role`/`persona`/`items`; `home`/`chest` are not accepted keys — anchors are discovered in the world after spawn, R18/B3.6), `scenario` (wins over `villagers`), `god` (name/desks/budget/`embodiedVerdicts`/`godPrompt`), `behavior`, `llm` (strong/fast providers, `maxConcurrent`, cooldown), `skills`, `settlement.url` (`:8767`), `admin.port` (8770), `journal`.
 - **Data dir** `.eden-data/` (gitignored): `eden.db` (journal), `library/<skill>/skill.json` + `v*.js` (authored code), `bots/<name>.json` (memory + relations), `subscriptions/<name>.json`, `world.json` (world stamp), `llm/*.json` (transcripts).
-- **Port map** (R24 — a registry, never folklore): **8772 Squad runtime (control API, SSE, `/mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN`, docs/29; `/mcp/general`, a General's `gen-…` ticket, docs/38)** · **8770** Eden admin (its only held port) · **8771 Java `god`/`builder` MCP servers (only with `godAgent = external`, bearer token, docs/27)** · 4096 opencode (`opencode serve`, the external God agent, Basic auth) · 8765/8766 v1 (reserved while coexisting) · **8767 Java settlement (stateless per request; Eden POSTs accepted trades to it, with `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when the mod sets `settlementToken`; `./gradlew runServer` takes it, R29; the dev server uses 8777)** · 25565 production, `run/` (RCON 25575) · 25599 dev server, `dev/` (RCON 25576; God MCP 8781). **Read the server's `server.properties`, never assume the port (R28).**
+- **Port map** (R24 — a registry, never folklore): **8772 Squad runtime (control API, SSE, `/mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN`, docs/29; `/mcp/general`, a General's `gen-…` ticket, docs/38)** · **8770** Eden admin (its only held port) · **8771 Java `god`/`builder` MCP servers (only with `godAgent = external`, bearer token, docs/27)** · 4096 opencode (`opencode serve`, the external God agent, Basic auth) · 8765/8766 v1 (reserved while coexisting) · **8767 Java settlement (stateless per request; Eden POSTs accepted trades to it, with `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when the mod sets `settlementToken`; `./gradlew runServer` takes it, R29; the dev server uses 8777)** · 25565 production, `run/` (RCON 25575) · 25599 dev server, `dev/` (RCON 25576; God MCP 8781) · 25602 the 26.1.2 dev server, `dev-26.1.2/` (RCON 25579; settlement 8778; God MCP 8782). **Read the server's `server.properties`, never assume the port (R28).**
 - **Identity** (R12): Eden's avatar is **`Dieu`** — never v1's `LLMBot`/`GodBot`; villagers use French roster names; the eval harness namespaces every username `EvalBot*`. Minecraft kicks the second login of a name, so every login across all coexisting systems must be pairwise distinct.
 
 ### Live test suite ([docs/19](docs/19-live-test-suite.md), [docs/20](docs/20-live-test-process.md), code in [eden/live-tests/](eden/live-tests/))

@@ -30,7 +30,7 @@ runtime order.
 | # | Line | Call | What it registers (immediately or as a listener) |
 |---|---|---|---|
 | 1 | `:20` | `GibCommand.register()` | 3 × `CommandRegistrationCallback`: `/gib`, `/gib_salary`, `/gib_salary_period` (`GibCommand.java:20,49,72`) |
-| 2 | `:22` | `RevenueManager.register()` | `ServerPlayConnectionEvents.JOIN` listener **#1** → `updateRevenue(uuid)` (backlog payout) (`RevenueManager.java:19-26`) |
+| 2 | `:22` | `RevenueManager.register()` | `ServerPlayConnectionEvents.JOIN` listener **#1** → `updateRevenue(handler.getPlayer())` (backlog payout; the joining player itself, since it is not in the player list yet at `JOIN`) (`RevenueManager.java:19-29`) |
 | 3 | `:24` | `SalaryScheduler.register()` | `SERVER_STARTED` **#1** → `start(server)`; `SERVER_STOPPING` **#1** → `stop()` (`SalaryScheduler.java:21-28`) |
 | 4 | `:26` | `Money.register()` | Immediate `Registry.register(Registries.ITEM, "paulsbrawls:coin", maxCount 99)` (`Money.java:18-23`) |
 | 5 | `:30` | `FlagManager.register()` | `EntityElytraEvents.ALLOW`, `ServerLivingEntityEvents.ALLOW_DAMAGE`, `ServerTickEvents.START_WORLD_TICK`, `ServerPlayConnectionEvents.DISCONNECT` (forget the player's glow ownership) (`FlagManager.java:37,49,60,66`) |

@@ -56,11 +56,9 @@ Accessors: `getPlayerValue(uuid)` / `getGlobalValue(key)` return `getOrDefault(.
 (`:78-89`); both setters call `markDirty()` (`:82-94`) so the state is saved with the world. Malformed
 UUID keys are skipped on load (`:36-43`).
 
-## Payout algorithm — `RevenueManager.updateRevenue(uuid, server)` (`RevenueManager.java:28-63`)
+## Payout algorithm — `RevenueManager.updateRevenue(player, server)` (`RevenueManager.java:31-65`)
 
 ```
-player = server.getPlayerManager().getPlayer(uuid)      // online only
-if player == null: log "player is null"; return
 if !player.isAlive(): return                            // death screen: paid at AFTER_RESPAWN instead
 total = global[total_revenue]; paid = player_data[uuid] (0 if new)
 owed = GibberMath.owed(total, paid)                     // max(0, total - paid), no overflow
@@ -73,14 +71,19 @@ if inserted > 0: player_data[uuid] = GibberMath.paidAfter(paid, inserted) // cre
 if inserted < owed: log "<name>: inventory full, <n> of <owed> coin(s) still owed"
 ```
 
-`UpdateRevenueAll(server)` (`:65-69`) loops `getPlayerList()` (online players) and calls the above.
+`UpdateRevenueAll(server)` (`:67-71`) loops `getPlayerList().getPlayers()` (online players) and calls the above. The
+`JOIN` hook passes the joining player itself (`handler.getPlayer()`, `RevenueManager.java:19-29`): Fabric fires `JOIN`
+inside `PlayerList.placeNewPlayer`, after the player's save is loaded but before the player is in the player list, so
+the old lookup by UUID (`getPlayerList().getPlayer(uuid)`) was always null there ("player is null" in every log) and the
+backlog waited for the next salary tick, up to `salary_period` later (found 2026-11-04 on the 26.1.2 dev server, docs/39
+§4; fixed on both versions).
 
 Consequences that follow directly from this code:
 
 - **Dead players** are skipped (coins would go into the corpse's emptied inventory and be lost on respawn); the
   `ServerPlayerEvents.AFTER_RESPAWN` hook pays their backlog on respawn (review fix).
 - **Offline players** are never iterated; their gap simply grows and is paid in full at their next join
-  (the `JOIN` hook, `RevenueManager.java:19-26`).
+  (the `JOIN` hook, `RevenueManager.java:19-29`).
 - **New players receive the entire historical `total_revenue`** on first join (their paid value starts at 0).
 - **Every Mineflayer bot is a player**: `LLMBot`, Eden's `Dieu`, Eden villagers and `EvalBot*` names all get
   the full backlog on first join and every subsequent salary.

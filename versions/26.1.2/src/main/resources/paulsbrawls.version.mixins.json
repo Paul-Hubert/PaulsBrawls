@@ -1,0 +1,12 @@
+{
+	"required": true,
+	"package": "com.paul.brawl.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"mixins": [
+		"AbstractArrowMixin",
+		"RegistrySyncVanillaClientsMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

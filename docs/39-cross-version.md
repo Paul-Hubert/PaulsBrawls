@@ -1,9 +1,9 @@
 # 39 — One mod, several Minecraft versions (1.21.1 and 26.1.2)
 
-Status: **26.1.2 compiles and passes the tests; not run yet** (2026-11-03). Both versions build `main`, `client` and
-the tests from the shared `src/`, and both pass the same 1137 tests (22 skipped: the E2E tests that need an external
-binary). What differs lives in two compat classes and one mixin per version (§4). Nothing has run on a 26.1.2 server
-or client yet (§5). The as-built Gradle layout is
+Status: **26.1.2 runs on its own dev server** (`dev-26.1.2/`, 2026-11-04); no 26.1.2 client has run it yet, and the
+bots are still 1.21.1-only (§5). Both versions build `main`, `client` and the tests from the shared `src/`, and both
+pass the same 1137 tests (22 skipped: the E2E tests that need an external binary). What differs lives in two compat
+classes and a per-version mixin config (§4). The as-built Gradle layout is
 [docs/system/platform/build-and-runtime.md](system/platform/build-and-runtime.md) ("One project per Minecraft version").
 
 ## 1. Decisions (Paul, 2026-11-03)
@@ -27,19 +27,23 @@ or client yet (§5). The as-built Gradle layout is
 src/                      shared: every class that compiles on every version
 gradle/mod.gradle         the build every version shares
 versions/1.21.1/          remapping Loom, Mojang mappings, Java 21: production
-versions/26.1.2/          plain Loom (nothing remapped), Java 25: compiles and tests, not run yet
+versions/26.1.2/          plain Loom (nothing remapped), Java 25: its dev server is dev-26.1.2/
   build.gradle, gradle.properties
   src/main/java/com/paul/brawl/compat/Compat.java          what differs, server side (§4)
   src/main/java/com/paul/brawl/mixin/AbstractArrowMixin.java   its target moved package
+  src/main/java/com/paul/brawl/mixin/RegistrySyncVanillaClientsMixin.java   26.1.2 only (§4)
+  src/main/resources/paulsbrawls.version.mixins.json        the mixins that exist per version
   src/client/java/com/paul/brawl/compat/ClientCompat.java  what differs, client side
+dev-26.1.2/               the 26.1.2 dev server (dev-26.1.2/README.md)
 ```
 
 - `mc_versions` (root `gradle.properties`) picks the versions that build; the first is the primary one, the only one
   with `runServer`, `runDevServer`, `runClient` and `mcpProbe` (Gradle runs a command-line task in every project that
   has it). `build` and `test` run in every included version, so a shared change is tested on all of them.
-- 26.1.2 stays out of `mc_versions` until it has run (§5); test it with
+- 26.1.2 stays out of `mc_versions` until §5 is done; test it with
   `./gradlew -Pmc_versions=1.21.1,26.1.2 :26.1.2:test :26.1.2:jar` (not `build`, whose copy tasks fill the 1.21.1 mods
-  folders too). Its `build.gradle` lifts javac's 100-error cap.
+  folders too), and run its dev server with `./gradlew -Pmc_versions=1.21.1,26.1.2 :26.1.2:runDevServer26`. Its
+  `build.gradle` lifts javac's 100-error cap.
 - IntelliJ cannot put one source folder in two modules: with both versions in `mc_versions` it shows `src/` under one
   of them. Import with the default `mc_versions` for everyday work.
 
@@ -54,8 +58,10 @@ versions/26.1.2/          plain Loom (nothing remapped), Java 25: compiles and t
 3. **Only when most of a file differs**, move the file itself into each version's `src/` (it then exists once per
    version and must be kept in step by hand; say so in its header).
 4. Never `if (version …)` at run time: each version's jar contains only its own code.
-5. Mixins: a target that moved (26.x `AbstractArrow` is in `…projectile.arrow`) needs the mixin class per version.
-   A target whose signature changed but whose name is unique in its class can be named alone (`PlayerMixin`:
+5. Mixins: a target that moved (26.x `AbstractArrow` is in `…projectile.arrow`) needs the mixin class per version,
+   and so does a mixin only one version has. Those are listed in `paulsbrawls.version.mixins.json`, one per version in
+   `versions/<v>/src/main/resources` (both named in the shared `fabric.mod.json`); the shared `paulsbrawls.mixins.json`
+   lists only the mixins in `src/`. A target whose signature changed but whose name is unique in its class can be named alone (`PlayerMixin`:
    `method = "dropEquipment"`, which is `dropEquipment()` on 1.21.1 and `dropEquipment(ServerLevel)` on 26.x; Loom
    still remaps it to `method_16078`), with a handler that takes no target arguments. Check every mixin at run time
    (a bot joins, an arrow hits, the bot is killed), because a missing target fails only when the class loads.
@@ -91,18 +97,42 @@ data in `<world>/data/<namespace>/<name>.dat`, and its world upgrade moves only 
 there into `data/paulsbrawls/`. The codec is `CompoundTag.CODEC` with `DataFixTypes.SAVED_DATA_COMMAND_STORAGE` (an
 untyped compound to the fixers; a null fix type would make the load fail and start an empty state). Not run yet.
 
+**Clients without Fabric (the bots).** 26.1.2's Fabric API (`fabric-registry-sync-v0` 7.1.1) disconnects a client
+that cannot take its registry sync, unless every registry with modded entries is marked optional: the coin is in the
+item registry, so every mineflayer bot was kicked with "This server requires Fabric Loader and Fabric API installed on
+your client!". 1.21.1's (5.3.1) skipped the sync for such a client instead. Fabric API has no switch for it, so the
+26.1.2-only `RegistrySyncVanillaClientsMixin` makes `RegistrySyncManager.areAllRegistriesOptional` (whose only caller is
+that branch) answer true: no sync and no kick, as on 1.21.1. A vanilla client that is sent a coin gets an item id it
+does not know, as on 1.21.1.
+
 What was checked: both versions' 1137 tests; both jars' mixin targets in the bytecode (1.21.1 remapped to
 `method_16078`, `method_7454`, `method_24920`; 26.1.2 the Mojang names); the 1.21.1 jar on the dev server (a bot
-joins, an arrow hits the ground, the bot is killed, no mixin error, the Gibber state saved).
+joins, an arrow hits the ground, the bot is killed, no mixin error, the Gibber state saved). On the 26.1.2 dev server
+(2026-11-04, a mineflayer 4.39 bot, `version: '26.1.2'`, protocol 775):
+
+- the bot joins; no mixin or other error in the log;
+- permission levels: `/mcp status` and `/bots status` (0) answer, `/gib 3` (2) is an unknown command until the bot is
+  op'd, then gives 3 coins (`clear … paulsbrawls:coin 0` finds 3);
+- `/village` shows the listener running on 8778;
+- capture the flag: a banner named Flag makes its holder glow, a hit drops it (unbreakable) and clears the glow;
+- two arrows (one on the ground, one on the bot) and a death: no error, and a non-roster bot drops its coins and items;
+- the Gibber state: saved to `world/data/paulsbrawls/gibbers_state.dat` and read back after a restart; on a copy of
+  the 1.21.1 dev world, `data/gibbers_state.dat` (DataVersion 3955, `total_revenue` set to 7) was moved to
+  `data/paulsbrawls/` and saved again by 26.1.2 with `total_revenue` 7 (DataVersion 4790).
+
+Found on the way, on both versions, and fixed: the coins owed at login were not paid at
+`ServerPlayConnectionEvents.JOIN`, because Fabric fires it inside `PlayerList.placeNewPlayer` before the player is in
+the player list, so `RevenueManager`'s lookup by UUID was always null ("player is null", in the 1.21.1 production log
+too) and the next salary tick paid them instead. `RevenueManager` now pays `handler.getPlayer()`; checked on both dev
+servers with an hour-long salary period, so no tick could pay: a new player had its backlog 3 s after joining.
 
 ## 5. What is left, in order
 
 1. ~~Port `main`, `client` and the tests~~ (done, §4).
-2. **A 26.1.2 dev server** of its own: a directory (`dev-26.1.2/`) with its own ports (game, RCON, the settlement
-   listener, the God MCP, Squad), copied from `dev/`, and a `runDevServer26` run in `versions/26.1.2/build.gradle`
-   (named so it never collides with the primary's). Then the mixin check (§3.5), the commands and their permission
-   levels, the coin item, the Gibber state (a fresh world, then a copy of a 1.21.1 world: the move in §4), and a
-   26.1.2 client for `/prove` and `/build` (the asynchronous screenshot).
+2. ~~**A 26.1.2 dev server**~~ (done, §4): `dev-26.1.2/` (game 25602, RCON 25579, settlement 8778, God MCP 8782,
+   Squad and the God-Body bridge off; [dev-26.1.2/README.md](../dev-26.1.2/README.md)) and
+   `./gradlew -Pmc_versions=1.21.1,26.1.2 :26.1.2:runDevServer26`. **Still open:** a 26.1.2 client for `/prove` and
+   `/build` (the asynchronous screenshot); 26.1.2 has no `runClient` yet.
 3. **The bots, one version per runtime:** Squad hard-codes 1.21.1 in `SUPPORTED_MINECRAFT_VERSION`
    (`squad/src/bots/pool.ts`), the protocol hardening keyed on `'1.21'` (`bots/protocol.ts`), the arrow constants read
    from the 1.21.1 jar (`aim/arrow.mjs`), the chunk decoder (`world/decode.mjs`, the format changed in 1.21.5), the

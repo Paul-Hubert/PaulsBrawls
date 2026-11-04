@@ -133,6 +133,13 @@ dev/*
 !dev/server.properties
 !dev/eula.txt
 
+# dev-26.1.2/: the 26.1.2 dev server (dev-26.1.2/README.md, docs/39 §5). As dev/, except that server.properties
+# stays local (26.x writes a generated management-server-secret into it): runDevServer26 seeds it from the defaults.
+dev-26.1.2/*
+!dev-26.1.2/README.md
+!dev-26.1.2/server.defaults.properties
+!dev-26.1.2/eula.txt
+
 # minecraft-mcp-server's own history from before it was vendored (it was a separate repo)
 minecraft-mcp-server/.git-standalone/
 

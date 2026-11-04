@@ -17,27 +17,20 @@ public class RevenueManager {
 	private static final Logger LOGGER = LoggerFactory.getLogger("Revenue_Manager");
 
 	public static void register() {
-		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
-			ServerPlayer player = handler.getPlayer();
-			UUID uuid = player.getUUID();
-
-			updateRevenue(uuid, server);
-		});
+		// The joining player itself, not a lookup by UUID: Fabric fires JOIN inside PlayerList.placeNewPlayer, after
+		// the player's save is loaded but before it is added to the player list (1.21.1 and 26.1.2), so
+		// getPlayerList().getPlayer(uuid) was always null here and the backlog waited for the next salary tick. The
+		// initial inventory sync (initInventoryMenu) comes after JOIN, so the client sees the coins.
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> updateRevenue(handler.getPlayer(), server));
 		// A dead player is skipped below (coins would land in the corpse's emptied inventory, lost on respawn);
 		// pay the backlog as soon as they are back.
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) ->
-			updateRevenue(newPlayer.getUUID(), newPlayer.level().getServer()));
+			updateRevenue(newPlayer, newPlayer.level().getServer()));
 	}
 
-	public static void updateRevenue(UUID uuid, MinecraftServer server) {
-
-		var player = server.getPlayerList().getPlayer(uuid);
-		if(player == null) {
-			LOGGER.info("player is null");
-			return;
-		}	
-
+	public static void updateRevenue(ServerPlayer player, MinecraftServer server) {
 		if (!player.isAlive()) return; // on the death screen: paid at AFTER_RESPAWN instead
+		UUID uuid = player.getUUID();
 
 		PlayerPersistentState state = PlayerPersistentState.getState(server);
 
@@ -73,7 +66,7 @@ public class RevenueManager {
 
 	public static void UpdateRevenueAll(MinecraftServer server) {
 		for (var player : server.getPlayerList().getPlayers()) {
-			updateRevenue(player.getUUID(), server);
+			updateRevenue(player, server);
 		}
 	}
 

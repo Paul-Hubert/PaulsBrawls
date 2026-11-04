@@ -621,7 +621,8 @@ clicks and sends each one; it decides nothing about what a click does.
   without a token (a stop or an arrow hit too) is dropped silently. A player is forgotten on disconnect, and past 512
   entries the idle ones are dropped.
 - Registered from `ServerEntryPoint` (`SquadTriggers.register()`, after `SquadCommand.register()`); the mixin is in
-  `paulsbrawls.mixins.json` (`defaultRequire: 1`: a wrong target fails at startup).
+  each version's `paulsbrawls.version.mixins.json` (`versions/<v>/src/main/resources/`, docs/39 §3.5;
+  `defaultRequire: 1`: a wrong target fails when `AbstractArrow` loads).
 
 ## Bound items on the dev server (live, 2026-10-31)
 

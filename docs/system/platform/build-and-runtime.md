@@ -22,8 +22,10 @@ for its Minecraft-free helpers (`./gradlew test`).
 The root project only aggregates. Each Minecraft version is a project, `versions/<version>/` (project path
 `:<version>`), that builds the **shared** sources in the root's `src/` plus its own `versions/<version>/src/` (a class
 lives in one or the other, never both). Each version's own sources are `compat/Compat.java` (server side) and
-`compat/ClientCompat.java` (client), the same methods with that version's bodies, and `mixin/AbstractArrowMixin.java`
-(its target moved package in 26.x); the shared code calls `Compat` where the API changed (docs/39 §3, §4):
+`compat/ClientCompat.java` (client), the same methods with that version's bodies, `mixin/AbstractArrowMixin.java`
+(its target moved package in 26.x), 26.1.2's `mixin/RegistrySyncVanillaClientsMixin.java`, and
+`resources/paulsbrawls.version.mixins.json`, which lists that version's mixins; the shared code calls `Compat` where
+the API changed (docs/39 §3, §4):
 
 | File | Holds |
 |---|---|
@@ -35,13 +37,16 @@ lives in one or the other, never both). Each version's own sources are `compat/C
 | `versions/<v>/gradle.properties` | `minecraft_version`, `loader_version`, `fabric_version`, `java_version`, `minecraft_dependency` (for `fabric.mod.json`), the mods folders |
 
 Gradle runs a task named on the command line in **every** project that has it, so only the primary version (the first
-of `mc_versions`) answers `runServer`, `runDevServer`, `runClient` and `mcpProbe`; the other versions have no runs
-(`runs.clear()`) and no `mcpProbe`. `build` and `test` run in every included version.
+of `mc_versions`) answers `runServer`, `runDevServer`, `runClient` and `mcpProbe`; another version has no `mcpProbe`
+and only runs named for it: 26.1.2's `runDevServer26` (`./gradlew -Pmc_versions=1.21.1,26.1.2 :26.1.2:runDevServer26`,
+the dev server in `dev-26.1.2/`: port 25602, RCON 25579, settlement 8778, God MCP 8782, Squad and the God-Body bridge
+off; it seeds that directory's local configs and `server.properties` from `server.defaults.properties` when they are
+missing, [dev-26.1.2/README.md](../../../dev-26.1.2/README.md)). `build` and `test` run in every included version.
 
 | Version | Loom plugin | Mappings | Java | Fabric Loader / API | Status |
 |---|---|---|---|---|---|
 | `1.21.1` | `net.fabricmc.fabric-loom-remap` (obfuscated: the jar is remapped to intermediary) | `loom.officialMojangMappings()` (Yarn until 2026-11-03) | 21 | `0.17.3` / `0.116.7+1.21.1` | Production |
-| `26.1.2` | `net.fabricmc.fabric-loom` (unobfuscated: nothing remapped, `implementation` not `modImplementation`, `jar` not `remapJar`) | none | 25 | `0.20.1` / `0.155.3+26.1.2` | Compiles, 1137 tests pass; not run on a server or client yet, so not in `mc_versions` |
+| `26.1.2` | `net.fabricmc.fabric-loom` (unobfuscated: nothing remapped, `implementation` not `modImplementation`, `jar` not `remapJar`) | none | 25 | `0.20.1` / `0.155.3+26.1.2` | Compiles, 1137 tests pass, runs on its dev server (docs/39 §4); no client run yet and the bots are 1.21.1-only, so not in `mc_versions` |
 
 Shared values (root `gradle.properties`):
 
@@ -159,7 +164,7 @@ To disable the copy on another machine set either property to the literal `path/
 | `environment` | `*` |
 | `entrypoints.server` | `com.paul.brawl.ServerEntryPoint` (a `DedicatedServerModInitializer`) |
 | `entrypoints.client` | `com.paul.brawl.ClientEntryPoint` |
-| `mixins` | `paulsbrawls.mixins.json`; `paulsbrawls.client.mixins.json` with `environment: client` |
+| `mixins` | `paulsbrawls.mixins.json`; `paulsbrawls.version.mixins.json` (one per version); `paulsbrawls.client.mixins.json` with `environment: client` |
 | `depends` | `fabricloader >=0.16.14`, `minecraft ~1.21.1`, `java >=21`, `fabric-api *` |
 | `suggests` | `another-mod: *` (template leftover) |
 
@@ -169,16 +174,19 @@ server features (Gibber, CTF, AI God, village listener, op-on-join) are register
 (registered by `ClientEntryPoint`) and the client commands exist. See
 [entrypoints-and-wiring.md](entrypoints-and-wiring.md).
 
-## Mixins — stubs only
+## Mixins
 
 | Config | Package | Mixin | Target | Body |
 |---|---|---|---|---|
-| `src/main/resources/paulsbrawls.mixins.json` | `com.paul.brawl.mixin` | `ExampleMixin` (in `"mixins"`) | `MinecraftServer.loadWorld` @ HEAD | empty (`ExampleMixin.java:11-14`) |
+| `src/main/resources/paulsbrawls.mixins.json` | `com.paul.brawl.mixin` | `ExampleMixin` | `MinecraftServer.loadWorld` @ HEAD | empty (`ExampleMixin.java:11-14`) |
+| same | same | `PlayerMixin` | `Player.dropEquipment` @ HEAD (the name alone: `()` on 1.21.1, `(ServerLevel)` on 26.x) | a Squad roster bot drops nothing (docs/35 F6) |
+| `versions/<v>/src/main/resources/paulsbrawls.version.mixins.json` | same | `AbstractArrowMixin` (one class per version) | `AbstractArrow.onHitEntity`, `onHitBlock` @ HEAD | the `arrow-hit` trigger (docs/29 §5.4) |
+| 26.1.2's copy only | same | `RegistrySyncVanillaClientsMixin` | Fabric API `RegistrySyncManager.areAllRegistriesOptional` @ HEAD | answers true: a client without Fabric (the bots) joins unsynced, as on 1.21.1 (docs/39 §4) |
 | `src/client/resources/paulsbrawls.client.mixins.json` | `com.paul.brawl.mixin.client` | `ExampleClientMixin` (in `"client"`) | `MinecraftClient.run` @ HEAD | empty (`ExampleClientMixin.java:11-14`) |
 
-Both configs: `required: true`, `compatibilityLevel: JAVA_21`, `injectors.defaultRequire: 1`. They do
-nothing; all behaviour is done through Fabric API events instead. To add a real mixin, add the class under
-the listed package and its simple name to the matching array.
+All configs: `required: true`, `compatibilityLevel: JAVA_21`, `injectors.defaultRequire: 1`. A mixin in `src/` goes in
+`paulsbrawls.mixins.json`; one that exists per version, or in one version only, goes in each version's
+`paulsbrawls.version.mixins.json` (docs/39 §3.5).
 
 ## Assets (`src/main/resources/assets/paulsbrawls/`)
 
