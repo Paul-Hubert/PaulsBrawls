@@ -5,6 +5,11 @@
 //     vector times 3 at full draw, then PLUS the shooter's movement, `shooter.getMovement()`, with its y dropped when
 //     the shooter is on the ground. For a player that is ServerPlayerEntity.movement: the position delta of its last
 //     move packet (ServerPlayNetworkHandler.onPlayerMove), so 0 for a bot that stands and only turns.
+//     26.1.2 (javap of its unobfuscated jar, docs/47 §1): the same add (Projectile.shootFromRotation +
+//     Entity.getKnownMovement); a rider that steers its horse gives its lastKnownClientMovement, which
+//     handleMoveVehicle sets to the horse's move (the delta of its vehicle_move packet). Mineflayer sends no
+//     client_tick_end, so it is never reset to 0 between packets. The rider itself is seated on the horse only in the
+//     server's tick (rideTick → positionRider): the arrow starts where the last tick seated it (draw.ts).
 //   • A crossbow: CrossbowItem.shoot → setVelocity(x, y, z, 3.15F, 1.0F) along the view vector: no shooter movement.
 //   • Both add a random spread (triangle(0, 0.0172275) per component before the speed, about ±0.5°) that nothing
 //     can aim for.

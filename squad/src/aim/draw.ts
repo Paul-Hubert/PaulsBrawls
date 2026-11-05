@@ -32,6 +32,7 @@ import { performance } from 'node:perf_hooks';
 import type { Bot } from 'mineflayer';
 
 import { DEFAULT_AIM, type AimConfig } from '../config';
+import { isRiding } from '../bots/mount';
 import { logger } from '../logger';
 import { orderOf, unwrap } from '../orders/guard';
 import { BOW_SPEED, CROSSBOW_SPEED, EYE_DROP } from './arrow.mjs';
@@ -496,10 +497,14 @@ export async function drawShot(bot: Bot, at: { entity: AimEntity | null; point: 
       target = { x: at.point!.x, y: at.point!.y, z: at.point!.z };
     }
     const warm = newestK >= 0 ? answers.get(newestK)! : null;
+    // A rider's arrow leaves a tick behind its body (docs/47 §1): the server moves the horse on the vehicle_move
+    // packet, but seats the rider on it only in its next tick (Entity.rideTick → positionRider), and the release,
+    // sent just after this tick's move, finds the rider where the last tick seated it.
+    const toStart = toRelease - (isRiding(real as unknown as Bot) ? 1 : 0);
     return {
       dim,
       speed,
-      from: { x: p.x + selfVel.x * toRelease, y: p.y + eye, z: p.z + selfVel.z * toRelease },
+      from: { x: p.x + selfVel.x * toStart, y: p.y + eye, z: p.z + selfVel.z * toStart },
       vel: weapon === 'bow' ? { x: selfVel.x, y: real.entity.onGround === false ? selfVel.y : 0, z: selfVel.z } : { x: 0, y: 0, z: 0 },
       shooter: real.entity.id,
       team: 0,

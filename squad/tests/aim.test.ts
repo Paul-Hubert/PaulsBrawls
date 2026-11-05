@@ -183,6 +183,41 @@ test('solver: a moving target is led (to the release, then the flight), and the 
   assert.ok(!hits(still, walking), 'the aim of a still shooter misses');
 });
 
+test('solver: a horse archer riding across the line (8–14 b/s) hits at 30 and 50 blocks; the aim of a still shooter misses by 4–12 blocks; a start a tick off misses by the tick\'s ride (docs/47 §1)', () => {
+  /** Where the arrow passes the target's x: its sideways miss (z). */
+  const sideMiss = (sol: AimSolution, from: AimInput['from'], vel: AimInput['vel'], tx: number, tz: number): number => {
+    const v = { x: -Math.sin(sol.yaw) * Math.cos(sol.pitch) * BOW_SPEED + vel.x, y: Math.sin(sol.pitch) * BOW_SPEED + vel.y, z: -Math.cos(sol.yaw) * Math.cos(sol.pitch) * BOW_SPEED + vel.z };
+    const pts = [from, ...stepFlight(from, v, 200)];
+    for (let k = 0; k + 1 < pts.length; k++) {
+      if (pts[k + 1]!.x < tx) continue;
+      const f = (tx - pts[k]!.x) / (pts[k + 1]!.x - pts[k]!.x);
+      return pts[k]!.z + (pts[k + 1]!.z - pts[k]!.z) * f - tz;
+    }
+    return Infinity;
+  };
+  // A rider's eyes: the horse's seat (0.84375) + 1.62, the arrow 0.1 below.
+  const from = { x: 0.5, y: 64 + 0.84375 + 1.62 - 0.1, z: 0.5 };
+  const expected: Record<string, number> = { '30/0.4': 4.0, '30/0.7': 7.0, '50/0.4': 6.7, '50/0.7': 11.8 };
+  for (const d of [30, 50]) {
+    for (const side of [0.4, 0.7]) {
+      const vel = { x: 0, y: 0, z: side };
+      const tgt = zombie(from.x + d, from.z);
+      const riding = input({ from, vel, target: tgt });
+      const s = solveAim(riding, world(floor), null);
+      assert.equal(s.hit, 'target', `${d} blocks, ${side * 20} b/s`);
+      assert.ok(hits(s, riding));
+      assert.ok(Math.abs(sideMiss(s, from, vel, tgt.x, tgt.z)) < 0.05);
+      const still = solveAim(input({ from, target: tgt }), world(floor), null);
+      const m = sideMiss(still, from, vel, tgt.x, tgt.z);
+      assert.ok(Math.abs(m - expected[`${d}/${side}`]!) < 0.1, `${d} blocks, ${side * 20} b/s, own motion ignored: ${m.toFixed(2)} blocks`);
+      assert.ok(!hits(still, riding));
+      // The arrow starting one tick of the ride away from where the aim put it: off by that tick, at any range.
+      const late = sideMiss(s, { ...from, z: from.z - side }, vel, tgt.x, tgt.z);
+      assert.ok(Math.abs(late + side) < 0.02, `a tick behind: ${late.toFixed(2)}`);
+    }
+  }
+});
+
 test('solver: a wall in the way: the high arc over it; walled in: blocked (both arcs)', () => {
   const wall = (x: number, y: number, _z: number) => floor(x, y) || (x === 10 && y >= 64 && y <= 67);
   const inp = input({ target: zombie(20.5, 0.5) });
@@ -416,6 +451,41 @@ test('draw: ticks that come in a burst at the release (a late event loop) still 
     aimStats(true);
   } finally {
     configureAim({ jobs: null, world: null, fallbackTicks: true });
+  }
+});
+
+test('draw: a moving shooter: the arrow starts where it is at the release and carries its movement; a rider\'s a tick behind its body (docs/47 §1)', async () => {
+  for (const riding of [false, true]) {
+    const s = bench();
+    if (riding) Object.assign(s.b, { vehicle: { id: 31, name: 'horse', position: s.b.entity.position.clone() } });
+    let atRelease: Vec3 | null = null;
+    const deactivate = s.b.deactivateItem.bind(s.b);
+    s.b.deactivateItem = () => {
+      atRelease = s.b.entity.position.clone();
+      deactivate();
+    };
+    try {
+      const shot = shoot(s.b as never, target() as never);
+      await new Promise((r) => setImmediate(r));
+      s.submits[0]!.resolve(answer(0));
+      // Half a block a tick across the line (10 b/s, a horse's canter), moved before each tick's packet.
+      for (let i = 0; i < 40 && s.b.releases.length === 0; i++) {
+        s.b.entity.position = s.b.entity.position.offset(0, 0, 0.5);
+        await s.tick();
+        for (const x of s.submits) if (x.k > 0 && !(x as { done?: boolean }).done) {
+          (x as { done?: boolean }).done = true;
+          x.resolve(answer(x.k));
+        }
+      }
+      assert.deepEqual(await shot, { shot: true });
+      const last = s.submits.at(-1)!;
+      assert.equal(last.k, DEFAULT_AIM.schedule.at(-1), 'the last update flew');
+      assert.ok(Math.abs(last.input.vel.z - 0.5) < 1e-9, `its movement: ${last.input.vel.z}`);
+      const start = atRelease!.z - (riding ? 0.5 : 0);
+      assert.ok(Math.abs(last.input.from.z - start) < 1e-9, `${riding ? 'riding' : 'on foot'}: from z ${last.input.from.z}, expected ${start}`);
+    } finally {
+      configureAim({ jobs: null, world: null, fallbackTicks: true });
+    }
   }
 });
 
