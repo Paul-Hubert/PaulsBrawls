@@ -22,7 +22,7 @@ export type TriggerKind = keyof typeof TRIGGERS;
 export const TRIGGER_KINDS = Object.keys(TRIGGERS) as TriggerKind[];
 
 /** What a rule may do: an offered order, or the General's own moves. */
-export const RULE_ACTIONS = ['raid', 'attack', 'line', 'advance', 'reinforce'] as const;
+export const RULE_ACTIONS = ['raid', 'attack', 'line', 'flank', 'advance', 'reinforce'] as const;
 export type RuleAction = (typeof RULE_ACTIONS)[number];
 
 export interface RuleAt {
@@ -60,6 +60,7 @@ export function checkRule(r: { when: string; value?: number; do: string; args?: 
   if (!Number.isFinite(cooldown) || cooldown < 2 || cooldown > 600) throw new Error(`cooldown_s ${cooldown} out of 2..600`);
   const at = r.at && Object.keys(r.at).length ? { ...r.at } : undefined;
   if ((r.do === 'attack' || r.do === 'raid') && !at?.target && !at?.pos) throw new Error(`${r.do} needs at.target ("trigger", "nearest", a cluster) or at.pos`);
+  if (r.do === 'flank' && !at?.target) throw new Error('flank needs at.target ("trigger", "nearest", a cluster)');
   return { when: r.when as TriggerKind, value, do: r.do as RuleAction, ...(r.args ? { args: r.args } : {}), ...(at ? { at } : {}), ...(r.do === 'reinforce' ? { n: Math.max(1, Math.min(50, Math.round(r.n ?? 1))) } : {}), cooldown };
 }
 
@@ -93,7 +94,11 @@ export function defaultRules(kit: string): Rule[] {
     case 'archer':
     case 'guard':
     case 'spearman':
-      return [r({ when: 'idle', value: 8, do: 'line', at: { pos: 'here', target: 'nearest' } })];
+      return [
+        // A fighting retreat: once per crossing of 35 %, the line re-forms 12 blocks back from the enemy.
+        r({ when: 'hp', value: 35, do: 'line', at: { pos: 'back 12', target: 'nearest' } }),
+        r({ when: 'idle', value: 8, do: 'line', at: { pos: 'here', target: 'nearest' } }),
+      ];
     default:
       return [];
   }

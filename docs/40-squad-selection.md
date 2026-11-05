@@ -47,7 +47,7 @@ deselects, and a bound item's order then fails with a short « no squad selected
 ## 4. `line` and `attack`
 
 `src/stock/line.mjs` and `src/stock/attack.mjs`; the four old files are deleted (and the old two-line stock `attack`
-replaced). The General offers `raid`, `attack`, `line` (`general.ts` `OFFERED`).
+replaced). The General offers `raid`, `attack`, `line` and, since docs/45, `flank` (`general.ts` `OFFERED`).
 
 - **`line`** = the shield wall and the archer line in one order. Roles `guards` (a shield) and `archers` (a bow, no
   shield), neither required (no bot at all: an error). One point (as before: the arrow's hit, the crosshair, else 8

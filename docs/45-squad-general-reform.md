@@ -149,3 +149,13 @@ benchmark (started at step 1, extended at each). 10. `agent/general/CLAUDE.md` l
    24` standing order pulls the squad out instead), a `line fallback=` arg (the same: `hp`/`losses` rules with
    `line @back N` give the fighting retreat, step by step; the foot squads' defaults get one, below), and spreading
    at the mod's spawn point (the mod is out of this work's scope; the arrival line spreads them).
+5. **Flank, reserve, fighting retreat** (step 5). `squad/src/stock/flank.mjs` (new): the pointed target, a side
+   (`left`/`right`/`rear` by way of `via`) measured against its velocity (else the line from the squad to it),
+   one or two legs (each bot to its own place in a loose line, 2 apart; on to the next leg once 70 % are within 4 or
+   after `march` s), then `ctx.run('attack', { group, backoff, seconds, approach })` on every bot. `line` has
+   `reserve` (0–8): the first N melee bots (fixed at the first formation) stand `back` + 3 behind the wall; a watch
+   every 300 ms lends them to `attack` on the wall's point (`radius` = `reach` + 8, no volley) when a foe comes
+   within `reach` + 8 of it; they return to their places when it ends. The General offers `flank` (also as a rule
+   action, which needs a target). The foot kits' default rules gain the fighting retreat: `hp below 35 → line @back 12
+   facing the nearest enemy`, before `idle 8s → line @here`. Tests: `tests/item-orders.test.ts` (flank, line
+   reserve), `tests/standing.test.ts`.

@@ -13,7 +13,7 @@ you are done, the player orders it with `/bots order NAME [args]`, and your prog
 2. `get_context` — the player's bots now: tags, items, health, busy or idle, position; and the player's position and
    what they were looking at.
 3. `list_commands` / `read_command` — reuse before you write. The stock commands (`squad:come`, `squad:follow`,
-   `squad:defend`, `squad:gather`, `squad:deposit`, `squad:bring`, `squad:raid`, and for bound items `squad:line`, `squad:attack`) are worked
+   `squad:defend`, `squad:gather`, `squad:deposit`, `squad:bring`, `squad:raid`, and for bound items `squad:line`, `squad:attack`, `squad:flank`) are worked
    examples of the dialect: read the ones close to the request and copy their patterns. Any command the player can
    use can be called from yours as a subroutine with `ctx.run(name, args, { bots, until })`: those bots are lent to
    it while it runs (your own loops lose them: `squad.on('left')` with reason `'lent'`) and come back to their role

@@ -160,6 +160,6 @@ test('standing: a foot squad idle with an enemy in sight lines up facing it; an 
   assert.match(events('standing')[0]!.text, /idle 8s → squad G: line #\d+ \(2 guards\) at E\d+ facing N/);
   assert.ok(Math.abs(orderOf('G')!.snap.yaw - 180) <= 2, `facing north, at the enemy: ${orderOf('G')!.snap.yaw}`);
   assert.match(generals.setStanding(g, 'G', []), /no standing orders/);
-  assert.match(generals.setStanding(g, 'G', 'defaults'), /1\. idle 8s → line/);
+  assert.match(generals.setStanding(g, 'G', 'defaults'), /1\. health below 35% → line on nearest @back 12\n 2\. idle 8s → line/);
   await generals['deps'].runner.stopAll();
 });

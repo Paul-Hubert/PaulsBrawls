@@ -43,7 +43,7 @@ const arrival = {
 const rule = z.object({
   when: z.enum(TRIGGER_KINDS as [string, ...string[]]).describe('contact (a cluster within value), approach (one within value closing on the squad), hp (mean health below value %), losses (value deaths since it last fired), idle (no order for value s), ended (its order ended by itself)'),
   value: z.number().optional().describe('The trigger number (defaults: contact 48, approach 64, hp 40, losses 1, idle 8)'),
-  do: z.enum(RULE_ACTIONS).describe('An order (raid, attack, line), advance, or reinforce'),
+  do: z.enum(RULE_ACTIONS).describe('An order (raid, attack, line, flank), advance, or reinforce'),
   args: z.string().optional().describe('The order key=value args'),
   at: z
     .object({

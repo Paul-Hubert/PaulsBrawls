@@ -188,13 +188,18 @@ for its hit (a release does not move a formation; its hit does).
   back once (at most `reach` (4) from its slot), then raises its shield again. Bots with neither (horsemen) hold the
   wall's flanks, 2 blocks apart, and hit back the same way. Each bot paths to within 2 blocks of its slot, then walks
   straight onto its exact place and stops there (no crouch walk, docs/43), on foot or on a horse. Until stopped. Params `distance` 24,
-  `spacing` 1 (guards), `archerSpacing` 2, `back` 4, `range` 120, `ranks` 1 (1–3), `reach` 4.
+  `spacing` 1 (guards), `archerSpacing` 2, `back` 4, `range` 120, `ranks` 1 (1–3), `reach` 4. `reserve` (0): that many
+  melee bots stand `back` + 3 behind the wall instead of on its flanks, counter-attack what comes within `reach` + 8 of
+  it (a subroutine `attack` on the wall's point) and come back (docs/45).
 - `attack` (once `epee` and `tir`): a creature or an enemy where you point: the archers shoot it from where they
   stand, two melee bots fight it and the others fight what is near it, until it is dead or `seconds` (60) pass; only
   the ground: each archer fires a volley of `volley` (3) arrows spread over `spread` (3) blocks around the point,
   the melee bots take a ring of 3 around it and fight what comes within `radius` (16); the sky: « Aucune cible. »; a
   friend: refused. It ends by itself (the target down; the volley fired and the point clear), and bots it took from a
-  `line` go back to their slots there.
+  `line` go back to their slots there. `approach` (0): an archer farther than that from its foe walks closer first.
+- `flank` (docs/45): a creature or an enemy where you point: the squad goes round it at `radius` (24) to its `side`
+  (`left`, `right`, or `rear` by way of `via`; relative to the way it moves, else to the way from the squad to it),
+  then runs `attack` on its group from there. Ends with that attack.
 
 Bots never hurt their own team: the mod cancels a bot's damage to a bot sharing an owner with it, or to one of its
 owners. Everyone else (mobs, other players, other owners' bots) can be hit; PvP is on. A script's friends (`isFriend`)

@@ -13,6 +13,9 @@
 // for a moment. Given a new slot (the line formed or re-formed), an archer on foot gets there first: it holds fire on
 // the way (at most `march` seconds, then it shoots what comes as before). A horse archer rides there and shoots on the move
 // (shoot holds a free rein: the horse keeps its heading while the rider aims, docs/41).
+// A reserve (`reserve` = N, docs/45): the first N melee bots stand loose `back` + 3 behind the wall, not on its flanks;
+// when a foe comes within `reach` + 8 of the wall's point, they counter-attack it there (the stock `attack` on the
+// point, lent to it as a subroutine) and come back to their places once it is clear.
 export const manifest = {
   summary: 'Ligne : mur de boucliers là où je vise, archers derrière lui, qui tirent sur ce qui approche',
   params: {
@@ -25,6 +28,7 @@ export const manifest = {
       range: { type: 'integer', minimum: 4, maximum: 120, default: 120, description: "portée de tir autour de chaque archer (120 : aussi loin qu'un arc porte)" },
       ranks: { type: 'integer', minimum: 1, maximum: 3, default: 1, description: "nombre de rangs d'archers, 2 blocs entre deux rangs" },
       reach: { type: 'integer', minimum: 1, maximum: 12, default: 4, description: "jusqu'où, depuis sa place, un garde frappé avance pour rendre le coup" },
+      reserve: { type: 'integer', minimum: 0, maximum: 8, default: 0, description: "fantassins gardés en réserve derrière le mur, qui contre-attaquent ce qui l'atteint" },
       march: { type: 'integer', minimum: 0, maximum: 60, default: 20, description: "secondes pendant lesquelles un archer à pied gagne sa nouvelle place sans tirer (0 : il tire en chemin ; à cheval, il tire toujours en chemin)" },
     },
   },
@@ -68,9 +72,12 @@ export default async function (squad, args, ctx) {
   const ranks = Math.min(3, Math.max(1, Math.floor(Number(args.ranks) || 1)));
   const reach = Number(args.reach) || 4;
   const marchMs = Math.min(60, Math.max(0, Number(args.march ?? 20) || 0)) * 1000; // an archer on foot to a new slot holds fire this long at most
+  const reserveN = Math.min(8, Math.max(0, Math.floor(Number(args.reserve) || 0)));
+  /** The reserve's names, chosen once (the first melee bots at the first formation). */
+  const reserves = new Set();
 
   /** The formation: a new one bumps `v`; the yaw it faces, the archers' centre, each bot's slot by name. */
-  const line = { v: 0, yaw: 0, centre: ctx.commander.at.position, slots: new Map() };
+  const line = { v: 0, yaw: 0, centre: ctx.commander.at.position, point: null, slots: new Map() };
   const roleOf = (bot) => ['guards', 'melee'].find((r) => (squad.roles[r] ?? []).includes(bot)) ?? 'archers';
   const shield = (bot, up) => (roleOf(bot) === 'guards' ? raiseShield(bot, up) : undefined);
 
@@ -79,7 +86,10 @@ export default async function (squad, args, ctx) {
     const at = aimAt;
     const bots = squad.bots.filter((b) => b.entity);
     const of = (role) => bots.filter((b) => roleOf(b) === role);
-    const [guards, archers, melee] = [of('guards'), of('archers'), of('melee')];
+    const [guards, archers, allMelee] = [of('guards'), of('archers'), of('melee')];
+    if (reserves.size === 0) for (const b of allMelee.slice(0, reserveN)) reserves.add(b.username);
+    const melee = allMelee.filter((b) => !reserves.has(b.username));
+    const reserve = allMelee.filter((b) => reserves.has(b.username));
     const fwd = lookDir(at.yaw);
     const right = lookDir(at.yaw + 90);
     const point = pointOf(squad.bots, at, { distance, ahead: AHEAD });
@@ -92,6 +102,10 @@ export default async function (squad, args, ctx) {
     // The archers: front-most to the front rank, then left to right.
     const centre = onGround(squad.bots, point.offset(-fwd.x * back, 0, -fwd.z * back));
     for (const [name, s] of lineUp(archers, centre, at.yaw, { spacing: archerSpacing, ranks, depth: 2, ground: squad.bots })) given.set(name, s);
+    // The reserve: loose, behind the archers.
+    const rear = onGround(squad.bots, point.offset(-fwd.x * (back + 3), 0, -fwd.z * (back + 3)));
+    for (const [name, s] of lineUp(reserve, rear, at.yaw, { spacing: 2, ground: squad.bots })) given.set(name, s);
+    line.point = point;
     line.v++;
     line.yaw = at.yaw;
     line.centre = centre;
@@ -311,6 +325,28 @@ export default async function (squad, args, ctx) {
         if (roleOf(bot) !== 'archers' && !isFriend(attacker)) struck.set(bot.username, { attacker, at: Date.now() });
       }),
   });
+  // The reserve's watch: a foe near the wall's point → the reserve counter-attacks it there, then comes back.
+  let countering = false;
+  let counters = 0;
+  const watch = async () => {
+    for (;;) {
+      await squad.sleep(300);
+      if (countering || reserves.size === 0 || !line.point) continue;
+      const pt = line.point;
+      const rs = (squad.roles.melee ?? []).filter((b) => reserves.has(b.username) && b.entity);
+      if (rs.length === 0 || !anyBot(squad.bots, (b) => nearestFoe(b, reach + 8, { from: pt }))) continue;
+      countering = true;
+      counters++;
+      ctx.log(`reserve: ${rs.map((b) => b.username).join(', ')} counter-attack at the wall`);
+      ctx
+        .run('attack', { radius: reach + 8, seconds: 30, volley: 0, group: 8 }, { bots: rs })
+        .catch((e) => ctx.log(`reserve: ${e.message}`))
+        .finally(() => {
+          countering = false;
+        });
+    }
+  };
+  if (reserveN > 0) watch().catch(() => undefined); // ends with the order (its sleep throws)
   await squad.untilStopped();
-  return 'Ligne rompue.';
+  return counters ? `Ligne rompue (${counters} contre-attaque${counters === 1 ? '' : 's'} de la réserve).` : 'Ligne rompue.';
 }

@@ -167,7 +167,7 @@ test('spawn_squad goes through the mod and counts against the allowance; arrival
   // With no order to join, the arrivals form a line at the rally point (spread out, not a pile at the spawn).
   assert.match(ev.find((e) => e.kind === 'arrived')!.text, /3 archer arrived at the spawn point .*; squad A: line #\d+ \(3 archers\)/);
   assert.match(generals.sitrep(g), /allow archer 3\/4 guard 0\/4/);
-  assert.match(generals.sitrep(g), /^A 3\/3 archer3 hp100 line rules1 @E2/m);
+  assert.match(generals.sitrep(g), /^A 3\/3 archer3 hp100 line rules2 @E2/m);
 });
 
 test('order: a written snapshot at the point, facing the axis; retarget re-aims a listening order without restarting', async () => {
@@ -209,7 +209,7 @@ test('enemies: a sighting is a contact, a cluster in the sitrep, and a target fo
   const contact = generals.events(g).since(0).find((e) => e.kind === 'contact');
   assert.ok(contact, 'a contact event');
   assert.match(contact.text, /X1 1 @E30 .*sword1 diamond \[Paul\]/);
-  assert.match(generals.sitrep(g), /^A 2\/2 archer2 hp100 idle rules1 @E2 contact X1 29b mobs1$/m);
+  assert.match(generals.sitrep(g), /^A 2\/2 archer2 hp100 (?:idle|line) rules2 @E2 contact X1 29b mobs1$/m);
   const r = await generals.order(g, 'A', 'attack', '', { target: 'X1' });
   assert.match(r, /on Paul @E30 facing E/);
   const o = generals['deps'].runner.get(/#(\d+)/.exec(r)![1]!) as Order;

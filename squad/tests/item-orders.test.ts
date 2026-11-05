@@ -1088,3 +1088,42 @@ test('attack (archers), approach: a foe beyond `approach` is closed in on before
     await f.h.runner.stopAll();
   }
 });
+
+test('flank: the squad goes round the target to its right (seen from the squad when it stands still), then attacks its group from there (docs/45)', async () => {
+  const f = field();
+  const a = f.add('Sword0', 0, 0, SWORD);
+  const b = f.add('Sword1', 2, 0, SWORD);
+  const z = f.spawn(zombie(1.5, 30.5));
+  const o = await f.start('flank', f.snap({ yaw: 0, lookEntity: { id: z.id, name: 'zombie', type: 'hostile', position: z.position } }), ['side=right', 'radius=12', 'march=10']);
+  try {
+    // Facing the zombie from the squad is facing south (+z): its right is west (-x), 12 blocks out.
+    await until(() => [a, b].every((x) => x.entity.position.x < -6 && Math.abs(x.entity.position.z - 30.5) < 4), 5_000, 'round to its right');
+    await until(() => [a, b].some((x) => x.pvp.target === z), 5_000, 'then the attack');
+    z.isValid = false;
+    await until(() => !o.running, 8_000, 'the flank ends with its attack');
+    assert.match(o.report.result ?? '', /^Flanc droit pris/);
+  } finally {
+    await f.h.runner.stopAll();
+  }
+});
+
+test('line reserve: the first melee bot waits behind the wall, counter-attacks a foe that reaches it, and comes back (docs/45)', async () => {
+  const f = field();
+  f.add('Guard0', 0, 0, SHIELD);
+  const res = f.add('Sword0', 0, -2, SWORD);
+  const flank = f.add('Sword1', 0, 2, SWORD);
+  const o = await f.start('line', wallClick(f), ['reserve=1']);
+  try {
+    // The wall on x = -7.5 facing west; the reserve back + 3 = 7 blocks behind it, on x = -0.5; the other on a flank.
+    await until(() => Math.abs(res.entity.position.x + 0.5) < 1 && Math.abs(flank.entity.position.x + 7.5) < 1, 5_000, 'reserve behind, the other on the flank');
+    const z = f.spawn(zombie(-12, 0.5));
+    await until(() => res.pvp.target === z, 5_000, 'the reserve counter-attacks');
+    assert.notEqual(flank.pvp.target, z, 'the flank holds');
+    z.isValid = false;
+    await until(() => Math.abs(res.entity.position.x + 0.5) < 1 && res.pvp.target !== z, 8_000, 'back to its place');
+    assert.ok(o.running);
+    assert.ok(o.report.logs.some((l) => /reserve: Sword0 counter-attack at the wall/.test(l)));
+  } finally {
+    await f.h.runner.stopAll();
+  }
+});
