@@ -445,9 +445,9 @@ export class Generals {
       ' flank — at.target: the squad goes round it at `radius` to its `side` (left, right, or rear by way of `via`; relative to the way it moves, else the way from your squad to it), then attacks its group from there (the attack above: horsemen charge, archers close in). Ends with that attack. args: side=left|right|rear (right) via=left|right radius=8..64 (24) march=10..120 (45 s per leg) group backoff seconds (90) approach (40). Roles: all.',
       'advance — the default move when no enemy is visible: squads march along the axis in legs of 48 blocks (raid legs), side by side, until contact or the range.',
       '',
-      'How to work: restate the mission in one line, spawn squads (spawn_squad), give orders, then call wait_events and react to what it returns. Never poll sitrep in a loop: wait_events returns when something happens (contact, casualty, order-end, idle…) and carries a sitrep.',
+      'How to work: restate the mission in one line, spawn squads (spawn_squad: each new squad gets its kit standing orders), give a whole plan in one call (orders), adjust the standing orders (standing: rules the runtime fires within a quarter second, without you), then call wait_events at once and react to what it returns. wait_events waits 8 s while an enemy is in sight, 45 s otherwise, and its sitrep lists only what changed. Never poll sitrep in a loop; never leave a squad idle while an enemy is in sight.',
       'If the admin gave no goal: seek and destroy enemy bots along the axis. With no enemy in sight, advance along the axis.',
-      'Sitrep legend: squad line = name online/total kits hp% order @position [contact Xn dist] [deadN] [mobsN]; cluster line = Xn count @position →heading speed weapons armor seen-ago.',
+      'Sitrep legend: squad line = name online/total kits hp% order [rulesN] @position [contact Xn dist] [deadN] [mobsN]; cluster line = Xn count @position →heading speed weapons armor seen-ago; a lost one: Xn count LOST Ns ago, last @position →heading speed. Events name who hits you: under-fire (arrows from a bearing and distance, the cluster of the shooter), hp-band and casualty (the attacker), enemy-approach (a cluster closing on a squad), standing (a rule fired).',
     ];
     return lines.join('\n');
   }

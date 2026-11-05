@@ -1,6 +1,6 @@
 # 45 — Reforming the General: standing orders, sight of damage, kits used for their purpose
 
-Status: **approved by the owner (2026-11-05), being built**; §7 records what is built. Brief: [general-reform-prompt.md](general-reform-prompt.md).
+Status: **built (2026-11-05), not yet live-tested**; §7 records what was built and where it differs from §1–§5. Brief: [general-reform-prompt.md](general-reform-prompt.md).
 Audit of today's code: [system/squad/general-reform-audit.md](system/squad/general-reform-audit.md). Scope: `squad/`
 and `docs/` only.
 
@@ -179,3 +179,19 @@ benchmark (started at step 1, extended at each). 10. `agent/general/CLAUDE.md` l
    `attack`), so it cannot show what a flank or a charge through a group is worth; the contact-to-order time of
    "after" is 0 because arrivals already hold a line (`onArrival`). `npm run check` runs it (0.2 s); the test fails if
    "after" stops beating "before" on all three numbers.
+7. **The doctrine** (step 7). `squad/agent/general/CLAUDE.md` rewritten from the tools as built and the bench:
+   two groups at least; tempo rules (act the turn after a contact, never end a turn with a squad idle, `wait_events`
+   with its default timeout, no sleeping); a scout before the wall advances; pre- and post-contact checklists; the
+   wall at the edge of bow range; `line` never moves horsemen (give them their rules, a `flank`, or the wall's
+   `reserve`); no cavalry into a shooting archer line (the bench); horse archers with `approach`, beyond the reach
+   the `under-fire` events report; the standing orders' table and defaults; reinforcement safety. The briefing's
+   "how to work" and legend say the same.
+
+## 8. Still open
+
+- **Live:** nothing here ran against a server. The first live check: a General against `/bots raid` and against a
+  player's 20 bots, with the bench's numbers to compare.
+- The bench's model has no facing, cover, shields or lance passes, so it cannot rate `flank` or a charge; a richer
+  model (or real FakeBots running the stock orders in a fight) is the next step if those need a number.
+- `squad/tests/pathworkers.test.ts` "a block_updated reset …" fails on this machine before and after this work
+  (baseline `76c7430`); jobs and raid timing tests fail only when the whole suite runs at once.
