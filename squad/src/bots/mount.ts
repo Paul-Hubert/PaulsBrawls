@@ -14,7 +14,8 @@
 //   • A free rein (`freeRein`, held by `shoot` for a draw): the horse goes where the walk steers (the pathfinder, a
 //     line's last step: `steer`), the rider looks where it aims. The body's physics walks along `entity.moveYaw`
 //     (squad's prismarine-physics patch), the horse's move faces it, and the look is the aim's: a horse archer shoots
-//     on the move. On foot a player walks where it looks, so a free rein does nothing there.
+//     on the move. On foot a free rein does nothing; the same hold on foot is a free look (`freeLook`, held by
+//     `walkFacing`, docs/49): a guard walks to its slot facing the line, a strafe or a backward walk.
 
 import type { EventEmitter } from 'node:events';
 
@@ -60,18 +61,39 @@ export function steer(bot: Bot, yaw: number, force = false): void {
   void bot.look(yaw, 0, force)?.catch?.(() => undefined);
 }
 
+/** Per body (its entity): the free look holding `moveYaw` now, so an earlier hold's release leaves a later one alone. */
+const holder = new WeakMap<object, object>();
+
 /**
- * Hold a free rein while a riding bot looks away from where it goes (a bow's draw): the walk keeps its heading
- * (`steer`) and the look is free. Returns the release, which turns the look back to the heading. On foot, or already
- * held: nothing (a no-op release).
+ * Hold a free look, riding or on foot (docs/49): the walk keeps its own heading (`steer` turns only `moveYaw`, which
+ * the body's physics walks along, squad's prismarine-physics patch) and the look is free. On foot the server sees the
+ * look (the position packets carry it); riding, the horse's move faces the heading. Returns the release, which ends
+ * the hold and leaves the look where it is. Already held: a no-op release.
+ */
+export function freeLook(bot: Bot): () => void {
+  const e = (bot as Riding).entity;
+  if (!e || e.moveYaw !== undefined) return () => undefined;
+  const me = {};
+  holder.set(e, me);
+  e.moveYaw = e.yaw;
+  return () => {
+    if (holder.get(e) !== me) return;
+    holder.delete(e);
+    delete e.moveYaw;
+  };
+}
+
+/**
+ * Hold a free rein while a riding bot looks away from where it goes (a bow's draw): a free look whose release turns
+ * the look back to the heading. On foot, or already held: nothing (a no-op release).
  */
 export function freeRein(bot: Bot): () => void {
   const e = (bot as Riding).entity;
   if (!isRiding(bot) || !e || e.moveYaw !== undefined) return () => undefined;
-  e.moveYaw = e.yaw;
+  const release = freeLook(bot);
   return () => {
     const heading = e.moveYaw;
-    delete e.moveYaw;
+    release();
     if (heading !== undefined && isRiding(bot)) void bot.look(heading, 0, true)?.catch?.(() => undefined);
   };
 }

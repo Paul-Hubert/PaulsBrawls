@@ -76,7 +76,8 @@ Every tool except `get_api_reference` takes the ticket from the first message.
 - **Formations and fights: use the formation helpers** (what `squad:line`, `squad:attack` and `squad:raid` are
   written with; read them). `pointOf(squad.bots, at)` is where a click points on the ground; `lineUp(bots, centre,
   yaw, { spacing, ranks })` gives each bot an exact slot on the ground, by where it stands (no crossing paths);
-  `approach(bot, slot, { until })` walks it there and stops it on the place (never a block's centre, never sneaking);
+  `approach(bot, slot, { until })` walks it there and stops it on the place (never a block's centre, never sneaking;
+  `facing: yaw` keeps its look, and a shield, that way the whole walk: `walkFacing`);
   `targets()` shares the threats among a role's bots (`pick`, `take`, `block`), `nearestFoe` finds one, `isEnemy`
   tells another player (or another owner's bot) from a friend; `melee(bot, foe, { leash })` never starts a fight that
   would break off at once; `inReach` measures from the eyes (a rider's are in the saddle); `sidestep` after "no clear

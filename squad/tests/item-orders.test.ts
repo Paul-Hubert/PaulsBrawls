@@ -12,6 +12,7 @@ import { Vec3 } from 'vec3';
 import { HelperError } from '../src/api/errors';
 import { lineSlots, lookDir, mineflayerYaw, toVec3 } from '../src/api/helpers';
 import type { Order } from '../src/orders/order';
+import { steer } from '../src/bots/mount';
 import { loadStock } from '../src/stock';
 import { EMPTY_SNAPSHOT, type Snapshot } from '../src/types';
 import { flatWorld, type FakeBot, type FakeItem } from './fakes/fake-bot';
@@ -182,7 +183,9 @@ for (const yaw of [87, 45, 90]) {
       const offCentre = exact.filter((s) => Math.hypot(s.x - Math.floor(s.x) - 0.5, s.z - Math.floor(s.z) - 0.5) > 0.2);
       assert.ok(offCentre.length >= 6, `${offCentre.length} places off their block's centre`);
       if (yaw !== 90) assert.ok(new Set(exact.map(block)).size < 10, 'two exact places in one block');
-      await until(() => guards.every((g) => shieldUp(g) && facing(g, yaw)), 5_000, 'every shield up, facing the yaw');
+      // A guard faces the yaw on its way too (docs/49): wait for every place to be taken.
+      const taken = () => exact.every((s) => guards.some((g) => Math.hypot(g.entity.position.x - s.x, g.entity.position.z - s.z) <= 0.15 && !g.controlState.forward));
+      await until(() => taken() && guards.every((g) => shieldUp(g) && facing(g, yaw)), 5_000, 'every place taken, shields up, facing the yaw');
 
       const pos = guards.map((g) => g.entity.position);
       const show = pos.map((p) => `${p.x.toFixed(2)},${p.z.toFixed(2)}`).join(' ');
@@ -236,7 +239,10 @@ test('line (guards): a new formation ends a last step at once, its controls let 
       assert.ok(letGo >= 0 && letGo < after.indexOf('pathfinder.setGoal'), `${g.username}: controls let go before the walk: ${after.join(' ')}`);
     });
     for (const g of guards) g.physics({ tickMs: 10 });
-    await until(() => guards.every((g) => shieldUp(g) && facing(g, 0)), 3_000, 'both on the new wall, shields up');
+    // On their exact places (x = 0 and 1), not the block centres the fake pathfinder leaves them on: a guard faces
+    // south on its way too (docs/49).
+    const atWall = () => [0, 1].every((x) => guards.some((g) => Math.abs(g.entity.position.x - x) <= 0.15 && Math.abs(g.entity.position.z - 10.5) <= 0.15));
+    await until(() => atWall() && guards.every((g) => shieldUp(g) && facing(g, 0)), 3_000, 'both on the new wall, shields up');
     // Facing south, the left is +X: the exact places are x = 1 and x = 0, half a block either side of the point.
     const xs = guards.map((g) => g.entity.position.x).sort((a, b) => a - b);
     assert.ok(Math.abs(xs[0]! - 0) <= 0.2 && Math.abs(xs[1]! - 1) <= 0.2, `on the exact places: ${xs.join(', ')}`);
@@ -342,6 +348,7 @@ test('line (guards): a guard pushed 2 blocks off its slot long after the wall fo
   const guards = [f.add('Guard0', -3, 3, SHIELD), f.add('Guard1', -3, -2, SHIELD), f.add('Guard2', -3, 0, SHIELD)];
   await f.start('line', f.snap({ yaw: 90, lookBlock: { x: -8, y: 63, z: 0, name: 'grass_block' }, trigger: { kind: 'use', item: 'shield' } }));
   await until(() => formedWest(guards), 3_000, 'the wall formed facing west');
+  await tick(300); // a guard faces west on its way too (docs/49): one more look (200 ms) and it has marked its slot reached
   const g = guards[2]!;
   const [sx, sz] = xz(g);
   // 11 s after it reached its slot (STUCK_MS is 10 s), a fight leaves it 2 blocks off. Before the fix its timer still
@@ -364,6 +371,46 @@ test('line (guards): a guard pushed 2 blocks off its slot long after the wall fo
     });
   } finally {
     await f.h.runner.stopAll(); // also on a failure: the guards' loops would keep the test process alive
+  }
+});
+
+test('line (guards): a wall re-formed 8 blocks behind itself walks there backward, facing the enemy with its shields up on every tick, never sprinting (docs/49)', async () => {
+  const f = field();
+  const guards = [f.add('Guard0', -3, 1, SHIELD), f.add('Guard1', -3, -1, SHIELD), f.add('Guard2', -3, 0, SHIELD)];
+  await f.start('line', f.snap({ yaw: 90, lookBlock: { x: -8, y: 63, z: 0, name: 'grass_block' }, trigger: { kind: 'use', item: 'shield' } }));
+  try {
+    await until(() => formedWest(guards), 3_000, 'the wall formed facing west');
+    await tick(300);
+    // From here the guards walk with their bodies, as the real pathfinder steers them (steer: a free look turns only
+    // the walk), and the fake pathfinder no longer puts them on their goals.
+    const ticks: Array<{ facing: boolean; shield: boolean; sprint: boolean }> = [];
+    for (const g of guards) {
+      g.autoWalk = false;
+      g.on('physicsTick', () => {
+        const goal = g.pathfinder.goal as { x?: number; z?: number } | null;
+        if (!goal || typeof goal.x !== 'number' || typeof goal.z !== 'number') return;
+        const p = g.entity.position;
+        const [dx, dz] = [goal.x + 0.5 - p.x, goal.z + 0.5 - p.z];
+        if (Math.hypot(dx, dz) <= 1) {
+          g.setControlState('forward', false);
+          g.pathfinder.goal = null;
+          return;
+        }
+        steer(g as never, Math.atan2(-dx, -dz));
+        g.setControlState('forward', true);
+        ticks.push({ facing: facing(g, 90), shield: shieldUp(g), sprint: !!g.controlState.sprint });
+      });
+    }
+    // The wall falls back 8 blocks east (behind it), still facing west.
+    await f.click('line', f.snap({ yaw: 90, lookBlock: { x: 0, y: 63, z: 0, name: 'grass_block' }, trigger: { kind: 'use', item: 'shield' } }));
+    await until(() => guards.every((g) => Math.abs(g.entity.position.x - 0.5) <= 0.15 && !g.controlState.forward), 5_000, 'the wall 8 blocks back');
+    assert.ok(ticks.length >= 3 * 20, `${ticks.length} walked ticks`);
+    assert.ok(ticks.every((t) => t.facing), 'facing west (the enemy) on every walked tick');
+    assert.ok(ticks.every((t) => t.shield), 'shield up on every walked tick');
+    assert.ok(ticks.every((t) => !t.sprint), 'never sprinting');
+    assert.ok(guards.every((g) => facing(g, 90) && shieldUp(g)), 'on the new wall: facing west, shields up');
+  } finally {
+    await f.h.runner.stopAll();
   }
 });
 

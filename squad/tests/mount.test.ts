@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 import { Vec3 } from 'vec3';
 
-import { freeRein, HORSE_SEAT, installRiding, isSneakStart, notchianYaw, PLAYER_EYES, steer } from '../src/bots/mount';
+import { freeLook, freeRein, HORSE_SEAT, installRiding, isSneakStart, notchianYaw, PLAYER_EYES, steer } from '../src/bots/mount';
 import { FakeBot } from './fakes/fake-bot';
 import { holdEventLoopPerTest } from './fakes/keep-alive';
 
@@ -131,4 +131,25 @@ test('a free rein: while it is held a rider steers only its heading (the body\'s
   freeRein(b as never);
   dismount();
   assert.equal(e.moveYaw, undefined);
+});
+
+test('a free look on foot (docs/49): steer turns only the walk (moveYaw), the look stays; the release ends it and leaves the look; an earlier release leaves a later hold alone', () => {
+  const b = new FakeBot('Garde01', { position: new Vec3(0.5, 64, 0.5) });
+  const e = b.entity as unknown as { yaw: number; moveYaw?: number };
+  e.yaw = Math.PI; // facing south
+  const first = freeLook(b as never);
+  assert.equal(e.moveYaw, Math.PI, 'the walk starts along the look');
+  steer(b as never, 0); // the pathfinder turns the walk north
+  assert.deepEqual([e.yaw, e.moveYaw], [Math.PI, 0], 'the look stays south, the walk goes north');
+  assert.equal(freeLook(b as never)(), undefined, 'a second hold is a no-op');
+  assert.equal(e.moveYaw, 0, '…whose release leaves the first alone');
+  first();
+  assert.equal(e.moveYaw, undefined);
+  assert.equal(e.yaw, Math.PI, 'the release leaves the look where it is');
+  const later = freeLook(b as never);
+  first(); // released again, after a later hold began
+  assert.equal(e.moveYaw, Math.PI, 'the later hold is still on');
+  later();
+  steer(b as never, 1);
+  assert.equal(e.yaw, 1, 'no hold: steering turns the look');
 });

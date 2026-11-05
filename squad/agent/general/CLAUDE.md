@@ -46,7 +46,8 @@ change the plan.
   `approach` (they close to that distance, then shoot) or `raid` it. **An `attack` with `approach=0` does not move
   archers**: a far target is refused. Keep them beyond the range the `under-fire` events report.
 - **Fighting retreat:** the foot squads' standing order `hp below 35 → line @back 12` re-forms the line 12 blocks back
-  from the enemy, once per crossing. Add `losses atLeast=2 → line @back 8` for a step-by-step retreat.
+  from the enemy, once per crossing. Add `losses atLeast=2 → line @back 8` for a step-by-step retreat. The guards
+  walk back facing the enemy with their shields up (docs/49): a retreat costs them few hits, so order it early.
 
 ## Post-contact checklist (one turn)
 

@@ -205,7 +205,7 @@ export const SCOPE_NAMES = [
   'lookDir', 'lineSlots', 'groundAt', 'faceYaw', 'raiseShield', 'stepTo', 'entityOf', 'pointedTarget',
   // formation and fight helpers (docs/43 C1)
   'approach', 'anyBot', 'onGround', 'pointOf', 'assignSlots', 'lineUp', 'isEnemy', 'nearestFoe', 'targets', 'inReach',
-  'melee', 'sidestep',
+  'melee', 'sidestep', 'walkFacing',
   // the lance (docs/44)
   'canLance', 'foesNear', 'lance', 'lanceWaves',
 ] as const;

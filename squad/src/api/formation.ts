@@ -18,10 +18,10 @@ import type { Entity } from 'prismarine-entity';
 import pathfinderPkg from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 
-import { steer as steerWalk } from '../bots/mount';
+import { freeLook, isRiding, steer as steerWalk } from '../bots/mount';
 import { checkLease, orderOf, unwrap } from '../orders/guard';
 import { HelperError, isBotLeft, isStopped } from './errors';
-import { attack, groundAt, isHostile, lineSlots, lookDir, nearestEntity, pointedTarget, toVec3, type Leash, type PointedAt, type PosLike } from './helpers';
+import { attack, faceYaw, groundAt, isHostile, lineSlots, lookDir, nearestEntity, pointedTarget, toVec3, type Leash, type PointedAt, type PosLike } from './helpers';
 
 const { goals } = pathfinderPkg;
 
@@ -187,19 +187,59 @@ export async function stepTo(bot: Bot, place: PosLike, opts: { until?: () => boo
 }
 
 /**
+ * Walk one way, look another (docs/49): a free look (mount.ts `freeLook`) and the look turned to `yaw` (the commander's
+ * degrees) and `pitch` (default 0, level). The pathfinder and `stepTo` then turn only the walk, and the look is put
+ * back on every physics tick that something else turned it (a server's correction). On foot, no sprint while held
+ * (a player sprints only forward): the bot's pathfinder movements get `allowSprinting` false until the release, which
+ * also plans its paths without the gaps only a sprint jump crosses. Returns the release (the look stays where it is).
+ * Already held (a rider's free rein, another walkFacing): the look is turned, and the release does nothing more.
+ */
+export async function walkFacing(bot: Bot, yaw: number, pitch = 0): Promise<() => void> {
+  checkLease(bot);
+  const ownLook = freeLook(bot);
+  try {
+    await faceYaw(bot, yaw, pitch);
+  } catch (e) {
+    ownLook();
+    throw e;
+  }
+  const e = bot.entity;
+  const held = { yaw: e.yaw, pitch: e.pitch };
+  const keep = (): void => {
+    if (Math.abs(e.yaw - held.yaw) > 1e-6 || Math.abs(e.pitch - held.pitch) > 1e-6) void bot.look(held.yaw, held.pitch, true)?.catch?.(() => undefined);
+  };
+  bot.on('physicsTick', keep);
+  const m = bot.pathfinder?.movements as { allowSprinting?: boolean } | undefined;
+  const noSprint = !isRiding(bot) && !!m && m.allowSprinting === true;
+  if (noSprint) m!.allowSprinting = false;
+  if (!isRiding(bot) && (bot as unknown as { controlState?: Record<string, boolean> }).controlState?.sprint) bot.setControlState('sprint', false);
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    bot.removeListener('physicsTick', keep);
+    if (noSprint && m!.allowSprinting === false) m!.allowSprinting = true;
+    ownLook();
+  };
+}
+
+/**
  * Go to an exact place (docs/43 B): the pathfinder until within APPROACH_DIRECT (2) blocks of it (GoalNear on its exact
  * coordinates, range 2), then the direct walk of `stepTo` onto it. `tolerance` (default 0.15) is how close counts as
  * there; one of a block or more (a loose hold) is pathfinding only, there within it. Ends at rest there (`there`),
  * when `until()` returns true (checked every 100 ms, through both parts), after `timeoutMs` (default 30 s) or, for the
- * direct walk, `stepTimeoutMs` (3 s: `timedOut`). A bot that left throws BotLeftError.
+ * direct walk, `stepTimeoutMs` (3 s: `timedOut`). With `facing` (degrees), the whole walk looks that way (walkFacing,
+ * docs/49: a shield wall walks to its place facing the enemy, never sprinting). A bot that left throws BotLeftError.
  */
 export async function approach(
   bot: Bot,
   place: PosLike,
-  opts: { until?: () => boolean; timeoutMs?: number; stepTimeoutMs?: number; tolerance?: number } = {},
+  opts: { until?: () => boolean; timeoutMs?: number; stepTimeoutMs?: number; tolerance?: number; facing?: number } = {},
 ): Promise<ApproachResult> {
   checkLease(bot);
   const to = toVec3(place, `approach(${who(bot)}) place`);
+  // Held before the first goal, so the path is planned without sprinting; released after the goal is cleared.
+  const release = opts.facing === undefined ? null : await walkFacing(bot, opts.facing);
   const until = opts.until ?? (() => false);
   const tolerance = Number(opts.tolerance ?? APPROACH_TOLERANCE);
   const end = Date.now() + Number(opts.timeoutMs ?? APPROACH_TIMEOUT_MS);
@@ -236,6 +276,7 @@ export async function approach(
     } catch {
       /* best-effort: a bot that left had its goal cleared by the abort sequence */
     }
+    release?.();
   }
 }
 
@@ -486,6 +527,7 @@ export function sidestep(bot: Bot, from: PosLike, opts: { min?: number; max?: nu
 /** The formation and fight helpers by name (scope globals). */
 export const FORMATION_HELPERS = {
   approach,
+  walkFacing,
   stepTo,
   anyBot,
   onGround,

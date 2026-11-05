@@ -54,7 +54,9 @@ replaced). The General offers `raid`, `attack`, `line` and, since docs/45, `flan
   blocks ahead); the wall on it, the archers' ranks `back` (4) blocks behind it. Each role behaves as its old command
   did (slots, last step, the guards' blow back, the archers' targets and sidesteps). A squad of guards alone is a
   wall; of archers alone, the old archer line. Params: `distance`, `spacing` (guards, 1), `archerSpacing` (2), `back`,
-  `range`, `ranks`, `reach`. Until stopped. 398 lines (the 400-line cap of a command holds for stock files too).
+  `range`, `ranks`, `reach`. Until stopped. A guard walks to its slot facing the line's direction, shield up, never
+  sprinting: a re-formed wall sidesteps or falls back behind its shields ([docs/49](49-squad-shield-walk.md)). 354
+  lines (the 400-line cap of a command holds for stock files too).
 - **`attack`** = `epee`'s target fight with `tir`'s volley, **bounded** (`maxMinutes` 10): a target: archers shoot
   from where they stand, two melee bots on it, the others on what is near it, until it is dead or gone or `seconds`
   (60); the ground: each archer fires `volley` (3) arrows over a disc of `spread` (3), then shoots threats within

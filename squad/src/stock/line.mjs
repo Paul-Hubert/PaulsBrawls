@@ -6,9 +6,9 @@
 // Each rank is straight at the exact yaw: each slot is an exact place at its column's ground height (lineUp), given to
 // the bots by where they stand so no paths cross. A bot paths to within 2 blocks of its slot, then walks onto it itself
 // (approach, docs/43 B). A bot lent to another order (an `attack`) keeps its slot and comes back to it.
-// Guards: shield up, on their slot and on the way to it (a re-formed wall walks to its new place behind its shields,
-// then faces the new direction); hit in melee, a guard hits back once (a step toward the attacker, not past `reach`),
-// then raises its shield again. Melee bots (no shield, no bow: horsemen) hold the wall's flanks the same way. Archers
+// Guards: shield up, on their slot and on the way to it, facing the line's direction all the way, at walking speed
+// (walkFacing, docs/49: a re-formed wall sidesteps or walks backward behind its shields, never shows its back); hit
+// in melee, a guard hits back once (a step toward the attacker, not past `reach`), then raises its shield again. Melee bots (no shield, no bow: horsemen) hold the wall's flanks the same way. Archers
 // shoot from where they stand, the wall's guards over; after "no clear line of fire" on its slot an archer steps aside
 // for a moment. Given a new slot (the line formed or re-formed), an archer on foot gets there first: it holds fire on
 // the way (at most `march` seconds, then it shoots what comes as before). A horse archer rides there and shoots on the move
@@ -145,7 +145,9 @@ export default async function (squad, args, ctx) {
     if (!h.loose && Date.now() - h.since > STUCK_MS) h.loose = true;
     const v = line.v;
     const left = h.loose ? 30_000 : Math.max(1, STUCK_MS - (Date.now() - h.since));
-    const r = await approach(bot, slot, { until: () => line.v !== v || until(), tolerance: h.loose ? LOOSE : ON_SLOT, timeoutMs: left });
+    // A guard walks facing the line (its shield to the enemy), never sprinting: walkFacing, docs/49.
+    const facing = roleOf(bot) === 'guards' ? line.yaw : undefined;
+    const r = await approach(bot, slot, { until: () => line.v !== v || until(), tolerance: h.loose ? LOOSE : ON_SLOT, timeoutMs: left, facing });
     if (r.timedOut && !h.loose && r.off <= 2.75 && Date.now() - h.since < STUCK_MS) {
       h.gaveUp = true;
       ctx.log(`${bot.username}: holds ${r.off.toFixed(2)} off its slot (the last step did not get there)`);
@@ -188,7 +190,7 @@ export default async function (squad, args, ctx) {
       if (Date.now() - hit.at <= ANSWER_MS) return strikeBack(bot, hit.attacker, slot);
     }
     if (!holds(bot, slot)) {
-      await shield(bot, true); // it walks behind its shield (the bots' physics does not slow a blocking bot)
+      await shield(bot, true); // it walks behind its shield, facing the line (go); the server does not slow a blocking walk
       return go(bot, slot, () => struck.has(bot.username));
     }
     there(bot, slot);

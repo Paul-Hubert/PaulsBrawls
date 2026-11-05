@@ -276,7 +276,8 @@ export class FakeBot extends EventEmitter {
       // A speed attribute (a horse's, mount.ts) gives its own acceleration, as prismarine-physics reads it.
       const speed = (this.entity as { attributes?: Record<string, { value: number }> }).attributes?.['minecraft:movement_speed']?.value;
       const a = (speed !== undefined ? speed * 0.98 : FakeBot.WALK_ACCEL) * (this.controlState.sneak ? FakeBot.SNEAK_FACTOR : 1);
-      const yaw = this.entity.yaw; // mineflayer's: 0 looks toward −Z, π/2 toward −X
+      // mineflayer's yaw: 0 looks toward −Z, π/2 toward −X; a free look walks along moveYaw (the physics patch, docs/49)
+      const yaw = (this.entity as { moveYaw?: number }).moveYaw ?? this.entity.yaw;
       v.x += -Math.sin(yaw) * a;
       v.z += -Math.cos(yaw) * a;
     }

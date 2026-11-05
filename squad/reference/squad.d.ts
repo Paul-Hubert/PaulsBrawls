@@ -422,8 +422,9 @@ declare global {
   /**
    * Raise the shield (on, default) or lower it (false). Raising moves a shield into the off-hand when it is elsewhere
    * in the inventory (throws when there is none) and holds use; calling it again while raised sends nothing, so call it
-   * in your loop: it raises the shield again after something lowered it (auto-eat lowers it to eat). Blocking slows
-   * walking: lower it to walk, raise it once there. A bot leaving the order lowers it.
+   * in your loop: it raises the shield again after something lowered it (auto-eat lowers it to eat). The server does
+   * not slow a blocking walk: a shield wall walks with its shields up, facing the enemy (approach with `facing`). A
+   * bot leaving the order lowers it.
    */
   function raiseShield(bot: SquadBot, on?: boolean): Promise<{ raised: boolean }>;
   // ---------------------------------------------------------------------------------------------------------
@@ -439,9 +440,17 @@ declare global {
    * mounted bot does the same on its horse. Ends there (there: true), when until() returns true (checked every 100 ms:
    * a new formation, a hit, a foe to shoot), or after timeoutMs (default 30 000) or, for the direct walk, stepTimeoutMs
    * (default 3000: something keeps the body off the place) (timedOut: true). A tolerance of 1 or more is a loose hold:
-   * pathfinding only, there within it. `off`: how far off the place the body ended.
+   * pathfinding only, there within it. `off`: how far off the place the body ended. With `facing` (a yaw in degrees),
+   * the whole walk looks that way (walkFacing): a shield wall walks to its place facing the enemy, never sprinting.
    */
-  function approach(bot: SquadBot, place: Pos, opts?: { until?: () => boolean; timeoutMs?: number; stepTimeoutMs?: number; tolerance?: number }): Promise<{ there: boolean; timedOut: boolean; off: number }>;
+  function approach(bot: SquadBot, place: Pos, opts?: { until?: () => boolean; timeoutMs?: number; stepTimeoutMs?: number; tolerance?: number; facing?: number }): Promise<{ there: boolean; timedOut: boolean; off: number }>;
+  /**
+   * WALK ONE WAY, LOOK ANOTHER (docs/49): turn the look to `yaw` (and `pitch`, default 0) and keep it there while the
+   * pathfinder, approach or stepTo walk the bot anywhere (sideways, backward), the way a player strafes. On foot it
+   * does not sprint while held. Returns the release (call it when done; the look stays where it is). Already held (a
+   * horse archer's free rein during a shot): it only turns the look. approach(bot, place, { facing }) does it for you.
+   */
+  function walkFacing(bot: SquadBot, yaw: number, pitch?: number): Promise<() => void>;
   /**
    * approach's direct walk alone, from within 2.75 blocks of the place (farther: an error, use approach). It clears the
    * pathfinder's goal first, and on every exit lets go of forward (unless a later stepTo on the same bot took over).
@@ -584,7 +593,8 @@ declare module 'squad' {
     mineBlock, craftItem, smeltItem, placeItem, killMob, exploreUntil, getItemFromChest, depositItemIntoChest,
     checkItemInsideChest, goTo, follow, attack, shoot, equip, eat, pickupDrops, findBlock, nearestEntity,
     nearestHostile, isFriend, blockKey, lookDir, lineSlots, groundAt, faceYaw, raiseShield, stepTo, entityOf,
-    pointedTarget, approach, anyBot, onGround, pointOf, assignSlots, lineUp, isEnemy, nearestFoe, targets, inReach,
+    pointedTarget, approach, walkFacing, anyBot, onGround, pointOf, assignSlots, lineUp, isEnemy, nearestFoe,
+    targets, inReach,
     melee, sidestep, canLance, foesNear, lance, lanceWaves,
   };
 }

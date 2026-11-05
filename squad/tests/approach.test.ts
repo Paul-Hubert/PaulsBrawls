@@ -8,7 +8,9 @@ import assert from 'node:assert/strict';
 
 import { Vec3 } from 'vec3';
 
-import { approach, stepTo } from '../src/api/formation';
+import { approach, stepTo, walkFacing } from '../src/api/formation';
+import { mineflayerYaw } from '../src/api/helpers';
+import { steer } from '../src/bots/mount';
 import { HelperError } from '../src/api/errors';
 import { FakeBot } from './fakes/fake-bot';
 import { holdEventLoopPerTest } from './fakes/keep-alive';
@@ -194,4 +196,76 @@ test('approach: until() ends the path part too; a loose tolerance (2.5) is pathf
   } finally {
     b.stopTicks();
   }
+});
+
+/**
+ * A pathfinder that walks (as squad's patched one does): each physics tick, while it has a goal with a position, it
+ * steers toward it through `steer` (a free look turns only the walk) with forward held, and sprints when its movements
+ * allow it; within its range it stops and clears the goal.
+ */
+function walkingPathfinder(b: FakeBot): { allowSprinting: boolean } {
+  const movements = { allowSprinting: true };
+  b.pathfinder.movements = movements;
+  b.on('physicsTick', () => {
+    const g = b.pathfinder.goal as { x?: number; z?: number; rangeSq?: number } | null;
+    if (!g || typeof g.x !== 'number' || typeof g.z !== 'number') return;
+    const p = b.entity.position;
+    const [dx, dz] = [g.x + 0.5 - p.x, g.z + 0.5 - p.z];
+    if (Math.hypot(dx, dz) <= 1) {
+      b.setControlState('forward', false);
+      b.pathfinder.goal = null;
+      return;
+    }
+    steer(b as never, Math.atan2(-dx, -dz));
+    b.setControlState('forward', true);
+    if (b.controlState.sprint !== movements.allowSprinting) b.setControlState('sprint', movements.allowSprinting);
+  });
+  return movements;
+}
+
+test('approach with facing (docs/49): a guard walking to a place 8 blocks behind it looks the way it faced on every tick, never sprints, and gets onto the place; the release ends the hold', async () => {
+  const b = new FakeBot('Guard', { position: new Vec3(0.5, 64, 0.5) }).physics({ tickMs: 2 });
+  const movements = walkingPathfinder(b);
+  const north = mineflayerYaw(180); // facing north (−Z), the place is south (+Z): it walks backward
+  b.entity.yaw = 1; // looking elsewhere when the order comes
+  const looks: number[] = [];
+  const sprints: boolean[] = [];
+  b.on('physicsTick', () => {
+    looks.push(b.entity.yaw);
+    sprints.push(movements.allowSprinting);
+  });
+  const place = new Vec3(0.7, 64, 8.4);
+  try {
+    const r = await approach(b as never, place, { facing: 180 });
+    assert.deepEqual([r.there, r.timedOut], [true, false], `${r.off.toFixed(3)} off`);
+    assert.ok(looks.length > 20, `${looks.length} ticks`);
+    assert.ok(looks.every((y) => y === north), 'facing north on every tick of the walk');
+    assert.ok(sprints.every((s) => s === false) && !b.calls.includes('setControlState(sprint,true)'), 'never sprinting');
+    assert.equal(movements.allowSprinting, true, 'sprinting allowed again after');
+    assert.equal((b.entity as { moveYaw?: number }).moveYaw, undefined, 'the hold released');
+    assert.equal(b.entity.yaw, north, 'the look left where it was');
+  } finally {
+    b.stopTicks();
+  }
+});
+
+test('walkFacing: a look turned by something else is put back on the next tick; a rider keeps sprinting (its horse\'s speed counts on it)', async () => {
+  const b = new FakeBot('Guard', { position: new Vec3(0.5, 64, 0.5) });
+  const movements = { allowSprinting: true };
+  b.pathfinder.movements = movements;
+  const release = await walkFacing(b as never, 90);
+  assert.equal(movements.allowSprinting, false);
+  b.entity.yaw = 0; // a server's correction
+  b.tick();
+  assert.equal(b.entity.yaw, mineflayerYaw(90), 'put back');
+  release();
+  release();
+  assert.equal(movements.allowSprinting, true);
+  b.entity.yaw = 0;
+  b.tick();
+  assert.equal(b.entity.yaw, 0, 'released: no more put back');
+  Object.assign(b, { vehicle: { name: 'horse' } });
+  const riding = await walkFacing(b as never, 90);
+  assert.equal(movements.allowSprinting, true, 'riding: the sprint stays');
+  riding();
 });

@@ -187,7 +187,9 @@ for its hit (a release does not move a formation; its hit does).
   `range` (120) of each archer, from where they stand, over the wall. A guard goes after nobody: hit in melee, it hits
   back once (at most `reach` (4) from its slot), then raises its shield again. Bots with neither (horsemen) hold the
   wall's flanks, 2 blocks apart, and hit back the same way. Each bot paths to within 2 blocks of its slot, then walks
-  straight onto its exact place and stops there (no crouch walk, docs/43), on foot or on a horse. Until stopped. Params `distance` 24,
+  straight onto its exact place and stops there (no crouch walk, docs/43), on foot or on a horse. A guard walks there
+  facing the wall's direction with its shield up, at walking speed: a re-formed wall sidesteps or falls back behind
+  its shields, never showing its back (docs/49). Until stopped. Params `distance` 24,
   `spacing` 1 (guards), `archerSpacing` 2, `back` 4, `range` 120, `ranks` 1 (1–3), `reach` 4. `reserve` (0): that many
   melee bots stand `back` + 3 behind the wall instead of on its flanks, counter-attack what comes within `reach` + 8 of
   it (a subroutine `attack` on the wall's point) and come back (docs/45).
