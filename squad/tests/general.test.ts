@@ -120,7 +120,7 @@ function rig() {
     sent.push({ event, data: data as Record<string, unknown> });
     return true;
   };
-  const r = generals.create({ by: PAUL, admin: true, name: 'Rouge', owner: ROUGE, spawn: SPAWN, allowance: { archer: 4, guard: 4 }, reinforce: 2, range: 200 });
+  const r = generals.create({ by: PAUL, admin: true, name: 'Rouge', owner: ROUGE, spawn: SPAWN, allowance: { archer: 4, guard: 4, horsearcher: 2 }, reinforce: 2, range: 200 });
   assert.ok(r.ok, r.text);
   const g = generals.byTicket(r.ticket) as GeneralRecord;
   /** The mod's side of a spawn: each bot in the roster (and the fake pool), reported spawned then arrived. */
@@ -414,6 +414,18 @@ test('attack: archers close in by default (approach=40); with approach=0 a far t
   const r = await generals.order(g, 'A', 'attack', '', { target: 'X1' });
   const o = generals['deps'].runner.get(/#(\d+)/.exec(r)![1]!) as Order;
   assert.equal(o.args.approach, 40);
+});
+
+test('attack: horse archers circle any target (orbit, docs/47): approach=0 does not refuse a far one for them; orbit=0 does', async () => {
+  const { generals, g, fulfil } = rig();
+  generals.spawnSquad(g, 'HA', 'horsearcher', 2);
+  const [a1] = fulfil();
+  generals.setStanding(g, 'HA', []);
+  a1!.entities = { 90: { id: 90, type: 'player', username: 'Far', position: new Vec3(210, 64, -300) } };
+  generals.sample();
+  await assert.rejects(generals.order(g, 'HA', 'attack', 'approach=0 orbit=0', { target: 'X1' }), /out of bow range/);
+  const r = await generals.order(g, 'HA', 'attack', 'approach=0', { target: 'X1' });
+  assert.match(r, /attack #\d+/);
 });
 
 // -- over HTTP -------------------------------------------------------------------------------------------------------

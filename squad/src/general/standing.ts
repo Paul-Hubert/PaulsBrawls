@@ -88,8 +88,9 @@ export function defaultRules(kit: string): Rule[] {
     case 'horsearcher':
       return [
         r({ when: 'hp', value: 50, do: 'line', args: 'range=120', at: { pos: 'back 32' } }),
-        r({ when: 'contact', value: 64, do: 'raid', args: 'radius=40 quiet=10', at: { target: 'trigger' } }),
-        r({ when: 'ended', do: 'raid', args: 'radius=40 quiet=10', at: { target: 'nearest' } }),
+        // They circle what they attack (docs/47): on the bench they trade 1.58 kills per loss, against 0.66 raiding.
+        r({ when: 'contact', value: 64, do: 'attack', at: { target: 'trigger' } }),
+        r({ when: 'ended', do: 'attack', at: { target: 'nearest' } }),
       ];
     case 'archer':
     case 'guard':

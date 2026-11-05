@@ -9,6 +9,10 @@
 //   • Army bots move at 4.3 b/s on foot, 7 on a horse, toward the place their squad's order gives them.
 //   • Archers (archer, horsearcher) shoot every 1.25 s, hit with p = clamp(1 − d/140, 0.1, 0.9), 5 damage.
 //   • Melee bots hit what is within 3 blocks: 3 hp/s, a horseman in attack/flank 5 hp/s.
+//   • Horse archers in `attack` (`orbit`, default 30; 0: they stand as foot archers) ride round the group's centre at
+//     `orbit` blocks at 7 b/s, away from an enemy melee bot within 12 (docs/47), shooting as archers do; while they
+//     circle, an enemy arrow's hit chance is × ORBIT_EVADE (0.4: jinking riders against an aim like ours, measured in
+//     tests/orbit.test.ts « jinks »: 37–41 % of the arrows that hit a steady rider).
 //   • The enemy: 10 archers static 100 blocks out on the axis, with our archers' numbers (the same stock `line`: range
 //     `enemyRange`, default 120, the same hit curve, 5 damage),
 //     and 10 melee next to them that charge the nearest army bot at 4 b/s from `chargeAt` s on (3 hp/s within 3).
@@ -31,6 +35,8 @@ export const SPAWN = { x: 0, y: 64, z: 0, dimension: 'overworld', yaw: 270 }; //
 const DT = 0.25;
 const ARCHERS = new Set(['archer', 'horsearcher']);
 const MOUNTED = new Set(['horseman', 'horsearcher']);
+/** An enemy arrow's hit chance on a circling horse archer, against a still one (docs/47 §3). */
+const ORBIT_EVADE = 0.4;
 
 /** A seeded random draw (mulberry32), so a battle replays. */
 function rng(seed: number): () => number {
@@ -141,6 +147,8 @@ export interface Unit {
   bot: FakeBot;
   nextShot: number;
   idleFor: number;
+  /** Circling in an attack this step (the enemy's arrows: × ORBIT_EVADE). */
+  orbiting?: boolean;
 }
 
 export interface Foe {
@@ -328,6 +336,7 @@ export async function battle(doctrine: Doctrine, tickMs: (ms: number) => void, o
     const o = orderOf(u);
     const archer = ARCHERS.has(u.kit);
     const here = u.bot.entity.position;
+    u.orbiting = false;
     if (!o) {
       if (!archer) melee(u, now, false); // hit back what is on it
       return;
@@ -352,7 +361,18 @@ export async function battle(doctrine: Doctrine, tickMs: (ms: number) => void, o
         if (!point) return;
         const group = Number(o.args.group ?? 8);
         const f = nearestFoe(here, group + 2, point) ?? nearestFoe(point, group);
-        if (archer) {
+        const orbit = archer && MOUNTED.has(u.kit) ? Number(o.args.orbit ?? 30) : 0;
+        if (orbit > 0 && f) {
+          // The ring round the group's centre: one step on along the circle, or away from a melee bot within 12.
+          const group = alive().filter((x) => x.entity.position.distanceTo(f.entity.position) <= Number(o.args.group ?? 8));
+          const c = group.reduce((a, x) => a.plus(x.entity.position), new Vec3(0, 0, 0)).scaled(1 / group.length);
+          const close = alive().find((x) => x.kind === 'melee' && x.entity.position.distanceTo(here) <= 12);
+          const angle = Math.atan2(here.z - c.z, here.x - c.x) + (7 * DT * 1.5) / orbit;
+          const away = close ? here.plus(here.minus(close.entity.position).normalize().scaled(8)) : null;
+          moveToward(u, away ?? new Vec3(c.x + Math.cos(angle) * orbit, 64, c.z + Math.sin(angle) * orbit));
+          u.orbiting = true;
+          if (here.distanceTo(f.entity.position) <= 120) shoot(u, f, now);
+        } else if (archer) {
           const approach = Number(o.args.approach ?? 0);
           if (f) {
             const d = here.distanceTo(f.entity.position);
@@ -411,7 +431,7 @@ export async function battle(doctrine: Doctrine, tickMs: (ms: number) => void, o
       if (f.kind === 'archer') {
         if (bd <= enemyRange && now >= f.nextShot) {
           f.nextShot = now + 1.25;
-          if (rand() < Math.min(0.9, Math.max(0.1, 1 - bd / 140))) damageUnit(best, 5, f, 'arrow');
+          if (rand() < Math.min(0.9, Math.max(0.1, 1 - bd / 140)) * (best.orbiting ? ORBIT_EVADE : 1)) damageUnit(best, 5, f, 'arrow');
         }
       } else if (t >= chargeAt) {
         const p = f.entity.position;

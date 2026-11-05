@@ -104,3 +104,60 @@ test('benchmark: 20 v 20 against static archers 100 blocks out and charging mele
     mock.timers.reset();
   }
 });
+
+/**
+ * The after doctrine, plus the horse archers sent at the nearest enemy cluster on contact (and again whenever they
+ * stand idle) with `command args`: their harassment, scored (docs/47 §4).
+ */
+const harass = (name: string, command: 'attack' | 'raid', args: string): Doctrine => ({
+  name,
+  async setup() {
+    (this as { planned?: boolean }).planned = false;
+  },
+  async turn(c) {
+    const x = nearest(c);
+    if (!x) return;
+    const state = this as { planned?: boolean };
+    if (!state.planned && contact(c)) {
+      state.planned = true;
+      await c.generals.orderMany(c.g, [
+        { squad: 'G', command: 'line', at: { pos: 'E4', facing: 'E' } },
+        { squad: 'A', command: 'line', args: 'back=4', at: { pos: 'E4', facing: 'E' } },
+        { squad: 'HA', command, args, at: { target: x } },
+      ]);
+      return;
+    }
+    for (const line of c.generals.sitrep(c.g).split('\n')) {
+      const m = /^(\w+) (\d+)\/\d+ \S+ hp\d+ idle/.exec(line);
+      if (!m || m[2] === '0') continue;
+      try {
+        if (m[1] === 'HA') await c.generals.order(c.g, 'HA', command, args, { target: x });
+        else await c.generals.order(c.g, m[1]!, 'line', '', { pos: 'E4', facing: 'E' });
+      } catch {
+        /* the minute's budget: next turn */
+      }
+    }
+  },
+});
+
+test('benchmark: horse archers harassing the enemy: attack circling (orbit 30) trades better than attack standing at approach 40, and than raid (docs/47)', async () => {
+  mock.timers.enable({ apis: ['Date'], now: 1_800_000_000_000 });
+  try {
+    const tick = (ms: number) => mock.timers.tick(ms);
+    const sum = async (d: Doctrine) => {
+      const runs = [];
+      for (const seed of [1, 2, 3]) runs.push(await battle(d, tick, { seed }));
+      const kills = runs.reduce((n, r) => n + r.kills, 0);
+      const losses = runs.reduce((n, r) => n + r.losses, 0);
+      return { doctrine: d.name, kills, losses, killsPerLoss: kills / Math.max(1, losses), errors: runs.flatMap((r) => r.turnErrors) };
+    };
+    const orbit = await sum(harass('attack, orbit 30', 'attack', ''));
+    const still = await sum(harass('attack, orbit=0 (approach 40)', 'attack', 'orbit=0'));
+    const raid = await sum(harass('raid', 'raid', 'radius=40 quiet=10'));
+    for (const s of [orbit, still, raid]) console.log(`[bench] HA ${s.doctrine}: kills ${s.kills}, losses ${s.losses}, ${s.killsPerLoss.toFixed(2)} per loss; refused ${JSON.stringify(s.errors)}`);
+    assert.ok(orbit.killsPerLoss > still.killsPerLoss, 'circling beats standing');
+    assert.ok(orbit.killsPerLoss > raid.killsPerLoss, 'and the raid');
+  } finally {
+    mock.timers.reset();
+  }
+});

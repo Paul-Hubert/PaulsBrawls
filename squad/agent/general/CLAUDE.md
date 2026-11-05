@@ -42,9 +42,12 @@ change the plan.
   counter-attack what reaches it).
 - **Do not throw cavalry at an archer line** that is shooting: it costs about a third of the trade on the bench. Hit
   what comes out (a charge, stragglers, archers already engaged with your wall), from the side (`flank`).
-- **Horse archers** shoot on the move. In the archer line they add 120-block fire; to harass, `attack` a target with
-  `approach` (they close to that distance, then shoot) or `raid` it. **An `attack` with `approach=0` does not move
-  archers**: a far target is refused. Keep them beyond the range the `under-fire` events report.
+- **Horse archers** shoot on the move. In `attack` they **circle** the target's group at `orbit` blocks (default 30,
+  `approach` does not apply to them), jinking so enemy archers miss, breaking away from what comes within 12, keeping
+  to the far side from an archer that hit them, pulling out under 40 % health (docs/47). That is their best use: on
+  the bench, horse archers harassing the enemy line with `attack` trade 1.58 kills per loss, against 0.75 standing at
+  `approach` 40 (`orbit=0`) and 0.66 raiding. In the archer line they add 120-block fire. **Foot archers in an
+  `attack` with `approach=0` do not move**: a far target is refused for them (not for circling horse archers).
 - **Fighting retreat:** the foot squads' standing order `hp below 35 → line @back 12` re-forms the line 12 blocks back
   from the enemy, once per crossing. Add `losses atLeast=2 → line @back 8` for a step-by-step retreat. The guards
   walk back facing the enemy with their shields up (docs/49): a retreat costs them few hits, so order it early.
@@ -78,8 +81,8 @@ position. A `line` with a target forms facing it. The first rule due fires; each
 your own order to the squad. Every firing is a `standing` event: read them.
 
 Defaults: **horseman** `hp<40 → line @back 24`, `contact 48 → attack trigger`, `approach 64 → attack trigger`,
-`ended → attack nearest`. **horsearcher** `hp<50 → line @back 32`, `contact 64 → raid trigger`, `ended → raid
-nearest`. **archer, guard, spearman** `hp<35 → line @back 12`, `idle 8s → line @here facing the nearest`.
+`ended → attack nearest`. **horsearcher** `hp<50 → line @back 32`, `contact 64 → attack trigger` (they circle it), `ended →
+attack nearest`. **archer, guard, spearman** `hp<35 → line @back 12`, `idle 8s → line @here facing the nearest`.
 
 ## The orders (one per squad; a new one replaces the squad's)
 
@@ -112,7 +115,7 @@ army). The `arrived` event wakes you and says what they did.
 | `archer` | bow, chainmail | behind the wall; 120-block fire |
 | `spearman` | spear, shield | on foot; misses nearer than 2 blocks: not for point-blank brawls |
 | `horseman` | spear, **horse** | charges in waves, flanks, the wall's reserve; never idle in a line |
-| `horsearcher` | bow, **horse** | fire on the move; the archer line or harassment beyond enemy bow reach; fragile |
+| `horsearcher` | bow, **horse** | fire on the move; `attack` circles the target (harassment), or the archer line; fragile |
 | `miner`, `farmer` | tools | not for fighting |
 
 ## Reading the sitrep

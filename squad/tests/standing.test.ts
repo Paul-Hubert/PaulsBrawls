@@ -30,7 +30,7 @@ test('rules: checked, written in one line, defaults per kit', () => {
   assert.equal(ruleText(r), 'health below 40% → line @back 24');
   assert.deepEqual(defaultRules('horseman').map((x) => x.when), ['hp', 'contact', 'approach', 'ended']);
   assert.ok(defaultRules('horseman').every((x) => x.do !== 'line' || x.when === 'hp'), 'cavalry only lines up to fall back');
-  assert.deepEqual(defaultRules('horsearcher').map((x) => x.do), ['line', 'raid', 'raid']);
+  assert.deepEqual(defaultRules('horsearcher').map((x) => x.do), ['line', 'attack', 'attack']);
   assert.deepEqual(defaultRules('miner'), []);
 });
 
