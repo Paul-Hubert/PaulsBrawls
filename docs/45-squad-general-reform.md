@@ -159,3 +159,23 @@ benchmark (started at step 1, extended at each). 10. `agent/general/CLAUDE.md` l
    action, which needs a target). The foot kits' default rules gain the fighting retreat: `hp below 35 → line @back 12
    facing the nearest enemy`, before `idle 8s → line @here`. Tests: `tests/item-orders.test.ts` (flank, line
    reserve), `tests/standing.test.ts`.
+6. **The benchmark** (step 6). `squad/tests/general-bench.test.ts` on `squad/tests/fakes/battle.ts`: the real
+   `Generals` (sampler, standing orders, events, arrivals) on a fake order runner whose orders a coarse, documented
+   combat model carries out in virtual time (`mock.timers` on `Date`, 250 ms steps, 180 s): 20 v 20, the enemy's
+   10 archers static 100 blocks out on the axis with **our** bows' numbers (the same stock `line`: range 120, hit
+   chance 1 − d/140, 5 damage) and 10 melee beside them that charge at 20 s; a model turn takes 15 s. Three seeds,
+   summed (2026-11-05):
+
+   | Doctrine | contact → order (mean) | idle > 5 s | kills / losses | kills per loss |
+   |---|---|---|---|---|
+   | before: no standing orders, one `line` for every squad on contact, then nothing | 14.8 s | 547 bot·s | 33 / 60 | 0.55 |
+   | after: standing orders, wall + archers at bow range, the mobile kits on their rules | 0 s | 0 bot·s | 55 / 39 | 1.41 |
+
+   Variants measured on the same bench (3 seeds): wall + horsemen `flank` 1.04; wall + horsemen `flank` + horse
+   archers `attack approach=90` 1.07; the wall 30 blocks further back (out of both sides' reach) 0.95; every squad
+   `raid` 0.53. So the doctrine (`agent/general/CLAUDE.md`) holds the wall at the edge of bow range and keeps the
+   cavalry for what comes out of the enemy's line (its standing orders do that), not for charging an archer line.
+   **Limits of the model:** it has no facing, cover, shields, lance passes or flank detours (a `flank` moves like an
+   `attack`), so it cannot show what a flank or a charge through a group is worth; the contact-to-order time of
+   "after" is 0 because arrivals already hold a line (`onArrival`). `npm run check` runs it (0.2 s); the test fails if
+   "after" stops beating "before" on all three numbers.
