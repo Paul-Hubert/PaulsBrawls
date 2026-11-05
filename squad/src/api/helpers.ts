@@ -19,6 +19,7 @@ import pathfinderPkg from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 
 import { closeStrayWindow, windowOperation, type WindowBot } from '../bots/hardening';
+import { freeRein } from '../bots/mount';
 import { GoalFollowOffset, slotStandable, type FollowOffset } from '../bots/follow-goal';
 import { checkLease, orderOf, unwrap } from '../orders/guard';
 import { HelperError, isBotLeft, isStopped } from './errors';
@@ -249,7 +250,9 @@ export async function follow(
 ): Promise<{ following: boolean }> {
   checkLease(bot);
   const o = order(bot);
-  if (!entity) {
+  // A destroyed entity (a stale players[name].entity) waits too: returning at once, a loop of follow() calls spun on
+  // microtasks (docs/43 A1).
+  if (!entity || (entity as { isValid?: boolean }).isValid === false) {
     await sleepMs(opts.untilMs ?? 1_000);
     return { following: false };
   }
@@ -967,6 +970,8 @@ export async function shoot(bot: Bot, target: Entity | PosLike | null | undefine
     return gone();
   };
   let end: DrawEnd;
+  // A rider aims while its horse goes on where it was steered (a free rein): a horse archer shoots on the move.
+  const rein = freeRein(real);
   try {
     if (bot.heldItem?.name !== weapon) {
       // auto-eat is eating: let it finish. Taking the hand back would cancel the meal, and the meal would drop the draw.
@@ -982,6 +987,7 @@ export async function shoot(bot: Bot, target: Entity | PosLike | null | undefine
     throw new HelperError(`${label}: ${(e as Error).message} at ${what}`);
   } finally {
     client?.removeListener?.('spawn_entity', onSpawn);
+    rein();
   }
   if (end.kind === 'blocked') {
     throw new HelperError(`${label}: no clear line of fire: ${inTheWay(bot, end.sol)}, shooting at ${what} from ${fmt(bot.entity.position)}${end.drawn ? ' (put down unfired)' : ''}`);
@@ -1121,7 +1127,8 @@ const shieldUp = new WeakMap<object, number>();
 /**
  * Raise (`on`, the default) or lower the shield. Raising puts a shield in the off-hand when it is elsewhere in the
  * inventory, then holds use with `bot.activateItem(true)` (the off-hand `use_item` packet); calling it again while
- * raised sends nothing. Lowering is `bot.deactivateItem()`. Blocking slows walking: raise it after arriving. While
+ * raised sends nothing. Lowering is `bot.deactivateItem()`. A bot may walk with it raised (the stock line's guards do): the
+ * bots' client-side physics does not slow a blocking bot as the game's own client does. While
  * auto-eat eats (it lowers the shield to eat), neither is sent; call it again to raise the shield after the meal.
  * Leaving an order lowers it (the abort sequence's deactivateItem).
  */
@@ -1157,98 +1164,6 @@ export async function raiseShield(bot: Bot, on = true): Promise<{ raised: boolea
     if (e instanceof HelperError) throw e;
     throw new HelperError(`${label}: ${(e as Error).message}`);
   }
-}
-
-/**
- * stepTo lets go of the controls this close to the place: a sneaking body slides about 0.08 block on after it, so it
- * comes to rest on the place, well within the 0.15 the stock lines count as on a slot.
- */
-const STEP_STOP = 0.08;
-/** stepTo is over once the body moved less than this in a physics tick (at rest). */
-const STEP_AT_REST = 0.005;
-/** stepTo gives up after this long by default (a block beside the place keeps the body off it). */
-const STEP_TIMEOUT_MS = 3_000;
-/** How often stepTo looks at what ends it (a physics tick); the steering itself runs on every tick. */
-const STEP_LOOK_MS = 50;
-/** stepTo walks straight, blind: a place farther than this needs a path first (its block: goals.GoalBlock). */
-const STEP_REACH = 2;
-/** Per body: the stepTo that drives its controls. A later one takes over, and the earlier one then leaves them alone. */
-const stepping = new WeakMap<object, object>();
-/** Let go of stepTo's controls. A bot that left had them released by the abort sequence (and may not be driven). */
-function letGoStep(bot: Bot): void {
-  try {
-    bot.setControlState('forward', false);
-    bot.setControlState('sneak', false);
-  } catch (e) {
-    if (!isBotLeft(e) && !isStopped(e)) throw e;
-  }
-}
-
-/**
- * The last step onto an exact place (its x and z, not a block's centre; its y is not used), from close by: a path ends
- * on a block's centre, up to 0.7 off a place inside that block, so a formation at any yaw walks each bot to its
- * place's block, then steps (docs/35 F2, the shield wall). The bot sneaks straight to the place with its controls,
- * steered on every physics tick (mineflayer runs late ticks in a burst), until it stands still within STEP_STOP.
- * Sneaking is slow enough to stop where it lets go, and never walks off an edge. It clears the pathfinder's goal
- * first (the pathfinder steers too). It ends at rest there (`there`), when `until()` returns true (checked every
- * STEP_LOOK_MS: a new formation, a hit to answer, a foe to shoot), or after `timeoutMs` (`timedOut`). On every exit it
- * takes its steering off the ticks and lets go of forward and sneak, unless a later stepTo on the same body took them
- * over; so a bot about to draw a bow after it has neither its own motion going into the arrow nor the step's looks
- * fighting the draw's. A bot that left throws BotLeftError (the abort sequence released its controls).
- */
-export async function stepTo(bot: Bot, place: PosLike, opts: { until?: () => boolean; timeoutMs?: number } = {}): Promise<{ there: boolean; timedOut: boolean; off: number }> {
-  checkLease(bot);
-  const label = `stepTo(${who(bot)})`;
-  const to = toVec3(place, `${label} place`);
-  const timeoutMs = Number(opts.timeoutMs ?? STEP_TIMEOUT_MS);
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) throw new HelperError(`${label}: timeoutMs must be a number of milliseconds ≥ 0, got ${safeJson(opts.timeoutMs)}`);
-  const until = opts.until ?? (() => false);
-  const off = (): number => Math.hypot(to.x - bot.entity.position.x, to.z - bot.entity.position.z);
-  if (off() > STEP_REACH) {
-    throw new HelperError(`${label}: ${off().toFixed(2)} blocks from ${fmt(to)}, more than ${STEP_REACH}: walk to its block first (goals.GoalBlock), then step`);
-  }
-  const real = unwrap(bot) as object;
-  const me = {};
-  stepping.set(real, me);
-  let last = bot.entity.position.clone();
-  let still = false;
-  const steer = (): void => {
-    const p = bot.entity.position;
-    const moved = Math.hypot(p.x - last.x, p.z - last.z);
-    last = p.clone();
-    const dx = to.x - p.x;
-    const dz = to.z - p.z;
-    if (Math.hypot(dx, dz) > STEP_STOP) {
-      still = false;
-      bot.look(Math.atan2(-dx, -dz), 0, true).catch(() => undefined); // mineflayer's yaw toward the place, as bot.lookAt turns
-      bot.setControlState('forward', true);
-    } else {
-      bot.setControlState('forward', false);
-      still = moved < STEP_AT_REST;
-    }
-  };
-  const end = Date.now() + timeoutMs;
-  let timedOut = false;
-  try {
-    if (bot.pathfinder?.goal) bot.pathfinder.setGoal(null);
-    bot.on('physicsTick', steer);
-    bot.setControlState('sneak', true);
-    while (!still && stepping.get(real) === me && !until()) {
-      if (Date.now() >= end) {
-        timedOut = true;
-        break;
-      }
-      await sleepMs(STEP_LOOK_MS);
-      checkLease(bot);
-    }
-  } finally {
-    bot.removeListener('physicsTick', steer);
-    if (stepping.get(real) === me) {
-      stepping.delete(real);
-      letGoStep(bot);
-    }
-  }
-  return { there: still, timedOut, off: off() };
 }
 
 /** An entity as a snapshot names it: `ctx.commander.at.lookEntity`, `at.trigger.hit.entity`. */
@@ -1318,12 +1233,27 @@ export interface PointedAt {
  *     `near` blocks (0: only the exact one), as this bot sees it. Qualifying: a living creature or a player (no item,
  *     arrow, XP orb, vehicle or armor stand), valid, not of the order's team, not a spectator, and `filter(e)`;
  *   • pending: an 'arrow-release' (its 'arrow-hit' follows; until then position and entity are the look's).
+ * Given a list of bots (`squad.bots`), the first answer with an entity, else the first answer (a bot that has just
+ * left is skipped); none at all: no position, no entity (docs/43 C1).
  */
 export function pointedTarget(
-  bot: Bot,
+  bot: Bot | Bot[],
   at: PointedAt | null | undefined,
   opts: { near?: number; filter?: (e: Entity) => boolean } = {},
 ): { position: Vec3 | null; entity: Entity | null; pending: boolean } {
+  if (Array.isArray(bot)) {
+    let seen: { position: Vec3 | null; entity: Entity | null; pending: boolean } | null = null;
+    for (const b of bot) {
+      try {
+        const p = pointedTarget(b, at, opts);
+        if (p.entity) return p;
+        seen = seen ?? p;
+      } catch (e) {
+        if (!isBotLeft(e)) throw e;
+      }
+    }
+    return seen ?? { position: null, entity: null, pending: at?.trigger?.kind === 'arrow-release' };
+  }
   const label = `pointedTarget(${who(bot)})`;
   if (!at || typeof at !== 'object') throw new HelperError(`${label}: expected ctx.commander.at, got ${safeJson(at)}`);
   const near = Number(opts.near ?? 4);
@@ -1504,7 +1434,7 @@ export const HELPERS = {
   groundAt,
   faceYaw,
   raiseShield,
-  stepTo,
+
   entityOf,
   pointedTarget,
 } as const;

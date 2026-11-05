@@ -1,0 +1,15 @@
+{
+  "minecraft": { "host": "127.0.0.1", "port": 25602, "version": "26.1.2" },
+  "port": 8783,
+  "dataDir": ".squad-data-26.1.2",
+  "token": "dev-26-squad-token",
+  "limits": {
+    "maxBots": 30,
+    "orderMinutes": 10,
+    "maxOrderMinutes": 60,
+    "maxStandingMinutes": 120,
+    "trialSeconds": 60,
+    "maxTrialsPerTurn": 3
+  },
+  "pathfinding": { "astarBudgetMs": 20 }
+}

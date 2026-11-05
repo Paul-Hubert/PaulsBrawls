@@ -214,7 +214,7 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv = process.env, 
   if (shared && !world.enabled) throw new ConfigError('squad.json: world.shared needs the shared world (world.enabled cannot be false with it)');
   const aim = parseAim((o.aim ?? {}) as Record<string, unknown>);
   return {
-    minecraft: { host, port, version: typeof mc.version === 'string' ? mc.version : '1.21.1' },
+    minecraft: { host, port, version: typeof mc.version === 'string' ? mc.version : '26.1.2' },
     port: num(o.port, 8772, 'port'),
     token,
     dataDir: resolve(baseDir, typeof o.dataDir === 'string' && o.dataDir ? o.dataDir : '.squad-data'),

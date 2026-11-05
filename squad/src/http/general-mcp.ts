@@ -138,7 +138,7 @@ export function buildGeneralServer(generals: Generals, ticket: string | undefine
     'retarget',
     {
       title: 'Re-aim an order',
-      description: "Re-aim a squad's running order at a new point, target or facing (epee, ligne-archers and mur-de-boucliers re-aim without restarting; others restart).",
+      description: "Re-aim a squad's running order at a new point, target or facing (attack and line re-aim without restarting; raid restarts).",
       inputSchema: { squad: z.string(), at: at.unwrap() },
     },
     async ({ squad, at: a }) => run((g) => generals.retarget(g, squad, a)),

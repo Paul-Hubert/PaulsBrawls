@@ -45,11 +45,14 @@ final class SquadSpawn {
         final float yaw;
         final List<String> spawned = new ArrayList<>();
         final AtomicInteger arrived = new AtomicInteger();
+        /** This spawn's squad (docs/40): the roster tag {@code esc-N} every recruit gets on arrival. */
+        final String squad;
         boolean spawning = true;
 
-        Muster(CommandSourceStack src, SquadKits.Kit kit, List<GameProfile> owners, ServerPlayer center) {
+        Muster(CommandSourceStack src, SquadKits.Kit kit, List<GameProfile> owners, ServerPlayer center, String squad) {
             this.src = src;
             this.kit = kit;
+            this.squad = squad;
             this.owners = new JsonArray();
             for (GameProfile p : owners) this.owners.add(Squad.player(p));
             this.ownerNames = String.join(" + ", owners.stream().map(Compat::name).toList());
@@ -58,7 +61,25 @@ final class SquadSpawn {
         }
     }
 
+    /**
+     * The last squad number given here: two spawns in a row get distinct tags even before the runtime's state (which
+     * the next number is otherwise read from) shows the first one's bots. Server thread only.
+     */
+    private static long lastSquad;
+
     private SquadSpawn() {}
+
+    /** A new squad's tag (docs/40): past every {@code esc-N} the roster holds and the last one given here. */
+    private static String newSquad() {
+        List<String> tags = new ArrayList<>();
+        for (JsonElement el : Squad.stateArray("bots")) {
+            JsonObject b = el.getAsJsonObject();
+            if (b.has("tags")) for (JsonElement t : b.getAsJsonArray("tags")) tags.add(t.getAsString());
+        }
+        String tag = SquadSelection.nextTag(tags, lastSquad);
+        lastSquad = SquadSelection.number(tag);
+        return tag;
+    }
 
     // -- /bots squad spawn --------------------------------------------------------------------------------------------
 
@@ -93,7 +114,7 @@ final class SquadSpawn {
             || srv.getPlayerList().getPlayerByName(n) != null || Squad.hasPlayed(srv, n) || SquadCommand.reservedName(n);
         List<String> names = SquadRaidPlan.names(SquadSpawnPlan.prefix(a.kit()), a.count(), taken);
 
-        Muster m = new Muster(src, a.kit(), owners, center);
+        Muster m = new Muster(src, a.kit(), owners, center, newSquad());
         List<Recruit> recruits = new ArrayList<>();
         for (int i = 0; i < names.size(); i++) {
             SquadSpawnPlan.XZ d = SquadSpawnPlan.ring(i, names.size());
@@ -103,8 +124,8 @@ final class SquadSpawn {
                 ? new Recruit(names.get(i), feet.getX() + 0.5, feet.getY(), feet.getZ() + 0.5)
                 : new Recruit(names.get(i), center.getX(), center.getY(), center.getZ()));
         }
-        SquadCommand.reply(src, String.format(Locale.ROOT, "[Bots] Escouade : %d %s(s) pour %s, autour de %s…",
-            names.size(), a.kit().label(), m.ownerNames, center.getName().getString()));
+        SquadCommand.reply(src, String.format(Locale.ROOT, "[Bots] %s : %d %s(s) pour %s, autour de %s…",
+            capitalized(SquadSelection.label(m.squad)), names.size(), a.kit().label(), m.ownerNames, center.getName().getString()));
         spawnNext(m, recruits, 0);
         return Command.SINGLE_SUCCESS;
     }
@@ -120,17 +141,21 @@ final class SquadSpawn {
         JsonObject body = SquadCommand.base(m.src);
         body.addProperty("name", r.name());
         body.add("owners", m.owners.deepCopy());
+        // Expected before the request: the runtime may log the bot in before its answer reaches the server thread,
+        // and a join nobody expected gets no place, no kit and no tag (the first bot of a squad did).
+        Squad.whitelist(srv, r.name(), true);
+        Squad.expectArrival(r.name(), m.world, r.x(), r.y(), r.z(), m.yaw, bot -> arrived(m, bot));
         Squad.client().post("/api/bots/spawn", body).thenAccept(res -> srv.execute(() -> {
             if (!SquadAuthoring.ok(res)) {
+                Squad.forgetArrivals(List.of(r.name()));
+                Squad.whitelist(srv, r.name(), false);
                 String why = SquadNotice.fromJson(res).text().replace("[Bots] ", "");
                 SquadCommand.reply(m.src, "[Bots] Escouade : " + r.name() + " refusé (" + why + ") ; " + m.spawned.size()
                     + " bot(s) en route. Plus de bots : limits.maxBots dans squad/squad.json.");
                 spawnsDone(m);
                 return;
             }
-            Squad.whitelist(srv, r.name(), true);
             m.spawned.add(r.name());
-            Squad.expectArrival(r.name(), m.world, r.x(), r.y(), r.z(), m.yaw, bot -> arrived(m, bot));
             spawnNext(m, recruits, i + 1);
         }));
     }
@@ -147,7 +172,9 @@ final class SquadSpawn {
             LOGGER.info("Squad bot {} arrived: {}", name, answer);
             JsonObject body = SquadCommand.base(m.src);
             body.addProperty("name", name);
-            body.add("changes", SquadCommand.array(SquadKits.tagChanges(m.kit)));
+            List<String> changes = new ArrayList<>(SquadKits.tagChanges(m.kit));
+            changes.add("+" + m.squad); // its squad (docs/40): what the selector selects
+            body.add("changes", SquadCommand.array(changes));
             Squad.client().post("/api/bots/tag", body).thenAccept(res -> {
                 if (!SquadAuthoring.ok(res)) LOGGER.warn("Squad bot {}: tag {} refused: {}", name, m.kit.name(), SquadNotice.fromJson(res).text());
             });
@@ -156,7 +183,12 @@ final class SquadSpawn {
     }
 
     private static void ready(Muster m) {
-        SquadCommand.reply(m.src, "[Bots] Escouade prête (" + m.kit.label() + ", à " + m.ownerNames + ") : " + String.join(", ", m.spawned) + ".");
+        SquadCommand.reply(m.src, "[Bots] " + capitalized(SquadSelection.label(m.squad)) + " prête (" + m.kit.label() + ", à " + m.ownerNames + ") : "
+            + String.join(", ", m.spawned) + ". Pour lui donner des ordres : un sélecteur (/bots orders bind select), clic droit sur un de ses bots.");
+    }
+
+    private static String capitalized(String s) {
+        return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 
     /**

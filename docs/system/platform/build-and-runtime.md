@@ -37,16 +37,19 @@ the API changed (docs/39 §3, §4):
 | `versions/<v>/gradle.properties` | `minecraft_version`, `loader_version`, `fabric_version`, `java_version`, `minecraft_dependency` (for `fabric.mod.json`), the mods folders |
 
 Gradle runs a task named on the command line in **every** project that has it, so only the primary version (the first
-of `mc_versions`) answers `runServer`, `runDevServer`, `runClient` and `mcpProbe`; another version has no `mcpProbe`
-and only runs named for it: 26.1.2's `runDevServer26` (`./gradlew -Pmc_versions=1.21.1,26.1.2 :26.1.2:runDevServer26`,
-the dev server in `dev-26.1.2/`: port 25602, RCON 25579, settlement 8778, God MCP 8782, Squad and the God-Body bridge
-off; it seeds that directory's local configs and `server.properties` from `server.defaults.properties` when they are
-missing, [dev-26.1.2/README.md](../../../dev-26.1.2/README.md)). `build` and `test` run in every included version.
+of `mc_versions`, default `26.1.2,1.21.1` since 2026-11-04) answers `runServer`, `runDevServer`, `runClient` and
+`mcpProbe`; another version's runs are cleared and its run tasks disabled (`gradle/mod.gradle`: Loom creates
+`runServer`/`runClient` before `runs.clear()`). 26.1.2's `runServer` runs production in `run-26.1.2/` (port 25565,
+[run-26.1.2/README.md](../../../run-26.1.2/README.md)) and `runDevServer` the dev server in `dev-26.1.2/` (port 25602,
+RCON 25579, settlement 8778, God MCP 8782, Squad on the dev runtime :8783, the God-Body bridge off,
+[dev-26.1.2/README.md](../../../dev-26.1.2/README.md)); both seed `server.properties` from `server.defaults.properties`
+when it is missing, and `runDevServer` its local configs. `"-Pmc_versions=1.21.1"` gives the 1.21.1 runs back (`run/`,
+`dev/`). `build` and `test` run in every included version.
 
 | Version | Loom plugin | Mappings | Java | Fabric Loader / API | Status |
 |---|---|---|---|---|---|
-| `1.21.1` | `net.fabricmc.fabric-loom-remap` (obfuscated: the jar is remapped to intermediary) | `loom.officialMojangMappings()` (Yarn until 2026-11-03) | 21 | `0.17.3` / `0.116.7+1.21.1` | Production |
-| `26.1.2` | `net.fabricmc.fabric-loom` (unobfuscated: nothing remapped, `implementation` not `modImplementation`, `jar` not `remapJar`) | none | 25 | `0.20.1` / `0.155.3+26.1.2` | Compiles, 1137 tests pass, runs on its dev server (docs/39 §4); no client run yet and the bots are 1.21.1-only, so not in `mc_versions` |
+| `1.21.1` | `net.fabricmc.fabric-loom-remap` (obfuscated: the jar is remapped to intermediary) | `loom.officialMojangMappings()` (Yarn until 2026-11-03) | 21 | `0.17.3` / `0.116.7+1.21.1` | The old production (`run/`, `dev/`), kept for a rollback; builds and tests by default |
+| `26.1.2` | `net.fabricmc.fabric-loom` (unobfuscated: nothing remapped, `implementation` not `modImplementation`, `jar` not `remapJar`) | none | 25 | `0.20.1` / `0.155.3+26.1.2` | The default since 2026-11-04 (production `run-26.1.2/`); no client run yet, the unified bridge cannot join it (docs/39 §5) |
 
 Shared values (root `gradle.properties`):
 

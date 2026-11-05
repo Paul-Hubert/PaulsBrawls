@@ -74,6 +74,13 @@ public final class Squad {
     private static final Map<UUID, List<SquadNotice>> pending = new ConcurrentHashMap<>();
     /** Bots spawned by an admin, teleported on their first join (lower-case name → where, and what to do then). */
     private static final Map<String, Spot> arrivals = new ConcurrentHashMap<>();
+    /**
+     * Bots that joined with no arrival waiting (lower-case name → when). The runtime logs a bot in as soon as it is
+     * asked (spawn, respawn, a general's reinforcements), so the join can beat the answer that registers the arrival:
+     * an arrival registered within {@link #LATE_ARRIVAL_MS} of such a join still applies, at once.
+     */
+    private static final Map<String, Long> unexpected = new ConcurrentHashMap<>();
+    static final long LATE_ARRIVAL_MS = 15_000;
 
     /** Where a new bot goes on its first join; `then` (may be null) runs on the next tick, once it stands there. */
     private record Spot(ServerLevel world, double x, double y, double z, float yaw, float pitch, Consumer<ServerPlayer> then) {}
@@ -334,6 +341,7 @@ public final class Squad {
      * (one server-thread call), so a bot no longer online has its last save on disk, and nothing writes it again.
      */
     public static void registerSaveCleanup() {
+        ServerTickEvents.END_SERVER_TICK.register(Squad::runArrivals);
         ServerTickEvents.END_SERVER_TICK.register(srv -> {
             if (saves.isEmpty()) return;
             List<String> roster = botNames();
@@ -421,7 +429,60 @@ public final class Squad {
      * and the start of the raid). `then` runs on the server thread, the tick after the teleport.
      */
     static void expectArrival(String bot, ServerLevel world, double x, double y, double z, float yaw, Consumer<ServerPlayer> then) {
-        arrivals.put(bot.toLowerCase(Locale.ROOT), new Spot(world, x, y, z, yaw, 0, then));
+        String key = bot.toLowerCase(Locale.ROOT);
+        Spot spot = new Spot(world, x, y, z, yaw, 0, then);
+        Long joined = unexpected.remove(key);
+        MinecraftServer srv = server;
+        ServerPlayer online = srv == null ? null : srv.getPlayerList().getPlayerByName(bot);
+        if (joined != null && online != null && !online.isDeadOrDying() && System.currentTimeMillis() - joined < LATE_ARRIVAL_MS) {
+            LOGGER.info("Squad bot {} joined before its arrival was registered: placing it now", bot);
+            arrive(online, spot);
+            return;
+        }
+        arrivals.put(key, spot);
+    }
+
+    /** An arrival's `then`, waiting for its bot to be in the player list. */
+    private record AfterArrival(ServerPlayer player, Consumer<ServerPlayer> then, int ticksLeft) {}
+
+    /** Server thread only (arrive, runArrivals). */
+    private static final List<AfterArrival> afterArrivals = new ArrayList<>();
+    /** An arrival whose bot is not in the player list after this many ticks is dropped (it left). */
+    private static final int ARRIVAL_TICKS = 100;
+
+    /**
+     * Put an arriving bot at its spot; its `then` (the kit, a horse, a raid's start) at the end of a tick once the bot
+     * is in the player list. Fabric's JOIN fires before the server adds the player to its list, and `srv.execute` there
+     * ran `then` at once (on the server thread, outside a task, it does not wait): the kit's lookup by name found nobody,
+     * « n'est pas connecté : impossible de l'équiper », and every other bot of a squad came with no kit and no horse
+     * (only those the kit pacer happened to delay got theirs).
+     */
+    private static void arrive(ServerPlayer player, Spot spot) {
+        Compat.teleport(player, spot.world(), spot.x(), spot.y(), spot.z(), spot.yaw(), spot.pitch());
+        if (spot.then() != null) afterArrivals.add(new AfterArrival(player, spot.then(), ARRIVAL_TICKS));
+    }
+
+    /** Each tick's end: the arrivals whose bot is now in the player list run; a bot gone for good is dropped. */
+    private static void runArrivals(MinecraftServer srv) {
+        if (afterArrivals.isEmpty()) return;
+        List<AfterArrival> due = new ArrayList<>();
+        for (int i = afterArrivals.size() - 1; i >= 0; i--) {
+            AfterArrival a = afterArrivals.get(i);
+            boolean listed = srv.getPlayerList().getPlayer(a.player().getUUID()) == a.player();
+            if (listed) due.add(0, a);
+            else if (a.ticksLeft() > 1 && !a.player().isRemoved()) {
+                afterArrivals.set(i, new AfterArrival(a.player(), a.then(), a.ticksLeft() - 1));
+                continue;
+            } else LOGGER.warn("Squad bot {} never showed in the player list after its arrival: no kit given.", a.player().getName().getString());
+            afterArrivals.remove(i);
+        }
+        for (AfterArrival a : due) {
+            try {
+                a.then().accept(a.player());
+            } catch (RuntimeException e) {
+                LOGGER.warn("Squad bot {}: its arrival failed: {}", a.player().getName().getString(), e.toString());
+            }
+        }
     }
 
     /** Forget the arrivals not yet seen (`/bots raid clear` before every raider came). */
@@ -456,12 +517,10 @@ public final class Squad {
             disconnect.accept(Component.literal("Ce nom est réservé à un bot."));
             return;
         }
-        Spot spot = arrivals.remove(name.toLowerCase(Locale.ROOT));
-        if (spot != null) {
-            Compat.teleport(player, spot.world(), spot.x(), spot.y(), spot.z(), spot.yaw(), spot.pitch());
-            MinecraftServer srv = server;
-            if (spot.then() != null && srv != null) srv.execute(() -> spot.then().accept(player));
-        }
+        String key = name.toLowerCase(Locale.ROOT);
+        Spot spot = arrivals.remove(key);
+        if (spot != null) arrive(player, spot);
+        else if (isBot) unexpected.put(key, System.currentTimeMillis());
         List<SquadNotice> missed = pending.remove(player.getUUID());
         if (missed != null) for (SquadNotice n : missed) for (Component t : render(n)) player.sendSystemMessage(t);
     }
@@ -512,7 +571,12 @@ public final class Squad {
         if (p == null) return "[Bots] " + botName + " n'est pas connecté : impossible de l'équiper.";
         List<String> given = new ArrayList<>();
         for (SquadKits.Item it : kit.items()) {
-            Optional<Item> item = Compat.item("minecraft:" + it.id());
+            Optional<Item> item = Optional.empty();
+            String itemId = it.id();
+            for (String candidate : it.id().split("\\|")) { // « a|b »: the first one this game has
+                item = Compat.item("minecraft:" + candidate);
+                if (item.isPresent()) { itemId = candidate; break; }
+            }
             if (item.isEmpty()) {
                 LOGGER.warn("Kit {}: unknown item minecraft:{}", kit.name(), it.id());
                 continue;
@@ -541,11 +605,68 @@ public final class Squad {
                     if (!old.isEmpty()) give(p, old);
                 }
             }
-            String what = it.count() > 1 ? it.count() + " " + it.id() : it.id();
+            String what = it.count() > 1 ? it.count() + " " + itemId : itemId;
             given.add(enchants.isEmpty() ? what : what + " (" + String.join(", ", enchants) + ")");
         }
+        if (kit.mounted()) given.add(mount(srv, p) ? "cheval sellé" : "cheval raté");
         LOGGER.info("Equipped squad bot {} as {}: {}", p.getName().getString(), kit.name(), given);
         return "[Bots] " + p.getName().getString() + " équipé en " + kit.label() + " : " + String.join(", ", given) + ".";
+    }
+
+    /**
+     * A tamed, saddled horse under the bot, and the bot on it (a mounted kit). Any horse it had before is removed. The
+     * commands run as the server, so no permission is needed. Main thread. False when a command failed.
+     */
+    private static boolean mount(MinecraftServer srv, ServerPlayer p) {
+        return mount(srv, p, MOUNT_CHECKS);
+    }
+
+    /** {@link #mount}, then {@link #checkMounted} {@code checks} more times. */
+    private static boolean mount(MinecraftServer srv, ServerPlayer p, int checks) {
+        String name = p.getName().getString();
+        String tag = "mount_" + name;
+        String horse = "@e[type=minecraft:horse,tag=" + tag + ",limit=1]";
+        try {
+            var src = srv.createCommandSourceStack().withSuppressedOutput();
+            var cmds = srv.getCommands();
+            cmds.performPrefixedCommand(src, "kill @e[type=minecraft:horse,tag=" + tag + "]");
+            cmds.performPrefixedCommand(src, "execute as " + name + " at @s run summon minecraft:horse ~ ~ ~ {Tame:1b,Tags:[\"" + tag + "\"]}");
+            // The saddle slot is « horse.saddle » up to 1.21.4 and « saddle » since 1.21.5 (26.x): the other one fails
+            // to parse, silently (suppressed output).
+            cmds.performPrefixedCommand(src, "item replace entity " + horse + " horse.saddle with minecraft:saddle");
+            cmds.performPrefixedCommand(src, "item replace entity " + horse + " saddle with minecraft:saddle");
+            cmds.performPrefixedCommand(src, "ride " + name + " mount " + horse);
+        } catch (RuntimeException e) {
+            LOGGER.warn("Could not mount squad bot {}", name, e);
+            return false;
+        }
+        if (checks > 0) checkMounted(srv, name, checks);
+        return true;
+    }
+
+    /** How many times {@link #checkMounted} looks, {@link #MOUNT_CHECK_MS} apart. */
+    static final int MOUNT_CHECKS = 5;
+    static final long MOUNT_CHECK_MS = 1_000;
+
+    /**
+     * A bot kitted right after it joined (the first ones of a squad: the kit pacer has no wait for them) can lose its
+     * horse while its client is still settling in: no horse, or the horse but not on it. Look again a few times, and
+     * mount it again when it is not on its horse.
+     */
+    private static void checkMounted(MinecraftServer srv, String name, int left) {
+        java.util.concurrent.CompletableFuture.delayedExecutor(MOUNT_CHECK_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .execute(() -> srv.execute(() -> {
+                ServerPlayer p = srv.getPlayerList().getPlayerByName(name);
+                if (p == null || p.isDeadOrDying()) return;
+                var vehicle = p.getVehicle();
+                if (vehicle != null && Compat.tags(vehicle).contains("mount_" + name)) return;
+                if (left <= 1) {
+                    LOGGER.warn("Squad bot {} is still not on its horse", name);
+                    return;
+                }
+                LOGGER.info("Squad bot {} is not on its horse: mounting it again", name);
+                mount(srv, p, left - 1);
+            }));
     }
 
     /**

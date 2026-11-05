@@ -221,4 +221,11 @@ test('bound items over HTTP: check, a trigger starts, a second restarts an order
   assert.deepEqual(stop.json, { ok: true, text: '[Bots] « follow » arrêté.', orderId: again.json.orderId, stopped: true });
   const none = await api('/api/orders/trigger', { by: PAUL, command: 'follow', tokens: [], stop: true, snap: {} });
   assert.equal(none.json.text, '[Bots] Aucun ordre « follow » en cours.');
+
+  // A squad (docs/40) goes through when it is a tag, and scopes the order; a malformed one is no squad.
+  const scoped = await api('/api/orders/trigger', { by: PAUL, command: 'follow', tokens: [], squad: 'esc-404', snap: {} });
+  assert.equal(scoped.json.text, "[Bots] Aucun de tes bots dans l'escouade sélectionnée (esc-404).");
+  const untagged = await api('/api/orders/start', { by: PAUL, command: 'follow', tokens: [], squad: 'Not A Tag!', snap: {} });
+  assert.equal(untagged.json.ok, true, String(untagged.json.text));
+  assert.equal(rt.service.deps.runner.get(String((untagged.json as { orderId?: string }).orderId))!.squad, undefined);
 });

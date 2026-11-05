@@ -1,7 +1,8 @@
 # 39 — One mod, several Minecraft versions (1.21.1 and 26.1.2)
 
-Status: **26.1.2 runs on its own dev server** (`dev-26.1.2/`, 2026-11-04); no 26.1.2 client has run it yet, and the
-bots are still 1.21.1-only (§5). Both versions build `main`, `client` and the tests from the shared `src/`, and both
+Status: **26.1.2 is the default version** (Paul, 2026-11-04): first in `mc_versions`, production in `run-26.1.2/`
+(a copy of the 1.21.1 world, upgraded at its first start), the dev server in `dev-26.1.2/`, Squad on 26.1.2. The
+unified bridge, a 26.1.2 client and the extra mods are still open (§5). Both versions build `main`, `client` and the tests from the shared `src/`, and both
 pass the same 1137 tests (22 skipped: the E2E tests that need an external binary). What differs lives in two compat
 classes and a per-version mixin config (§4). The as-built Gradle layout is
 [docs/system/platform/build-and-runtime.md](system/platform/build-and-runtime.md) ("One project per Minecraft version").
@@ -26,24 +27,28 @@ classes and a per-version mixin config (§4). The as-built Gradle layout is
 ```
 src/                      shared: every class that compiles on every version
 gradle/mod.gradle         the build every version shares
-versions/1.21.1/          remapping Loom, Mojang mappings, Java 21: production
-versions/26.1.2/          plain Loom (nothing remapped), Java 25: its dev server is dev-26.1.2/
+versions/1.21.1/          remapping Loom, Mojang mappings, Java 21: the old production (run/, dev/)
+versions/26.1.2/          plain Loom (nothing remapped), Java 25: the default (run-26.1.2/, dev-26.1.2/)
   build.gradle, gradle.properties
   src/main/java/com/paul/brawl/compat/Compat.java          what differs, server side (§4)
   src/main/java/com/paul/brawl/mixin/AbstractArrowMixin.java   its target moved package
   src/main/java/com/paul/brawl/mixin/RegistrySyncVanillaClientsMixin.java   26.1.2 only (§4)
   src/main/resources/paulsbrawls.version.mixins.json        the mixins that exist per version
   src/client/java/com/paul/brawl/compat/ClientCompat.java  what differs, client side
-dev-26.1.2/               the 26.1.2 dev server (dev-26.1.2/README.md)
+run-26.1.2/               the production server on 26.1.2 (run-26.1.2/README.md)
+dev-26.1.2/               the dev server on 26.1.2 (dev-26.1.2/README.md)
 ```
 
 - `mc_versions` (root `gradle.properties`) picks the versions that build; the first is the primary one, the only one
   with `runServer`, `runDevServer`, `runClient` and `mcpProbe` (Gradle runs a command-line task in every project that
   has it). `build` and `test` run in every included version, so a shared change is tested on all of them.
-- 26.1.2 stays out of `mc_versions` until §5 is done; test it with
-  `./gradlew -Pmc_versions=1.21.1,26.1.2 :26.1.2:test :26.1.2:jar` (not `build`, whose copy tasks fill the 1.21.1 mods
-  folders too), and run its dev server with `./gradlew -Pmc_versions=1.21.1,26.1.2 :26.1.2:runDevServer26`. Its
-  `build.gradle` lifts javac's 100-error cap.
+- The default is `26.1.2,1.21.1` (since 2026-11-04): both build and test, 26.1.2 has the runs (`runServer` in
+  `run-26.1.2/`, `runDevServer` in `dev-26.1.2/`, `runClient`). A non-primary version's run tasks are disabled
+  (`gradle/mod.gradle`), because Loom creates `runServer`/`runClient` before a version's `runs.clear()`.
+  `"-Pmc_versions=1.21.1"` makes 1.21.1 primary again (`run/`, `dev/`). In PowerShell quote a `-P` with a version
+  in it: Windows PowerShell splits `-Pmc_versions=1.21.1,…` at the first dot and Gradle sees `mc_versions=1`.
+  `:26.1.2:build` copies its jar into the PrismLauncher instance "26.1.2"; a plain `build` also copies the 1.21.1
+  jar into the 1.21.1 folders.
 - IntelliJ cannot put one source folder in two modules: with both versions in `mc_versions` it shows `src/` under one
   of them. Import with the default `mc_versions` for everyday work.
 
@@ -131,14 +136,18 @@ servers with an hour-long salary period, so no tick could pay: a new player had 
 1. ~~Port `main`, `client` and the tests~~ (done, §4).
 2. ~~**A 26.1.2 dev server**~~ (done, §4): `dev-26.1.2/` (game 25602, RCON 25579, settlement 8778, God MCP 8782,
    Squad and the God-Body bridge off; [dev-26.1.2/README.md](../dev-26.1.2/README.md)) and
-   `./gradlew -Pmc_versions=1.21.1,26.1.2 :26.1.2:runDevServer26`. **Still open:** a 26.1.2 client for `/prove` and
-   `/build` (the asynchronous screenshot); 26.1.2 has no `runClient` yet.
-3. **The bots, one version per runtime:** Squad hard-codes 1.21.1 in `SUPPORTED_MINECRAFT_VERSION`
-   (`squad/src/bots/pool.ts`), the protocol hardening keyed on `'1.21'` (`bots/protocol.ts`), the arrow constants read
-   from the 1.21.1 jar (`aim/arrow.mjs`), the chunk decoder (`world/decode.mjs`, the format changed in 1.21.5), the
-   block-state tables, and three `patch-package` patches. Make the version a setting (`squad.json`
-   `minecraft.version` already exists) and key those by version; run the live tests on the 26.1.2 dev server. The
-   unified bridge pins it too (`minecraft-mcp-server/src/bot-connection.ts`). Eden is dead code: not ported.
+   `./gradlew runDevServer` (since 26.1.2 is primary). **Still open:** a 26.1.2 client for `/prove` and
+   `/build` (the asynchronous screenshot), from `runClient` or the PrismLauncher instance "26.1.2".
+3. **The bots.** Squad runs on 26.1.2: `squad.json` `minecraft.version` (the default, and `SUPPORTED_MINECRAFT_VERSION`
+   in `squad/src/bots/pool.ts`, are 26.1.2 since 2026-11-04); `npm run start:dev` (`squad-dev.json`) is the dev
+   runtime for `dev-26.1.2/` (port 8783, the mod's `squad.properties` there points at it). Its mineflayer 4.39 joins
+   26.1, and the live tests' core group passed on the 26.1.2 dev server (2026-11-04: spawn, gather, come, defend with
+   an archer's shots, two ladders, despawn), with the shared world and the reader workers on. Not yet: the live tests
+   take the server's version (`MC_VERSION` / RCON `/version`, uncommitted, and not run since), the bound-item and
+   range scenarios, the protocol hardening for 26.1 (`bots/protocol.ts` keys only `'1.21'`: no `declare_recipes`
+   bypass, the decoders stay alive), the arrow constants read from the 1.21.1 jar (`aim/arrow.mjs`), the unit tests'
+   1.21.1 fakes. The unified bridge cannot join 26.x: its mineflayer is 4.35 and it pins 1.21.1
+   (`minecraft-mcp-server/src/bot-connection.ts`); 26.1 needs 4.39. Eden is dead code: not ported.
 4. **The server's other mods** for 26.1.2 (WorldEdit, Simple Voice Chat) in `scripts/setup-server.mjs`
    (`--mc=26.1.2` refuses without `--no-extras` until then).
-5. **Add 26.1.2 to `mc_versions`.** From then on every shared change must compile on both.
+5. ~~**Add 26.1.2 to `mc_versions`**~~ (done 2026-11-04, first: the default). Every shared change must compile on both.

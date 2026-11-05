@@ -14,7 +14,9 @@ import type { Order } from '../orders/order';
 import { unwrap } from '../orders/guard';
 import type { EntityRef, Snapshot, TriggerKind, Vec3Like } from '../types';
 import { BotLeftError, OrderStoppedError } from './errors';
+import { FORMATION_HELPERS } from './formation';
 import { HELPERS, blockKey } from './helpers';
+import { LANCE_HELPERS } from './lance';
 import type { Squad } from './squad';
 
 const { goals, Movements } = pathfinderPkg;
@@ -26,7 +28,7 @@ class SquadMovements extends Movements {
   }
 }
 
-const SQUAD_MODULE_KEYS = ['Vec3', 'goals', 'Movements', 'BotLeftError', 'OrderStoppedError', 'blockKey', ...Object.keys(HELPERS)];
+const SQUAD_MODULE_KEYS = ['Vec3', 'goals', 'Movements', 'BotLeftError', 'OrderStoppedError', 'blockKey', ...Object.keys(HELPERS), ...Object.keys(FORMATION_HELPERS), ...Object.keys(LANCE_HELPERS)];
 
 function format(args: unknown[]): string {
   return args.map((a) => (typeof a === 'string' ? a : inspect(a, { depth: 3, breakLength: 160 }))).join(' ');
@@ -58,7 +60,10 @@ export function buildScope(order: Order): Record<string, unknown> {
       warn: (...a: unknown[]) => order.log('warn: ' + format(a)),
       error: (...a: unknown[]) => order.log('error: ' + format(a)),
     },
+    // Read when each order starts (a test may wrap one: tests/fakes/shots.ts).
     ...HELPERS,
+    ...FORMATION_HELPERS,
+    ...LANCE_HELPERS,
     isFriend,
     blockKey,
   };
@@ -245,6 +250,63 @@ export function commanderOf(order: Order): Commander {
   return commander;
 }
 
+/**
+ * A subroutine's commander (ctx.run, docs/43 C2): the order's, except that its trigger listeners and a waiting
+ * `next()` end with the subroutine (`signal`), so a finished `attack` no longer retargets on the parent's clicks.
+ */
+export function subCommander(order: Order, signal: AbortSignal): Commander {
+  const base = commanderOf(order);
+  const mine = new Set<(at: CommanderAt) => unknown>();
+  signal.addEventListener('abort', () => {
+    for (const fn of mine) base.off('trigger', fn);
+    mine.clear();
+  }, { once: true });
+  return {
+    name: base.name,
+    uuid: base.uuid,
+    get at() {
+      return base.at;
+    },
+    entity: (bot) => base.entity(bot),
+    on(e, fn) {
+      if (signal.aborted) return;
+      base.on(e, fn);
+      mine.add(fn);
+    },
+    off(e, fn) {
+      base.off(e, fn);
+      mine.delete(fn);
+    },
+    next(timeoutMs) {
+      if (signal.aborted) return Promise.reject(new OrderStoppedError('subroutine ended'));
+      return new Promise<CommanderAt | null>((resolve, reject) => {
+        const onAbort = (): void => reject(new OrderStoppedError('subroutine ended'));
+        signal.addEventListener('abort', onAbort, { once: true });
+        base.next(timeoutMs).then(
+          (at) => {
+            signal.removeEventListener('abort', onAbort);
+            resolve(at);
+          },
+          (e: unknown) => {
+            signal.removeEventListener('abort', onAbort);
+            reject(e);
+          },
+        );
+      });
+    },
+  };
+}
+
+/** `ctx.run`'s options (docs/43 C2): the bots lent to the subroutine, and when to end it from outside. */
+export interface RunOptions {
+  /** The bots it may have (default: all of the caller's). One of the caller's live arrays makes it live. */
+  bots?: Bot[];
+  /** Ended (its bots given back) once this returns true, checked every 100 ms. */
+  until?: () => boolean;
+  /** Ended once this aborts. */
+  signal?: AbortSignal;
+}
+
 export interface Ctx {
   commander: Commander;
   friends: ReadonlySet<string>;
@@ -253,12 +315,12 @@ export interface Ctx {
   signal: AbortSignal;
   log(...parts: unknown[]): void;
   say(text: string): void;
-  run(name: string, args?: Record<string, unknown>, opts?: { bots?: Bot[] }): Promise<unknown>;
+  run(name: string, args?: Record<string, unknown>, opts?: RunOptions): Promise<unknown>;
 }
 
-export function buildCtx(order: Order, args: Record<string, unknown>, run: Ctx['run']): Ctx {
+export function buildCtx(order: Order, args: Record<string, unknown>, run: Ctx['run'], commander: Commander = commanderOf(order)): Ctx {
   return {
-    commander: commanderOf(order),
+    commander,
     friends: order.friends,
     args,
     trial: order.trial,

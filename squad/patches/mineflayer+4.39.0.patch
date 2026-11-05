@@ -1,0 +1,15 @@
+diff --git a/node_modules/mineflayer/lib/plugins/physics.js b/node_modules/mineflayer/lib/plugins/physics.js
+index bd36f96..d467524 100644
+--- a/node_modules/mineflayer/lib/plugins/physics.js
++++ b/node_modules/mineflayer/lib/plugins/physics.js
+@@ -476,7 +476,9 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+   }
+ 
+   let respawnTimer = 0
+-  bot.on('mount', () => { shouldUsePhysics = false })
++  // squad (docs/41): physics stays on while riding. The rider's body walks with its controls, and squad's
++  // src/bots/mount.ts sends it as the horse's move (vehicle_move); its looks still go out. Upstream stops physics on
++  // mount until the next server teleport, and a mounted bot then never moved its horse.
+   bot.on('death', () => {
+     shouldUsePhysics = false
+     respawnTimer = Date.now()

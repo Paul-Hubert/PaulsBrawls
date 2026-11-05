@@ -93,3 +93,14 @@ export default async function (squad) { await squad.sleep(${FOLLOW_KEEP_MS * 2})
   }
   assert.deepEqual(unhandled, []);
 });
+
+test('follow: an entity that is no longer valid waits untilMs like a null one, and sets no goal (docs/43 A1)', async () => {
+  // A loop of follow() calls on a destroyed entity (a stale players[name].entity) returned at once, awaiting no timer:
+  // the stock follow, defend's and raid's keep-up loops spun on microtasks.
+  const b = new FakeBot('Bob');
+  const t0 = Date.now();
+  const r = await follow(b as never, { isValid: false, position: new Vec3(5, 64, 0) } as never, 3, { untilMs: 60 });
+  assert.ok(Date.now() - t0 >= 50, `waited ${Date.now() - t0} ms`);
+  assert.deepEqual(r, { following: false });
+  assert.equal(sets(b), 0, 'no goal toward a dead entity');
+});

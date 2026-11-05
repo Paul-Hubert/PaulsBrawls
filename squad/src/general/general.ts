@@ -28,12 +28,12 @@ import { along, dirName, dirOf, horizontal, onAxis, parseDirection, parsePositio
 import { centroid, ClusterTracker, kit as kitOfCluster, type Cluster, type Sighting } from './perception';
 
 /** The kits the mod knows (SquadKits), and the bot-name part each one gives: `<General><Arc>01`. */
-export const KITS = ['archer', 'guard', 'miner', 'farmer'] as const;
+export const KITS = ['archer', 'guard', 'miner', 'farmer', 'spearman', 'horseman', 'horsearcher'] as const;
 export type Kit = (typeof KITS)[number];
-const KIT_PREFIX: Record<Kit, string> = { archer: 'Arc', guard: 'Gar', miner: 'Min', farmer: 'Far' };
+const KIT_PREFIX: Record<Kit, string> = { archer: 'Arc', guard: 'Gar', miner: 'Min', farmer: 'Far', spearman: 'Spe', horseman: 'Hor', horsearcher: 'Hac' };
 
 /** The stock orders a General may give (the ones that work with no commander's body). */
-export const OFFERED = ['raid', 'epee', 'tir', 'ligne-archers', 'mur-de-boucliers'] as const;
+export const OFFERED = ['raid', 'attack', 'line'] as const;
 
 /** A General's name: also its virtual owner's player name, and the prefix of its bots' names (16 chars at most). */
 export const GENERAL_NAME = /^[A-Za-z0-9_]{3,11}$/;
@@ -356,10 +356,8 @@ export class Generals {
       '',
       'Orders (order tool; `at` = { pos?, target?, facing? }; target = a cluster id like X1, an enemy name, or #entityId):',
       ' raid — march in formation on at.pos (or the target, whom it hunts) and fight every enemy met; ends after `quiet` seconds without enemies at the point. args: radius=8..48 (24) quiet=1..600 (60). Roles: archers (bow), melee.',
-      ' epee — at.target: everyone attacks it (archers shoot, 2 melee on it, the rest fight what is near it), then they hold where they are; no target: hold at.pos (guards on a ring of 3, archers of 6) and fight threats within radius. Until stopped; retarget re-aims it. args: radius=4..48 (16) seconds=5..600 (60) near=0..16 (4).',
-      ' tir — archers only, they do not move: shoot at.target until dead (seconds), or a volley at at.pos. args: volley=1..16 (3) spread (3) seconds (8) near (4). Ends by itself.',
-      ' ligne-archers — archers form a line at at.pos facing at.facing and shoot everything in range in front. Until stopped; retarget re-forms it. args: spacing (2) back (4) range=4..120 (120) ranks=1..3 (1).',
-      ' mur-de-boucliers — guards (shield) form a straight shield wall at at.pos facing at.facing, hit back what hits them. Until stopped; retarget re-forms it. args: spacing=1..3 (1) reach (4).',
+      ' attack — at.target: its group is attacked, it and every enemy within `group` of it, spread over the bots (archers shoot from where they stand, 2 melee on one foe at most) until the group is down or `seconds`; no target: each archer fires a volley at at.pos, the melee take a ring of 3 around it and fight threats within radius. Horsemen with spears charge in waves: through the group at speed, out `backoff` beyond it, re-form, charge back. Ends by itself (the group down, or the volley fired and the point clear); bots it took from a line go back to it. Retarget re-aims it. args: radius=4..48 (16) seconds=5..600 (60) near=0..16 (4) volley=0..16 (3) spread (3) group=0..32 (8) backoff=6..32 (12). Roles: archers (bow), melee.',
+      ' line — guards (shield) form a straight shield wall at at.pos facing at.facing and hit back what hits them; archers form a line `back` blocks behind it and shoot everything in range, in front first. Until stopped; retarget re-forms it. args: spacing=1..3 (1, guards) archerSpacing=1..4 (2) back (4) range=4..120 (120) ranks=1..3 (1) reach (4) march=0..60 (20: seconds an archer on foot walks to a new slot before it shoots on the way; horse archers always shoot on the move). Roles: guards (shield), archers (bow), melee (neither, e.g. horsemen: on the wall flanks, 2 apart).',
       'advance — the default move when no enemy is visible: squads march along the axis in legs of 48 blocks (raid legs), side by side, until contact or the range.',
       '',
       'How to work: restate the mission in one line, spawn squads (spawn_squad), give orders, then call wait_events and react to what it returns. Never poll sitrep in a loop: wait_events returns when something happens (contact, casualty, order-end, idle…) and carries a sitrep.',
@@ -1003,7 +1001,7 @@ export class Generals {
 
   private mostlyArchers(g: GeneralRecord, s: string): boolean {
     const bots = this.online(g, s);
-    return bots.filter((n) => this.kitOf(g, n) === 'archer').length * 2 > bots.length;
+    return bots.filter((n) => ['archer', 'horsearcher'].includes(this.kitOf(g, n) ?? '')).length * 2 > bots.length;
   }
 
   private anyBot(g: GeneralRecord): Bot | undefined {

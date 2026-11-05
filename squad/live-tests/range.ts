@@ -50,7 +50,7 @@ export async function rangeScenario(k: LiveKit): Promise<void> {
       // Every mob in reach of the line: 120 blocks reach the drowned of the ocean below the strip.
       await rcon.command(`execute positioned ${E.x - WEST / 2} ${E.y} ${E.z} run kill @e[type=!minecraft:player,distance=..200]`);
 
-      captain = mineflayer.createBot({ host: '127.0.0.1', port: k.mcPort, username: CAPTAIN.name, auth: 'offline', version: '1.21.1', customPackets: RECIPES_AS_BYTES } as Parameters<typeof mineflayer.createBot>[0]);
+      captain = mineflayer.createBot({ host: '127.0.0.1', port: k.mcPort, username: CAPTAIN.name, auth: 'offline', version: k.mcVersion, customPackets: RECIPES_AS_BYTES } as Parameters<typeof mineflayer.createBot>[0]);
       await until(() => !!captain?.entity, 30_000, 'the captain in game');
       await rcon.command(`tp ${CAPTAIN.name} ${E.x + 0.5} ${E.y + 1} ${E.z + 0.5} 90 0`);
       await rcon.command(`effect give ${CAPTAIN.name} minecraft:resistance infinite 4 true`);

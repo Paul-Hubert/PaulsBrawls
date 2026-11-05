@@ -29,7 +29,21 @@ public final class SquadKits {
         }
     }
 
-    public record Kit(String name, String label, List<Item> items) {}
+    /**
+     * {@code mounted}: the bot gets a tamed, saddled horse and sits on it ({@link Squad#equip}); it fights from the
+     * saddle.
+     */
+    public record Kit(String name, String label, List<Item> items, boolean mounted) {
+        public Kit(String name, String label, List<Item> items) {
+            this(name, label, items, false);
+        }
+    }
+
+    /**
+     * The spear: {@code iron_spear} where the game has it (26.x), else the iron sword (1.21.1 has no spear). An item id
+     * of a kit may list fallbacks, {@code a|b}, tried in order by {@link Squad#equip}.
+     */
+    static final String SPEAR = "iron_spear|iron_sword";
 
     private static Item at(Slot slot, String id) {
         return new Item(slot, id, 1);
@@ -59,6 +73,18 @@ public final class SquadKits {
             at(Slot.HEAD, "iron_helmet"), at(Slot.CHEST, "iron_chestplate"),
             at(Slot.LEGS, "iron_leggings"), at(Slot.FEET, "iron_boots"),
             at(Slot.MAINHAND, "iron_sword"), at(Slot.OFFHAND, "shield"), inv("cooked_beef", 16))),
+        "spearman", new Kit("spearman", "lancier", List.of(
+            at(Slot.HEAD, "iron_helmet"), at(Slot.CHEST, "iron_chestplate"),
+            at(Slot.LEGS, "iron_leggings"), at(Slot.FEET, "iron_boots"),
+            at(Slot.MAINHAND, SPEAR), at(Slot.OFFHAND, "shield"), inv("cooked_beef", 16))),
+        "horseman", new Kit("horseman", "cavalier", List.of(
+            at(Slot.HEAD, "iron_helmet"), at(Slot.CHEST, "iron_chestplate"),
+            at(Slot.LEGS, "iron_leggings"), at(Slot.FEET, "iron_boots"),
+            at(Slot.MAINHAND, SPEAR), inv("cooked_beef", 16)), true),
+        "horsearcher", new Kit("horsearcher", "archercheval", List.of(
+            at(Slot.HEAD, "chainmail_helmet"), at(Slot.CHEST, "chainmail_chestplate"),
+            at(Slot.LEGS, "chainmail_leggings"), at(Slot.FEET, "chainmail_boots"),
+            enchanted(at(Slot.MAINHAND, "bow"), ARCHER_BOW), inv("arrow", 64), inv("stone_sword", 1), inv("cooked_beef", 16)), true),
         "miner", new Kit("miner", "mineur", List.of(
             at(Slot.MAINHAND, "iron_pickaxe"), inv("iron_shovel", 1), inv("iron_axe", 1),
             inv("torch", 32), inv("cooked_beef", 16))),
@@ -67,7 +93,7 @@ public final class SquadKits {
             inv("water_bucket", 1), inv("bread", 16))));
 
     /** Kit names, for tab completion and the usage line. */
-    public static final List<String> NAMES = List.of("archer", "guard", "miner", "farmer");
+    public static final List<String> NAMES = List.of("archer", "guard", "miner", "farmer", "spearman", "horseman", "horsearcher");
 
     private SquadKits() {}
 

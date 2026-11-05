@@ -6,6 +6,10 @@ apply plugin: 'maven-publish'
 // The first of mc_versions (settings.gradle) is the primary version: it alone answers mcpProbe, because Gradle runs a
 // task named on the command line in every project that has it.
 def primary = project.name == gradle.ext.mcVersions[0]
+// The runs too (versions/<v>/build.gradle): only the primary version defines them, but Loom creates runServer and
+// runClient before a version's runs.clear(), so a non-primary version's run tasks are disabled here. Otherwise
+// `./gradlew runServer` would start a server in every version, all on one port.
+if (!primary) tasks.withType(JavaExec).matching { it.name.startsWith('run') }.configureEach { enabled = false }
 // The jar to ship: remapped to intermediary names for an obfuscated Minecraft, as built for an unobfuscated one.
 def shippedJar = tasks.names.contains('remapJar') ? tasks.named('remapJar') : tasks.named('jar')
 

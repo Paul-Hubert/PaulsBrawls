@@ -216,12 +216,12 @@ dependency, so `--omit=dev` applies them too). A patch that no longer applies fa
 | Roster | `roster.ts` | Bots, owners, tags in `.squad-data/roster.json`, and `dead` for a bot that died (docs/35 F7: offline until `/bots squad respawn`); the runtime is its only writer |
 | Leases | `leases.ts` | A lease stack per bot (depth 4). `plan` :84 grants idle bots first, then busy ones for `take: 'reclaim'` roles, all or nothing. `apply` :106 runs the old order's cleanup before reuse. `release` :130 hands a bot back to the live order below |
 | Orders | `orders/runner.ts`, `order.ts`, `guard.ts`, `claims.ts` | `start` :141 (tracked per binding, below) → `launch` :147 resolves, compiles (once per version) and runs. Each script gets a **lease-guarded Proxy** of each bot (`guardBot` :81): calls check the lease, listeners and timers are tracked, chat is rate-limited, `quit` is refused. Reads pass through, so every helper that acts on the bot calls `checkLease` first: a dead archer's empty inventory threw « no bow » before any guarded call, and its loop went round forever holding its target (docs/35 F1). Every leave and every end runs the R4/R5 abort sequence. Claims are shared across orders. `trigger` :208: a bound item's click delivers to, restarts, starts or stops the player's order of that command (below) |
-| Dialect | `api/squad.ts`, `api/helpers.ts`, `api/scope.ts`, `reference/squad.d.ts` | `squad.parallel`, `squad.tasks` (work queue, re-queues the work of a leaving bot), claims, acquire/release, `ctx.commander` (with `on('trigger')`, `off`, `next`), `ctx.run`. Voyager-named helpers (`mineBlock`, `craftItem`, `goTo`, `shoot`…), and the formation helpers of bound items (`lookDir`, `lineSlots`, `groundAt`, `faceYaw`, `raiseShield`, `stepTo`, `entityOf`; below) |
+| Dialect | `api/squad.ts`, `api/helpers.ts`, `api/scope.ts`, `reference/squad.d.ts` | `squad.parallel`, `squad.tasks` (work queue, re-queues the work of a leaving bot), claims, acquire/release, `ctx.commander` (with `on('trigger')`, `off`, `next`), `ctx.run`. Voyager-named helpers (`mineBlock`, `craftItem`, `goTo`, `shoot`…), and the formation helpers of bound items (`lookDir`, `lineSlots`, `groundAt`, `faceYaw`, `raiseShield`, `entityOf`; below). `api/formation.ts` (docs/43): `approach`/`stepTo`, `lineUp`, `assignSlots`, `onGround`, `pointOf`, `anyBot`, `targets`, `nearestFoe`, `isEnemy`, `inReach`, `melee`, `sidestep`; `squad.crew` (one loop per bot); `ctx.run` subroutines on lent bots (below) |
 | Scripts | `script/compile.ts`, `manifest.ts`, `check.ts` | ESM rewritten in place, keeping lines (`vm.Script` filename `squad:<author>/<name>@vN.mjs`); loop budget + fences; manifest and args (French errors for players); `check_script` = compile + dry module run + typecheck (`BLOCKING_CODES` :40) |
 | Authoring | `authoring.ts`, `http/mcp.ts`, `agent/` | `cmd-…` tickets (30 min; manual 2 h). Seven MCP tools (`get_api_reference`, `get_context`, `list_commands`, `read_command`, `check_script`, `trial_run` ≤ 60 s on idle bots, `submit_command`). Claude Code config in `agent/claude-code/`, opencode config in `agent/opencode.json` |
 | Storage | `store/commands.ts`, `journal/journal.ts` | `.squad-data/commands/<uuid>/<name>/meta.json` + `vN.mjs` (append-only, shares, revert); SQLite `squad.db` (WAL, `synchronous=NORMAL`), one row per order with its full report, and one `vitals` row per minute |
 | HTTP | `http/server.ts` | 22 `POST /api/...` routes (incl. `/api/metrics`, `/api/orders/check`, `/api/orders/trigger`, `/api/bots/respawn`), `GET /events` (SSE: `hello`, `notice`, `state`; notices buffered while no mod listens), `POST /mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN` |
-| Stock | `src/stock/*.mjs` | `come`, `follow`, `defend`, `gather`, `deposit`, `attack`, `bring`, `raid`, and for bound items `mur-de-boucliers`, `epee`, `ligne-archers`, `tir`. Usable by everyone, and the agent's examples. `defend`, `raid` and the four: below |
+| Stock | `src/stock/*.mjs` | `come`, `follow`, `defend`, `gather`, `deposit`, `bring`, `raid`, and for bound items `line` and `attack` (docs/40; `line`, `attack` and `raid` written on `api/formation.ts`, docs/43; `attack`'s group targets and horsemen's lance waves on `api/lance.ts`, docs/44). Usable by everyone, and the agent's examples. `defend`, `raid` and the four: below |
 
 **Block searches** (`api/block-search.ts`, [docs/37 §10](../../37-squad-worker-reads-plan.md), P6). `mineBlock`, so
 `gather`, finds its blocks with `findBlockPositions`: mineflayer's `bot.findBlocks({ matching, maxDistance, count })`
@@ -274,8 +274,20 @@ The mod keeps the binding on the item stack and sends each click; the runtime de
   for it and loops until none is left, then decides synchronously, so two clicks never start two orders. The order
   that start produced gets the trigger even before it listens: a bow's arrow-hit reaches the order its arrow-release
   started. If that start failed, the first waiting trigger starts the order and the others are delivered to it.
-- **The script side** (`api/scope.ts`, `commanderOf` :166). One commander object per order, in a `WeakMap`, shared by
-  its `ctx.run` subroutines, so a click reaches the whole order once.
+- **The script side** (`api/scope.ts`, `commanderOf`). One commander object per order, in a `WeakMap`, shared by
+  its `ctx.run` subroutines, so a click reaches the whole order once. A subroutine gets `subCommander` over it: its
+  `on('trigger')` listeners are removed and a waiting `next()` rejects when the subroutine ends (docs/43 C2).
+- **`ctx.run` subroutines lend bots** (docs/43 C2/C3, `runner.runSub`, `Squad.view`, `Order.lend/unlend`). A
+  subroutine runs on a view of its caller's squad: the bots it is given (default all of the caller's) are lent to it
+  for as long as it runs. `Order.lentTo` keeps a stack of holders per member (empty: the order's own squad); each
+  holder has its own guarded bot (`Order.guardFor`), whose lease check also requires that holder on top, so the
+  caller's guard throws `BotLeftError('lent')` and its listeners on the bot are removed; lending runs the abort
+  sequence. A lent bot leaves the caller's `bots`/roles (`left`, reason `lent`); the view takes it in the first of
+  its manifest's roles it matches with room (a role's unmet `min` is logged, no longer an error). Given one of the
+  caller's live arrays, the view is live: a bot joining it later is lent too. The view's `on`, `parallel`, `tasks`,
+  `crew` and `sleep` are its own (its events only for its bots). It ends when the subroutine returns or throws, when
+  `until()` turns true (every 100 ms) or `signal` aborts (`ctx.run` then resolves undefined): `dispose()` gives
+  each bot back to the holder under it (`joined`, with the role it had), and the view's sleeps reject.
   - On delivery (`Order.deliverTrigger`, `order.ts` :449) `order.snap` is replaced; `report.snap` keeps the start one.
   - `atOf` (:140) builds a new `ctx.commander.at` (positions as `Vec3`, `trigger.hit` too). Every listener gets it.
   - Then every pending `next()` resolves with it, or, with none waiting, it fills the one slot (latest wins).
@@ -294,6 +306,8 @@ The mod keeps the binding on the item stack and sends each click; the runtime de
   restart. Tests: `squad/tests/triggers.test.ts`, plus the HTTP round trip in `tests/http.test.ts`.
 
 ## Orders bound to items — the helpers and the four stock commands (docs/29 §5.4 items 5, 7–8)
+
+> **Since 2026-11-04 ([docs/40](../../40-squad-selection.md))** the four commands below are two: `line` (`src/stock/line.mjs`: the `mur-de-boucliers` guards on the point and the `ligne-archers` archers `back` blocks behind them, in one order; `spacing` is the guards', `archerSpacing` the archers') and `attack` (`src/stock/attack.mjs`: `epee`'s fight on a target plus `tir`'s volley on the ground, bounded: it ends once the target is down or the volley fired and the point clear, so bots it took from a `line` go back to it). Each role keeps the behaviour the table describes; the files named there are deleted. Orders are scoped to the selected squad (a roster tag `esc-N`, one per `/bots squad spawn`; `OrderRequest.squad`, the binding key (commander, command, squad)); the selector is an item bound to `select` (the mod's `SquadSelection`, `SquadTriggers.select`). docs/40 is the as-built.
 
 **Any item carries any order** (Paul, 2026-10-31, after the first build). The item and the trigger say only *where* the
 player points; every command reads that the same way, whatever the item or the trigger kind, and from `/bots order`
@@ -324,16 +338,32 @@ The helpers (`api/helpers.ts`; scope globals through `HELPERS` and `compile.ts` 
   is true (`SHIELD_REASSERT_MS`, which recovers a shield the server dropped). Nothing is sent while auto-eat eats
   (`autoEat.isEating`): auto-eat lowers the shield itself (`deactivateItem` before eating), and the next call raises it
   again. A bot leaving an order lowers it (the abort sequence's `deactivateItem`).
-- `stepTo(bot, place, { until, timeoutMs = 3000 })` (since 2026-11-02, docs/35 F4; the shield wall's last step, docs/35
-  F2, moved here when the archer line needed it too: a copy put `ligne-archers` over the 400 lines a command may have):
-  the last step onto an exact place (its x and z; its y unused), from within 2 blocks (farther: "walk to its block
-  first", a `HelperError`). A path ends on a block's centre, up to 0.7 off a place inside that block, so a line at any
-  yaw walks each bot to its place's block (`GoalBlock`), then steps. It clears the pathfinder's goal, sneaks (slow
-  enough to stop where it lets go; never off an edge) and steers on every `physicsTick` (mineflayer runs late ticks in
-  a burst): `forward` toward the place, let go within 0.08, done once the body moved less than 0.005 in a tick
-  (`there`). `until()` (every 50 ms) ends it, and so does `timeoutMs` (`timedOut`). On every exit it takes its
-  steering off the ticks and lets go of `forward` and `sneak`, unless a later `stepTo` on the same body (a per-body
-  `WeakMap`) took them over. A bot that left throws `BotLeftError` (the abort sequence released its controls).
+- `approach(bot, place, { until, timeoutMs = 30 000, stepTimeoutMs = 3000, tolerance = 0.15 })` (`api/formation.ts`,
+  docs/43 B; replaced the sneaking last step of docs/35 F2/F4): the pathfinder (`GoalNear` on the exact coordinates,
+  range 2) until the body is within 2 blocks of the place, then `stepTo`'s direct walk. `tolerance` ≥ 1 is a loose
+  hold: pathfinding only. `until()` every 100 ms through both parts.
+- `stepTo(bot, place, { until, timeoutMs = 3000, tolerance = 0.15 })`: the direct walk onto an exact place from within
+  2.75 blocks (farther: a `HelperError`), at walking speed, **never sneaking**, steered on every `physicsTick`. On the
+  ground prismarine-physics keeps 0.546 of the horizontal velocity per tick, so a body let go slides
+  `entity.velocity` / (1 − 0.546) on. Each tick it predicts where the body would come to rest if let go now; it lets
+  go of `forward` when that is within 0.04 of the place, else holds it one more tick toward the error (a held tick moves
+  the rest point by the walking acceleration × 2.2: about 0.22 block on foot, 0.37 on a horse); an error smaller than
+  that is closed by two ticks at an angle either side of it (their sideways parts cancel). The acceleration comes from
+  the speed attribute (a horse's, mount.ts) and is corrected from what each walked tick did. A place up to 1.3 above
+  is jumped onto. Done at rest within `tolerance` (`there`); `until()` (every 50 ms) and `timeoutMs` (`timedOut`) end
+  it. On every exit it takes its steering off the ticks and lets go of `forward` (and `jump`), unless a later `stepTo`
+  on the same body took them over. Tests: `tests/approach.test.ts` (prismarine's ground physics in FakeBot).
+- The other formation and fight helpers (`api/formation.ts`, typed in `squad.d.ts`): `anyBot(bots, fn)` (first answer,
+  a bot that left skipped), `onGround(bots, p)` (p's x and z at its column's ground y), `pointOf(bots, at, { distance,
+  ahead })` (where a click points for a formation), `assignSlots(bots, slots, yaw)` (ranks front first, each left to
+  right; bots by where they stand), `lineUp(bots, centre, yaw, opts)` (lineSlots + onGround + assignSlots), `isEnemy`,
+  `nearestFoe(bot, range, { from, filter, prefer: 'hostile' | 'nearest' })`, `targets()` (who is on what: `load`,
+  `take`, `pick` by tiers, `block`/`blocked` for a target a block stopped a shot at), `inReach(bot, e)` (eyes, the
+  saddle's for a rider, to the hitbox), `melee(bot, foe, { leash, closeIn })` (never a fight that breaks off before its
+  first swing: farther than radius + 3 it closes in, then pauses 200 ms), `sidestep(bot, from, { min, max })`.
+  `pointedTarget` also takes `squad.bots`. `squad.crew(fn, { roles, while, setup, minPassMs = 50 })`: one loop per
+  bot, a new one for a bot that comes back (with `setup` again for its listeners), every pass followed by at least a
+  macrotask and padded to `minPassMs`.
 - `shoot(bot, target)`: an entity (anything with `isValid`, as prismarine-entity's are) or a position (a Vec3,
   `[x, y, z]`, a block, a snapshot ref). Squad's own aim since docs/37 P3 (`aim/`; hawkEye is gone):
   - **Which bow:** the one in hand, else one with Infinity (`enchantLevel`: 1.21.1's prismarine-item hands back the

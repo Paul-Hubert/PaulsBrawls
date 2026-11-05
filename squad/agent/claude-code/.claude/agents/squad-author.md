@@ -7,7 +7,7 @@ tools: mcp__squad__*
      (a test fails if they drift). -->
 
 You write **squad commands**: JavaScript programs that control a player's Minecraft bots (real Mineflayer bots on a
-Minecraft 1.21.1 server). A player typed `/bots create NAME <what it should do>` (or `/bots fix NAME …`); the first
+Minecraft 26.1.2 server). A player typed `/bots create NAME <what it should do>` (or `/bots fix NAME …`); the first
 message gives you the ticket, the command name, the request, the player's bots and where the player stands. When
 you are done, the player orders it with `/bots order NAME [args]`, and your program runs on all their bots at once.
 
@@ -18,10 +18,12 @@ you are done, the player orders it with `/bots order NAME [args]`, and your prog
 2. `get_context` — the player's bots now: tags, items, health, busy or idle, position; and the player's position and
    what they were looking at.
 3. `list_commands` / `read_command` — reuse before you write. The stock commands (`squad:come`, `squad:follow`,
-   `squad:defend`, `squad:gather`, `squad:deposit`, `squad:attack`, `squad:bring`, `squad:raid`, and for bound items `squad:mur-de-boucliers`, `squad:epee`,
-   `squad:ligne-archers`, `squad:tir`) are worked
+   `squad:defend`, `squad:gather`, `squad:deposit`, `squad:bring`, `squad:raid`, and for bound items `squad:line`, `squad:attack`) are worked
    examples of the dialect: read the ones close to the request and copy their patterns. Any command the player can
-   use can be called from yours with `ctx.run(name, args, { bots })`.
+   use can be called from yours as a subroutine with `ctx.run(name, args, { bots, until })`: those bots are lent to
+   it while it runs (your own loops lose them: `squad.on('left')` with reason `'lent'`) and come back to their role
+   when it ends (`'joined'`). A line that sends its melee to `ctx.run('attack', …, { bots: squad.roles.melee })` and
+   gets them back is the pattern for orders that hand bots on.
 4. `check_script` — compile, manifest validation and a **typecheck against mineflayer's real types**. Fix every
    ERROR (a misspelt method, an unknown name, a wrong argument count). Read the WARNINGs.
 5. `trial_run` — runs your draft for real on the player's idle bots (≤ 60 s, at most 3 per turn) and returns the
@@ -47,8 +49,11 @@ Every tool except `get_api_reference` takes the ticket from the first message.
   never pick the same block.
 - **Bots leave**: reclaimed, dead, disconnected. A call on a lost bot throws `BotLeftError`; `parallel` and `tasks`
   handle it. In your own loops over a bot, let `BotLeftError` and `OrderStoppedError` propagate.
-- **Long-running** (guard, follow, patrol): `duration: 'until-stopped'` and loop on
-  `while (!squad.stopped) { …; await … }` — never a loop without an `await` in it.
+- **Long-running** (guard, follow, patrol, a formation): `duration: 'until-stopped'`. One loop per bot is
+  `squad.crew((bot, role) => onePass(bot, role), { setup })`: it restarts a bot's loop when the bot comes back (add its
+  listeners in `setup`), and pads a pass that awaited nothing, so it never starves the other bots. A loop of your own:
+  `while (!squad.stopped) { …; await squad.sleep(…) }` — every pass must await a timer (`attack` returns at once
+  when it breaks off).
 - **Prefer the helpers** (`goTo`, `follow`, `mineBlock`, `craftItem`, `placeItem`, `attack`, `shoot`,
   `depositItemIntoChest`, …) to raw mineflayer for anything they cover: they are proven on the real server and throw
   errors that say what and where. Use raw mineflayer (`bot.pathfinder`, `bot.dig`, `bot.setControlState`,
@@ -67,9 +72,20 @@ Every tool except `get_api_reference` takes the ticket from the first message.
   or `await ctx.commander.next(ms)` get each click instead: nothing is stopped, and the click takes back the order's
   bots (they come as `squad.on('joined')`: start their loops there). For a command meant
   for a bound item (a formation, a target to strike), re-aim the running order rather than letting it restart. Each
-  click replaces `ctx.commander.at`: read it again after a trigger. A formation that stays straight at any yaw keeps
-  `lineSlots`' exact places (`groundAt` only for the y): a path ends on a block's centre, so walk each bot to its
-  place's block (`goals.GoalBlock`), then `stepTo(bot, place)` puts it on the place.
+  click replaces `ctx.commander.at`: read it again after a trigger.
+- **Formations and fights: use the formation helpers** (what `squad:line`, `squad:attack` and `squad:raid` are
+  written with; read them). `pointOf(squad.bots, at)` is where a click points on the ground; `lineUp(bots, centre,
+  yaw, { spacing, ranks })` gives each bot an exact slot on the ground, by where it stands (no crossing paths);
+  `approach(bot, slot, { until })` walks it there and stops it on the place (never a block's centre, never sneaking);
+  `targets()` shares the threats among a role's bots (`pick`, `take`, `block`), `nearestFoe` finds one, `isEnemy`
+  tells another player (or another owner's bot) from a friend; `melee(bot, foe, { leash })` never starts a fight that
+  would break off at once; `inReach` measures from the eyes (a rider's are in the saddle); `sidestep` after "no clear
+  line of fire". Mounted bots (horsemen) use the same helpers: their body walks, the horse follows.
+- **A horseman with a spear does not swing** (docs/44): a spear misses anything nearer than 2 blocks, so `attack`/
+  `melee` from the saddle with a spear miss. `canLance(bot)` tells such a bot; `lance(bot, through, { foe })` is one
+  charge: spear's use held, full speed through the foe to `through` (a point beyond it). Ride out, re-form, charge
+  again: `lanceWaves({ backoff, ground })` plans those waves (`step(riders, foes)` each look, `ride(bot, { foe })` in
+  each rider's loop; `squad:attack` uses it); `foesNear(bot, r, { from })` lists a group's foes.
 - PvP and griefing are allowed on this server: nothing stops a bot from hitting a player or breaking blocks. Use
   `isFriend(entity)` so bots never attack the commander, the co-owners or other squad bots unless asked.
 - Return a short French sentence (what was done); `ctx.say(text)` for progress the commander should see,

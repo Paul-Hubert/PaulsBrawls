@@ -69,6 +69,25 @@ test('the loop budget stops an endless synchronous loop', async () => {
   assert.throws(() => (ex.default as () => void)(), StalledError);
 });
 
+test('a loop that awaits only resolved promises lets timers run: an await yields once no timer ran for YIELD_MS (docs/43 A1)', async () => {
+  // A melee bot whose attack() broke off at once spun such a loop: 30 bots, loop p99 3039 ms, until the canary.
+  const f = compile('export default async function (spin) { const t0 = Date.now(); while (Date.now() - t0 < 1200) { await null; } }', 'squad:t/spin@v1.mjs');
+  const s = scope();
+  Object.assign(s, createLoopBudget(() => undefined, 1_000_000_000));
+  const ex = await f(s);
+  await new Promise((r) => setTimeout(r, 120)); // a heartbeat first: the yield is measured from the last one
+  const fired: number[] = [];
+  const t0 = Date.now();
+  const timer = setInterval(() => fired.push(Date.now() - t0), 20);
+  try {
+    await (ex.default as () => Promise<void>)();
+  } finally {
+    clearInterval(timer);
+  }
+  // Before: no timer ran until the loop ended (1.2 s). Now: within a heartbeat (100 ms) + YIELD_MS of the start.
+  assert.ok(fired.length >= 3 && fired[0]! < 450, `timers fired at ${fired.slice(0, 5).join(', ')} ms`);
+});
+
 test('an await resets the budget, and the fence stops a stopped order at its next await', async () => {
   let stopped = false;
   const s = scope();

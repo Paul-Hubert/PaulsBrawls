@@ -420,3 +420,45 @@ test('snapshot(): kinds whitelisted, numbers coerced, strings checked, unknown k
   assert.equal(snapshot({ lookEntity: 'zombie', lookBlock: [1, 2, 3] }).lookEntity, null);
   assert.equal(snapshot(null), EMPTY_SNAPSHOT);
 });
+
+// -- squads (docs/40): a selection scopes an order to one `/bots squad spawn` ------------------------------------------
+
+test('a squad-scoped trigger grants only that squad\'s bots; each squad has its own order of a command; a stop stops only its own', async () => {
+  const h = harness();
+  h.bot('Alpha1', [PAUL], [], ['esc-1']);
+  h.bot('Alpha2', [PAUL], [], ['esc-1']);
+  h.bot('Bravo1', [PAUL], [], ['esc-2']);
+  h.bot('Loose', [PAUL]);
+  h.command(PAUL, 'mur', LISTEN);
+  const a = await trigger(h, PAUL, 'mur', snap(1), { squad: 'esc-1' });
+  assert.ok(a.ok && 'started' in a && a.started, a.text);
+  const first = h.runner.get(idOf(a))!;
+  assert.deepEqual(first.memberNames().sort(), ['Alpha1', 'Alpha2']);
+  assert.equal(first.squad, 'esc-1');
+  // The other squad: a second order of the same command, not a restart of the first.
+  const b = await trigger(h, PAUL, 'mur', snap(2), { squad: 'esc-2' });
+  assert.ok(b.ok && 'started' in b && b.started, b.text);
+  assert.deepEqual(h.runner.get(idOf(b))!.memberNames(), ['Bravo1']);
+  assert.equal(first.running, true);
+  // The first squad's next click reaches its own order.
+  await until(() => first.listening, 1000, 'listening');
+  const again = await trigger(h, PAUL, 'mur', snap(3), { squad: 'esc-1' });
+  assert.deepEqual(again, { ok: true, text: '', orderId: first.id, delivered: true });
+  // A stop for squad 2 stops its order only.
+  const stop = await trigger(h, PAUL, 'mur', snap(4), { squad: 'esc-2', stop: true });
+  assert.ok('stopped' in stop && stop.stopped, stop.text);
+  assert.equal(first.running, true);
+  const none = await trigger(h, PAUL, 'mur', snap(5), { squad: 'esc-2', stop: true });
+  assert.equal(none.text, '[Bots] Aucun ordre « mur » en cours pour cette escouade.');
+  await h.runner.stopAll();
+});
+
+test('a squad with none of the commander\'s bots is refused; another player\'s bots of that squad are never granted', async () => {
+  const h = harness();
+  h.bot('Theirs', [ALICE], [], ['esc-9']);
+  h.bot('Mine', [PAUL]);
+  h.command(PAUL, 'mur', LISTEN);
+  const r = await trigger(h, PAUL, 'mur', snap(1), { squad: 'esc-9' });
+  assert.deepEqual(r, { ok: false, text: "[Bots] Aucun de tes bots dans l'escouade sélectionnée (esc-9)." });
+  assert.deepEqual(h.runner.candidates(PAUL.uuid, [], 'esc-9'), []);
+});

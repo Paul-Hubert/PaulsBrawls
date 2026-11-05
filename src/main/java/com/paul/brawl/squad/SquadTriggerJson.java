@@ -72,9 +72,10 @@ public final class SquadTriggerJson {
 
     /**
      * The body of {@code POST /api/orders/trigger}: who, the binding's order and line (parsed like
-     * {@code /bots order}), {@code stop} only for the stop gesture, and the snapshot (with its trigger).
+     * {@code /bots order}), {@code stop} only for the stop gesture, the selected squad ({@code esc-N}, docs/40; none
+     * when null) and the snapshot (with its trigger).
      */
-    public static JsonObject body(String uuid, String name, boolean admin, SquadBinding binding, boolean stop, JsonObject snap) {
+    public static JsonObject body(String uuid, String name, boolean admin, SquadBinding binding, boolean stop, String squad, JsonObject snap) {
         JsonObject b = new JsonObject();
         JsonObject by = new JsonObject();
         by.addProperty("uuid", uuid);
@@ -87,6 +88,7 @@ public final class SquadTriggerJson {
         b.add("filters", array(a.filters()));
         if (a.take() != null) b.addProperty("take", a.take());
         if (stop) b.addProperty("stop", true);
+        if (squad != null) b.addProperty("squad", squad);
         b.add("snap", snap);
         return b;
     }

@@ -1,53 +1,66 @@
-// Minecraft 26.1.2, being ported. The shared build is gradle/mod.gradle; the versions are in gradle.properties.
+// Minecraft 26.1.2, the default version since 2026-11-04 (docs/39). The shared build is gradle/mod.gradle; the
+// versions are in gradle.properties.
 plugins {
 	id 'net.fabricmc.fabric-loom'
 }
 
 apply from: rootProject.file('gradle/mod.gradle')
 
+def primary = project.name == gradle.ext.mcVersions[0]
+
 loom {
-	// Only devServer26 (task runDevServer26): runServer and runClient are the primary version's (Gradle runs a task
-	// named on the command line in every project that has it). It is the 26.1.2 dev server in the repo's dev-26.1.2/
-	// (port 25602, its own world and ports, dev-26.1.2/README.md). Run it with
-	// ./gradlew -Pmc_versions=1.21.1,26.1.2 :26.1.2:runDevServer26 while 26.1.2 is out of mc_versions.
-	runs.clear()
-	runs {
-		devServer26 {
-			server()
-			configName = "Dev Server 26.1.2"
-			runDir "../../dev-26.1.2"
+	// Only the primary version (the first of mc_versions) has runs: Gradle runs a task named on the command line in
+	// every project that has it. runServer is the production server (run-26.1.2/, port 25565, run-26.1.2/README.md),
+	// runDevServer the dev server (dev-26.1.2/, port 25602, its own world and ports, dev-26.1.2/README.md), runClient a
+	// dev client in run-26.1.2/. They run in the repo's directories, not in this project's.
+	if (primary) {
+		runs {
+			configureEach {
+				runDir "../../run-26.1.2"
+			}
+			devServer {
+				inherit server
+				configName = "Dev Server"
+				runDir "../../dev-26.1.2"
+			}
 		}
+	} else {
+		runs.clear()
 	}
 }
 
-// The configs that keep this server off the other servers' ports and off the 1.21.1 bots, the God's prompts (the
-// repo root's prompt.txt, build_prompt.txt) and server.properties (from the tracked server.defaults.properties: 26.x
-// writes a generated management-server-secret into server.properties). They stay local (the mod and the server write
-// tokens into some of them), so a fresh clone gets them here, once; an existing file is never touched.
-def devServer26Configs = [
+// What each server needs and git does not hold, written at its start when missing (an existing file is never touched):
+// server.properties from the tracked server.defaults.properties (26.x writes a generated management-server-secret
+// into server.properties, so it stays local), the God's prompts from the repo root, and, for the dev server, the
+// configs that keep it off production's ports (the mod and the server write tokens into some of them).
+def devServerConfigs = [
 	'village_config.properties': ['# dev-26.1.2/: the trade-settlement listener off 8767 (production) and 8777 (dev/)',
 		'listenerPort=8778'],
 	'god_agent.properties': ['# The God MCP servers off 8771 (production) and 8781 (dev/), if godAgent is set to external.',
 		'mcpPort=8782'],
-	'squad.properties': ['# Off: the runtime (squad/) joins 1.21.1 only until docs/39 §5 step 3.', 'enabled=false'],
-	'bridge_config.properties': ['# Off: the unified bridge (LLMBot) joins 1.21.1 only until docs/39 §5 step 3.',
+	'squad.properties': ['# On: the dev Squad runtime (cd squad; npm run start:dev, squad/squad-dev.json), a dev token on loopback.',
+		'enabled=true', 'url=http\\://127.0.0.1\\:8783', 'token=dev-26-squad-token'],
+	'bridge_config.properties': ['# Off: the unified bridge (LLMBot) cannot join 26.x yet (its mineflayer is 4.35, docs/39 §5).',
 		'enabled=false'],
-	'mcp_config.properties': ['# Off: the MCP tools come from the unified bridge (1.21.1 only for now).', 'enabled=false'],
+	'mcp_config.properties': ['# Off: the MCP tools come from the unified bridge.', 'enabled=false'],
 ]
-tasks.matching { it.name == 'runDevServer26' }.configureEach {
-	def dir = rootProject.file('dev-26.1.2')
-	doFirst {
-		dir.mkdirs()
-		devServer26Configs.each { name, lines ->
-			def f = new File(dir, name)
-			if (!f.exists()) f.text = lines.join('\n') + '\n'
-		}
-		['prompt.txt': rootProject.file('prompt.txt'), 'build_prompt.txt': rootProject.file('build_prompt.txt'),
-		 'server.properties': new File(dir, 'server.defaults.properties')].each { name, from ->
-			def f = new File(dir, name)
-			if (!f.exists()) f.bytes = from.bytes
-		}
+def seed = { File dir, Map<String, List<String>> configs ->
+	dir.mkdirs()
+	configs.each { name, lines ->
+		def f = new File(dir, name)
+		if (!f.exists()) f.text = lines.join('\n') + '\n'
 	}
+	['prompt.txt': rootProject.file('prompt.txt'), 'build_prompt.txt': rootProject.file('build_prompt.txt'),
+	 'server.properties': new File(dir, 'server.defaults.properties')].each { name, from ->
+		def f = new File(dir, name)
+		if (!f.exists() && from.exists()) f.bytes = from.bytes
+	}
+}
+tasks.matching { it.name == 'runDevServer' }.configureEach {
+	doFirst { seed(rootProject.file('dev-26.1.2'), devServerConfigs) }
+}
+tasks.matching { it.name == 'runServer' }.configureEach {
+	doFirst { seed(rootProject.file('run-26.1.2'), [:]) }
 }
 
 dependencies {
@@ -56,7 +69,7 @@ dependencies {
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 }
 
-// While it is ported: every compile error, not javac's first 100.
+// Every compile error, not javac's first 100.
 tasks.withType(JavaCompile).configureEach {
 	options.compilerArgs += ['-Xmaxerrs', '10000']
 }

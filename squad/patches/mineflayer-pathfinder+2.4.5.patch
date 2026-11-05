@@ -1,5 +1,5 @@
 diff --git a/node_modules/mineflayer-pathfinder/index.js b/node_modules/mineflayer-pathfinder/index.js
-index b38bd30..472554f 100644
+index b38bd30..1f4624f 100644
 --- a/node_modules/mineflayer-pathfinder/index.js
 +++ b/node_modules/mineflayer-pathfinder/index.js
 @@ -1,5 +1,3 @@
@@ -164,7 +164,18 @@ index b38bd30..472554f 100644
        if (stopPathing) {
          stop()
          return
-@@ -629,8 +679,8 @@ function inject (bot) {
+@@ -604,7 +654,9 @@ function inject (bot) {
+       dz = nextPoint.z - p.z
+     }
+ 
+-    bot.look(Math.atan2(-dx, -dz), 0)
++    // squad (docs/41): bot.pathfinder.steer, when set, turns the walk (a rider with a free rein: only its horse's heading).
++    if (typeof bot.pathfinder.steer === 'function') bot.pathfinder.steer(Math.atan2(-dx, -dz))
++    else bot.look(Math.atan2(-dx, -dz), 0)
+     bot.setControlState('forward', true)
+     bot.setControlState('jump', false)
+ 
+@@ -629,8 +681,8 @@ function inject (bot) {
      }
  
      // check for futility

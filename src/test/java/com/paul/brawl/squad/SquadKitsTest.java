@@ -46,7 +46,7 @@ class SquadKitsTest {
         // Nothing else in any kit is enchanted.
         for (String name : SquadKits.NAMES) {
             for (SquadKits.Item i : SquadKits.find(name).orElseThrow().items()) {
-                if (i != bow) assertTrue(i.enchantments().isEmpty(), name + " " + i.id());
+                if (i != bow && !i.id().equals("bow")) assertTrue(i.enchantments().isEmpty(), name + " " + i.id());
             }
         }
     }
@@ -60,7 +60,7 @@ class SquadKitsTest {
                 if (s == SquadKits.Slot.INVENTORY) continue;
                 assertTrue(k.items().stream().filter(i -> i.slot() == s).count() <= 1, name + " " + s);
             }
-            assertTrue(k.items().stream().allMatch(i -> i.id().matches("[a-z_]+") && i.count() >= 1 && i.count() <= 64), name);
+            assertTrue(k.items().stream().allMatch(i -> i.id().matches("[a-z_|]+") && i.count() >= 1 && i.count() <= 64), name);
             assertTrue(k.items().stream().flatMap(i -> i.enchantments().entrySet().stream())
                 .allMatch(e -> e.getKey().matches("[a-z_]+") && e.getValue() >= 1 && e.getValue() <= 255), name);
         }
@@ -89,7 +89,20 @@ class SquadKitsTest {
     }
 
     @Test
+    void spearmanAndHorsemanCarrySpearsAndOnlyMountedKitsRide() {
+        assertEquals(Set.of("shield"), ids("spearman", SquadKits.Slot.OFFHAND));
+        assertTrue(ids("horseman", SquadKits.Slot.OFFHAND).isEmpty(), "no shield");
+        assertEquals(ids("spearman", SquadKits.Slot.MAINHAND), ids("horseman", SquadKits.Slot.MAINHAND));
+        assertEquals(Set.of("bow"), ids("horsearcher", SquadKits.Slot.MAINHAND));
+        assertTrue(SquadKits.find("horseman").orElseThrow().mounted());
+        assertTrue(SquadKits.find("horsearcher").orElseThrow().mounted());
+        assertTrue(!SquadKits.find("spearman").orElseThrow().mounted());
+        assertTrue(!SquadKits.find("guard").orElseThrow().mounted());
+        assertEquals("horseman", SquadKits.find("horsemen".replace("men", "man") + "s").orElseThrow().name());
+    }
+
+    @Test
     void kitTagsReplaceEachOther() {
-        assertEquals(List.of("-archer", "-miner", "-farmer", "+guard"), SquadKits.tagChanges(SquadKits.find("Guard").orElseThrow()));
+        assertEquals(List.of("-archer", "-miner", "-farmer", "-spearman", "-horseman", "-horsearcher", "+guard"), SquadKits.tagChanges(SquadKits.find("Guard").orElseThrow()));
     }
 }

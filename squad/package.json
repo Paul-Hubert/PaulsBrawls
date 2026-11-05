@@ -11,6 +11,7 @@
     "postinstall": "patch-package --error-on-fail",
     "start": "tsx src/supervisor.ts squad.json",
     "start:direct": "tsx src/main.ts squad.json",
+    "start:dev": "tsx src/supervisor.ts squad-dev.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node --import tsx --test \"tests/**/*.test.ts\"",

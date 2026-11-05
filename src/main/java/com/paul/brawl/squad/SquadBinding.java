@@ -59,6 +59,7 @@ public record SquadBinding(String order, String line, boolean glint, String lore
 
     /** « Ordre : mur-de-boucliers spacing=2 », cut to {@link #MAX_LORE} characters. */
     static String loreFor(String order, String line) {
+        if (SquadSelection.isSelector(order)) return "Sélecteur d'escouade";
         String s = "Ordre : " + order + (line == null || line.isBlank() ? "" : " " + line.trim());
         return s.length() <= MAX_LORE ? s : s.substring(0, MAX_LORE - 1) + "…";
     }

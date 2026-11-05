@@ -1,4 +1,5 @@
-// Minecraft 1.21.1, the production version. The shared build is gradle/mod.gradle; the versions are in gradle.properties.
+// Minecraft 1.21.1, the old production version (26.1.2 is the default since 2026-11-04, docs/39). The shared build
+// is gradle/mod.gradle; the versions are in gradle.properties.
 plugins {
 	id 'net.fabricmc.fabric-loom-remap'
 }
@@ -6,18 +7,23 @@ plugins {
 apply from: rootProject.file('gradle/mod.gradle')
 
 loom {
-	// runServer is the production server (run/, port 25565). runDevServer is the server for dev tests (dev/, port
-	// 25599, its own world and ports, dev/README.md): the live tests target it, so they never touch production. Both
-	// run in the repo's run/ and dev/, not in this project's directory.
-	runs {
-		configureEach {
-			runDir "../../run"
+	// Only the primary version (the first of mc_versions) has runs: Gradle runs a task named on the command line in
+	// every project that has it. With "-Pmc_versions=1.21.1": runServer is the 1.21.1 production server (run/, port
+	// 25565, run/README.md), runDevServer the 1.21.1 dev server (dev/, port 25599, its own world and ports,
+	// dev/README.md). Both run in the repo's run/ and dev/, not in this project's directory.
+	if (project.name == gradle.ext.mcVersions[0]) {
+		runs {
+			configureEach {
+				runDir "../../run"
+			}
+			devServer {
+				inherit server
+				configName = "Dev Server"
+				runDir "../../dev"
+			}
 		}
-		devServer {
-			inherit server
-			configName = "Dev Server"
-			runDir "../../dev"
-		}
+	} else {
+		runs.clear()
 	}
 }
 

@@ -11,6 +11,7 @@ import mineflayer, { type Bot } from 'mineflayer';
 import { logger } from '../logger';
 import { boundPathfinder, defaultMovements, type AbortableBot } from './hardening';
 import { installMeleeHits } from './hits';
+import { installRiding } from './mount';
 import { loadPlugins, pathfinder } from './plugins';
 import { keepDecodersAlive, RECIPES_AS_BYTES, SHARED_WORLD_PACKETS, type SkippedPacket } from './protocol';
 import type { OffloadedBot } from './pathworkers/offload';
@@ -36,7 +37,7 @@ export interface WorldFeed {
 /** A mineflayer plugin standing in for its internal `blocks` (createBot's `plugins.blocks`). */
 export type BlocksPlugin = (bot: unknown, options: Record<string, unknown>) => void;
 
-export const SUPPORTED_MINECRAFT_VERSION = '1.21.1'; // R11: server, mod and bot must agree
+export const SUPPORTED_MINECRAFT_VERSION = '26.1.2'; // R11: server, mod and bot must agree (26.1.2 since 2026-11-04, docs/39)
 const KEEPALIVE_INTERVAL_MS = 90_000; // R13
 const RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
 /** A connected bot that received no packet for this long is deaf (its decoder died): it is reconnected. */
@@ -470,6 +471,7 @@ function realSetup(bot: Bot): void {
   boundPathfinder(bot as unknown as AbortableBot); // R6
   loadPlugins(bot); // R15/R16/R17
   installMeleeHits(bot); // bot.on('meleeHit'): who hit it in melee, a shield block included
+  installRiding(bot); // a mounted kit's horse moves with the bot's body (docs/41)
 }
 
 function safeMovements(bot: Bot): unknown {

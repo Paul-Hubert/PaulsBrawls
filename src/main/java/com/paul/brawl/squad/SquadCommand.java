@@ -137,7 +137,7 @@ public final class SquadCommand {
                     // Bound items (docs/29 §5.4): anyone, a captain may bind items to hand out. Greedy like `order`.
                     .then(Commands.literal("bind")
                         .executes(c -> reply(c.getSource(), BIND_USAGE))
-                        .then(Commands.argument("line", StringArgumentType.greedyString()).suggests(ORDER_LINE)
+                        .then(Commands.argument("line", StringArgumentType.greedyString()).suggests(BIND_LINE)
                             .executes(c -> bind(c, StringArgumentType.getString(c, "line")))))
                     .then(Commands.literal("unbind").executes(SquadCommand::unbind))
                     .then(Commands.literal("bound").executes(SquadCommand::bound)))
@@ -195,7 +195,7 @@ public final class SquadCommand {
         int cut = typed.lastIndexOf(' ') + 1;
         if (cut == 0) return b.buildFuture(); // the General's name first
         var next = b.createOffset(b.getStart() + cut);
-        for (String k : List.of("archer=", "guard=", "miner=", "farmer=", "reinforce=", "range=")) {
+        for (String k : List.of("archer=", "guard=", "spearman=", "horseman=", "horsearcher=", "miner=", "farmer=", "reinforce=", "range=")) {
             if (k.startsWith(typed.substring(cut).toLowerCase(Locale.ROOT)) && !typed.contains(k)) next.suggest(k);
         }
         return next.buildFuture();
@@ -226,6 +226,14 @@ public final class SquadCommand {
         opts.add("--reclaim");
         opts.add("--free");
         return SharedSuggestionProvider.suggest(opts, b.createOffset(b.getStart() + cut));
+    };
+    /** {@code /bots orders bind …}: as {@code order}, plus the selector ({@code select}, docs/40). */
+    private static final SuggestionProvider<CommandSourceStack> BIND_LINE = (c, b) -> {
+        ServerPlayer p = c.getSource().getPlayer();
+        if (p == null || b.getRemaining().contains(" ")) return ORDER_LINE.getSuggestions(c, b);
+        List<String> names = new ArrayList<>(Squad.commandsOf(p.getUUID(), false));
+        names.add(0, SquadSelection.SELECT);
+        return SharedSuggestionProvider.suggest(names, b);
     };
     private static final SuggestionProvider<CommandSourceStack> MY_COMMANDS = (c, b) -> {
         ServerPlayer p = c.getSource().getPlayer();
@@ -261,12 +269,13 @@ public final class SquadCommand {
             " /bots stop [all | #id | NOM | @bot] — arrêter",
             " /bots fix NOM [ce qui ne va pas] — la corriger d'après son dernier rapport",
             " /bots orders bind NOM [arguments] — lier l'objet en main : clic droit lance l'ordre, accroupi + clic droit l'arrête · orders unbind · orders bound",
+            " /bots orders bind select — un sélecteur : clic droit sur un de tes bots choisit son escouade (une par /bots squad spawn), à qui vont ensuite les ordres de tes objets liés ; clic droit ailleurs : plus aucune",
             " /bots list · orders · commands · show NOM · tag BOT +étiquette -étiquette · status",
             " /bots share NOM JOUEUR… · unshare · delete NOM · revert NOM VERSION · ticket NOM",
         };
         for (String l : lines) src.sendSuccess(() -> Component.literal(l), false);
         if (Compat.hasPermission(src, 2)) {
-            src.sendSuccess(() -> Component.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · squad spawn KIT [nombre] [propriétaire=@s] [autres…] · squad despawn [KIT] [propriétaire=@s] · squad respawn [KIT] [nombre] [propriétaire=@s] (un bot mort reste déconnecté jusque-là) · squad purge (les sauvegardes laissées par d'anciens bots) · equip BOT archer|guard|miner|farmer (il devient aussi à toi) · raid [distance] [archers] [gardes] | clear | stop · general create NOM archer=N guard=N [reinforce=N] [range=N] | allow | tell | stop | list · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
+            src.sendSuccess(() -> Component.literal(" Admin : /bots spawn BOT JOUEUR1 [JOUEUR2 …] · squad spawn KIT [nombre] [propriétaire=@s] [autres…] · squad despawn [KIT] [propriétaire=@s] · squad respawn [KIT] [nombre] [propriétaire=@s] (un bot mort reste déconnecté jusque-là) · squad purge (les sauvegardes laissées par d'anciens bots) · equip BOT archer|guard|miner|farmer|spearman|horseman|horsearcher (il devient aussi à toi) · raid [distance] [archers] [gardes] | clear | stop · general create NOM archer=N guard=N [reinforce=N] [range=N] | allow | tell | stop | list · despawn BOT|all · owners BOT add|remove JOUEUR… · list all · stop all"), false);
         }
         return Command.SINGLE_SUCCESS;
     }
@@ -445,6 +454,8 @@ public final class SquadCommand {
             b.add("tokens", array(a.tokens()));
             b.add("filters", array(a.filters()));
             if (a.take() != null) b.addProperty("take", a.take());
+            // The selected squad, if any (docs/40): its bots only. With none, every bot of the player, as before.
+            SquadSelection.selected(p.getUUID()).ifPresent(s -> b.addProperty("squad", s));
             b.add("snap", snap);
             return b;
         }));
@@ -467,6 +478,14 @@ public final class SquadCommand {
         if (!SquadBinding.validOrder(order)) return reply(src, "[Bots] Nom de commande invalide : " + order + " (NOM ou auteur:NOM).");
         ItemStack held = p.getMainHandItem();
         if (held.isEmpty()) return reply(src, "[Bots] Prends en main l'objet à lier (un bouclier, une épée, un arc…).");
+        if (SquadSelection.isSelector(order)) {
+            // The selector (docs/40) is the mod's own: nothing for the runtime to check.
+            SquadBinding.write(held, SquadSelection.SELECT, "");
+            Component t = prefix().append(Component.literal("Sélecteur d'escouade lié à ton objet (")).append(held.getHoverName())
+                .append(Component.literal(") : clic droit sur un de tes bots pour choisir son escouade, clic droit ailleurs pour la désélectionner. Tes objets liés donnent ensuite leurs ordres à cette escouade."));
+            src.sendSuccess(() -> t, false);
+            return Command.SINGLE_SUCCESS;
+        }
         int slot = Compat.selectedSlot(p.getInventory());
         Item item = held.getItem();
         String rest = line.get().rest();

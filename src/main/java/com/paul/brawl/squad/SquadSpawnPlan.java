@@ -17,9 +17,9 @@ public final class SquadSpawnPlan {
     static final double MIN_RADIUS = 2.5;
     static final double SPACING = 1.5;
 
-    static final String SPAWN_USAGE = "/bots squad spawn archer|guard|miner|farmer [nombre=5] [propriétaire=@s] [autres propriétaires…]";
-    static final String DESPAWN_USAGE = "/bots squad despawn [archer|guard|miner|farmer] [propriétaire=@s]";
-    static final String RESPAWN_USAGE = "/bots squad respawn [archer|guard|miner|farmer] [nombre] [propriétaire=@s]";
+    static final String SPAWN_USAGE = "/bots squad spawn archer|guard|miner|farmer|spearman|horseman|horsearcher [nombre=5] [propriétaire=@s] [autres propriétaires…]";
+    static final String DESPAWN_USAGE = "/bots squad despawn [archer|guard|miner|farmer|spearman|horseman|horsearcher] [propriétaire=@s]";
+    static final String RESPAWN_USAGE = "/bots squad respawn [archer|guard|miner|farmer|spearman|horseman|horsearcher] [nombre] [propriétaire=@s]";
 
     /** {@code owner} is a player name or {@code @s}; {@code others} the other owners, in order. */
     public record SpawnArgs(SquadKits.Kit kit, int count, String owner, List<String> others) {}

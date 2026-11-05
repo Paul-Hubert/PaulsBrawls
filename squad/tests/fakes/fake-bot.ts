@@ -6,8 +6,10 @@
 // physics ticks (fast, in bursts, as mineflayer catches up) and a bow that fires when released after a draw (one
 // arrow leaves the inventory, the release is recorded with the look it flew at, and the arrow's spawn_entity packet
 // reaches `_client` with this bot as its owner; a bow with Infinity keeps the arrow). `physics()`: physics ticks one
-// at a time. On every tick a held `forward` moves the bot along its look (mineflayer's yaw) at walking speed, 0.3 of
-// it sneaking; no momentum, no collisions.
+// at a time. Each tick moves the bot as prismarine-physics does on the ground (docs/43 B): a held `forward` adds the
+// walking acceleration (0.098 a tick; 0.3 of it sneaking) along its look (mineflayer's yaw) to its velocity, the body
+// moves by the velocity, then keeps 0.546 of it (friction): 0.216 blocks a tick at full walk, and a body let go slides
+// on (velocity × 2.2). No collisions; `entity.velocity` is mineflayer's (after the tick's friction).
 
 import { EventEmitter } from 'node:events';
 
@@ -42,7 +44,7 @@ export function flatWorld(groundY = 63, solid: Iterable<string> = [], unloaded: 
 
 export class FakeBot extends EventEmitter {
   username: string;
-  entity: { position: Vec3; type: string; username: string; isValid: boolean; yaw: number; pitch: number };
+  entity: { position: Vec3; velocity: Vec3; onGround: boolean; type: string; username: string; isValid: boolean; yaw: number; pitch: number };
   readonly _client = new EventEmitter();
   health = 20;
   food = 20;
@@ -76,8 +78,11 @@ export class FakeBot extends EventEmitter {
   readonly releases: Array<{ yaw: number; pitch: number; drawnTicks: number; fired: boolean }> = [];
   /** Mineflayer's control states: set by setControlState, all released by clearControlStates. */
   controlState: Record<string, boolean> = {};
-  /** Blocks a held `forward` moves the bot per physics tick: a walking player's 4.3 blocks a second. */
+  /** Blocks a held `forward` moves the bot per physics tick at full walk: a walking player's 4.3 blocks a second. */
   static readonly WALK_PER_TICK = 0.216;
+  /** The walking acceleration per tick (prismarine-physics: speed 0.1 × 0.98), and the ground's inertia. */
+  static readonly WALK_ACCEL = 0.098;
+  static readonly INERTIA = 0.546;
   /** Sneaking: mineflayer's sneakSpeed, 0.3 of walking. */
   static readonly SNEAK_FACTOR = 0.3;
   private bowFires = false;
@@ -145,7 +150,7 @@ export class FakeBot extends EventEmitter {
     super();
     this.setMaxListeners(100);
     this.username = username;
-    this.entity = { position: opts.position ?? new Vec3(0, 64, 0), type: 'player', username, isValid: true, yaw: 0, pitch: 0 };
+    this.entity = { position: opts.position ?? new Vec3(0, 64, 0), velocity: new Vec3(0, 0, 0), onGround: true, type: 'player', username, isValid: true, yaw: 0, pitch: 0 };
     this.items = opts.items ? [...opts.items] : [];
   }
 
@@ -263,14 +268,23 @@ export class FakeBot extends EventEmitter {
     this.ticker.unref();
     return this;
   }
-  /** One physics tick: a held `forward` moves the bot along its look, then `physicsTick`. */
+  /** One physics tick: a held `forward` accelerates the bot along its look, it moves, friction, then `physicsTick`. */
   tick(): void {
     this.ticks++;
+    const v = this.entity.velocity;
     if (this.controlState.forward) {
-      const d = FakeBot.WALK_PER_TICK * (this.controlState.sneak ? FakeBot.SNEAK_FACTOR : 1);
+      // A speed attribute (a horse's, mount.ts) gives its own acceleration, as prismarine-physics reads it.
+      const speed = (this.entity as { attributes?: Record<string, { value: number }> }).attributes?.['minecraft:movement_speed']?.value;
+      const a = (speed !== undefined ? speed * 0.98 : FakeBot.WALK_ACCEL) * (this.controlState.sneak ? FakeBot.SNEAK_FACTOR : 1);
       const yaw = this.entity.yaw; // mineflayer's: 0 looks toward −Z, π/2 toward −X
-      this.entity.position = this.entity.position.offset(-Math.sin(yaw) * d, 0, -Math.cos(yaw) * d);
+      v.x += -Math.sin(yaw) * a;
+      v.z += -Math.cos(yaw) * a;
     }
+    if (v.x !== 0 || v.z !== 0) this.entity.position = this.entity.position.offset(v.x, 0, v.z);
+    v.x *= FakeBot.INERTIA;
+    v.z *= FakeBot.INERTIA;
+    if (Math.abs(v.x) < 1e-6) v.x = 0;
+    if (Math.abs(v.z) < 1e-6) v.z = 0;
     this.emit('physicsTick');
   }
   stopTicks(): void {

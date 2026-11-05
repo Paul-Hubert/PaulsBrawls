@@ -37,6 +37,11 @@ export class StalledError extends Error {
 export const DEFAULT_LOOP_BUDGET = 1_000_000;
 /** How long the event loop may go without running a timer while a script is iterating. */
 export const STARVATION_MS = 3_000;
+/**
+ * A script's await goes through a macrotask (setImmediate) once the 100 ms heartbeat is this late: a loop that awaits
+ * only resolved promises then lets timers, packets and the other bots run at least this often (docs/43 A1).
+ */
+export const YIELD_MS = 150;
 
 /** Modules a command may import (they resolve to the same instances as the scope globals). */
 export const IMPORTABLE = ['squad', 'vec3', 'mineflayer-pathfinder', 'minecraft-data'] as const;
@@ -198,6 +203,11 @@ export const SCOPE_NAMES = [
   'pickupDrops', 'findBlock', 'nearestEntity', 'nearestHostile', 'isFriend', 'blockKey',
   // formations (orders bound to items, docs/29 §5.4)
   'lookDir', 'lineSlots', 'groundAt', 'faceYaw', 'raiseShield', 'stepTo', 'entityOf', 'pointedTarget',
+  // formation and fight helpers (docs/43 C1)
+  'approach', 'anyBot', 'onGround', 'pointOf', 'assignSlots', 'lineUp', 'isEnemy', 'nearestFoe', 'targets', 'inReach',
+  'melee', 'sidestep',
+  // the lance (docs/44)
+  'canLance', 'foesNear', 'lance', 'lanceWaves',
 ] as const;
 
 /** Compile a command's source once per version. `filename` shows in stack traces. */
@@ -274,6 +284,9 @@ export function createLoopBudget(fence: () => void, max = DEFAULT_LOOP_BUDGET): 
       fence();
       canary();
       count = 0;
+      // No timer ran for YIELD_MS (the heartbeat is late): this await goes through a macrotask, so a loop that only
+      // awaits resolved promises (attack() breaking off at once, docs/43 A1) cannot starve the event loop.
+      if (Date.now() - lastTick > YIELD_MS) return Promise.resolve(p).then((v) => new Promise<unknown>((r) => setImmediate(() => r(v)))) as T;
       return p;
     },
     __fence: (): void => fence(),

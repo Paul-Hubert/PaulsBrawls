@@ -56,6 +56,8 @@ interface Member {
 
 interface TrackedListener {
   bot: string;
+  /** The part of the script that added it: the order's own squad (null) or a ctx.run subroutine's view. */
+  holder: object | null;
   emitter: object;
   event: string | symbol;
   fn: (...a: unknown[]) => unknown;
@@ -83,6 +85,8 @@ export class Order implements LeaseHolder {
   /** The @bot filters and take it was started with: a bound item's click with others restarts it (runner.trigger). */
   filters: string[] = [];
   take?: Take;
+  /** The squad (a roster tag, `esc-N`: one `/bots squad spawn`) it is scoped to: only that squad's bots are granted. */
+  squad?: string;
   readonly trial: boolean;
   readonly friends: Set<string>;
   readonly filename: string;
@@ -99,6 +103,14 @@ export class Order implements LeaseHolder {
 
   private readonly members = new Map<string, Member>();
   private readonly guards = new Map<string, { real: Bot; guard: Bot }>();
+  /**
+   * Bots lent inside the order (docs/43 C3): per member, the ctx.run views it was handed to, the last one driving it.
+   * Absent or empty: the order's own squad drives it. A guard made for one holder throws BotLeftError('lent') while
+   * another holder drives the body, so a part of the script that lent a bot can no longer move it.
+   */
+  private readonly lentTo = new Map<string, object[]>();
+  /** Per view: its guarded bots, by name. */
+  private readonly viewGuards = new WeakMap<object, Map<string, { real: Bot; guard: Bot }>>();
   private readonly leftReasons = new Map<string, LeftReason | 'order-ended'>();
   private readonly listeners: TrackedListener[] = [];
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
@@ -224,6 +236,7 @@ export class Order implements LeaseHolder {
     const m = this.members.get(name);
     if (!m) return undefined;
     this.members.delete(name);
+    this.lentTo.delete(name);
     this.leftReasons.set(name, reason);
     removeFrom(this.bots, m.guard);
     for (const arr of Object.values(this.roles)) removeFrom(arr, m.guard);
@@ -231,22 +244,27 @@ export class Order implements LeaseHolder {
     return m;
   }
 
-  private control(name: string, real: Bot): GuardControl {
+  private control(name: string, real: Bot, holder: object | null = null): GuardControl {
+    const leftError = (): Error => {
+      if (this.status !== 'running') return new OrderStoppedError(this.stopWhy);
+      if (!this.holds(name, real)) return new BotLeftError(name, this.leftReasons.get(name) ?? 'released');
+      return new BotLeftError(name, 'lent');
+    };
     return {
       check: () => {
         if (this.status !== 'running') throw new OrderStoppedError(this.stopWhy);
         if (!this.holds(name, real)) throw new BotLeftError(name, this.leftReasons.get(name) ?? 'released');
+        if (this.topHolder(name) !== holder) throw new BotLeftError(name, 'lent');
       },
-      live: () => this.status === 'running' && this.holds(name, real),
-      leftError: () =>
-        this.status !== 'running' ? new OrderStoppedError(this.stopWhy) : new BotLeftError(name, this.leftReasons.get(name) ?? 'released'),
+      live: () => this.status === 'running' && this.holds(name, real) && this.topHolder(name) === holder,
+      leftError,
       addListener: (emitter, event, fn) => {
         const wrapped = this.wrapCallback(fn, `listener ${String(event)} on ${name}`);
-        this.listeners.push({ bot: name, emitter, event, fn, wrapped });
+        this.listeners.push({ bot: name, holder, emitter, event, fn, wrapped });
         return wrapped;
       },
       takeListener: (emitter, event, fn) => {
-        const i = this.listeners.findIndex((l) => l.emitter === emitter && l.event === event && l.fn === fn);
+        const i = this.listeners.findIndex((l) => l.holder === holder && l.emitter === emitter && l.event === event && l.fn === fn);
         if (i < 0) return undefined;
         const [l] = this.listeners.splice(i, 1);
         return l?.wrapped;
@@ -262,10 +280,12 @@ export class Order implements LeaseHolder {
     return this.members.has(name) && this.deps.leases.holds(this.id, name) && this.deps.bot(name) === real;
   }
 
-  private removeListenersOf(name: string | null): void {
+  /** Remove the listeners of a bot (null: every bot), only those its `holder` added when given. */
+  private removeListenersOf(name: string | null, holder?: object | null): void {
     for (let i = this.listeners.length - 1; i >= 0; i--) {
       const l = this.listeners[i] as TrackedListener;
       if (name !== null && l.bot !== name) continue;
+      if (holder !== undefined && l.holder !== holder) continue;
       try {
         (l.emitter as EventEmitter).removeListener(l.event, l.wrapped);
       } catch {
@@ -273,6 +293,67 @@ export class Order implements LeaseHolder {
       }
       this.listeners.splice(i, 1);
     }
+  }
+
+  // -- lending inside the order (ctx.run subroutines, docs/43 C3) -----------------------------------------------
+
+  /** Who drives a member now: the order's own squad (null) or the ctx.run view it is lent to. */
+  topHolder(name: string): object | null {
+    const s = this.lentTo.get(name);
+    return s && s.length > 0 ? (s[s.length - 1] as object) : null;
+  }
+
+  /** A member's guarded bot for a holder (null: the order's own, the one in `order.bots`). */
+  guardFor(name: string, holder: object | null): Bot | undefined {
+    const m = this.members.get(name);
+    if (!m) return undefined;
+    if (holder === null) return m.guard;
+    let map = this.viewGuards.get(holder);
+    if (!map) this.viewGuards.set(holder, (map = new Map()));
+    let g = map.get(name);
+    if (!g || g.real !== m.real) {
+      g = { real: m.real, guard: guardBot(m.real, this.control(name, m.real, holder)) };
+      map.set(name, g);
+    }
+    return g.guard;
+  }
+
+  /**
+   * Lend a member from `from` (the holder driving it now) to the view `to`: `from`'s guard throws BotLeftError('lent')
+   * from now on, its listeners on the bot are removed, and the abort sequence stops what it was doing. Returns `to`'s
+   * guard, or undefined when `from` does not drive it.
+   */
+  async lend(name: string, from: object | null, to: object): Promise<Bot | undefined> {
+    const m = this.members.get(name);
+    if (!m || this.status !== 'running' || this.topHolder(name) !== from) return undefined;
+    const stack = this.lentTo.get(name) ?? [];
+    stack.push(to);
+    this.lentTo.set(name, stack);
+    this.removeListenersOf(name, from);
+    await abortActiveTasks(m.real as never, this.deps.movements(name));
+    return this.guardFor(name, to);
+  }
+
+  /**
+   * A view gives a member back (its subroutine ended): the view, and any view it lent the bot on to, no longer drive
+   * it; the holder under it does again. Returns that holder (null: the order's own squad), or undefined when the bot
+   * is no longer a member or the view did not hold it.
+   */
+  async unlend(name: string, holder: object): Promise<object | null | undefined> {
+    const stack = this.lentTo.get(name);
+    const i = stack ? stack.indexOf(holder) : -1;
+    if (!stack || i < 0) return undefined;
+    for (const h of stack.splice(i)) this.removeListenersOf(name, h);
+    if (stack.length === 0) this.lentTo.delete(name);
+    const m = this.members.get(name);
+    if (!m) return undefined;
+    if (this.status === 'running') await abortActiveTasks(m.real as never, this.deps.movements(name));
+    return this.topHolder(name);
+  }
+
+  /** emitSafe for the squads of the order (a subroutine's view lends and gives back bots of the order's arrays). */
+  emitEvent(event: 'left' | 'joined', ...args: unknown[]): void {
+    this.emitSafe(event, ...args);
   }
 
   // -- LeaseHolder -----------------------------------------------------------------------------------------------

@@ -12,7 +12,7 @@ import { timingSafeEqual } from 'node:crypto';
 import type { SquadService } from '../service';
 import type { EntityRef, Notice, Snapshot, Trigger, TriggerKind, Vec3Like } from '../types';
 import { EMPTY_SNAPSHOT, TRIGGER_KINDS } from '../types';
-import type { Player } from '../roster';
+import { TAG, type Player } from '../roster';
 import { errorMessage } from '../api/errors';
 import { logger } from '../logger';
 import { handleMcp } from './mcp';
@@ -180,6 +180,7 @@ export class SquadHttp {
           tokens: strings(b.tokens ?? []),
           filters: strings(b.filters ?? []),
           ...(b.take === 'free' || b.take === 'reclaim' ? { take: b.take } : {}),
+          ...squadOf(b.squad),
           snap: snapshot(b.snap),
         });
       case '/api/orders/check':
@@ -192,6 +193,7 @@ export class SquadHttp {
           filters: strings(b.filters ?? []),
           ...(b.take === 'free' || b.take === 'reclaim' ? { take: b.take } : {}),
           ...(b.stop === true ? { stop: true } : {}),
+          ...squadOf(b.squad),
           snap: snapshot(b.snap),
         });
       case '/api/orders/stop':
@@ -288,6 +290,11 @@ function count(v: unknown): number {
   const n = Number(v);
   if (!Number.isInteger(n) || n < 1) throw new HttpError(400, '"n" must be an integer ≥ 1');
   return n;
+}
+
+/** The squad a selection scopes an order to (a roster tag, docs/40); anything else is no squad. */
+function squadOf(v: unknown): { squad?: string } {
+  return typeof v === 'string' && TAG.test(v) ? { squad: v } : {};
 }
 
 function strings(v: unknown): string[] {

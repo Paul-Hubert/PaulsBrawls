@@ -159,31 +159,42 @@ summary row per minute goes to the `vitals` table of `.squad-data/squad.db` (kep
 
 Stock commands everyone has: `come`, `follow`, `defend` (archers reclaimed, melee kept; threats within `radius` of
 the commander, at most two guards per creature, each bot on its own spot around the commander), `gather`, `deposit`,
-`attack`, `bring`, `raid` (an army marches on a point in formation behind a leader, melee ahead of the archers, fights
-any enemy within `radius` of the leader on the way, then hunts the `target` player and their bots; it ends after
-`quiet` seconds, default 60, without an enemy player).
+`bring`, `raid` (an army marches on a point in formation behind a leader, melee ahead of the archers, fights any
+enemy within `radius` of the leader on the way, then hunts the `target` player and their bots; it ends after `quiet`
+seconds, default 60, without an enemy player), and the two item commands below.
 
-Four stock commands aim where you point (`/bots orders bind NAME`, docs/29 §5.4; e.g. a shield in hand,
-`/bots orders bind mur-de-boucliers spacing=2`); each click re-aims the running order without restarting it. **Any item
-can carry any of them** (the shield, sword, arrow and bow below are only examples): a click says where you point, the
-same way for every item and from `/bots order` too. Where you point: your arrow's hit (a bow), else the creature or the
-block in your crosshair. The target there: that creature, else the nearest one within `near` (4) blocks of the point.
-A bow's arrow-release waits for its hit (a release does not move a formation; its hit does).
-- `mur-de-boucliers` (e.g. a shield): the guards with a shield line up across your view where you point (or 5 blocks
-  ahead when that is too far or the sky), face along it and raise their shields once there. A guard goes after nobody:
-  hit in melee (blocked or not), it hits back once, stepping toward the attacker if needed (at most `reach` (4) from
-  its slot), then raises its shield again. Params `distance` 24, `spacing` 1, `reach` 4.
-- `epee` (e.g. a sword): a creature or an enemy where you point: the archers shoot it and two guards fight it (the
-  others fight what is near it) until it is dead or `seconds` (60) pass; only the ground: the bots hold that spot
-  (rings of 3 and 6 around it); the sky or a friend: they defend you. Params `radius` 16, `seconds` 60, `near` 4.
-- `ligne-archers` (e.g. an arrow, right-click): the archers line up across your view, `back` (4) blocks short of where
-  you point, in `ranks` (1) ranks, and shoot what comes within `range` (120, about as far as a bow carries) of each
-  archer, from where they stand: on their slots, or on their way to them. A friend in their line of fire (a shield
-  wall in front) is shot over on a higher arc. Params `distance` 24, `spacing` 2, `back` 4, `range` 120, `ranks` 1 (1–3).
-- `tir` (e.g. a bow, or a stick): the archers shoot where you point, from where they stand: the creature there (or the
-  nearest within `near`) until it is dead or `seconds` (8) pass, else a volley of `volley` (3) arrows each spread over
-  `spread` (3) blocks around the point. A friend with nobody near them is refused. It ends after that; archers it took
-  from a `ligne-archers` go back to their slots there.
+**Mounted bots** (docs/41): the `horseman` and `horsearcher` kits ride a horse, and every command drives it (the bot's
+body walks as on foot; its moves go to the server as the horse's). A horse is 1.4 wide: it does not pass a door or a
+1-wide gap.
+
+**Squads and the selector** (docs/40). Each `/bots squad spawn` is one squad: its bots carry the tag `esc-N` (N new
+for each spawn; « Escouade 3 prête »). Bind a selector to any item, `/bots orders bind select`: a right-click on one of
+your bots (as far as you can see) selects its squad (« Escouade 3 sélectionnée : Archer01, Garde01 (2 bots). »); a
+right-click on nothing deselects. Every bound item's click then orders the selected squad only, and each squad keeps
+its own order of a command: squad 1 holds a `line` while squad 2 `attack`s. With no squad selected a bound item's
+click answers « Aucune escouade sélectionnée. » and does nothing. `/bots order` uses the selected squad too, and all
+your bots when none is selected. Bots spawned otherwise (`/bots spawn`) have no squad and cannot be selected.
+
+Two stock commands aim where you point (`/bots orders bind NAME`, docs/29 §5.4; e.g. a shield in hand,
+`/bots orders bind line spacing=2`); each click re-aims the running order without restarting it. **Any item can carry
+either** (a shield, a sword, a bow, a stick): a click says where you point, the same way for every item and from
+`/bots order` too. Where you point: your arrow's hit (a bow), else the creature or the block in your crosshair. The
+target there: that creature, else the nearest one within `near` (4) blocks of the point. A bow's arrow-release waits
+for its hit (a release does not move a formation; its hit does).
+- `line` (once `mur-de-boucliers` and `ligne-archers`): the guards (a shield) form a straight shield wall across your
+  view where you point (or 8 blocks ahead when that is too far or the sky), face along it and raise their shields; the
+  archers (a bow) line up `back` (4) blocks behind the wall, in `ranks` (1) ranks, and shoot what comes within
+  `range` (120) of each archer, from where they stand, over the wall. A guard goes after nobody: hit in melee, it hits
+  back once (at most `reach` (4) from its slot), then raises its shield again. Bots with neither (horsemen) hold the
+  wall's flanks, 2 blocks apart, and hit back the same way. Each bot paths to within 2 blocks of its slot, then walks
+  straight onto its exact place and stops there (no crouch walk, docs/43), on foot or on a horse. Until stopped. Params `distance` 24,
+  `spacing` 1 (guards), `archerSpacing` 2, `back` 4, `range` 120, `ranks` 1 (1–3), `reach` 4.
+- `attack` (once `epee` and `tir`): a creature or an enemy where you point: the archers shoot it from where they
+  stand, two melee bots fight it and the others fight what is near it, until it is dead or `seconds` (60) pass; only
+  the ground: each archer fires a volley of `volley` (3) arrows spread over `spread` (3) blocks around the point,
+  the melee bots take a ring of 3 around it and fight what comes within `radius` (16); the sky: « Aucune cible. »; a
+  friend: refused. It ends by itself (the target down; the volley fired and the point clear), and bots it took from a
+  `line` go back to their slots there.
 
 Bots never hurt their own team: the mod cancels a bot's damage to a bot sharing an owner with it, or to one of its
 owners. Everyone else (mobs, other players, other owners' bots) can be hit; PvP is on. A script's friends (`isFriend`)
@@ -195,6 +206,14 @@ player's bots are enemies, so two armies fight.
 One ES module: `export const manifest = { summary, params, roles, duration }` and
 `export default async function (squad, args, ctx)`. Full API: [reference/squad.d.ts](reference/squad.d.ts) (also
 what the agent reads and what `check_script` typechecks against). Examples: [src/stock/](src/stock/).
+
+**Formations and fights** (docs/43): `lineUp` gives each bot an exact slot on the ground by where it stands,
+`approach` walks it there and stops it on the place, `squad.crew` runs one loop per bot (restarted for a bot that
+comes back, never spinning), `targets()` shares the threats among a role's bots, `melee` never starts a fight that
+breaks off at once. `line`, `attack` and `raid` are written with them. **Subroutines**: `ctx.run(name, args, { bots,
+until })` lends those bots to another command while it runs (they leave your loops, `left` reason `lent`) and gives them
+back to their role when it ends: a line lending its melee to `attack` and getting them back is
+[tests/fixtures/commands/charge.mjs](tests/fixtures/commands/charge.mjs).
 
 **Orders given with a bound item** (`/bots orders bind`, docs/29 §5.4). Using the item starts the order, with
 `ctx.commander.at.trigger` (`use`, or a bow's `arrow-release` then `arrow-hit`). A later click restarts it, unless the
@@ -220,8 +239,7 @@ $env:LIVE_ONLY='items'; $env:LIVE_RUNTIME_PORT='8779'; npm run live-test   # onl
 
 `LIVE_ONLY=core` runs the first scenarios (connect, `gather`, `come`, reclaim, ladders, despawn), `LIVE_ONLY=items`
 the bound-item ones (`live-tests/items.ts`, dev world only): the four item commands, `/bots orders bind` with real
-clicks and arrows, any item carrying any order (`tir` and `epee` on a stick, a bow placing a shield wall where its arrow
-lands), and a guard coming back to `defend` after a wall. The test's runtime listens on `LIVE_RUNTIME_PORT`
+clicks and arrows, any item carrying any order (written for the four commands `line` and `attack` replaced: **not yet ported**, docs/40), and a guard coming back to `defend` after a wall. The test's runtime listens on `LIVE_RUNTIME_PORT`
 (default: any free port). The scenarios driven through the mod need the dev server's mod to talk to that runtime, and
 never to the real one on 8772. Before `./gradlew runDevServer`, set `dev/squad.properties` (it holds `enabled=false`):
 

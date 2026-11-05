@@ -133,6 +133,17 @@ dev/*
 !dev/server.properties
 !dev/eula.txt
 
+# run-26.1.2/: production on 26.1.2 (run-26.1.2/README.md). Its world, logs and configs (tokens, keys) stay local;
+# server.properties too (26.x writes a generated management-server-secret into it), seeded from the defaults.
+run-26.1.2/*
+!run-26.1.2/README.md
+!run-26.1.2/server.defaults.properties
+!run-26.1.2/eula.txt
+!run-26.1.2/prompt.txt
+!run-26.1.2/build_prompt.txt
+!run-26.1.2/max_build_prompt.txt
+!run-26.1.2/mcp_config.properties
+
 # dev-26.1.2/: the 26.1.2 dev server (dev-26.1.2/README.md, docs/39 §5). As dev/, except that server.properties
 # stays local (26.x writes a generated management-server-secret into it): runDevServer26 seeds it from the defaults.
 dev-26.1.2/*
@@ -149,3 +160,6 @@ minecraft-mcp-server/.git-standalone/
 run/whitelist.json
 run/banned-players.json
 run/banned-ips.json
+
+# a hand-made world backup (76 MB)
+run/world-backup-*/

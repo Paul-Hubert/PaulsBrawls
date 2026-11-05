@@ -71,7 +71,7 @@ const MC_PORT = Number(process.env.MC_PORT ?? props['server-port'] ?? 25599);
 const RCON_PORT = Number(process.env.RCON_PORT ?? props['rcon.port'] ?? 25576);
 const RCON_PASSWORD = process.env.RCON_PASSWORD ?? props['rcon.password'] ?? '';
 // Only the dev server's world may be changed (arenas, camps, killed entities): run/ is production since 2026-10-31.
-const SETUP_WORLD = process.env.LIVE_SETUP_WORLD ? process.env.LIVE_SETUP_WORLD === '1' : /[\\/]dev[\\/]server\.properties$/.test(PROPS_FILE);
+const SETUP_WORLD = process.env.LIVE_SETUP_WORLD ? process.env.LIVE_SETUP_WORLD === '1' : /[\\/]dev(-[\d.]+)?[\\/]server\.properties$/.test(PROPS_FILE);
 const TOKEN = 'live-test-token';
 const RUNTIME_PORT = Number(process.env.LIVE_RUNTIME_PORT ?? 0);
 const ONLY = process.env.LIVE_ONLY ?? '';
@@ -114,10 +114,16 @@ async function main(): Promise<void> {
   const rcon = new Rcon('127.0.0.1', RCON_PORT, RCON_PASSWORD);
   await rcon.connect();
   console.log(`server ${PROPS_FILE} (port ${MC_PORT}); RCON:`, (await rcon.command('list')).trim());
+  // The server's Minecraft version, which the runtime and the captains join with (docs/39 §5): MC_VERSION, else RCON's
+  // /version (26.x has it), else 1.21.1 (which has none).
+  const mcVersion = process.env.MC_VERSION ?? /id = ([\d.]+)/.exec(await rcon.command('version'))?.[1] ?? '1.21.1';
+  // 1.21.11 renamed the gamerules to registry ids (doDaylightCycle → advance_time).
+  const idRules = Number(mcVersion.split('.')[0]) >= 26 || mcVersion === '1.21.11';
+  console.log(`Minecraft ${mcVersion}`);
   if (SETUP_WORLD) {
     await rcon.command('time set day');
-    await rcon.command('gamerule doDaylightCycle false');
-    await rcon.command('gamerule doMobSpawning false');
+    await rcon.command(`gamerule ${idRules ? 'advance_time' : 'doDaylightCycle'} false`);
+    await rcon.command(`gamerule ${idRules ? 'spawn_mobs' : 'doMobSpawning'} false`);
     await rcon.command('difficulty easy');
   }
 
@@ -128,7 +134,7 @@ async function main(): Promise<void> {
   const n = process.env.LIVE_WORKERS ?? process.env.LIVE_JOBS ?? process.env.LIVE_PATH_WORKERS;
   const workers = n === undefined ? {} : { count: Number(n) };
   const world = process.env.LIVE_WORLD_SHARED === '0' ? { shared: false } : {};
-  const cfg = parseConfig({ minecraft: { port: MC_PORT }, port: RUNTIME_PORT, dataDir: join(runDir, 'data'), loginStaggerMs: 1500, workers, world }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN });
+  const cfg = parseConfig({ minecraft: { port: MC_PORT, version: mcVersion }, port: RUNTIME_PORT, dataDir: join(runDir, 'data'), loginStaggerMs: 1500, workers, world }, { PAULSBRAWLS_SQUAD_TOKEN: TOKEN });
   if (process.env.LIVE_WORLD === '1') cfg.world.enabled = true;
   if (process.env.LIVE_WORLD_SHARED === '1') {
     cfg.world.enabled = true;
@@ -315,10 +321,10 @@ async function main(): Promise<void> {
     }
 
     if (ONLY === 'range') {
-      await rangeScenario({ rcon, rt, mcPort: MC_PORT, setupWorld: SETUP_WORLD, notices, api, scenario, until, sleep, admin: PAUL });
+      await rangeScenario({ rcon, rt, mcPort: MC_PORT, mcVersion, setupWorld: SETUP_WORLD, notices, api, scenario, until, sleep, admin: PAUL });
     }
     if (ONLY === '' || ONLY === 'items') {
-      await itemScenarios({ rcon, rt, mcPort: MC_PORT, setupWorld: SETUP_WORLD, notices, api, scenario, until, sleep, admin: PAUL });
+      await itemScenarios({ rcon, rt, mcPort: MC_PORT, mcVersion, setupWorld: SETUP_WORLD, notices, api, scenario, until, sleep, admin: PAUL });
     }
   } finally {
     const paths = rt.paths?.stats();

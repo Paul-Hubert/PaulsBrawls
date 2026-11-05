@@ -1,5 +1,13 @@
 // `squad`: the order's bots and the cooperation primitives (docs/29 §5.2). Everything is awaitable; a bot leaving
-// is handled inside parallel/tasks so scripts written with them keep going with the bots they still have.
+// is handled inside parallel/tasks/crew so scripts written with them keep going with the bots they still have.
+//
+// A `ctx.run` subroutine gets a view (docs/43 C2/C3): its own Squad over the bots it was given, which are LENT to it
+// for as long as it runs. A lent bot leaves the lender's `bots` and roles (a 'left' event, reason 'lent'), and the
+// lender's guarded bot throws BotLeftError('lent') if it still tries to drive it, so two parts of one script never move
+// one body. When the subroutine ends, its bots come back (a 'joined' event each, with the role they had). Given one of
+// the lender's live arrays (`squad.roles.melee`), the view is live too: a bot joining that role later is lent at once.
+
+import { EventEmitter } from 'node:events';
 
 import type { Bot } from 'mineflayer';
 
@@ -14,7 +22,7 @@ export interface ParallelResult<T = unknown> {
   ok: boolean;
   value?: T;
   error?: string;
-  /** The bot left the order during the call (reclaimed, released, died, disconnected). */
+  /** The bot left the order during the call (reclaimed, released, died, disconnected), or was lent. */
   left?: boolean;
 }
 
@@ -34,60 +42,237 @@ export interface SquadDeps {
   facts(name: string): BotFacts | undefined;
 }
 
+/** `squad.crew`'s options. */
+export interface CrewOptions {
+  /** Only the bots of these roles (default: every bot of the squad). */
+  roles?: string[];
+  /** The loops go on while this holds (checked before each pass; default: until the order or the view ends). */
+  while?: () => boolean;
+  /** Called at each launch of a bot's loop (its first, and again when it comes back): add its listeners here. */
+  setup?: (bot: Bot, role: string | undefined) => unknown;
+  /** A pass shorter than this is followed by a pause up to it (default 50 ms, one physics tick; at least a macrotask). */
+  minPassMs?: number;
+}
+
 /** How long `tasks` waits for a bot to join when every bot left with work still queued. */
 export const TASKS_WAIT_FOR_BOTS_MS = 30_000;
+/** `squad.crew`: the default shortest pass (a physics tick). */
+export const CREW_MIN_PASS_MS = 50;
+/** `squad.crew`: the pause after a pass that threw (anything but a bot leaving or the order ending). */
+export const CREW_ERROR_PAUSE_MS = 500;
 
 export class Squad {
-  /** The bots of this squad: the order's own live array, or a subset view for a `ctx.run` subroutine. */
+  /** The bots of this squad: the order's own live array, or a subroutine view's (live too). */
   readonly bots: Bot[];
   readonly roles: Record<string, Bot[]>;
-  private readonly subset: Set<string> | null;
+  /** null: the order's own squad; a view: itself (the holder its lent bots' guards are made for). */
+  private readonly holder: object | null;
+  private readonly parent: Squad | null;
+  private readonly events: EventEmitter;
+  /** The lender's live array a view follows (bots joining it later are lent to the view too), else null. */
+  private source: Bot[] | null = null;
+  private manifest: Manifest | null = null;
+  private disposed = false;
+  private disposing?: Promise<void>;
+  private readonly controller: AbortController | null;
+  private readonly sleepers = new Set<(e: Error) => void>();
+  private readonly endWaiters: Array<() => void> = [];
+  private readonly cleanups: Array<() => void> = [];
+  /** Bots this squad lent to a view, by name: the role they had here (they come back to it). */
+  private readonly lentRoles = new Map<string, string | undefined>();
 
   constructor(
     private readonly order: Order,
     private readonly deps: SquadDeps,
-    view?: { bots: Bot[]; manifest: Manifest },
+    parent?: Squad,
   ) {
-    if (!view) {
+    if (!parent) {
       this.bots = order.bots;
       this.roles = order.roles;
-      this.subset = null;
+      this.holder = null;
+      this.parent = null;
+      this.events = order.events;
+      this.controller = null;
       return;
     }
-    // A subroutine's view: the given bots, its own roles matched by its manifest's selectors, kept live.
-    this.subset = new Set(view.bots.map((b) => order.nameOf(b)).filter((n): n is string => !!n && order.hasMember(n)));
-    this.bots = order.bots.filter((b) => this.subset!.has(order.nameOf(b) as string));
+    this.bots = [];
     this.roles = {};
-    const taken = new Set<string>();
-    for (const [role, spec] of Object.entries(view.manifest.roles)) {
-      const arr: Bot[] = [];
-      for (const b of this.bots) {
-        const name = order.nameOf(b) as string;
-        const f = deps.facts(name);
-        if (taken.has(name) || arr.length >= spec.max || !f || !matches(spec.select, f)) continue;
-        arr.push(b);
-        taken.add(name);
-      }
-      if (arr.length < spec.min) throw new Error(`ctx.run: role "${role}" needs ${spec.min} bot(s), the given bots match ${arr.length}`);
-      this.roles[role] = arr;
-    }
-    order.events.on('left', (bot: Bot) => {
-      remove(this.bots, bot);
-      for (const arr of Object.values(this.roles)) remove(arr, bot);
-    });
-    order.events.on('joined', (bot: Bot) => {
-      const name = order.nameOf(bot);
-      if (name && this.subset!.has(name) && !this.bots.includes(bot)) this.bots.push(bot);
-    });
+    this.holder = this;
+    this.parent = parent;
+    this.events = new EventEmitter();
+    this.events.setMaxListeners(100);
+    this.controller = new AbortController();
+    order.signal.addEventListener('abort', () => void this.dispose(), { once: true });
   }
 
-  /** True once the order is stopped, timed out or finished. */
+  /**
+   * A subroutine's view (ctx.run): `bots` (the lender's bots it may have) are lent to it, each in the first of the
+   * manifest's roles that it matches and that has room. A role whose `min` is not met is logged, not refused: the
+   * view is live, more may come. Bots the lender does not drive, or that match no role, stay with the lender.
+   */
+  static async view(parent: Squad, opts: { bots: Bot[]; manifest: Manifest; name: string }): Promise<Squad> {
+    const v = new Squad(parent.order, parent.deps, parent);
+    v.manifest = opts.manifest;
+    for (const role of Object.keys(opts.manifest.roles)) v.roles[role] = [];
+    if (parent.bots === opts.bots || Object.values(parent.roles).includes(opts.bots)) v.source = opts.bots;
+    const order = v.order;
+    for (const b of [...opts.bots]) await v.borrow(b);
+    for (const [role, spec] of Object.entries(opts.manifest.roles)) {
+      const n = v.roles[role]?.length ?? 0;
+      if (n < spec.min) order.log(`ctx.run("${opts.name}"): role "${role}" has ${n} bot(s) of its min ${spec.min}; it runs with them (more may join)`);
+    }
+    // A bot leaving the order (dead, reclaimed by another order) leaves the view it was lent to.
+    const onOrderLeft = (bot: Bot, reason: string): void => {
+      if (reason === 'lent') return;
+      const name = order.nameOf(bot);
+      if (!name) return;
+      const mine = v.bots.find((b) => order.nameOf(b) === name);
+      if (!mine) return;
+      v.drop(mine);
+      v.emit('left', mine, reason);
+    };
+    order.events.on('left', onOrderLeft);
+    v.cleanups.push(() => order.events.removeListener('left', onOrderLeft));
+    // A live view takes the bots that join its source later.
+    if (v.source) {
+      const onParentJoined = (bot: Bot): void => {
+        if (v.disposed || !v.source?.includes(bot)) return;
+        void v.borrow(bot).then((g) => {
+          if (g && !v.disposed) v.emit('joined', g, v.roleIn(g));
+        });
+      };
+      parent.events.on('joined', onParentJoined);
+      v.cleanups.push(() => parent.events.removeListener('joined', onParentJoined));
+    }
+    return v;
+  }
+
+  /** Lend one of the lender's bots to this view; its guard here, or undefined when it stayed with the lender. */
+  private async borrow(lenderBot: Bot): Promise<Bot | undefined> {
+    const parent = this.parent as Squad;
+    const order = this.order;
+    const name = order.nameOf(lenderBot);
+    if (!name || !order.hasMember(name) || order.topHolder(name) !== parent.holder || this.disposed) return undefined;
+    const role = this.roleFor(name);
+    if (role === null) return undefined;
+    const guard = await order.lend(name, parent.holder, this);
+    if (!guard) return undefined;
+    parent.lentOut(name, lenderBot);
+    if (!this.bots.includes(guard)) this.bots.push(guard);
+    if (role !== undefined) (this.roles[role] ??= []).push(guard);
+    return guard;
+  }
+
+  /** The view's role for a bot: the first of its manifest's roles it matches with room; null: none (it is not taken). */
+  private roleFor(name: string): string | undefined | null {
+    const m = this.manifest;
+    if (!m) return undefined;
+    const f = this.deps.facts(name);
+    for (const [role, spec] of Object.entries(m.roles)) {
+      if ((this.roles[role]?.length ?? 0) >= spec.max || !f || !matches(spec.select, f)) continue;
+      return role;
+    }
+    return null;
+  }
+
+  private roleIn(bot: Bot): string | undefined {
+    for (const [role, arr] of Object.entries(this.roles)) if (arr.includes(bot)) return role;
+    return undefined;
+  }
+
+  /** This squad lent a bot to a view: it leaves `bots` and its role here ('left', reason 'lent'). */
+  private lentOut(name: string, bot: Bot): void {
+    this.lentRoles.set(name, this.holder === null ? this.order.roleOf(name) : this.roleIn(bot));
+    this.drop(bot);
+    this.emit('left', bot, 'lent');
+  }
+
+  /** A bot this squad lent comes back: into `bots` and its role, with a 'joined' event. */
+  private takeBack(name: string): void {
+    const bot = this.order.guardFor(name, this.holder);
+    if (!bot) return;
+    const role = this.lentRoles.get(name);
+    this.lentRoles.delete(name);
+    if (this.disposed) {
+      // A view that ended meanwhile gives the bot on down.
+      void this.order.unlend(name, this as object).then((h) => this.handDown(name, h));
+      return;
+    }
+    if (!this.bots.includes(bot)) this.bots.push(bot);
+    if (role !== undefined && !(this.roles[role] ??= []).includes(bot)) this.roles[role].push(bot);
+    this.emit('joined', bot, role);
+  }
+
+  /** After an unlend: the holder now driving the bot takes it back (the root squad or a view up the chain). */
+  private handDown(name: string, holder: object | null | undefined): void {
+    if (holder === undefined) return;
+    for (let s: Squad | null = this.parent; s; s = s.parent) {
+      if (s.holder === holder) {
+        s.takeBack(name);
+        return;
+      }
+    }
+  }
+
+  private drop(bot: Bot): void {
+    remove(this.bots, bot);
+    for (const arr of Object.values(this.roles)) remove(arr, bot);
+  }
+
+  private emit(event: 'left' | 'joined', bot: Bot, detail: unknown): void {
+    if (this.holder === null) this.order.emitEvent(event, bot, detail);
+    else {
+      for (const l of this.events.listeners(event)) {
+        try {
+          const r = (l as (...a: unknown[]) => unknown)(bot, detail);
+          if (r && typeof (r as Promise<unknown>).then === 'function') (r as Promise<unknown>).catch((e) => this.order.log(`squad.on('${event}'): ${errorMessage(e)}`));
+        } catch (e) {
+          this.order.log(`squad.on('${event}'): ${errorMessage(e)}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * The subroutine ended: its bots go back to the lender (to the role they had there), its listeners, timers and
+   * sleeps end (a sleep rejects with OrderStoppedError), `stopped` turns true. Idempotent.
+   */
+  dispose(): Promise<void> {
+    if (this.holder === null) return Promise.resolve();
+    this.disposing ??= this.disposeNow();
+    return this.disposing;
+  }
+
+  /** Whether the view ended (dispose was called). */
+  get ended(): boolean {
+    return this.disposed;
+  }
+
+  private async disposeNow(): Promise<void> {
+    this.disposed = true;
+    this.controller?.abort();
+    for (const c of this.cleanups.splice(0)) c();
+    for (const done of [...this.sleepers]) done(new OrderStoppedError('subroutine ended'));
+    for (const w of this.endWaiters.splice(0)) w();
+    const held = this.bots.map((b) => this.order.nameOf(b)).filter((n): n is string => !!n);
+    this.bots.length = 0;
+    for (const arr of Object.values(this.roles)) arr.length = 0;
+    this.events.removeAllListeners();
+    for (const name of held) this.handDown(name, await this.order.unlend(name, this));
+  }
+
+  /** True once the order is stopped, timed out or finished (for a view: or once its subroutine ended). */
   get stopped(): boolean {
-    return !this.order.alive;
+    return !this.order.alive || this.disposed;
   }
 
   get signal(): AbortSignal {
-    return this.order.signal;
+    return this.controller ? AbortSignal.any([this.order.signal, this.controller.signal]) : this.order.signal;
+  }
+
+  /** The order's squad tag (`esc-N`, docs/40) when the order is scoped to one, else null. */
+  get tag(): string | null {
+    return this.order.squad ?? null;
   }
 
   /**
@@ -99,23 +284,23 @@ export class Squad {
     const live = Array.isArray(bots) && (bots === this.bots || Object.values(this.roles).includes(bots));
     const list = Array.isArray(bots) ? [...bots] : [bots];
     const settled = live ? await this.parallelLive(bots, fn) : (await Promise.allSettled(list.map(async (bot) => fn(bot)))).map((s, i) => ({ bot: list[i] as Bot, s }));
-    if (this.stopped) throw new OrderStoppedError('order ended');
+    if (this.stopped) throw new OrderStoppedError(this.disposed ? 'subroutine ended' : 'order ended');
     return settled.map(({ bot, s }) => {
       if (s.status === 'fulfilled') return { bot, ok: true, value: s.value };
       const e = s.reason;
       if (isStopped(e)) return { bot, ok: false, error: errorMessage(e) };
       const name = this.order.nameOf(bot) ?? String((bot as { username?: string }).username);
-      const left = isBotLeft(e) || !this.order.hasMember(name);
+      const left = isBotLeft(e) || !this.order.hasMember(name) || !this.bots.includes(bot);
       if (!left) this.order.failure(name, 'parallel', e);
       return { bot, ok: false, error: errorMessage(e), ...(left ? { left: true } : {}) };
     });
   }
 
   /**
-   * `parallel` over the order's own live array (`squad.bots`, `squad.roles.x`): a bot reclaimed by another order and
-   * given back (§6.3) runs `fn` again, and the call waits for such a bot while it can still come back. Without this a
-   * returning bot rejoined `squad.bots` but no loop drove it: `defend`'s guards stood idle after a shield wall
-   * borrowed them (docs/33). One result per run, so a bot that came back has two.
+   * `parallel` over the squad's own live array (`squad.bots`, `squad.roles.x`): a bot reclaimed by another order (or
+   * lent to a subroutine) and given back (§6.3) runs `fn` again, and the call waits for such a bot while it can still
+   * come back. Without this a returning bot rejoined `squad.bots` but no loop drove it: `defend`'s guards stood idle
+   * after a shield wall borrowed them (docs/33). One result per run, so a bot that came back has two.
    */
   private parallelLive<T>(arr: Bot[], fn: (bot: Bot) => Promise<T> | T): Promise<Array<{ bot: Bot; s: PromiseSettledResult<T> }>> {
     const order = this.order;
@@ -127,7 +312,7 @@ export class Squad {
       const finish = (): void => {
         if (done) return;
         done = true;
-        order.events.removeListener('joined', onJoined);
+        this.events.removeListener('joined', onJoined);
         if (poll) clearInterval(poll);
         resolve(results);
       };
@@ -135,7 +320,7 @@ export class Squad {
       // looks again every second rather than only on events.
       const check = (): void => {
         if (running.size > 0) return;
-        if (!order.alive || order.suspended().length === 0) return finish();
+        if (this.stopped || (order.suspended().length === 0 && this.lentRoles.size === 0)) return finish();
         if (!poll) {
           poll = setInterval(check, 1_000);
           poll.unref?.();
@@ -156,14 +341,64 @@ export class Squad {
             check();
           });
       };
-      // The order pushes a returning bot into its arrays before it emits 'joined'.
+      // The squad pushes a returning bot into its arrays before it emits 'joined'.
       const onJoined = (bot: Bot): void => {
-        if (order.alive && arr.includes(bot)) run(bot);
+        if (!this.stopped && arr.includes(bot)) run(bot);
       };
-      order.events.on('joined', onJoined);
+      this.events.on('joined', onJoined);
       for (const bot of [...arr]) run(bot);
       check();
     });
+  }
+
+  /**
+   * One loop per bot, `fn(bot, role)` again and again (docs/43 C1): what a formation or a fight needs from each of
+   * its bots. A bot that leaves (dead, reclaimed, lent) ends its loop; one that comes back (a 'joined') gets a new
+   * one, with `setup` called again first (the listeners a bot had were removed when it left). A pass that throws is
+   * logged and followed by a 500 ms pause; every pass is followed by at least a macrotask and, when shorter than
+   * `minPassMs`, a pause up to it, so a pass that awaited nothing cannot starve the event loop. Returns `stop()`.
+   */
+  crew(fn: (bot: Bot, role: string | undefined) => unknown, opts: CrewOptions = {}): { stop: () => void } {
+    if (typeof fn !== 'function') throw new TypeError('squad.crew(fn, opts): fn must be a function');
+    const tokens = new Map<Bot, object>();
+    const minPass = Math.max(0, Number(opts.minPassMs ?? CREW_MIN_PASS_MS));
+    let stopped = false;
+    const goOn = (): boolean => !stopped && !this.stopped && (opts.while ? !!opts.while() : true);
+    const launch = (bot: Bot, role: string | undefined): void => {
+      if (opts.roles && (role === undefined || !opts.roles.includes(role))) return;
+      if (!goOn() || !this.bots.includes(bot)) return;
+      const token = {};
+      tokens.set(bot, token);
+      try {
+        opts.setup?.(bot, role);
+      } catch (e) {
+        if (isBotLeft(e) || isStopped(e)) return;
+        this.order.log(`${(bot as { username?: string }).username}: crew setup: ${errorMessage(e)}`);
+      }
+      void (async () => {
+        while (goOn() && tokens.get(bot) === token && this.bots.includes(bot)) {
+          const t0 = Date.now();
+          try {
+            await fn(bot, role);
+          } catch (e) {
+            if (isBotLeft(e) || isStopped(e)) break;
+            this.order.log(`${(bot as { username?: string }).username}: ${errorMessage(e)}`);
+            await this.sleep(CREW_ERROR_PAUSE_MS);
+            continue;
+          }
+          await this.sleep(Math.max(0, minPass - (Date.now() - t0)));
+        }
+      })().catch(() => undefined);
+    };
+    const onJoined = (bot: Bot, role: unknown): void => launch(bot, typeof role === 'string' ? role : this.roleIn(bot));
+    this.events.on('joined', onJoined);
+    for (const bot of [...this.bots]) launch(bot, this.roleIn(bot));
+    return {
+      stop: () => {
+        stopped = true;
+        this.events.removeListener('joined', onJoined);
+      },
+    };
   }
 
   /**
@@ -193,24 +428,24 @@ export class Squad {
         if (settled) return;
         settled = true;
         if (waitTimer) clearTimeout(waitTimer);
-        order.events.removeListener('joined', kick);
+        this.events.removeListener('joined', kick);
         if (err) reject(err);
         else resolve(results);
       };
       const work = async (bot: Bot, name: string): Promise<void> => {
-        while (queue.length > 0 && order.running && order.hasMember(name) && pool.includes(bot)) {
+        while (queue.length > 0 && order.running && !this.stopped && order.hasMember(name) && pool.includes(bot)) {
           const job = queue.shift() as (typeof queue)[number];
           inflight++;
           try {
             const value = await fn(bot, job.item, job.index);
             results[job.index] = { item: job.item, ok: true, value, bot: name };
           } catch (e) {
-            if (isStopped(e) || !order.alive) {
+            if (isStopped(e) || this.stopped) {
               inflight--;
               finish(isStopped(e) ? e : new OrderStoppedError('order ended'));
               return;
             }
-            if (isBotLeft(e) || !order.hasMember(name)) {
+            if (isBotLeft(e) || !order.hasMember(name) || !pool.includes(bot)) {
               queue.unshift(job); // someone else does it
               inflight--;
               return;
@@ -228,9 +463,9 @@ export class Squad {
           await nextTurn();
         }
       };
-      function kick(): void {
+      const kick = (): void => {
         if (settled) return;
-        if (!order.alive) return finish(new OrderStoppedError('order ended'));
+        if (this.stopped) return finish(new OrderStoppedError('order ended'));
         for (const bot of [...pool]) {
           // Only while work is queued: a worker started on an empty queue would end at once, and its `finally`
           // would kick again, forever (a microtask loop that freezes every bot).
@@ -260,9 +495,9 @@ export class Squad {
           clearTimeout(waitTimer);
           waitTimer = undefined;
         }
-      }
-      order.events.on('joined', kick);
-      order.signal.addEventListener('abort', () => finish(new OrderStoppedError('order ended')), { once: true });
+      };
+      this.events.on('joined', kick);
+      this.signal.addEventListener('abort', () => finish(new OrderStoppedError('order ended')), { once: true });
       kick();
     });
   }
@@ -284,16 +519,28 @@ export class Squad {
   async acquire(spec: { select?: unknown; max?: number; min?: number; take?: 'free' | 'reclaim'; as?: string } = {}): Promise<Bot[]> {
     const role = validateRoleSpec(spec, 'squad.acquire', ['as']);
     const as = typeof spec.as === 'string' && spec.as ? spec.as : 'extra';
+    if (this.disposed) throw new OrderStoppedError('subroutine ended');
     const got = await this.order.acquire(role, as, this.deps.candidates());
-    if (this.subset) {
-      for (const b of got) {
-        const n = this.order.nameOf(b);
-        if (n) this.subset.add(n);
-        if (!this.bots.includes(b)) this.bots.push(b);
-        (this.roles[as] ??= []).push(b);
-      }
+    if (this.holder === null) return got;
+    // A view: the new members (the order's own squad drives them at first) are lent to it.
+    const out: Bot[] = [];
+    const root = this.rootSquad();
+    for (const b of got) {
+      const name = this.order.nameOf(b);
+      if (!name) continue;
+      const g = await this.order.lend(name, null, this);
+      if (!g) continue;
+      root.lentOut(name, b);
+      if (!this.bots.includes(g)) this.bots.push(g);
+      (this.roles[as] ??= []).push(g);
+      out.push(g);
     }
-    return got;
+    return out;
+  }
+
+  /** The order's own squad, up the chain of views. */
+  private rootSquad(): Squad {
+    return this.parent ? this.parent.rootSquad() : this;
   }
 
   /** Let a bot go: it returns to the order it was reclaimed from (if still running), else it goes idle. */
@@ -301,29 +548,47 @@ export class Squad {
     return this.order.releaseBot(bot);
   }
 
-  /** `joined` (bot, role) / `left` (bot, reason). Listeners are removed when the order ends. */
+  /** `joined` (bot, role) / `left` (bot, reason). Listeners are removed when the order (or the subroutine) ends. */
   on(event: 'joined' | 'left', fn: (bot: Bot, detail: string) => unknown): void {
     if (event !== 'joined' && event !== 'left') throw new Error(`squad.on: unknown event "${String(event)}" (joined, left)`);
-    this.order.events.on(event, fn);
+    this.events.on(event, fn);
   }
 
   off(event: 'joined' | 'left', fn: (bot: Bot, detail: string) => unknown): void {
-    this.order.events.removeListener(event, fn);
+    this.events.removeListener(event, fn);
   }
 
+  /** Resolves after `ms`; rejects with OrderStoppedError when the order stops (or the subroutine ends) first. */
   sleep(ms: number): Promise<void> {
-    return this.order.sleep(ms);
+    if (this.disposed) return Promise.reject(new OrderStoppedError('subroutine ended'));
+    if (this.holder === null) return this.order.sleep(ms);
+    return new Promise<void>((resolve, reject) => {
+      const done = (e?: Error): void => {
+        this.sleepers.delete(done);
+        if (e) reject(e);
+        else resolve();
+      };
+      this.sleepers.add(done);
+      this.order.sleep(ms).then(
+        () => done(),
+        (e: Error) => done(e),
+      );
+    });
   }
 
-  /** Call `fn` every `ms` until the order ends; returns a function that stops it. */
+  /** Call `fn` every `ms` until the order (or the subroutine) ends; returns a function that stops it. */
   every(ms: number, fn: () => unknown): () => void {
-    const t = this.order.setInterval(fn, ms);
-    return () => this.order.clearInterval(t);
+    const t = this.order.setInterval(() => (this.disposed ? undefined : fn()), ms);
+    const stop = (): void => this.order.clearInterval(t);
+    if (this.holder !== null) this.cleanups.push(stop);
+    return stop;
   }
 
-  /** Resolves when the order is stopped (an `until-stopped` command that only reacts to events awaits this). */
+  /** Resolves when the order is stopped (or the subroutine ended): an `until-stopped` command that only reacts awaits it. */
   untilStopped(): Promise<void> {
-    return this.order.untilStopped();
+    if (this.holder === null) return this.order.untilStopped();
+    if (this.stopped) return Promise.resolve();
+    return new Promise<void>((resolve) => this.endWaiters.push(resolve));
   }
 }
 

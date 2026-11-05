@@ -15,8 +15,8 @@ public final class SquadGeneralPlan {
     /** A General's name: its virtual owner's player name, and the prefix of its bots' names (16 chars at most). */
     public static final Pattern NAME = Pattern.compile("[A-Za-z0-9_]{3,11}");
 
-    public static final String CREATE_USAGE = "/bots general create NOM [archer=N] [guard=N] [miner=N] [farmer=N] [reinforce=N] [range=N]";
-    public static final String ALLOW_USAGE = "/bots general allow NOM [archer=N] [guard=N] [miner=N] [farmer=N] [reinforce=N] [range=N]";
+    public static final String CREATE_USAGE = "/bots general create NOM [archer=N] [guard=N] [spearman=N] [horseman=N] [horsearcher=N] [miner=N] [farmer=N] [reinforce=N] [range=N]";
+    public static final String ALLOW_USAGE = "/bots general allow NOM [archer=N] [guard=N] [spearman=N] [horseman=N] [horsearcher=N] [miner=N] [farmer=N] [reinforce=N] [range=N]";
 
     /** The workspace of a General's Claude Code instance, from the repository's root. */
     public static final String WORKSPACE = "squad/agent/general";

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 import { checkScript, REFERENCE_FILE } from '../src/script/check';
 import { SCOPE_NAMES } from '../src/script/compile';
+import { FORMATION_HELPERS } from '../src/api/formation';
 import { HELPERS } from '../src/api/helpers';
 import { loadStock, stockFiles } from '../src/stock';
 
@@ -56,5 +57,5 @@ test('the reference declares every scope global and every helper', () => {
     if (name.startsWith('__') || name === 'require') continue;
     assert.match(ref, new RegExp(`(function|const|class) ${name}\\b`), `squad.d.ts does not declare ${name}`);
   }
-  for (const name of Object.keys(HELPERS)) assert.match(ref, new RegExp(`function ${name}\\b`), name);
+  for (const name of [...Object.keys(HELPERS), ...Object.keys(FORMATION_HELPERS)]) assert.match(ref, new RegExp(`function ${name}\\b`), name);
 });

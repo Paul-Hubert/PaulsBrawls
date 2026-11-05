@@ -133,13 +133,30 @@ declare global {
   }
 
   interface Squad {
-    /** Every bot of the order, live: bots that leave are removed, bots that join are added. */
+    /**
+     * Every bot of the order, live: bots that leave are removed, bots that join are added. In a ctx.run subroutine:
+     * the bots lent to it (they come back to the caller when it ends).
+     */
     readonly bots: SquadBot[];
     /** The bots of each manifest role, live (roles[name] is [] when none). */
     readonly roles: Record<string, SquadBot[]>;
-    /** True once the order is stopped, timed out or finished. */
+    /** True once the order is stopped, timed out or finished (in a subroutine: or once it ended). */
     readonly stopped: boolean;
     readonly signal: AbortSignal;
+    /** The squad the order is scoped to (its roster tag, 'esc-3': one /bots squad spawn), or null for all the commander's bots. */
+    readonly tag: string | null;
+
+    /**
+     * ONE LOOP PER BOT, the way to drive a formation or a fight: fn(bot, role) again and again for each bot of the squad
+     * (opts.roles: only those roles), while opts.while() holds and the order runs. A bot that leaves (dead, reclaimed,
+     * lent to a subroutine) ends its loop; one that comes back gets a new one, opts.setup(bot, role) called first (add
+     * the bot's listeners there: they were removed when it left). A pass that throws is logged, then a 500 ms pause; a
+     * pass shorter than opts.minPassMs (default 50) is padded to it, so a pass that awaited nothing never spins.
+     */
+    crew(
+      fn: (bot: SquadBot, role: string | undefined) => unknown,
+      opts?: { roles?: string[]; while?: () => boolean; setup?: (bot: SquadBot, role: string | undefined) => unknown; minPassMs?: number },
+    ): { stop(): void };
 
     /**
      * Run fn on each bot at once. One bot failing or leaving never rejects: check result.ok. Given squad.bots or a
@@ -164,7 +181,8 @@ declare global {
     release(bot: SquadBot): Promise<void>;
 
     on(event: 'joined', fn: (bot: SquadBot, role: string) => unknown): void;
-    on(event: 'left', fn: (bot: SquadBot, reason: 'reclaimed' | 'released' | 'died' | 'disconnected' | 'despawned') => unknown): void;
+    /** 'lent': handed to a ctx.run subroutine; it comes back ('joined', with its role) when the subroutine ends. */
+    on(event: 'left', fn: (bot: SquadBot, reason: 'reclaimed' | 'released' | 'died' | 'disconnected' | 'despawned' | 'lent') => unknown): void;
     off(event: 'joined' | 'left', fn: (...a: any[]) => unknown): void;
 
     /** Resolves after ms (rejects with OrderStoppedError if the order stops first). */
@@ -252,8 +270,16 @@ declare global {
     log(...parts: unknown[]): void;
     /** A French chat line to the commander (rate-limited: 5 quick, then 1 per second). */
     say(text: string): void;
-    /** Run another command the commander can use, as a subroutine on some of the bots (default: all). */
-    run(name: string, args?: Record<string, unknown>, opts?: { bots?: SquadBot[] }): Promise<unknown>;
+    /**
+     * Run another command the commander can use as a SUBROUTINE of this order, on some of the bots (default: all of
+     * yours). Those bots are LENT to it while it runs: they leave your squad.bots and roles ('left', 'lent'), a call on
+     * them from your side throws BotLeftError('lent'), and they come back to the role they had ('joined') when it ends.
+     * Pass one of your live arrays (squad.roles.melee) and bots joining it later are lent too. It ends when it returns
+     * (resolves to its value), throws, or from outside: until() true (checked every 100 ms) or signal aborted (resolves
+     * undefined). Its ctx.commander listeners end with it. A role whose min is not met is logged, not refused.
+     * The pattern for orders that hand bots on: a line that lends its melee to ctx.run('attack') and gets them back.
+     */
+    run(name: string, args?: Record<string, unknown>, opts?: { bots?: SquadBot[]; until?: () => boolean; signal?: AbortSignal }): Promise<unknown>;
   }
 
   // ---------------------------------------------------------------------------------------------------------
@@ -268,7 +294,7 @@ declare global {
 
   class BotLeftError extends Error {
     readonly bot: string;
-    readonly reason: 'reclaimed' | 'released' | 'died' | 'disconnected' | 'despawned' | 'order-ended';
+    readonly reason: 'reclaimed' | 'released' | 'died' | 'disconnected' | 'despawned' | 'order-ended' | 'lent';
   }
   class OrderStoppedError extends Error {}
 
@@ -381,10 +407,8 @@ declare global {
    * `count` positions on a line through `center`, perpendicular to the view `yaw`, `spacing` apart (default 1.5),
    * ordered LEFT TO RIGHT as the commander sees them. With `ranks` > 1 they fill rank by rank, Math.ceil(count / ranks)
    * per rank, each rank centred, rank r `depth * r` blocks (default 2) behind the first, toward the commander. Pure (no
-   * bot): every slot keeps center's y, so pass each through groundAt. groundAt gives its block's centre: for a line
-   * that stays straight at any yaw keep the slot's x and z with groundAt's y, walk to its block, then stepTo it. Give
-   * bots their slots sorted by their position along the line (lookDir(yaw + 90) points to the commander's right) so
-   * their paths do not cross.
+   * bot): every slot keeps center's y. lineUp does the rest (each slot on the ground at its exact x and z, given out by
+   * where the bots stand); then approach(bot, slot).
    */
   function lineSlots(center: Pos, yaw: number, count: number, opts?: { spacing?: number; ranks?: number; depth?: number }): Vec3Class[];
   /**
@@ -402,16 +426,128 @@ declare global {
    * walking: lower it to walk, raise it once there. A bot leaving the order lowers it.
    */
   function raiseShield(bot: SquadBot, on?: boolean): Promise<{ raised: boolean }>;
+  // ---------------------------------------------------------------------------------------------------------
+  //  Formation and fight helpers (docs/43): what the stock line, attack and raid are written with. A new
+  //  formation is: slots from lineUp, one loop per bot (squad.crew), approach onto the slot, targets() to share
+  //  the threats, melee for a leash-safe fight. Read squad:line, squad:attack and squad:raid for worked examples.
+  // ---------------------------------------------------------------------------------------------------------
+
   /**
-   * The last step onto an exact place (its x and z, not a block's centre; its y is not used), from within 2 blocks: a
-   * path ends on a block's centre, so walk to the place's block first (goals.GoalBlock), then stepTo the place. The
-   * bot sneaks straight there with its controls, steered every physics tick, and comes to rest within about 0.1. It
-   * clears the pathfinder's goal first. It ends at rest there (there: true), when `until()` returns true (checked
-   * every 50 ms: a new formation, a foe to shoot), or after `timeoutMs` (default 3000: something keeps the body off
-   * the place; timedOut: true). On every exit it lets go of forward and sneak (unless a later stepTo on the same bot
-   * took them over), so the bot can draw a bow at once. `off`: how far off the place the body is.
+   * GO TO AN EXACT PLACE (a formation slot): the pathfinder until within 2 blocks of it (GoalNear on its exact
+   * coordinates), then a direct walk onto it at walking speed (never sneaking), steered every physics tick and braked
+   * from the body's velocity, so it stops on the place: at rest within `tolerance` (default 0.15), no overshoot. A
+   * mounted bot does the same on its horse. Ends there (there: true), when until() returns true (checked every 100 ms:
+   * a new formation, a hit, a foe to shoot), or after timeoutMs (default 30 000) or, for the direct walk, stepTimeoutMs
+   * (default 3000: something keeps the body off the place) (timedOut: true). A tolerance of 1 or more is a loose hold:
+   * pathfinding only, there within it. `off`: how far off the place the body ended.
    */
-  function stepTo(bot: SquadBot, place: Pos, opts?: { until?: () => boolean; timeoutMs?: number }): Promise<{ there: boolean; timedOut: boolean; off: number }>;
+  function approach(bot: SquadBot, place: Pos, opts?: { until?: () => boolean; timeoutMs?: number; stepTimeoutMs?: number; tolerance?: number }): Promise<{ there: boolean; timedOut: boolean; off: number }>;
+  /**
+   * approach's direct walk alone, from within 2.75 blocks of the place (farther: an error, use approach). It clears the
+   * pathfinder's goal first, and on every exit lets go of forward (unless a later stepTo on the same bot took over).
+   */
+  function stepTo(bot: SquadBot, place: Pos, opts?: { until?: () => boolean; timeoutMs?: number; tolerance?: number }): Promise<{ there: boolean; timedOut: boolean; off: number }>;
+  /** The first truthy answer of fn over bots (a bot that just left is skipped), or null: anyBot(squad.bots, (b) => groundAt(b, p)). */
+  function anyBot<T>(bots: SquadBot[], fn: (bot: SquadBot) => T | null | undefined | false): T | null;
+  /** An exact place on its column's ground (groundAt's y, the place's own x and z), as any of the bots knows it; the place itself when none does. */
+  function onGround(bots: SquadBot | SquadBot[], pos: Pos): Vec3Class;
+  /**
+   * Where a click points for a formation: the pointed position (pointedTarget) on the ground when within opts.distance
+   * (default 24) of the commander, else opts.ahead (default 8) blocks along their view.
+   */
+  function pointOf(bots: SquadBot[], at: SquadCommanderAt, opts?: { distance?: number; ahead?: number }): Vec3Class;
+  /**
+   * Give out slots by where the bots stand, so no two paths cross: the slots taken as ranks (front first along the view
+   * yaw), each left to right; the front-most bots to the front rank, each rank's bots left to right. Map name → slot.
+   */
+  function assignSlots(bots: SquadBot[], slots: Pos[], yaw: number): Map<string, Vec3Class>;
+  /**
+   * A LINE: lineSlots through center across the view yaw (spacing default 1.5, ranks, depth), each slot an exact place
+   * on the ground (onGround over opts.ground, default the bots), given out with assignSlots. Map name → slot: walk each
+   * bot there with approach.
+   */
+  function lineUp(bots: SquadBot[], center: Pos, yaw: number, opts?: { spacing?: number; ranks?: number; depth?: number; ground?: SquadBot[] }): Map<string, Vec3Class>;
+  /** A player who is not isFriend and not a spectator: an enemy (another owner's bots included). */
+  function isEnemy(bot: SquadBot, entity: Entity | null | undefined): boolean;
+  /**
+   * The threat within range (default 16) of opts.from (default the bot): a hostile mob or an enemy player passing
+   * opts.filter. prefer 'hostile' (default: a mob first) or 'nearest' (whichever is nearer).
+   */
+  function nearestFoe(bot: SquadBot, range?: number, opts?: { from?: Pos | null; filter?: (e: Entity) => boolean; prefer?: 'hostile' | 'nearest' }): Entity | null;
+  /** Who fights what, shared by one role's bots (targets()). */
+  interface SquadTargets {
+    /** How many bots are on it now. */
+    load(e: Entity): number;
+    /** This bot is on it: call the function returned (in a finally) to let it go. */
+    take(e: Entity, bot: SquadBot): () => void;
+    /**
+     * The threat for this bot (nearestFoe within radius, default 16, of from): the first tier finding one wins.
+     * Default tiers: nobody on it, then fewer than cap (default Infinity). Never skip, nor what this bot passes over.
+     */
+    pick(bot: SquadBot, opts?: { from?: Pos | null; radius?: number; cap?: number; tiers?: Array<(e: Entity, load: number) => boolean>; skip?: Entity | null; prefer?: 'hostile' | 'nearest' }): Entity | null;
+    /** This bot passes over e for ms (a block stopped its shot at it). */
+    block(bot: SquadBot, e: Entity, ms: number): void;
+    blocked(bot: SquadBot, e: Entity): boolean;
+  }
+  /** A new shared target table, one per role: const archers = targets(); const t = archers.pick(bot, { radius: 24 }). */
+  function targets(): SquadTargets;
+  /** Whether e's hitbox is within reach (default 3) of the bot's eyes (a rider's eyes are in the saddle). */
+  function inReach(bot: SquadBot, e: Entity, reach?: number): boolean;
+  /**
+   * A LEASH-SAFE MELEE FIGHT: farther than leash.radius + 3 from leash.center() it does not start a fight that would
+   * break off before its first swing; it closes in (opts.closeIn(bot, centre), else a GoalNear 3 on the centre) and
+   * pauses 200 ms (closing: true). Else attack(); after a break-off, the same pause. It always awaits a timer.
+   */
+  function melee(
+    bot: SquadBot,
+    foe: Entity,
+    opts?: { leash?: SquadLeash; until?: () => boolean; timeoutMs?: number; closeIn?: (bot: SquadBot, centre: Vec3Class) => unknown },
+  ): Promise<{ killed: boolean; brokeOff?: 'leash' | 'until'; closing?: boolean }>;
+  /** Step aside from the line to `from` (an entity or a point): a GoalNear 1 on a point min–max (default 1–2) blocks to a random side. Not awaited. */
+  function sidestep(bot: SquadBot, from: Entity | Pos, opts?: { min?: number; max?: number }): unknown;
+  // ---------------------------------------------------------------------------------------------------------
+  //  The lance (docs/44): a mounted bot with a spear (26.x) hits by charging, not by swinging. A spear reaches
+  //  2–4.5 blocks from the eyes (nearer is NOT hit: attack()/melee from a horse with a spear miss), and its charge
+  //  (its use held) hits whatever is within that reach along the look, harder the faster the rider goes. Read
+  //  squad:attack for the worked example (waves: charge through, ride out, re-form, charge back).
+  // ---------------------------------------------------------------------------------------------------------
+
+  /** Whether this bot charges with a lance: it rides a horse and has an item named *_spear. */
+  function canLance(bot: SquadBot): boolean;
+  /** Every threat (hostile mob or enemy player, as nearestFoe) within range (default 16) of opts.from (default the bot), nearest first. */
+  function foesNear(bot: SquadBot, range?: number, opts?: { from?: Pos | null; filter?: (e: Entity) => boolean }): Entity[];
+  /**
+   * ONE LANCE PASS (canLance): the spear in hand, its use held, the bot rides at full speed toward `through` (a point
+   * BEYOND its foes, where it runs out). While opts.foe() is ahead it looks at the foe's body (the charge's reach) and
+   * rides onto it until within 2 blocks, then straight on to `through`. Ends there (passed), when until() returns true,
+   * when stuck (under 0.5 blocks in 1.2 s), or after timeoutMs (default 8000); always lets go of the use and controls.
+   * struck: creatures seen hurt within its reach during the pass.
+   */
+  function lance(
+    bot: SquadBot,
+    through: Pos,
+    opts?: { foe?: () => Entity | null | undefined; until?: () => boolean; timeoutMs?: number },
+  ): Promise<{ passed: boolean; struck: number; why: 'passed' | 'until' | 'stuck' | 'timeout' }>;
+  /**
+   * WAVES OF HORSEMEN (squad:attack's charges): in the formation the riders stood in when the waves took them,
+   * together, each at the foe of the group nearest its lane, through it (lance), out `backoff` (default 12) beyond the
+   * group, re-formed there facing back, and again, while the group lasts; far from it (beyond backoff + 20) they first
+   * form up `backoff` short of it. Call step(riders, foes) every look of the order (riders: canLance; foes: the
+   * group's, as foesNear gives them) and ride(bot, …) in each rider's loop: 'charged' (one pass), 'forming' (riding to
+   * its place), 'waiting' (for the others), 'idle' (no group: yours to decide). opts.foe(lane, center): the foe this
+   * rider charges, from its lane's entity ref ({ id, username }) or the group's centre. reset() for a new target.
+   * ground: the bots that know the ground (onGround); view: the yaw to charge along when there is no axis yet.
+   */
+  function lanceWaves(opts: { backoff?: number; ground: () => SquadBot[]; view?: () => number }): {
+    step(riders: SquadBot[], foes: Entity[]): void;
+    reset(): void;
+    ride(
+      bot: SquadBot,
+      opts: { foe: (lane: { id: number; username: string | null } | undefined, center: Vec3Class) => Entity | null | undefined; until?: () => boolean; log?: (line: string) => void },
+    ): Promise<'charged' | 'forming' | 'waiting' | 'idle'>;
+    readonly passes: number;
+    readonly struck: number;
+  };
   /**
    * The live entity of a snapshot entity (ctx.commander.at.lookEntity, at.trigger.hit.entity) as this bot sees it now,
    * or null (dead, gone, out of its sight): by `id` (bot.entities[id]), else a player by `username`, else the nearest
@@ -428,10 +564,10 @@ declare global {
    *     player (not an item, arrow, XP orb, vehicle or armor stand), valid, not isFriend, not a spectator, filter(e);
    *   • pending: true for an 'arrow-release' (its 'arrow-hit' follows; position and entity are the look's until then).
    * Pointing at a friend gives the qualifying entity nearest them, or entity null with the friend's position: never
-   * fire at that position.
+   * fire at that position. Given squad.bots: the first bot's answer with an entity, else the first answer.
    */
   function pointedTarget(
-    bot: SquadBot,
+    bot: SquadBot | SquadBot[],
     at: SquadCommanderAt,
     opts?: { near?: number; filter?: (e: Entity) => boolean },
   ): { position: Vec3Class | null; entity: Entity | null; pending: boolean };
@@ -448,7 +584,8 @@ declare module 'squad' {
     mineBlock, craftItem, smeltItem, placeItem, killMob, exploreUntil, getItemFromChest, depositItemIntoChest,
     checkItemInsideChest, goTo, follow, attack, shoot, equip, eat, pickupDrops, findBlock, nearestEntity,
     nearestHostile, isFriend, blockKey, lookDir, lineSlots, groundAt, faceYaw, raiseShield, stepTo, entityOf,
-    pointedTarget,
+    pointedTarget, approach, anyBot, onGround, pointOf, assignSlots, lineUp, isEnemy, nearestFoe, targets, inReach,
+    melee, sidestep, canLance, foesNear, lance, lanceWaves,
   };
 }
 

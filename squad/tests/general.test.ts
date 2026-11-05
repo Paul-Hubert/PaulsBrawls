@@ -158,18 +158,18 @@ test('order: a written snapshot at the point, facing the axis; retarget re-aims 
   const { generals, g, fulfil } = rig();
   generals.spawnSquad(g, 'G', 'guard', 2);
   fulfil();
-  const text = await generals.order(g, 'G', 'epee', '', { pos: 'E20 N2' });
-  assert.match(text, /squad G: epee #\d+ \(2 melee\) at E20 N2 facing E/);
+  const text = await generals.order(g, 'G', 'line', '', { pos: 'E20 N2' });
+  assert.match(text, /squad G: line #\d+ \(2 guards\) at E20 N2 facing E/);
   const id = /#(\d+)/.exec(text)![1]!;
   const o = generals['deps'].runner.get(id) as Order;
   assert.deepEqual(o.snap.lookBlock, { x: 120, y: 63, z: -302, name: 'ground' });
   assert.equal(o.snap.yaw, 270);
-  await until(() => o.listening, 2000, 'epee listens');
+  await until(() => o.listening, 2000, 'line listens');
   const again = await generals.retarget(g, 'G', { pos: 'E30' });
   assert.match(again, /re-aimed: at E30 facing E/);
   assert.equal(o.running, true);
   assert.equal(o.snap.lookBlock!.x, 130);
-  assert.match(await generals.stopSquad(g, 'G'), /epee stopped/);
+  assert.match(await generals.stopSquad(g, 'G'), /line stopped/);
   assert.equal(generals.events(g).since(0).filter((e) => e.kind === 'order-end').length, 0, 'a stop by the General is not an event');
 });
 
@@ -177,7 +177,7 @@ test('order refuses commands outside the offered list and squads with nobody onl
   const { generals, g } = rig();
   generals.spawnSquad(g, 'A', 'archer', 1); // never fulfilled: nobody online
   await assert.rejects(generals.order(g, 'A', 'gather', '', {}), /unknown order/);
-  await assert.rejects(generals.order(g, 'A', 'tir', '', {}), /no bot online/);
+  await assert.rejects(generals.order(g, 'A', 'attack', '', {}), /no bot online/);
 });
 
 test('enemies: a sighting is a contact, a cluster in the sitrep, and a target for orders', async () => {
@@ -194,7 +194,7 @@ test('enemies: a sighting is a contact, a cluster in the sitrep, and a target fo
   assert.ok(contact, 'a contact event');
   assert.match(contact.text, /X1 1 @E30 .*sword1 diamond \[Paul\]/);
   assert.match(generals.sitrep(g), /^A 2\/2 archer2 hp100 idle @E2 contact X1 29b mobs1$/m);
-  const r = await generals.order(g, 'A', 'tir', '', { target: 'X1' });
+  const r = await generals.order(g, 'A', 'attack', '', { target: 'X1' });
   assert.match(r, /on Paul @E30 facing E/);
   const o = generals['deps'].runner.get(/#(\d+)/.exec(r)![1]!) as Order;
   assert.equal(o.snap.lookEntity!.id, 41);

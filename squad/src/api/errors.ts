@@ -8,14 +8,17 @@ export class SquadError extends Error {
   override name = 'SquadError';
 }
 
-/** The bot is no longer this order's: reclaimed by another order, released, dead, disconnected, despawned. */
+/**
+ * The bot is no longer this order's: reclaimed by another order, released, dead, disconnected, despawned; or, inside
+ * one order, `lent` to a `ctx.run` subroutine (docs/43 C3: the part of the script that lent it no longer drives it).
+ */
 export class BotLeftError extends SquadError {
   override name = 'BotLeftError';
   constructor(
     readonly bot: string,
-    readonly reason: LeftReason | 'order-ended',
+    readonly reason: LeftReason | 'order-ended' | 'lent',
   ) {
-    super(`${bot} left the order (${reason})`);
+    super(reason === 'lent' ? `${bot} is lent to a subroutine of the order (ctx.run)` : `${bot} left the order (${reason})`);
   }
 }
 

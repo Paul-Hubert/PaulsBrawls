@@ -54,7 +54,7 @@ class SquadSavesTest {
     @Test
     void generatedNamesAreTheOnesSpawnAndRaidGive() {
         List<String> prefixes = SquadSaves.prefixes();
-        assertEquals(List.of("Archer", "Garde", "Mineur", "Fermier", "EnnArcher", "EnnGarde"), prefixes);
+        assertEquals(List.of("Archer", "Garde", "Mineur", "Fermier", "Lancier", "Cavalier", "Archercheval", "EnnArcher", "EnnGarde"), prefixes);
         List<String> names = SquadSaves.generatedNames(List.of("Garde", "EnnArcher"));
         assertEquals("Garde01", names.get(0));
         assertTrue(names.contains("Garde09") && names.contains("Garde134") && names.contains("Garde9999"));

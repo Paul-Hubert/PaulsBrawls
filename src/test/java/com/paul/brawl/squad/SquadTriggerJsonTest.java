@@ -51,13 +51,14 @@ class SquadTriggerJsonTest {
 
     @Test
     void bodyParsesTheBindingsLineLikeBotsOrder() {
-        SquadBinding b = new SquadBinding("mur-de-boucliers", "spacing=2 @Guard1 --reclaim", true, "Ordre : mur-de-boucliers spacing=2 @Guard1 --reclaim");
+        SquadBinding b = new SquadBinding("line", "spacing=2 @Guard1 --reclaim", true, "Ordre : line spacing=2 @Guard1 --reclaim");
         JsonObject snap = new JsonObject();
         snap.add("trigger", SquadTriggerJson.trigger(SquadTriggerJson.Kind.USE, "shield", null));
-        JsonObject body = SquadTriggerJson.body("uuid-1", "PUALHubert", false, b, false, snap);
+        JsonObject body = SquadTriggerJson.body("uuid-1", "PUALHubert", false, b, false, "esc-3", snap);
         assertEquals(JsonParser.parseString("{\"uuid\":\"uuid-1\",\"name\":\"PUALHubert\"}"), body.get("by"));
         assertFalse(body.get("admin").getAsBoolean());
-        assertEquals("mur-de-boucliers", body.get("command").getAsString());
+        assertEquals("line", body.get("command").getAsString());
+        assertEquals("esc-3", body.get("squad").getAsString());
         assertEquals(JsonParser.parseString("[\"spacing=2\"]"), body.get("tokens"));
         assertEquals(JsonParser.parseString("[\"Guard1\"]"), body.get("filters"));
         assertEquals("reclaim", body.get("take").getAsString());
@@ -67,8 +68,9 @@ class SquadTriggerJsonTest {
 
     @Test
     void stopGestureAndAnEmptyLine() {
-        JsonObject body = SquadTriggerJson.body("u", "n", true, new SquadBinding("tir", "", false, "Ordre : tir"), true, new JsonObject());
+        JsonObject body = SquadTriggerJson.body("u", "n", true, new SquadBinding("attack", "", false, "Ordre : attack"), true, null, new JsonObject());
         assertTrue(body.get("stop").getAsBoolean());
+        assertFalse(body.has("squad"));
         assertTrue(body.get("admin").getAsBoolean());
         assertEquals(0, body.getAsJsonArray("tokens").size());
         assertEquals(0, body.getAsJsonArray("filters").size());

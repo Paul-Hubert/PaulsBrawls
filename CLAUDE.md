@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-A Fabric mod for Minecraft 1.21.1 (Java 21; a 26.1.2 build runs on its own dev server, bots not yet, [docs/39](docs/39-cross-version.md)), `paulsbrawls`, bundling three loosely-coupled gameplay
+A Fabric mod for Minecraft 26.1.2 (Java 25; the default since 2026-11-04; the 1.21.1 build is kept, [docs/39](docs/39-cross-version.md)), `paulsbrawls`, bundling three loosely-coupled gameplay
 features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 
 - **Gibber** — server-wide money system (a custom `coin` item) with admin gift commands and a periodic salary scheduler.
 - **Capture the Flag** — auto-drops any banner named "Flag" when its holder takes damage, disables elytra while a Flag is carried, and makes flag-holders glow.
 - **AI God** — a LangChain4j-driven `Dieu` who hears prayers (`/pray`), trades, punishes, and rewards. **Has a physical body**: drives a Mineflayer bot (the avatar) over a Node HTTP bridge. Most player-facing strings are French.
-- **Squad** — player-owned Mineflayer bots ([docs/29](docs/29-squad-design.md), [squad/README.md](squad/README.md)). An admin spawns bots with owners (`/bots spawn BOT P1 P2…`); a player asks for a command in words (`/bots create NAME …`), the `squad-author` agent (headless Claude Code, MCP tools only) writes one JS file controlling all their bots, checks it (typecheck against mineflayer's types), test-runs it and submits it; `/bots order NAME` runs it. A bot that dies drops nothing and stays offline until an admin's `/bots squad respawn [kit] [n]` brings it back with its kit (docs/35 F7). A despawned bot's save (playerdata, stats, advancements) is deleted once it has left, so its name is given again (`SquadSaves`; `/bots squad purge` deletes older ones). `/bots orders bind NAME` binds an order to the held item: a right-click starts or re-aims it (a bound bow: the arrows it shoots), sneak + right-click stops it (docs/29 §5.4; stock `mur-de-boucliers`, `epee`, `ligne-archers`, `tir`). Co-owners reclaim busy bots per role (archers pulled, melee kept; reclaimed bots return). No sandbox (players are trusted). The runtime is one Node process in [squad/](squad/) (`npm start`, `:8772`); the mod's front is `com.paul.brawl.squad`. As built: [docs/system/squad/overview.md](docs/system/squad/overview.md). **The General** (docs/38): `/bots general create NAME archer=N guard=N …` gives a Claude Code instance (`squad/agent/general/`, ticket in `SQUAD_GENERAL_TICKET`) a bodiless army that fights other players' bots over `/mcp/general`; the admin's facing is its axis of attack, their prompt its mission. **New work on bots goes here, not in Eden.**
+- **Squad** — player-owned Mineflayer bots ([docs/29](docs/29-squad-design.md), [squad/README.md](squad/README.md)). An admin spawns bots with owners (`/bots spawn BOT P1 P2…`); a player asks for a command in words (`/bots create NAME …`), the `squad-author` agent (headless Claude Code, MCP tools only) writes one JS file controlling all their bots, checks it (typecheck against mineflayer's types), test-runs it and submits it; `/bots order NAME` runs it. A bot that dies drops nothing and stays offline until an admin's `/bots squad respawn [kit] [n]` brings it back with its kit (docs/35 F7). A despawned bot's save (playerdata, stats, advancements) is deleted once it has left, so its name is given again (`SquadSaves`; `/bots squad purge` deletes older ones). `/bots orders bind NAME` binds an order to the held item: a right-click starts or re-aims it (a bound bow: the arrows it shoots), sneak + right-click stops it (docs/29 §5.4; stock `line` and `attack`, which merged `mur-de-boucliers` + `ligne-archers` and `epee` + `tir`). Each `/bots squad spawn` is one squad (roster tag `esc-N`); an item bound to `select` selects, on right-click, the squad of the player's bot under the crosshair (on nothing: deselects), and every bound item's click then orders that squad only (none selected: « Aucune escouade sélectionnée. »); each squad has its own order of a command (docs/40). Mounted kits (`horseman`, `horsearcher`) ride: `squad/src/bots/mount.ts` sends the bot's walking body as its horse's `vehicle_move` (docs/41); in `attack` horsemen with spears charge in waves (`lance`: the spear's use held, through the group, out, re-form, back; a spear misses nearer than 2 blocks), and `attack` on a creature hits its whole group (docs/44). Co-owners reclaim busy bots per role (archers pulled, melee kept; reclaimed bots return). No sandbox (players are trusted). The runtime is one Node process in [squad/](squad/) (`npm start`, `:8772`); the mod's front is `com.paul.brawl.squad`. As built: [docs/system/squad/overview.md](docs/system/squad/overview.md). **The General** (docs/38): `/bots general create NAME archer=N guard=N …` gives a Claude Code instance (`squad/agent/general/`, ticket in `SQUAD_GENERAL_TICKET`) a bodiless army that fights other players' bots over `/mcp/general`; the admin's facing is its axis of attack, their prompt its mission. **New work on bots goes here, not in Eden.**
 - **AI Village (Eden)** — **dead code (owner, 2026-10-26): do not build inside it or keep it in step; copy what is worth having.** Ten LM-powered villager bots + one God acting through a single shared, God-judged library of typed, composable skills. The brain is **Eden**, a from-scratch rewrite in [eden/](eden/) (one Node process). The mod's only contribution is server-authority: the trade-settlement listener (Eden's villagers settle accepted trades on it), `coin`, op-on-join, and the `/villagers` + `/village` commands.
 
 > **Verified reference:** [docs/system/](docs/system/README.md) is a code-checked, per-system reference (with
@@ -39,9 +39,9 @@ features, plus two LLM subsystems that live in Node sub-projects beside the mod:
 
 ```powershell
 ./gradlew build                # compile + remap; auto-copies the jar to mods folders (see below)
-./gradlew runServer            # the PRODUCTION server (cwd run/, port 25565, RCON 25575; run/README.md)
-./gradlew runDevServer         # the dev-test server (cwd dev/, port 25599, RCON 25576, own ports; dev/README.md)
-./gradlew -Pmc_versions=1.21.1,26.1.2 :26.1.2:runDevServer26   # the 26.1.2 dev server (cwd dev-26.1.2/, port 25602)
+./gradlew runServer            # the PRODUCTION server, 26.1.2 (cwd run-26.1.2/, port 25565, RCON 25575; run-26.1.2/README.md)
+./gradlew runDevServer         # the dev-test server, 26.1.2 (cwd dev-26.1.2/, port 25602, RCON 25579, own ports; dev-26.1.2/README.md)
+./gradlew "-Pmc_versions=1.21.1" runServer   # the old 1.21.1 production server (cwd run/); runDevServer: dev/ (port 25599)
 ./gradlew runClient            # launch dev client
 ./gradlew genSources           # generate Minecraft sources for IDE navigation
 ./gradlew clean
@@ -51,21 +51,24 @@ The Gradle wrapper is tracked (`gradlew`, `gradlew.bat`, `gradle/wrapper/`, Grad
 work on a clean clone; the first run downloads Gradle. **The code uses Mojang's official names** (`Player`,
 `ServerLevel`, `AbstractArrow`; `mappings loom.officialMojangMappings()`, Loom 1.15.5 `net.fabricmc.fabric-loom-remap`),
 not Yarn's: it was migrated on 2026-11-03 so that 26.x, which ships unobfuscated, uses the same names. Older docs may
-still cite Yarn names. `run/` holds no server jar: Loom fetches the server for
-`runServer` ([run/README.md](run/README.md)).
+still cite Yarn names. `run-26.1.2/` holds no server jar: Loom fetches the server for
+`runServer` ([run-26.1.2/README.md](run-26.1.2/README.md)).
 
 **One Gradle project per Minecraft version** ([docs/39](docs/39-cross-version.md)): `versions/<version>/` builds the
 shared `src/` (with [gradle/mod.gradle](gradle/mod.gradle)) plus its own `versions/<version>/src/`; its
 `gradle.properties` holds its Minecraft, loader, Fabric API and Java versions. `mc_versions` in the root
-[gradle.properties](gradle.properties) picks which versions build (default `1.21.1`, the production version; its jar
-is `versions/1.21.1/build/libs/`). The first is the primary one: only it has `runServer`/`runDevServer`/`runClient`/
-`mcpProbe`, because Gradle runs a command-line task in every project that has it. **Where the Minecraft or Fabric API
+[gradle.properties](gradle.properties) picks which versions build (default `26.1.2,1.21.1`: both build and test; 26.1.2's jar is
+`versions/26.1.2/build/libs/`). The first is the primary one: only it has `runServer`/`runDevServer`/`runClient`/
+`mcpProbe`, because Gradle runs a command-line task in every project that has it (a non-primary version's run tasks
+are disabled in `gradle/mod.gradle`). In PowerShell, quote a `-P` with a version in it (`"-Pmc_versions=1.21.1"`):
+Windows PowerShell splits `-P…=1.21.1` at the first dot, and Gradle sees `mc_versions=1`. **Where the Minecraft or Fabric API
 differs between versions, shared code calls `com.paul.brawl.compat.Compat` / `ClientCompat`**, one copy per version in
 `versions/<v>/src/` with the same signatures (add a method to both; never name `ResourceLocation`/`Identifier` in
 shared code; a mixin that exists per version goes in each `versions/<v>/src/main/resources/paulsbrawls.version.mixins.json`).
-**26.1.2 compiles, passes the tests and runs on its dev server** (`-Pmc_versions=1.21.1,26.1.2 :26.1.2:test :26.1.2:jar`;
-`:26.1.2:runDevServer26` runs `dev-26.1.2/`, [dev-26.1.2/README.md](dev-26.1.2/README.md); Java 25, fetched into
-`~/.gradle/jdks` by the foojay resolver). It stays out of `mc_versions` until the bots and a client run it (docs/39 §5).
+**26.1.2 is the default version since 2026-11-04** (Java 25, fetched into `~/.gradle/jdks` by the foojay resolver;
+`:26.1.2:build` copies its jar into the PrismLauncher instance "26.1.2"). Still open (docs/39 §5): the unified
+bridge's `LLMBot` cannot join 26.x (its mineflayer is 4.35), the 26.1.2 client's `/prove`/`/build` are unchecked, and
+WorldEdit and Simple Voice Chat for 26.1.2 are not installed.
 
 **A standalone server** (a Fabric launcher and jar instead of `./gradlew runServer`) from a clone: `node scripts/setup-server.mjs [dir]`
 (default `server/`, gitignored). It downloads the Fabric server launcher for the versions in `versions/<mc>/gradle.properties`
@@ -132,6 +135,7 @@ cd squad
 npm install
 cp squad.example.json squad.json   # gitignored: minecraft host/port, token (or PAULSBRAWLS_SQUAD_TOKEN, same as the mod's squad.properties)
 npm start                          # supervisor + runtime on 127.0.0.1:8772 (stop with Ctrl+C; killing npm can leave node running)
+npm run start:dev                  # the dev runtime for dev-26.1.2/ (squad-dev.json: port 8783, the server on 25602)
 npm run check                      # lint + tsc + node:test on fakes (288 tests)
 npm run live-test                  # real bots + RCON; SERVER_PROPERTIES=../server/server.properties for production; LIVE_PATH_WORKERS=N; LIVE_ONLY=core|items|range (range: docs/35 F4 measurement)
 ```
@@ -140,7 +144,7 @@ npm run live-test                  # real bots + RCON; SERVER_PROPERTIES=../serv
   `POST /api/metrics` and `/bots status` (perm 0) show the last 10 s, and the journal keeps one `vitals` row per minute
   for 7 days. Capacity and the defaults: [docs/31 §11](docs/31-squad-performance-review.md).
 - **Patched dependencies:** `npm install` runs `patch-package --error-on-fail` on `squad/patches/` (prismarine-physics,
-  minecraft-protocol, mineflayer-pathfinder). A patch that no longer applies fails the install; the runtime refuses to
+  minecraft-protocol, mineflayer-pathfinder, mineflayer: physics stays on while riding, docs/41). A patch that no longer applies fails the install; the runtime refuses to
   start on an unpatched pathfinder. Change a patch by editing `node_modules` and running `npx patch-package <pkg>`.
 - `squad.json` `pathfinding.astarBudgetMs` (default 20 ms of A* per 50 ms window for all bots, 0 = off) and
   `workers.count` (default 32, capped at the hardware threads; reader worker threads: the bots' A*, block searches and aim run
@@ -175,12 +179,14 @@ The system prompt is loaded at
 runtime from [prompt.txt](prompt.txt) in the working directory (not bundled into the jar). LangChain4j
 settings persist to `llm_config.properties`; God-Body bridge settings to `bridge_config.properties`.
 
-> **Production runs in `run/`** (`./gradlew runServer`, port 25565, since 2026-10-31; `PaulsBrawlsVanilla\` is the
-> old production folder, kept but unused). That is where the runtime configs (`llm_config.properties`,
-> `bridge_config.properties`, …) and logs live. Dev tests run in `dev/` (`./gradlew runDevServer`, port 25599, its
-> own world, RCON 25576, settlement 8777, God MCP 8781, Squad off). **Two servers, two cwds**; the live tests default
-> to `dev/`. The 26.1.2 dev server is a third, in `dev-26.1.2/` (port 25602, RCON 25579, settlement 8778, God MCP 8782,
-> Squad and the God-Body bridge off).
+> **Production runs in `run-26.1.2/`** (`./gradlew runServer`, Minecraft 26.1.2, port 25565, since 2026-11-04; its
+> world is a copy of `run/world`, upgraded at its first start). That is where the runtime configs
+> (`llm_config.properties`, `bridge_config.properties`, …) and logs live. `run/` is the 1.21.1 production folder
+> (2026-10-31 to 2026-11-04), kept for a rollback (`./gradlew "-Pmc_versions=1.21.1" runServer`; never both: same
+> ports); `PaulsBrawlsVanilla\` is the one before it. Dev tests run in `dev-26.1.2/` (`./gradlew runDevServer`, port
+> 25602, its own world, RCON 25579, settlement 8778, God MCP 8782, Squad on the dev runtime :8783, the God-Body bridge
+> off); `dev/` is the 1.21.1 dev server (port 25599, RCON 25576, settlement 8777, God MCP 8781, Squad off). The live
+> tests still default to `dev/` (not yet updated for 26.1.2).
 
 ---
 
@@ -438,7 +444,7 @@ run by `npm run check`) — imports run **strictly downward**, an upward import 
 
 - **Config:** [eden/eden.example.json](eden/eden.example.json) → `eden.json` (gitignored). Holds NO key (env-only). Sections: `minecraft`, `provider`, `villagers` (roster: `name`/`role`/`persona`/`items`; `home`/`chest` are not accepted keys — anchors are discovered in the world after spawn, R18/B3.6), `scenario` (wins over `villagers`), `god` (name/desks/budget/`embodiedVerdicts`/`godPrompt`), `behavior`, `llm` (strong/fast providers, `maxConcurrent`, cooldown), `skills`, `settlement.url` (`:8767`), `admin.port` (8770), `journal`.
 - **Data dir** `.eden-data/` (gitignored): `eden.db` (journal), `library/<skill>/skill.json` + `v*.js` (authored code), `bots/<name>.json` (memory + relations), `subscriptions/<name>.json`, `world.json` (world stamp), `llm/*.json` (transcripts).
-- **Port map** (R24 — a registry, never folklore): **8772 Squad runtime (control API, SSE, `/mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN`, docs/29; `/mcp/general`, a General's `gen-…` ticket, docs/38)** · **8770** Eden admin (its only held port) · **8771 Java `god`/`builder` MCP servers (only with `godAgent = external`, bearer token, docs/27)** · 4096 opencode (`opencode serve`, the external God agent, Basic auth) · 8765/8766 v1 (reserved while coexisting) · **8767 Java settlement (stateless per request; Eden POSTs accepted trades to it, with `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when the mod sets `settlementToken`; `./gradlew runServer` takes it, R29; the dev server uses 8777)** · 25565 production, `run/` (RCON 25575) · 25599 dev server, `dev/` (RCON 25576; God MCP 8781) · 25602 the 26.1.2 dev server, `dev-26.1.2/` (RCON 25579; settlement 8778; God MCP 8782). **Read the server's `server.properties`, never assume the port (R28).**
+- **Port map** (R24 — a registry, never folklore): **8772 Squad runtime (control API, SSE, `/mcp/squad`; bearer `PAULSBRAWLS_SQUAD_TOKEN`, docs/29; `/mcp/general`, a General's `gen-…` ticket, docs/38)** · **8770** Eden admin (its only held port) · **8771 Java `god`/`builder` MCP servers (only with `godAgent = external`, bearer token, docs/27)** · 4096 opencode (`opencode serve`, the external God agent, Basic auth) · 8765/8766 v1 (reserved while coexisting) · **8767 Java settlement (stateless per request; Eden POSTs accepted trades to it, with `X-Village-Token` from `EDEN_SETTLEMENT_TOKEN` when the mod sets `settlementToken`; `./gradlew runServer` takes it, R29; the dev server uses 8777)** · 25565 production, `run-26.1.2/` (26.1.2; RCON 25575; the 1.21.1 `run/` uses the same ports) · 25602 dev server, `dev-26.1.2/` (RCON 25579; settlement 8778; God MCP 8782; Squad dev runtime 8783) · 25599 the 1.21.1 dev server, `dev/` (RCON 25576; God MCP 8781). **Read the server's `server.properties`, never assume the port (R28).**
 - **Identity** (R12): Eden's avatar is **`Dieu`** — never v1's `LLMBot`/`GodBot`; villagers use French roster names; the eval harness namespaces every username `EvalBot*`. Minecraft kicks the second login of a name, so every login across all coexisting systems must be pairwise distinct.
 
 ### Live test suite ([docs/19](docs/19-live-test-suite.md), [docs/20](docs/20-live-test-process.md), code in [eden/live-tests/](eden/live-tests/))
@@ -518,7 +524,7 @@ architecture.
 - **The God-Body avatar needs op for `/tp`.** Op-on-join is automatic for `BridgeConfig.botUsername`, Eden's `Dieu` and active scenario villagers — but only on a **real dedicated server** (the mod's server side is a `DedicatedServerModInitializer`). Op-on-join trusts usernames, which is exploitable in offline mode.
 - **`MCPGateway.ensureStarted` is best-effort.** If the SSE handshake fails (404 because the legacy bridge-only entrypoint is running instead of unified; ECONNREFUSED if no Node process), the exception is caught and godBot runs with its Java tool set only — silent in normal play. Check for `MCP gateway up — N tool(s) discovered` vs `MCP gateway connect failed (…); will retry in 30s` in the log on first `/pray`; reconnects retry automatically every 30 s.
 - **`MCPGateway.INSTANCE.tools()` caches** the last successful `listTools()`. Adding/removing Node tools does NOT propagate while healthy — run `/mcp reload`.
-- **The 1.21.1 pin is everywhere** — server, mod, and bot must agree (`SUPPORTED_MINECRAFT_VERSION` in `bot-connection.ts`).
+- **The version pin is everywhere** — server, mod, and bot must agree: 26.1.2 for Squad (`squad.json` `minecraft.version`, `SUPPORTED_MINECRAFT_VERSION` in `squad/src/bots/pool.ts`), still 1.21.1 for the unified bridge (`SUPPORTED_MINECRAFT_VERSION` in `bot-connection.ts`; its mineflayer 4.35 cannot join 26.x).
 - **`dig-block` is TEMP-disabled** at user request (registration commented out, two ava tests `test.skip`'d — NOT a defect). Restore path: grep `TEMP DISABLED`/`TEMP SKIPPED` (five spots) + `CANONICAL_TOOLS` in `verify-mcp-tools.mjs`. `move-in-direction` was **permanently removed** (blind WASD, no obstacle awareness) — don't re-add it.
 - **`Mineflayer detected … deprecated event (physicTick)`** on every spawn is harmless upstream noise from a loaded plugin — don't chase it.
 - **The bundled LangChain4j + OkHttp/Okio/Kotlin pile** is jar-in-jar'd via `include` in [gradle/mod.gradle](gradle/mod.gradle) specifically because `langchain4j-mcp`'s `HttpMcpTransport` is OkHttp-based. Without those lines the first `/pray` NCDFEs on `okhttp3/Interceptor`. When bumping `langchain4j-mcp`, re-derive the pins with `./gradlew dependencyInsight --dependency okhttp`.

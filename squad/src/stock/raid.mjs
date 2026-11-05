@@ -80,39 +80,10 @@ export default async function (squad, args, ctx) {
     return l && l !== bot && l.entity ? l.entity.position : bot.entity.position;
   };
 
-  /** A player who is not on our team, and not a spectator (nobody can hit one). */
-  const isFoe = (bot, e) => e.type === 'player' && !!e.username && !isFriend(e) && bot.players[e.username]?.gamemode !== 3;
-
-  /** Who fights what, per role: entity id → names of the bots on it. */
-  const taken = { archers: new Map(), melee: new Map() };
-  const load = (map, e) => map.get(e.id)?.size ?? 0;
-  const take = (map, e, bot) => {
-    const set = map.get(e.id) ?? new Set();
-    set.add(bot.username);
-    map.set(e.id, set);
-    return () => {
-      set.delete(bot.username);
-      if (set.size === 0 && map.get(e.id) === set) map.delete(e.id);
-    };
-  };
-
-  /** The enemy nearest `from` within `range`: an enemy player or a hostile mob, whichever is nearer. */
-  const nearestFoe = (bot, from, range, room) => {
-    const p = nearestEntity(bot, (e) => isFoe(bot, e) && room(e), range, { from });
-    const m = nearestHostile(bot, range, { from, filter: room });
-    if (!p || !m) return p ?? m;
-    return p.position.distanceTo(from) <= m.position.distanceTo(from) ? p : m;
-  };
-
-  /** An enemy for this bot: an untaken one first, then one with room (fewer than `cap` on it). */
-  const pick = (bot, map, cap) => {
-    const from = anchor(bot);
-    for (const max of [1, cap]) {
-      const t = nearestFoe(bot, from, radius, (e) => load(map, e) < max);
-      if (t) return t;
-    }
-    return null;
-  };
+  /** Who fights what, per role (targets: entity → the bots on it). */
+  const taken = { archers: targets(), melee: targets() };
+  /** An enemy for this bot near its anchor: an untaken one first, then one with room (fewer than `cap` on it). */
+  const pick = (bot, role, cap) => taken[role].pick(bot, { from: anchor(bot), radius, cap, prefer: 'nearest' });
 
   /** The other bots of a role, the leader left out (it has no slot: the formation is around it). */
   const ranks = (role) => (squad.roles[role] ?? []).filter((b) => b !== leader());
@@ -131,42 +102,38 @@ export default async function (squad, args, ctx) {
     return { x: Math.round(x * 10) / 10, z: Math.round(z * 10) / 10 };
   };
 
-  /** Two blocks to one side of the line to the target: out from behind whatever blocked the shot. */
-  const sidestep = async (bot, t) => {
-    const p = bot.entity.position;
-    const dx = t.position.x - p.x;
-    const dz = t.position.z - p.z;
-    const len = Math.hypot(dx, dz) || 1;
-    const side = Math.random() < 0.5 ? 2 : -2;
-    bot.pathfinder.setGoal(new goals.GoalNear(p.x - (dz / len) * side, p.y, p.z + (dx / len) * side, 1));
-    await squad.sleep(400);
-  };
-
-  /** Fight one enemy with this role's weapon. A guard is leashed to the leader (to where it stood, for the leader). */
+  /**
+   * Fight one enemy with this role's weapon; false when it did not (then the bot keeps up instead). A guard is leashed
+   * to the leader (to where it stood, for the leader). One too far from its anchor would break off before its first
+   * swing, and the soldier's loop would spin on it (a horseman left behind starved the event loop, found live): melee()
+   * does not start it (`closing`), and the soldier keeps up instead.
+   */
   const fight = async (bot, role, t) => {
     if (role === 'archers' && bot.inventory.items().some((i) => i.name.endsWith('arrow'))) {
       await shoot(bot, t);
-      return;
+      return true;
     }
     const here = bot.entity.position.clone();
     const center = () => (bot === leader() ? here : anchor(bot));
-    await attack(bot, t, { timeoutMs: 15000, leash: { center, radius } });
+    const r = await melee(bot, t, { timeoutMs: 15000, leash: { center, radius }, closeIn: () => undefined });
+    return !r.closing && !r.brokeOff;
   };
 
   /** Engage if there is an enemy for this bot; true when it fought (or tried to). */
   const engage = async (bot, role) => {
     const map = taken[role] ?? taken.melee;
-    const t = pick(bot, map, role === 'archers' ? Infinity : PER_TARGET);
+    const t = pick(bot, role === 'archers' ? 'archers' : 'melee', role === 'archers' ? Infinity : PER_TARGET);
     if (!t) return false;
     if (t.type === 'player') state.quietSince = Date.now();
-    const release = take(map, t, bot);
+    const release = map.take(t, bot);
     try {
-      await fight(bot, role, t);
+      if (!(await fight(bot, role, t))) return false;
     } catch (e) {
       if (e instanceof BotLeftError || e instanceof OrderStoppedError) throw e;
       ctx.log(`${bot.username}: ${e.message}`);
-      if (/no clear line of fire/.test(e.message)) await sidestep(bot, t);
-      else await squad.sleep(250);
+      const blocked = /no clear line of fire/.test(e.message);
+      if (blocked) sidestep(bot, t, { min: 2, max: 2 }); // two blocks to one side: out from behind what blocked it
+      await squad.sleep(blocked ? 400 : 250);
     } finally {
       release();
     }
@@ -201,7 +168,7 @@ export default async function (squad, args, ctx) {
     if (dist <= THERE) {
       step = null;
       // At the point: hunt the enemy player nearest where the target was last seen (their army stands around them).
-      const foe = nearestEntity(bot, (e) => isFoe(bot, e), HUNT, { from: state.dest });
+      const foe = nearestEntity(bot, (e) => isEnemy(bot, e), HUNT, { from: state.dest });
       if (foe) {
         state.quietSince = Date.now();
         if (foe.position.distanceTo(state.dest) > THERE) {
@@ -272,20 +239,20 @@ export default async function (squad, args, ctx) {
     }
   };
 
-  const soldier = (role) => async (bot) => {
-    while (!squad.stopped && !state.done) {
-      if (await engage(bot, role)) {
-        if (bot === leader()) step = null; // the fight moved it: plan a new step
-        continue;
-      }
-      if (bot === leader()) await lead(bot);
-      else await keepUp(bot, role);
+  /** One pass of a soldier: fight if there is an enemy for it, else lead (the leader) or keep up. */
+  const soldier = async (bot, role) => {
+    if (await engage(bot, role)) {
+      if (bot === leader()) step = null; // the fight moved it: plan a new step
+      return;
     }
+    if (bot === leader()) await lead(bot);
+    else await keepUp(bot, role);
   };
 
-  await Promise.all([squad.parallel(squad.roles.archers ?? [], soldier('archers')), squad.parallel(squad.roles.melee ?? [], soldier('melee'))]);
-  if (state.done) return state.found > 0 ? 'Raid terminé : plus aucun ennemi en vue.' : 'Raid terminé : aucun ennemi trouvé.';
-  return 'Raid arrêté.';
+  // One loop per bot (squad.crew: a pass that awaited nothing is followed by a pause, a bot that comes back gets a loop).
+  squad.crew((bot, role) => soldier(bot, role === 'archers' ? 'archers' : 'melee'), { while: () => !state.done });
+  while (!state.done) await squad.sleep(LOOK_MS); // a stop rejects the sleep: the order ends as stopped
+  return state.found > 0 ? 'Raid terminé : plus aucun ennemi en vue.' : 'Raid terminé : aucun ennemi trouvé.';
 }
 
 /** The march direction rounded to one of 8 (so the formation's slots do not change with every small turn). */

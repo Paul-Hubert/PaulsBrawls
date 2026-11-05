@@ -44,7 +44,7 @@ export default tseslint.config(
   {
     // Stock commands and exemplars are what the author agent reads: plain ESM JavaScript run by the runtime, with
     // the squad globals (squad.d.ts) in scope.
-    files: ['agent/**/*.mjs', 'src/stock/**/*.mjs', 'bench/commands/**/*.mjs'],
+    files: ['agent/**/*.mjs', 'src/stock/**/*.mjs', 'bench/commands/**/*.mjs', 'tests/fixtures/commands/**/*.mjs'],
     languageOptions: {
       sourceType: 'module',
       globals: {
@@ -56,6 +56,9 @@ export default tseslint.config(
         nearestEntity: 'readonly', nearestHostile: 'readonly', isFriend: 'readonly', blockKey: 'readonly',
         lookDir: 'readonly', lineSlots: 'readonly', groundAt: 'readonly', faceYaw: 'readonly', raiseShield: 'readonly',
         stepTo: 'readonly', entityOf: 'readonly', pointedTarget: 'readonly',
+        approach: 'readonly', anyBot: 'readonly', onGround: 'readonly', pointOf: 'readonly', assignSlots: 'readonly',
+        lineUp: 'readonly', isEnemy: 'readonly', nearestFoe: 'readonly', targets: 'readonly', inReach: 'readonly',
+        melee: 'readonly', sidestep: 'readonly', canLance: 'readonly', foesNear: 'readonly', lance: 'readonly', lanceWaves: 'readonly',
         sleep: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', setInterval: 'readonly',
         clearInterval: 'readonly', BotLeftError: 'readonly', OrderStoppedError: 'readonly',
       },

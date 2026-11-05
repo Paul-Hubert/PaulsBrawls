@@ -30,6 +30,8 @@ export interface LiveKit {
   rcon: Rcon;
   rt: Started;
   mcPort: number;
+  /** The server's Minecraft version (the captain joins with it). */
+  mcVersion: string;
   /** Whether the world may be changed (the dev server only). */
   setupWorld: boolean;
   notices: Notice[];
@@ -254,7 +256,7 @@ export async function itemScenarios(k: LiveKit): Promise<void> {
         port: k.mcPort,
         username: CAPTAIN.name,
         auth: 'offline',
-        version: '1.21.1',
+        version: k.mcVersion,
         customPackets: RECIPES_AS_BYTES,
       } as Parameters<typeof mineflayer.createBot>[0]);
       captain.on('messagestr', (m: string) => {

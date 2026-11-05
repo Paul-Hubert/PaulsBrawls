@@ -369,3 +369,60 @@ test('config: pathfinding.astarBudgetMs defaults to 20, is validated, and applyP
   }
   applyPathfinding({ astarBudgetMs: 0 });
 });
+
+test('patch 4, mineflayer physics: a mount does not stop physics (docs/41: a rider\'s body walks and moves its horse)', async () => {
+  const inject = require('mineflayer/lib/plugins/physics.js') as (bot: unknown, opts: Record<string, unknown>) => void;
+  const bot = stubBot();
+  const sent: string[] = [];
+  Object.assign(bot, {
+    isAlive: true,
+    supportFeature: () => false,
+    _client: Object.assign(new EventEmitter(), { state: 'play', write: (name: string) => sent.push(name) }),
+  });
+  inject(bot, {});
+  let ticks = 0;
+  bot.on('physicsTick', () => ticks++);
+  bot.emit('login');
+  try {
+    // The server's first position: physics starts.
+    bot._client.emit('position', { x: 0.5, y: 64, z: 0.5, yaw: 0, pitch: 0, flags: {}, teleportId: 1 });
+    await sleep(200);
+    assert.ok(ticks > 0, 'physics ticks on foot');
+    bot.emit('mount');
+    const before = ticks;
+    await sleep(200);
+    assert.ok(ticks > before, `physics still ticks after a mount (${ticks - before} ticks)`);
+  } finally {
+    bot.emit('end');
+  }
+});
+
+test('patch 5, prismarine-physics + pathfinder: a free rein (entity.moveYaw) is the heading the body walks along; the pathfinder steers through bot.pathfinder.steer (docs/41)', () => {
+  const { PlayerState } = require('prismarine-physics') as { PlayerState: new (bot: unknown, control: unknown) => { yaw: number } };
+  const bot = stubBot();
+  bot.entity.yaw = 1;
+  assert.equal(new PlayerState(bot, { ...bot.controlState }).yaw, 1, 'no rein: the body walks where it looks');
+  bot.entity.moveYaw = -2;
+  assert.equal(new PlayerState(bot, { ...bot.controlState }).yaw, -2, 'a rein: the body walks along its heading, not its look');
+  delete bot.entity.moveYaw;
+
+  const { pathfinder, goals } = require('mineflayer-pathfinder') as { pathfinder(bot: unknown): void; goals: { GoalXZ: new (x: number, z: number) => unknown } };
+  const walker = stubBot();
+  pathfinder(walker);
+  const looks: number[] = [];
+  walker.look = (yaw: number) => {
+    looks.push(yaw);
+    return Promise.resolve();
+  };
+  walker.pathfinder.setGoal(new goals.GoalXZ(12, 0));
+  for (let i = 0; i < 3; i++) walker.emit('physicsTick');
+  assert.ok(looks.length > 0, 'without steer: the walk turns the look');
+  const steered: number[] = [];
+  walker.pathfinder.steer = (yaw: number) => steered.push(yaw);
+  looks.length = 0;
+  for (let i = 0; i < 3; i++) walker.emit('physicsTick');
+  assert.ok(steered.length > 0, 'with steer: the walk steers through it');
+  assert.ok(Math.abs(steered.at(-1)! + Math.PI / 2) < 0.3, `toward +X (east: mineflayer's −π/2), got ${steered.at(-1)}`);
+  assert.deepEqual(looks, [], 'and leaves the look alone');
+  walker.pathfinder.setGoal(null);
+});

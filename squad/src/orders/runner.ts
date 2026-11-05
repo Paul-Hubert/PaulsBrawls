@@ -11,8 +11,8 @@ import type { Limits } from '../config';
 import type { Journal } from '../journal/journal';
 import type { LeaseManager, RoleRequest, Take } from '../leases';
 import type { Roster } from '../roster';
-import { errorMessage, isStopped } from '../api/errors';
-import { buildCtx, buildScope } from '../api/scope';
+import { errorMessage, isBotLeft, isStopped } from '../api/errors';
+import { buildCtx, buildScope, subCommander, type RunOptions } from '../api/scope';
 import { Squad } from '../api/squad';
 import { compile, CompileError, type CommandFactory } from '../script/compile';
 import { ManifestError, matches, parseArgs, usage, validateManifest, type BotFacts, type Manifest } from '../script/manifest';
@@ -45,6 +45,11 @@ export interface OrderRequest {
   /** @bot filters (only these bots may be granted). */
   filters?: string[];
   take?: Take;
+  /**
+   * The selected squad (a roster tag: one `/bots squad spawn`, docs/40): only its bots may be granted, and the binding
+   * is per squad, so two squads of one player each run their own `line`.
+   */
+  squad?: string;
   snap: Snapshot;
 }
 
@@ -128,11 +133,12 @@ export class OrderRunner extends EventEmitter {
     return { name: rb.name, tags: rb.tags, items: [...items] };
   }
 
-  /** The commander's online bots, restricted to `filters` when given. */
-  candidates(uuid: string, filters: string[] = []): string[] {
+  /** The commander's online bots, restricted to `filters` and to the bots tagged `squad` when given. */
+  candidates(uuid: string, filters: string[] = [], squad?: string): string[] {
     const want = new Set(filters.map((f) => f.toLowerCase()));
     return this.deps.roster
       .botsOf(uuid)
+      .filter((b) => !squad || b.tags.includes(squad))
       .map((b) => b.name)
       .filter((n) => (want.size === 0 || want.has(n.toLowerCase())) && !!this.deps.pool.bot(n));
   }
@@ -141,7 +147,7 @@ export class OrderRunner extends EventEmitter {
 
   /** `/bots order` (and a trigger's start): tracked, so a click arriving while it starts waits for it. */
   start(req: OrderRequest): Promise<StartResult> {
-    const b = this.bindingOf(req.commander, req.command);
+    const b = this.bindingOf(req.commander, req.command, req.squad);
     const p = this.launch(req);
     return 'error' in b ? p : this.track(b.key, p);
   }
@@ -151,6 +157,10 @@ export class OrderRunner extends EventEmitter {
     if (owned.length === 0) return { ok: false, text: "[Bots] Tu ne possèdes aucun bot (un admin en crée avec /bots spawn)." };
     for (const f of req.filters ?? []) {
       if (!owned.some((b) => b.name.toLowerCase() === f.toLowerCase())) return { ok: false, text: `[Bots] ${f} n'est pas un de tes bots.` };
+    }
+    const squad = req.squad;
+    if (squad && !owned.some((b) => b.tags.includes(squad))) {
+      return { ok: false, text: `[Bots] Aucun de tes bots dans l'escouade sélectionnée (${squad}).` };
     }
     let resolved: Resolved;
     try {
@@ -162,6 +172,7 @@ export class OrderRunner extends EventEmitter {
     const order = this.newOrder(ref, req.commander, req.snap, false);
     order.filters = [...(req.filters ?? [])];
     if (req.take) order.take = req.take;
+    if (squad) order.squad = squad;
     try {
       const factory = this.factory(ref, resolved.source);
       const { fn, manifest } = await this.load(order, factory);
@@ -176,11 +187,12 @@ export class OrderRunner extends EventEmitter {
       order.report.args = args;
       order.limitMs = this.limitMs(manifest);
       const roles = this.roleRequests(manifest, req.take);
-      const plan = this.deps.leases.plan(order.id, roles, this.candidates(req.commander.uuid, req.filters));
+      const plan = this.deps.leases.plan(order.id, roles, this.candidates(req.commander.uuid, req.filters, squad));
       if (!plan.ok) {
         await this.abandon(order);
         const detail = plan.shortfall.map((s) => `${s.role} ${s.got}/${s.min}`).join(', ');
-        return { ok: false, text: `[Bots] Pas assez de bots pour « ${ref.name} » : ${detail}.${this.offlineHint(req.commander.uuid)}` };
+        const where = squad ? ` dans l'escouade (${squad})` : '';
+        return { ok: false, text: `[Bots] Pas assez de bots${where} pour « ${ref.name} » : ${detail}.${this.offlineHint(req.commander.uuid, squad)}` };
       }
       this.deps.leases.register(order);
       await this.deps.leases.apply(order.id, plan.grants);
@@ -213,10 +225,11 @@ export class OrderRunner extends EventEmitter {
    * the order) waits for it, then goes to the order it started even before that order listens.
    */
   async trigger(req: TriggerRequest): Promise<TriggerResult> {
-    const b = this.bindingOf(req.commander, req.command);
+    const b = this.bindingOf(req.commander, req.command, req.squad);
+    const ofSquad = (o: Order): boolean => (o.squad ?? '') === (req.squad ?? '');
     if ('error' in b) {
       // The command no longer resolves for the player (unshared, deleted): the stop gesture still stops what runs.
-      const stale = req.stop ? this.mineRunning(req.commander, (o) => refMatches(o, req.command)) : [];
+      const stale = req.stop ? this.mineRunning(req.commander, (o) => ofSquad(o) && refMatches(o, req.command)) : [];
       return stale.length ? this.stopByTrigger(stale, req) : { ok: false, text: b.error };
     }
     let fresh: string | undefined;
@@ -225,9 +238,11 @@ export class OrderRunner extends EventEmitter {
       fresh = r.ok ? r.orderId : undefined;
     }
     // From here to the tracked restart below nothing awaits, so two triggers can never both start the binding.
-    const mine = this.mineRunning(req.commander, (o) => o.command.author.uuid === b.author && o.command.name === b.name);
+    // A squad's binding is that squad's order of the command: another squad's `line` is another binding.
+    const mine = this.mineRunning(req.commander, (o) => ofSquad(o) && o.command.author.uuid === b.author && o.command.name === b.name);
     if (req.stop) {
-      return mine.length ? this.stopByTrigger(mine, req) : { ok: true, text: `[Bots] Aucun ordre « ${b.name} » en cours.`, stopped: false };
+      const none = `[Bots] Aucun ordre « ${b.name} » en cours${req.squad ? ' pour cette escouade' : ''}.`;
+      return mine.length ? this.stopByTrigger(mine, req) : { ok: true, text: none, stopped: false };
     }
     const current = mine[mine.length - 1];
     if (current && (current.listening || current.id === fresh) && sameLine(current, req) && current.deliverTrigger(req.snap)) {
@@ -263,7 +278,7 @@ export class OrderRunner extends EventEmitter {
     const next = prev.then(async () => {
       const m = order.manifest;
       if (!m || !order.running) return;
-      const candidates = this.candidates(commander.uuid, order.filters);
+      const candidates = this.candidates(commander.uuid, order.filters, order.squad);
       let got = 0;
       for (const [role, spec] of Object.entries(m.roles)) {
         if (!order.running) break;
@@ -295,11 +310,14 @@ export class OrderRunner extends EventEmitter {
     return this.running().filter((o) => o.running && !o.trial && o.commander.uuid === commander.uuid && pick(o));
   }
 
-  /** The binding key of a command line for a player: who orders and which command (author + name), not the version. */
-  private bindingOf(commander: Player, command: string): { key: string; author: string; name: string } | { error: string } {
+  /**
+   * The binding key of a command line for a player: who orders, which command (author + name, not the version) and
+   * for which squad (docs/40: each selected squad has its own order of a command).
+   */
+  private bindingOf(commander: Player, command: string, squad?: string): { key: string; author: string; name: string } | { error: string } {
     try {
       const r = this.deps.store.resolve(commander.uuid, command);
-      return { key: `${commander.uuid}|${r.meta.author.uuid}/${r.meta.name}`, author: r.meta.author.uuid, name: r.meta.name };
+      return { key: `${commander.uuid}|${r.meta.author.uuid}/${r.meta.name}|${squad ?? ''}`, author: r.meta.author.uuid, name: r.meta.name };
     } catch (e) {
       return { error: `[Bots] ${errorMessage(e)}` };
     }
@@ -346,8 +364,13 @@ export class OrderRunner extends EventEmitter {
     }
   }
 
-  /** `ctx.run(name, args, { bots })`: another command the commander may use, as a subroutine of this order. */
-  private async runSub(order: Order, stack: string[], name: string, rawArgs: Record<string, unknown> | undefined, bots: Bot[] | undefined): Promise<unknown> {
+  /**
+   * `ctx.run(name, args, { bots, until, signal })`: another command the commander may use, as a subroutine of this
+   * order, on a view of `parent` (docs/43 C2/C3). Its bots (`bots`, default all of the parent's) are lent to it while
+   * it runs and come back when it ends: when it returns or throws, when `until()` turns true (checked every 100 ms)
+   * or `signal` aborts. Ended that way it resolves to undefined. Its `ctx.commander` listeners end with it.
+   */
+  private async runSub(order: Order, parent: Squad, stack: string[], name: string, rawArgs: Record<string, unknown> | undefined, opts: RunOptions | undefined): Promise<unknown> {
     if (stack.length >= this.deps.limits.maxCallDepth) throw new Error(`ctx.run: depth ${stack.length} reached (max ${this.deps.limits.maxCallDepth})`);
     let resolved: Resolved;
     try {
@@ -364,15 +387,47 @@ export class OrderRunner extends EventEmitter {
     const manifest = validateManifest(exports.manifest);
     const tokens = Object.entries(rawArgs ?? {}).map(([k, v]) => `${k}=${String(v)}`);
     const args = parseArgs(manifest, tokens);
-    const squad = new Squad(order, this.squadDeps(order), { bots: bots ?? [...order.bots], manifest });
-    const ctx = buildCtx(order, args, (n, a, o) => this.runSub(order, [...stack, key], n, a, o?.bots));
-    return (exports.default as (s: Squad, a: unknown, c: unknown) => unknown)(squad, args, ctx);
+    if (opts?.bots !== undefined && !Array.isArray(opts.bots)) throw new TypeError(`ctx.run("${name}"): opts.bots must be an array of bots`);
+    if (opts?.until !== undefined && typeof opts.until !== 'function') throw new TypeError(`ctx.run("${name}"): opts.until must be a function`);
+    const squad = await Squad.view(parent, { bots: opts?.bots ?? parent.bots, manifest, name: resolved.meta.name });
+    const commander = subCommander(order, squad.signal);
+    const ctx = { ...buildCtx(order, args, (n, a, o) => this.runSub(order, squad, [...stack, key], n, a, o), commander), signal: squad.signal };
+    let poll: ReturnType<typeof setInterval> | undefined;
+    let endedOutside = false;
+    const end = (): void => {
+      endedOutside = true;
+      void squad.dispose();
+    };
+    if (opts?.until) {
+      const until = opts.until;
+      poll = setInterval(() => {
+        try {
+          if (until()) end();
+        } catch (e) {
+          order.log(`ctx.run("${name}") until: ${errorMessage(e)}`);
+          end();
+        }
+      }, 100);
+    }
+    opts?.signal?.addEventListener?.('abort', end, { once: true });
+    try {
+      const value = await (exports.default as (s: Squad, a: unknown, c: unknown) => unknown)(squad, args, ctx);
+      return endedOutside ? undefined : value;
+    } catch (e) {
+      // Ended from outside (until, signal): what its loops threw on the way out is not a failure.
+      if (squad.stopped && order.alive && (isStopped(e) || isBotLeft(e))) return undefined;
+      throw e;
+    } finally {
+      if (poll) clearInterval(poll);
+      opts?.signal?.removeEventListener?.('abort', end);
+      await squad.dispose();
+    }
   }
 
   private execute(order: Order, fn: (...a: unknown[]) => unknown, args: Record<string, unknown>): void {
     const squad = new Squad(order, this.squadDeps(order));
     const rootKey = `${order.command.author.uuid}/${order.command.name}`;
-    const ctx = buildCtx(order, args, (n, a, o) => this.runSub(order, [rootKey], n, a, o?.bots));
+    const ctx = buildCtx(order, args, (n, a, o) => this.runSub(order, squad, [rootKey], n, a, o));
     void (async () => {
       try {
         const result = await fn(squad, args, ctx);
@@ -513,7 +568,7 @@ export class OrderRunner extends EventEmitter {
   private squadDeps(order: Order): ConstructorParameters<typeof Squad>[1] {
     return {
       claims: this.deps.claims,
-      candidates: () => this.candidates(order.commander.uuid),
+      candidates: () => this.candidates(order.commander.uuid, [], order.squad),
       facts: (n) => this.facts(n),
     };
   }
@@ -522,8 +577,12 @@ export class OrderRunner extends EventEmitter {
     return this.candidates(uuid).filter((n) => this.deps.leases.isIdle(n));
   }
 
-  private offlineHint(uuid: string): string {
-    const offline = this.deps.roster.botsOf(uuid).map((b) => b.name).filter((n) => !this.deps.pool.bot(n));
+  private offlineHint(uuid: string, squad?: string): string {
+    const offline = this.deps.roster
+      .botsOf(uuid)
+      .filter((b) => !squad || b.tags.includes(squad))
+      .map((b) => b.name)
+      .filter((n) => !this.deps.pool.bot(n));
     return offline.length ? ` Hors ligne : ${offline.join(', ')}.` : '';
   }
 

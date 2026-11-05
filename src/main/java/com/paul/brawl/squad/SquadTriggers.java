@@ -1,5 +1,6 @@
 package com.paul.brawl.squad;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -49,8 +50,8 @@ public final class SquadTriggers {
     private static final SquadTriggerLimiter LIMITER = new SquadTriggerLimiter(System::nanoTime);
     private static final SquadArrows<Shot> ARROWS = new SquadArrows<>(System::nanoTime);
 
-    /** A tracked arrow: whose, the binding of the bow it left, and that bow's item id. */
-    private record Shot(UUID player, SquadBinding binding, String item) {}
+    /** A tracked arrow: whose, the binding of the bow it left, that bow's item id, and the squad selected at the shot. */
+    private record Shot(UUID player, SquadBinding binding, String item, String squad) {}
 
     private SquadTriggers() {}
 
@@ -72,14 +73,21 @@ public final class SquadTriggers {
                 LOGGER.warn("Bound arrow release failed: {}", e.toString());
             }
         });
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> LIMITER.forget(handler.getPlayer().getUUID()));
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+            LIMITER.forget(handler.getPlayer().getUUID());
+            SquadSelection.clear(handler.getPlayer().getUUID());
+        });
     }
 
     private static void onUse(ServerPlayer sp, ItemStack stack) {
         Optional<SquadBinding> b = SquadBinding.read(stack);
         if (b.isEmpty() || !mayTrigger(sp)) return;
-        if (sp.isShiftKeyDown()) fire(sp, b.get(), itemId(stack), SquadTriggerJson.Kind.USE, null, true);
-        else if (!SquadBinding.isLauncher(stack)) fire(sp, b.get(), itemId(stack), SquadTriggerJson.Kind.USE, null, false);
+        if (SquadSelection.isSelector(b.get().order())) {
+            select(sp); // any item, a bow too, sneaking or not
+            return;
+        }
+        if (sp.isShiftKeyDown()) fire(sp, b.get(), itemId(stack), SquadTriggerJson.Kind.USE, null, true, selection(sp));
+        else if (!SquadBinding.isLauncher(stack)) fire(sp, b.get(), itemId(stack), SquadTriggerJson.Kind.USE, null, false, selection(sp));
     }
 
     private static void onArrowLoad(Projectile arrow, ServerLevel world) {
@@ -88,14 +96,55 @@ public final class SquadTriggers {
         ItemStack weapon = arrow.getWeaponItem();
         if (!SquadBinding.isLauncher(weapon)) return;
         Optional<SquadBinding> b = SquadBinding.read(weapon);
-        if (b.isEmpty() || !mayTrigger(sp) || sp.isShiftKeyDown()) return;
+        if (b.isEmpty() || SquadSelection.isSelector(b.get().order()) || !mayTrigger(sp) || sp.isShiftKeyDown()) return;
         if (arrow.position().distanceToSqr(sp.getEyePosition()) > RELEASE_RADIUS_SQ) return;
         if (!LIMITER.firstOfShot(sp.getUUID(), world.getGameTime())) return;
         String item = itemId(weapon);
+        String squad = selection(sp);
         // A release the limiter dropped is not tracked either: the shot is one gesture, its hit goes with it.
-        if (fire(sp, b.get(), item, SquadTriggerJson.Kind.ARROW_RELEASE, null, false)) {
-            ARROWS.track(arrow.getUUID(), new Shot(sp.getUUID(), b.get(), item));
+        if (fire(sp, b.get(), item, SquadTriggerJson.Kind.ARROW_RELEASE, null, false, squad)) {
+            ARROWS.track(arrow.getUUID(), new Shot(sp.getUUID(), b.get(), item, squad));
         }
+    }
+
+    /** The player's selected squad, or null (a bound item's click then says {@link SquadSelection#NONE}). */
+    private static String selection(ServerPlayer sp) {
+        return SquadSelection.selected(sp.getUUID()).orElse(null);
+    }
+
+    /**
+     * The selector's click (docs/40): the bot under the crosshair, as far as the player sees ({@link SquadLook}),
+     * selects its squad; no bot of theirs there deselects. The answer is one chat line.
+     */
+    private static void select(ServerPlayer sp) {
+        UUID who = sp.getUUID();
+        if (!LIMITER.tryAcquire(who)) return;
+        MinecraftServer srv = sp.level().getServer();
+        SquadLook.cast(sp).thenAccept(look -> srv.execute(() -> {
+            ServerPlayer p = srv.getPlayerList().getPlayer(who);
+            if (p == null) return;
+            SquadTriggerJson.EntityRef e = look.entity();
+            String bot = null;
+            if (e != null && e.player() && e.username() != null) {
+                for (String n : Squad.botNames()) if (n.equalsIgnoreCase(e.username())) bot = n;
+            }
+            String text;
+            if (bot == null) {
+                text = SquadSelection.deselectedText(SquadSelection.clear(who));
+            } else if (Squad.botsOf(who).stream().noneMatch(bot::equalsIgnoreCase)) {
+                text = "[Bots] " + bot + " n'est pas à toi.";
+            } else {
+                Optional<String> squad = SquadSelection.squadOf(Squad.tagsOf(bot));
+                if (squad.isEmpty()) {
+                    text = "[Bots] " + bot + " n'est dans aucune escouade (seuls les bots de /bots squad spawn en ont une).";
+                } else {
+                    SquadSelection.select(who, squad.get());
+                    List<String> members = Squad.botsOf(who).stream().filter(n -> Squad.tagsOf(n).contains(squad.get())).toList();
+                    text = SquadSelection.selectedText(squad.get(), members);
+                }
+            }
+            for (Component t : Squad.render(SquadNotice.of(text))) p.sendSystemMessage(t);
+        }));
     }
 
     /**
@@ -118,7 +167,7 @@ public final class SquadTriggers {
                 Vec3 p = hit.getLocation();
                 where = new SquadTriggerJson.Hit(p.x, p.y, p.z, null);
             }
-            fire(sp, s.binding(), s.item(), SquadTriggerJson.Kind.ARROW_HIT, where, false);
+            fire(sp, s.binding(), s.item(), SquadTriggerJson.Kind.ARROW_HIT, where, false, s.squad());
         } catch (RuntimeException e) {
             LOGGER.warn("Bound arrow hit failed: {}", e.toString());
         }
@@ -131,11 +180,18 @@ public final class SquadTriggers {
         return true;
     }
 
-    /** Send one trigger, the snapshot taken now; false when the limiter dropped it. */
+    /**
+     * Send one trigger for the selected {@code squad}, the snapshot taken now; false when the limiter dropped it, or
+     * when no squad is selected (the player is told, docs/40).
+     */
     private static boolean fire(ServerPlayer sp, SquadBinding binding, String item, SquadTriggerJson.Kind kind,
-                                SquadTriggerJson.Hit hit, boolean stop) {
+                                SquadTriggerJson.Hit hit, boolean stop, String squad) {
         UUID who = sp.getUUID();
         if (!LIMITER.tryAcquire(who)) return false;
+        if (squad == null) {
+            if (LIMITER.shouldShow(who, SquadSelection.NONE)) for (Component t : Squad.render(SquadNotice.of(SquadSelection.NONE))) sp.sendSystemMessage(t);
+            return false;
+        }
         String uuid = sp.getStringUUID();
         String name = sp.getName().getString();
         boolean admin = Compat.hasPermission(sp, 2);
@@ -143,7 +199,7 @@ public final class SquadTriggers {
         // Sent once the look is found (SquadLook, a tick or more), after this player's earlier triggers.
         CommanderSnap.take(sp).thenCompose(snap -> {
             snap.add("trigger", SquadTriggerJson.trigger(kind, item, hit));
-            return Squad.client().post("/api/orders/trigger", SquadTriggerJson.body(uuid, name, admin, binding, stop, snap));
+            return Squad.client().post("/api/orders/trigger", SquadTriggerJson.body(uuid, name, admin, binding, stop, squad, snap));
         }).thenAccept(r -> srv.execute(() -> answer(srv, who, r)));
         return true;
     }
