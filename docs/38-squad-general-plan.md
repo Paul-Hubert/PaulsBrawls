@@ -1,6 +1,7 @@
 # 38 — The General: a Claude Code instance commanding an army of squads
 
-Status: **built (G1–G3), not yet live-tested** (2026-11-03). The runtime is `squad/src/general/` + `squad/src/http/
+Status: **built (G1–G3), not yet live-tested** (2026-11-03). **Reformed by [docs/45](45-squad-general-reform.md)**
+(2026-11-05): standing orders, attribution, cadence; where the two differ, docs/45 §7 is the as-built. The runtime is `squad/src/general/` + `squad/src/http/
 general-mcp.ts` (`tests/general.test.ts`), the mod `SquadGeneral` + `SquadGeneralPlan` (`SquadGeneralPlanTest`), the
 instance `squad/agent/general/`. §10 lists where the build differs from the plan below. Plan of 2026-11-02. Owner's brief (Paul): no body; an admin's ticket with a spawn point
 prepares a Claude Code instance; the admin tells it what it may spawn, in squads; it fights other players' bots. The

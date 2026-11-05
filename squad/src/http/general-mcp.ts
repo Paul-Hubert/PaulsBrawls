@@ -11,7 +11,7 @@ import { z } from 'zod';
 
 import { errorMessage } from '../api/errors';
 import { EVENT_KINDS } from '../general/events';
-import { KITS, OFFERED, type GeneralRecord, type Generals } from '../general/general';
+import { FIGHT_WAIT_S, KITS, OFFERED, QUIET_WAIT_S, type GeneralRecord, type Generals } from '../general/general';
 import { logger } from '../logger';
 
 export const TICKET_HEADER = 'x-squad-general';
@@ -77,15 +77,18 @@ export function buildGeneralServer(generals: Generals, ticket: string | undefine
     {
       title: 'Wait for events',
       description:
-        'Long poll: returns as soon as something you wake on happens (2 s later, to gather the burst), or after timeout_s with nothing, always with a sitrep. Your heartbeat between moves: call it again after acting.',
+        'Long poll: returns as soon as something you wake on happens (0.5 s later for contact/casualty/under-fire/enemy-approach, 2 s for the rest, to gather the burst), or after timeout_s with nothing. The sitrep it carries lists only what changed since the last wait_events (full=true: whole). Your heartbeat between moves: call it again right after acting.',
       inputSchema: {
         cursor: z.number().int().optional().describe('The cursor of the previous answer (default: only new events)'),
-        timeout_s: z.number().int().min(1).max(50).optional().describe('Seconds (default 45)'),
-        wake_on: z.array(z.enum(EVENT_KINDS)).optional().describe('Kinds that wake you (default: all but arrived)'),
+        timeout_s: z.number().int().min(1).max(50).optional().describe(`Seconds (default ${FIGHT_WAIT_S} while an enemy is in sight, else ${QUIET_WAIT_S})`),
+        min_gap_s: z.number().int().min(0).max(30).optional().describe('Never return sooner than this after the call: the events of that time come together (default 0)'),
+        wake_on: z.array(z.enum(EVENT_KINDS)).optional().describe('Kinds that wake you (default: all)'),
+        full: z.boolean().optional().describe('The whole sitrep instead of the changes (default false)'),
       },
       annotations: read,
     },
-    async ({ cursor, timeout_s, wake_on }) => run((g) => generals.waitEvents(g, cursor, timeout_s ?? 45, wake_on, signal)),
+    async ({ cursor, timeout_s, min_gap_s, wake_on, full }) =>
+      run((g) => generals.waitEvents(g, { cursor, timeoutS: timeout_s, wakeOn: wake_on, minGapS: min_gap_s, full }, signal)),
   );
   server.registerTool(
     'set_mission',
@@ -133,6 +136,20 @@ export function buildGeneralServer(generals: Generals, ticket: string | undefine
       },
     },
     async ({ squad, command, args, at: a }) => run((g) => generals.order(g, squad, command, args ?? '', a ?? {})),
+  );
+  server.registerTool(
+    'orders',
+    {
+      title: 'Give several squads their orders at once',
+      description: 'A whole plan in one call: one order per squad (each replaces that squad\'s current one). All are checked first; nothing starts if one is wrong.',
+      inputSchema: {
+        orders: z
+          .array(z.object({ squad: z.string(), command: z.enum(OFFERED), args: z.string().optional().describe('key=value pairs'), at }))
+          .min(1)
+          .max(12),
+      },
+    },
+    async ({ orders }) => run((g) => generals.orderMany(g, orders)),
   );
   server.registerTool(
     'retarget',

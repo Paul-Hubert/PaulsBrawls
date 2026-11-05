@@ -313,6 +313,56 @@ test('attribution: who hurt a squad, from where; under-fire, enemy-approach, a l
   assert.match(generals.sitrep(g), /X2 1 LOST/);
 });
 
+test('cadence: wait_events sends the sitrep whole once, then only what changed; a short default timeout in a fight', async () => {
+  const { generals, g, fulfil } = rig();
+  generals.spawnSquad(g, 'A', 'guard', 1);
+  const [a] = fulfil();
+  generals.spawnSquad(g, 'B', 'archer', 1);
+  fulfil();
+  const first = await generals.waitEvents(g, { timeoutS: 1 });
+  assert.match(first, /^mission: /m);
+  assert.match(first, /^A 1\/1 /m);
+  const second = await generals.waitEvents(g, { timeoutS: 1 });
+  assert.doesNotMatch(second, /^A 1\/1 /m, 'nothing changed');
+  assert.match(second, /^unchanged: A B$/m);
+  a!.health = 10;
+  const third = await generals.waitEvents(g, { timeoutS: 1 });
+  assert.match(third, /^A 1\/1 guard1 hp50 /m);
+  assert.match(third, /^unchanged: B$/m);
+  assert.match(await generals.waitEvents(g, { timeoutS: 1, full: true }), /^B 1\/1 /m);
+
+  // An enemy in sight: the default timeout is the fight's (8 s), and a contact wakes it at once.
+  a!.entities = { 60: { id: 60, type: 'player', username: 'Hubert', position: new Vec3(140, 64, -300) } };
+  generals.sample();
+  const t = Date.now();
+  const quiet = await generals.waitEvents(g, {});
+  assert.ok(Date.now() - t >= 7_500 && Date.now() - t < 12_000, `waited ${Date.now() - t} ms`);
+  assert.match(quiet, /nothing new in 8s/);
+});
+
+test('orders: a plan in one call, checked whole first; the model and the runtime have their own budgets', async () => {
+  const { generals, g, fulfil } = rig();
+  generals.spawnSquad(g, 'A', 'guard', 2);
+  fulfil();
+  generals.spawnSquad(g, 'B', 'archer', 2);
+  fulfil();
+  await assert.rejects(generals.orderMany(g, [{ squad: 'A', command: 'line', at: { pos: 'E20' } }, { squad: 'Z', command: 'attack' }]), /unknown squad "Z"/);
+  assert.equal(generals['deps'].runner.running().length, 0, 'nothing started');
+  const r = await generals.orderMany(g, [
+    { squad: 'A', command: 'line', at: { pos: 'E20' } },
+    { squad: 'B', command: 'line', args: 'back=6', at: { pos: 'E20' } },
+  ]);
+  assert.match(r, /^squad A: line #\d+ \(2 guards\) at E20 facing E$/m);
+  assert.match(r, /^squad B: line #\d+ \(2 archers\) at E20 facing E$/m);
+  assert.equal(generals['deps'].runner.running().length, 2);
+  // 18 more model orders fit, the 19th not; the runtime's own budget is apart.
+  const rt = generals['runtime'](g);
+  rt.orderTimes.push(...Array.from({ length: 18 }, () => Date.now()));
+  await assert.rejects(generals.order(g, 'A', 'line', '', { pos: 'E30' }), /20 orders a minute at most/);
+  assert.match(await generals.advance(g, ['A'], 40), /squad A: raid #\d+/);
+  await generals['deps'].runner.stopAll();
+});
+
 // -- over HTTP -------------------------------------------------------------------------------------------------------
 
 let dir: string;

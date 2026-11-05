@@ -107,3 +107,11 @@ benchmark (started at step 1, extended at each). 10. `agent/general/CLAUDE.md` l
    draws it `o`. `squad_detail` gives per bot its order and role, what it does (mounted, fighting X, drawing its bow,
    shield up, moving to E30 (12b), standing), its hits in 10 s and the last log line naming it. Tests:
    `tests/hits.test.ts` (hurtBy), `tests/general.test.ts` (attribution).
+2. **Cadence and plans** (step 2). `wait_events`' sitrep is a diff against the last one it sent (`Generals.sitrepDiff`:
+   the header always, changed and new lines, « unchanged: A B X1 », « gone: X3 »; a cluster's « seen Ns ago » alone is
+   no change; `full: true` or the first call: whole). Its default timeout is 8 s while a cluster is visible, 45 s
+   otherwise; `min_gap_s` holds the answer at least that long; `contact`, `casualty`, `under-fire` and
+   `enemy-approach` are gathered for 0.5 s, the rest 2 s; `arrived` now wakes too. The `orders` tool
+   (`Generals.orderMany`) starts one order per squad for up to 12 squads, all checked before any starts. Budgets: the
+   model's orders 20 a minute, the runtime's own (advance legs, later the standing orders) 60 a minute, apart.
+   Tests: `tests/general.test.ts` (cadence, orders).

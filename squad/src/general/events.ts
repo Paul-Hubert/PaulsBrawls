@@ -20,8 +20,11 @@ export const EVENT_KINDS = [
 ] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
 
-/** Woken on by default: everything but the routine `arrived`. */
-export const DEFAULT_WAKE: readonly EventKind[] = EVENT_KINDS.filter((k) => k !== 'arrived');
+/** Woken on by default: every kind (`arrived` too: arrivals need an order, docs/45 §2). */
+export const DEFAULT_WAKE: readonly EventKind[] = EVENT_KINDS;
+/** Kinds whose burst is gathered for URGENT_COALESCE_MS only: the General must hear them at once. */
+export const URGENT: ReadonlySet<EventKind> = new Set(['casualty', 'under-fire', 'enemy-approach', 'contact']);
+export const URGENT_COALESCE_MS = 500;
 
 export interface GeneralEvent {
   seq: number;
@@ -79,7 +82,9 @@ export class EventRing {
       });
     }
     const woke = woken();
-    if (woke && this.coalesceMs > 0 && !signal?.aborted) await new Promise((r) => setTimeout(r, this.coalesceMs));
+    const urgent = this.since(cursor).some((e) => wake.has(e.kind) && URGENT.has(e.kind));
+    const ms = urgent ? Math.min(this.coalesceMs, URGENT_COALESCE_MS) : this.coalesceMs;
+    if (woke && ms > 0 && !signal?.aborted) await new Promise((r) => setTimeout(r, ms));
     return { events: this.since(cursor), woke };
   }
 

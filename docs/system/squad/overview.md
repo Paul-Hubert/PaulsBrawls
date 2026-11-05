@@ -538,7 +538,8 @@ A Claude Code instance commanding a bodiless army; the design and the as-built d
 - **The reform (docs/45, 2026-11-05)**, as built so far: who hurt the army (`hits.ts` `hurtBy`: melee, an arrow and
   its shooter, the bearing) named in `casualty` and `hp-band`; `under-fire` (3 arrows on a squad in 5 s) and
   `enemy-approach` (a cluster within 48 closing ≥ 1 b/s) events; a lost cluster keeps its last position and heading
-  (sitrep, `contact-lost`, `o` on the map); `squad_detail` says what each bot does, read from its body.
+  (sitrep, `contact-lost`, `o` on the map); `squad_detail` says what each bot does, read from its body. `wait_events` sends a diff sitrep, waits 8 s by default
+  in a fight; `orders` gives a whole plan in one call; runtime-given orders have their own 60/min budget.
 
 ## A bot that dies (docs/35 F6–F7, Paul's D2–D3)
 

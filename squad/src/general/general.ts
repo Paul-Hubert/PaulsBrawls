@@ -44,6 +44,11 @@ export const DEFAULT_RANGE = 256;
 export const DEFAULT_LEG = 48;
 /** Orders per General per minute: a confused agent cannot thrash its army. */
 export const MAX_ORDERS_PER_MINUTE = 20;
+/** Orders the runtime gives by itself (advance legs, standing orders) per General per minute: their own budget. */
+export const MAX_RUNTIME_ORDERS_PER_MINUTE = 60;
+/** wait_events' default timeout while an enemy is in sight, and otherwise (seconds). */
+export const FIGHT_WAIT_S = 8;
+export const QUIET_WAIT_S = 45;
 /** No enemy and no order for this long: one `idle` event (the default advance is due). */
 const IDLE_MS = 20_000;
 /** A squad more than this far ahead of the slowest advancing squad waits before its next leg. */
@@ -97,6 +102,10 @@ interface OrderEntry {
   args: string;
   at: AtInput;
   advance: boolean;
+  /** Who gave it: the model (a tool call) or the runtime (an advance leg, a standing order). */
+  by: 'model' | 'runtime';
+  /** When it started. */
+  startedAt: number;
   /** Replaced or stopped by the General itself: its end is not an event. */
   quiet: boolean;
 }
@@ -132,6 +141,9 @@ interface Runtime {
   /** Hostile mobs near each squad at the last sample. */
   mobs: Map<string, number>;
   orderTimes: number[];
+  runtimeOrderTimes: number[];
+  /** The last sitrep wait_events sent, by line key (the next one is a diff against it). */
+  lastSitrep?: Map<string, string>;
   idleSince?: number;
   idleSaid: boolean;
   axisEndSaid: boolean;
@@ -398,22 +410,54 @@ export class Generals {
   }
 
   sitrep(g: GeneralRecord): string {
+    return this.sitrepLines(g)
+      .map(([, l]) => l)
+      .join('\n');
+  }
+
+  /**
+   * The sitrep against the last one wait_events sent (docs/45 §2): the header always, then only the lines that changed
+   * or are new, the keys of the unchanged ones, and what is gone. The first one, or `full`, is whole. A line's "seen
+   * Ns ago" alone is no change.
+   */
+  sitrepDiff(g: GeneralRecord, full = false): string {
+    const rt = this.runtime(g);
+    const lines = this.sitrepLines(g);
+    const prev = rt.lastSitrep;
+    const norm = (l: string): string => l.replace(/ seen \d+s ago$/, '').replace(/ LOST \d+s ago/, ' LOST');
+    rt.lastSitrep = new Map(lines.map(([k, l]) => [k, norm(l)]));
+    if (full || !prev) return lines.map(([, l]) => l).join('\n');
+    const out: string[] = [];
+    const same: string[] = [];
+    for (const [k, l] of lines) {
+      if (k === 'header' || prev.get(k) !== norm(l)) out.push(l);
+      else if (/^[sc]:/.test(k)) same.push(k.slice(2));
+    }
+    const gone = [...prev.keys()].filter((k) => !rt.lastSitrep!.has(k) && /^[sc]:/.test(k)).map((k) => k.slice(2));
+    if (same.length) out.push(`unchanged: ${same.join(' ')}`);
+    if (gone.length) out.push(`gone: ${gone.join(' ')}`);
+    return out.join('\n');
+  }
+
+  /** The sitrep's lines, each with its key: header, mission, a squad's name, a cluster's id. */
+  private sitrepLines(g: GeneralRecord): Array<[string, string]> {
     const rt = this.runtime(g);
     const now = Date.now();
     const fielded = this.fieldedAll(g);
-    const out: string[] = [];
-    out.push(
+    const out: Array<[string, string]> = [];
+    out.push([
+      'header',
       `t=${Math.round((now - rt.startedAt) / 1000)}s cur=${rt.events.cursor} spawn=(${Math.round(g.spawn.x)},${Math.round(g.spawn.y)},${Math.round(g.spawn.z)}) axis=${dirName(g.axis)} front=${Math.round(this.front(g))}/${g.range} allow ${allowanceText(g, fielded)} reinf ${g.reinforce}`,
-    );
-    out.push(`mission: ${missionText(g)}`);
+    ]);
+    out.push(['mission', `mission: ${missionText(g)}`]);
     const names = Object.keys(g.squads);
-    if (names.length === 0) out.push('no squads: spawn_squad(name, kit, count)');
+    if (names.length === 0) out.push(['nosquads', 'no squads: spawn_squad(name, kit, count)']);
     const visible = rt.tracker.visible(now);
-    for (const s of names) out.push(this.squadLine(g, rt, s, visible));
+    for (const s of names) out.push([`s:${s}`, this.squadLine(g, rt, s, visible)]);
     const clusters = rt.tracker.all();
-    if (clusters.length === 0) out.push('enemies: none seen');
-    for (const c of clusters) out.push(clusterLine(g, c, now));
-    return out.join('\n');
+    if (clusters.length === 0) out.push(['noenemies', 'enemies: none seen']);
+    for (const c of clusters) out.push([`c:${c.id}`, clusterLine(g, c, now)]);
+    return out;
   }
 
   squadDetail(g: GeneralRecord, squad: string): string {
@@ -494,15 +538,33 @@ export class Generals {
     ].join('\n');
   }
 
-  async waitEvents(g: GeneralRecord, cursor: number | undefined, timeoutS: number, wakeOn: string[] | undefined, signal?: AbortSignal): Promise<string> {
+  /**
+   * The long poll (docs/38 §5, docs/45 §2): returns once a waking event came (and its burst was gathered), else at the
+   * timeout. Default timeout: FIGHT_WAIT_S while an enemy is in sight, QUIET_WAIT_S otherwise. `minGapS`: never sooner
+   * than this after the call (the events of that time come together). The sitrep is a diff against the last one sent,
+   * unless `full`.
+   */
+  async waitEvents(
+    g: GeneralRecord,
+    opts: { cursor?: number; timeoutS?: number; wakeOn?: string[]; minGapS?: number; full?: boolean },
+    signal?: AbortSignal,
+  ): Promise<string> {
     const rt = this.runtime(g);
-    const from = cursor ?? rt.events.cursor;
-    const wake = new Set<EventKind>((wakeOn?.length ? wakeOn : DEFAULT_WAKE).filter((k): k is EventKind => (EVENT_KINDS as readonly string[]).includes(k)));
-    const { events, woke } = await rt.events.wait(from, clampInt(timeoutS, 1, 50) * 1000, wake, signal);
+    const t0 = Date.now();
+    const from = opts.cursor ?? rt.events.cursor;
+    const wake = new Set<EventKind>((opts.wakeOn?.length ? opts.wakeOn : DEFAULT_WAKE).filter((k): k is EventKind => (EVENT_KINDS as readonly string[]).includes(k)));
+    const timeoutS = clampInt(opts.timeoutS ?? (rt.tracker.visible(t0).length ? FIGHT_WAIT_S : QUIET_WAIT_S), 1, 50);
+    const { events: first, woke } = await rt.events.wait(from, timeoutS * 1000, wake, signal);
+    let events = first;
+    const gap = clampInt(opts.minGapS ?? 0, 0, 30) * 1000 - (Date.now() - t0);
+    if (woke && gap > 0 && !signal?.aborted) {
+      await rt.events.wait(rt.events.cursor, gap, new Set(), signal); // nothing wakes it: it just waits out the gap
+      events = rt.events.since(from);
+    }
     const now = Date.now();
-    const lines = [woke ? `cursor=${rt.events.cursor} (pass it to the next wait_events)` : `cursor=${rt.events.cursor} nothing new in ${clampInt(timeoutS, 1, 50)}s`];
+    const lines = [woke ? `cursor=${rt.events.cursor} (pass it to the next wait_events)` : `cursor=${rt.events.cursor} nothing new in ${timeoutS}s`];
     for (const e of events) lines.push(eventLine(e, now));
-    lines.push('--- sitrep', this.sitrep(g));
+    lines.push('--- sitrep', this.sitrepDiff(g, !!opts.full));
     return lines.join('\n');
   }
 
@@ -589,7 +651,36 @@ export class Generals {
     if (!(OFFERED as readonly string[]).includes(c)) fail(`unknown order "${command}" (${OFFERED.join(', ')}; or advance)`);
     const rt = this.runtime(g);
     rt.advancing.delete(s);
-    return this.start(g, s, c, args, at, false);
+    return this.start(g, s, c, args, at, { by: 'model' });
+  }
+
+  /**
+   * A plan in one call (docs/45 §2): several squads' orders, all checked first (squads, commands, bots online, the
+   * minute's budget), then started one after the other. Nothing starts when one is wrong.
+   */
+  async orderMany(g: GeneralRecord, items: Array<{ squad: string; command: string; args?: string; at?: AtInput }>): Promise<string> {
+    if (items.length === 0) fail('no orders given');
+    const seen = new Set<string>();
+    const plan = items.map((it) => {
+      const s = this.squadName(g, it.squad);
+      if (seen.has(s)) fail(`squad ${s} is given two orders in one plan`);
+      seen.add(s);
+      const c = it.command.trim().toLowerCase();
+      if (!(OFFERED as readonly string[]).includes(c)) fail(`squad ${s}: unknown order "${it.command}" (${OFFERED.join(', ')})`);
+      if (this.online(g, s).length === 0) fail(`squad ${s} has no bot online`);
+      return { s, c, args: it.args ?? '', at: it.at ?? {} };
+    });
+    this.budget(this.runtime(g), 'model', plan.length);
+    const out: string[] = [];
+    for (const p of plan) {
+      this.runtime(g).advancing.delete(p.s);
+      try {
+        out.push(await this.start(g, p.s, p.c, p.args, p.at, { by: 'model' }));
+      } catch (e) {
+        out.push(`squad ${p.s}: ${errorMessage(e)}`);
+      }
+    }
+    return out.join('\n');
   }
 
   async retarget(g: GeneralRecord, squad: string, at: AtInput): Promise<string> {
@@ -607,7 +698,7 @@ export class Generals {
       }
     }
     rt.advancing.delete(s);
-    return this.start(g, s, e!.command, e!.args, merged, false);
+    return this.start(g, s, e!.command, e!.args, merged, { by: 'model' });
   }
 
   async advance(g: GeneralRecord, squads: string[] | undefined, distance: number | undefined): Promise<string> {
@@ -658,11 +749,18 @@ export class Generals {
 
   // -- orders ------------------------------------------------------------------------------------------------------
 
-  private async start(g: GeneralRecord, s: string, command: string, args: string, at: AtInput, advance: boolean): Promise<string> {
+  /** Whether one more order fits this minute's budget (the model's or the runtime's); fails with the reason. */
+  private budget(rt: Runtime, by: 'model' | 'runtime', n = 1, now = Date.now()): void {
+    rt.orderTimes = rt.orderTimes.filter((t) => now - t < 60_000);
+    rt.runtimeOrderTimes = rt.runtimeOrderTimes.filter((t) => now - t < 60_000);
+    if (by === 'model' && rt.orderTimes.length + n > MAX_ORDERS_PER_MINUTE) fail(`${MAX_ORDERS_PER_MINUTE} orders a minute at most (${rt.orderTimes.length} given in the last minute): let the last ones work, wait_events`);
+    if (by === 'runtime' && rt.runtimeOrderTimes.length + n > MAX_RUNTIME_ORDERS_PER_MINUTE) fail(`the runtime's ${MAX_RUNTIME_ORDERS_PER_MINUTE} orders a minute are spent`);
+  }
+
+  private async start(g: GeneralRecord, s: string, command: string, args: string, at: AtInput, opts: { advance?: boolean; by: 'model' | 'runtime' }): Promise<string> {
     const rt = this.runtime(g);
     const now = Date.now();
-    rt.orderTimes = rt.orderTimes.filter((t) => now - t < 60_000);
-    if (rt.orderTimes.length >= MAX_ORDERS_PER_MINUTE) fail(`${MAX_ORDERS_PER_MINUTE} orders a minute at most: let the last ones work, wait_events`);
+    this.budget(rt, opts.by, 1, now);
     const members = this.online(g, s);
     if (members.length === 0) fail(`squad ${s} has no bot online`);
     const { snap, desc, point, sighting } = this.snapFor(g, s, at);
@@ -678,13 +776,13 @@ export class Generals {
       prevOrder.silentEnd = true;
       await prevOrder.stop('stopped', `replaced by General ${g.name}`);
     }
-    rt.orderTimes.push(now);
+    (opts.by === 'model' ? rt.orderTimes : rt.runtimeOrderTimes).push(now);
     const r = await this.deps.runner.start({ commander: g.owner, command, tokens, filters: members, snap });
     if (!r.ok) fail(`${command} for squad ${s} did not start: ${r.text.replace(/^\[Bots\]\s*/, '')}`);
     const ok = r as { orderId: string; bots: Array<{ name: string; role: string }> };
     const o = this.deps.runner.get(ok.orderId) as Order;
     o.silentEnd = true;
-    const entry: OrderEntry = { orderId: ok.orderId, command, args, at, advance, quiet: false };
+    const entry: OrderEntry = { orderId: ok.orderId, command, args, at, advance: !!opts.advance, by: opts.by, startedAt: now, quiet: false };
     rt.orders.set(s, entry);
     void o.waitEnded().then(() => this.ended(g.name, s, entry, o));
     const roles = new Map<string, number>();
@@ -727,7 +825,7 @@ export class Generals {
     adv.target = target;
     adv.waiting = false;
     const pos = `${Math.round(target.x)} ${Math.round(target.y)} ${Math.round(target.z)}`;
-    return this.start(g, s, 'raid', 'quiet=3 radius=24', { pos, facing: dirName(g.axis) }, true);
+    return this.start(g, s, 'raid', 'quiet=3 radius=24', { pos, facing: dirName(g.axis) }, { advance: true, by: 'runtime' });
   }
 
   /** The commander snapshot of an order: where it "stands" (just behind the point), its facing, what it points at. */
@@ -1008,6 +1106,7 @@ export class Generals {
         bands: new Map(),
         mobs: new Map(),
         orderTimes: [],
+        runtimeOrderTimes: [],
         idleSaid: false,
         axisEndSaid: false,
         startedAt: Date.now(),
