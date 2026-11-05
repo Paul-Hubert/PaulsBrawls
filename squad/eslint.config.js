@@ -58,7 +58,7 @@ export default tseslint.config(
         stepTo: 'readonly', entityOf: 'readonly', pointedTarget: 'readonly',
         approach: 'readonly', anyBot: 'readonly', onGround: 'readonly', pointOf: 'readonly', assignSlots: 'readonly',
         lineUp: 'readonly', isEnemy: 'readonly', nearestFoe: 'readonly', targets: 'readonly', inReach: 'readonly',
-        melee: 'readonly', sidestep: 'readonly', canLance: 'readonly', foesNear: 'readonly', lance: 'readonly', lanceWaves: 'readonly',
+        melee: 'readonly', sidestep: 'readonly', canLance: 'readonly', foesNear: 'readonly', lance: 'readonly', lanceWaves: 'readonly', canOrbit: 'readonly', orbitRing: 'readonly',
         sleep: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', setInterval: 'readonly',
         clearInterval: 'readonly', BotLeftError: 'readonly', OrderStoppedError: 'readonly',
       },

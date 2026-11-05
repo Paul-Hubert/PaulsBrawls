@@ -31,7 +31,8 @@ mineflayer sends none. A mounted bot sat still whatever its order.
 ## 2. The commands
 
 - **`raid`, `attack`**: no change needed. Their roles already took every bot: horse archers are `archers` (a bow),
-  horsemen `melee` (no bow).
+  horsemen `melee` (no bow). Since docs/44 and [docs/47](47-squad-horse-archer-orbit.md), `attack` gives both their
+  own movement: horsemen with spears charge in waves, horse archers circle the group (`orbit`) shooting on the move.
 - **`line`**: a third role, `melee` (neither shield nor bow: horsemen). They hold the wall's flanks, `FLANK` (2)
   blocks beyond each end and 2 apart (a horse is 1.4 wide), alternately left and right; with no guards they form the
   line on the point themselves. They hold their slot facing the view and, hit in melee, hit back once like a guard,

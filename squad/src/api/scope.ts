@@ -17,6 +17,7 @@ import { BotLeftError, OrderStoppedError } from './errors';
 import { FORMATION_HELPERS } from './formation';
 import { HELPERS, blockKey } from './helpers';
 import { LANCE_HELPERS } from './lance';
+import { ORBIT_HELPERS } from './orbit';
 import type { Squad } from './squad';
 
 const { goals, Movements } = pathfinderPkg;
@@ -28,7 +29,7 @@ class SquadMovements extends Movements {
   }
 }
 
-const SQUAD_MODULE_KEYS = ['Vec3', 'goals', 'Movements', 'BotLeftError', 'OrderStoppedError', 'blockKey', ...Object.keys(HELPERS), ...Object.keys(FORMATION_HELPERS), ...Object.keys(LANCE_HELPERS)];
+const SQUAD_MODULE_KEYS = ['Vec3', 'goals', 'Movements', 'BotLeftError', 'OrderStoppedError', 'blockKey', ...Object.keys(HELPERS), ...Object.keys(FORMATION_HELPERS), ...Object.keys(LANCE_HELPERS), ...Object.keys(ORBIT_HELPERS)];
 
 function format(args: unknown[]): string {
   return args.map((a) => (typeof a === 'string' ? a : inspect(a, { depth: 3, breakLength: 160 }))).join(' ');
@@ -64,6 +65,7 @@ export function buildScope(order: Order): Record<string, unknown> {
     ...HELPERS,
     ...FORMATION_HELPERS,
     ...LANCE_HELPERS,
+    ...ORBIT_HELPERS,
     isFriend,
     blockKey,
   };

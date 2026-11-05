@@ -199,6 +199,8 @@ for its hit (a release does not move a formation; its hit does).
   the melee bots take a ring of 3 around it and fight what comes within `radius` (16); the sky: « Aucune cible. »; a
   friend: refused. It ends by itself (the target down; the volley fired and the point clear), and bots it took from a
   `line` go back to their slots there. `approach` (0): an archer farther than that from its foe walks closer first.
+  Horse archers circle the group at `orbit` (30) blocks, shooting on the move, jinking, breaking away from what
+  comes near, out when hurt (`orbit=0`: they stand as foot archers; docs/47).
 - `flank` (docs/45): a creature or an enemy where you point: the squad goes round it at `radius` (24) to its `side`
   (`left`, `right`, or `rear` by way of `via`; relative to the way it moves, else to the way from the squad to it),
   then runs `attack` on its group from there. Ends with that attack.

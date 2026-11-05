@@ -557,6 +557,31 @@ declare global {
     readonly passes: number;
     readonly struck: number;
   };
+  // ---------------------------------------------------------------------------------------------------------
+  //  The orbit (docs/47): horse archers ride round their target's group and shoot on the move. Read squad:attack.
+  // ---------------------------------------------------------------------------------------------------------
+
+  /** Whether this bot circles as a horse archer: it rides a horse and has a bow. */
+  function canOrbit(bot: SquadBot): boolean;
+  /**
+   * THE RING OF HORSE ARCHERS (squad:attack's): each rider gallops round `center` at `radius` (default 30, 16–48), all
+   * the same way round, spread by lanes (R ± 4), jinking at random outside the end of its own draw, keeping off walls,
+   * water and drops (a lane ± 6, else it turns back), breaking away from an enemy within 12 (or closing faster than
+   * 7 b/s), keeping to the far side of the group for 15 s after an arrow hit it, withdrawing to 64 under 40 % health
+   * (back at 70 %). It steers the horse every tick on a free rein, so shoot(bot, foe) in the rider's own loop fires on
+   * the move. Call step(riders, center) every look (riders: canOrbit; center: the group's centre) and stop() when the
+   * order ends (in a finally). canShoot(bot): false while withdrawn; inRange(bot, pos): within radius + 12.
+   */
+  function orbitRing(opts?: { radius?: number; jink?: boolean; log?: (line: string) => void }): {
+    step(riders: SquadBot[], center: Vec3Class | null): void;
+    canShoot(bot: SquadBot): boolean;
+    inRange(bot: SquadBot, at: Pos | null | undefined): boolean;
+    modeOf(bot: SquadBot): 'withdraw' | 'break' | 'arc' | 'circle' | 'idle';
+    stop(): void;
+    readonly laps: number;
+    readonly breaks: number;
+    readonly reversals: number;
+  };
   /**
    * The live entity of a snapshot entity (ctx.commander.at.lookEntity, at.trigger.hit.entity) as this bot sees it now,
    * or null (dead, gone, out of its sight): by `id` (bot.entities[id]), else a player by `username`, else the nearest
@@ -595,7 +620,7 @@ declare module 'squad' {
     nearestHostile, isFriend, blockKey, lookDir, lineSlots, groundAt, faceYaw, raiseShield, stepTo, entityOf,
     pointedTarget, approach, walkFacing, anyBot, onGround, pointOf, assignSlots, lineUp, isEnemy, nearestFoe,
     targets, inReach,
-    melee, sidestep, canLance, foesNear, lance, lanceWaves,
+    melee, sidestep, canLance, foesNear, lance, lanceWaves, canOrbit, orbitRing,
   };
 }
 

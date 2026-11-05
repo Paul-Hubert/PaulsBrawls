@@ -82,6 +82,9 @@ Every tool except `get_api_reference` takes the ticket from the first message.
   charge: spear's use held, full speed through the foe to `through` (a point beyond it). Ride out, re-form, charge
   again: `lanceWaves({ backoff, ground })` plans those waves (`step(riders, foes)` each look, `ride(bot, { foe })` in
   each rider's loop; `squad:attack` uses it); `foesNear(bot, r, { from })` lists a group's foes.
+- **Horse archers circle** (docs/47): `canOrbit(bot)` tells a rider with a bow; `orbitRing({ radius })` rides them
+  round a group (`step(riders, center)` each look, `stop()` in a `finally`) while your loop calls `shoot` as usual: the
+  horse keeps galloping round as the rider aims. `squad:attack` uses it (`orbit=0` turns it off).
 - PvP and griefing are allowed on this server: nothing stops a bot from hitting a player or breaking blocks. Use
   `isFriend(entity)` so bots never attack the commander, the co-owners or other squad bots unless asked.
 - Return a short French sentence (what was done); `ctx.say(text)` for progress the commander should see,

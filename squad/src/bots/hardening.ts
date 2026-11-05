@@ -23,6 +23,7 @@ export interface AbortableBot {
   stopDigging?: () => void;
   deactivateItem?: () => void;
   clearControlStates?: () => void;
+  entity?: { moveYaw?: number };
   currentWindow?: unknown;
   closeWindow?: (w: never) => void;
 }
@@ -56,7 +57,7 @@ export function defaultMovements(bot: Bot): unknown {
  *   1. collectblock: clear targets, cancel its task;
  *   2. pvp.stop();
  *   3. pathfinder stop() THEN setGoal(null) (a lone stop() silently cancels the NEXT goal, R4);
- *   4. stop digging, lower a drawn bow / raised shield, release all controls;
+ *   4. stop digging, lower a drawn bow / raised shield, release all controls and a held free rein;
  *   5. close any stray window (R1);
  *   6. `movements` (when given): the runtime's default movements replace a script's;
  *   7. one macrotask so the plugins' own handlers see the stops.
@@ -81,6 +82,10 @@ export async function abortActiveTasks(bot: AbortableBot, movements?: unknown): 
   await step(() => bot.stopDigging?.());
   await step(() => bot.deactivateItem?.());
   await step(() => bot.clearControlStates?.());
+  // A free rein (mount.ts) an order left held (it ended mid-ride): the horse goes where the rider looks again.
+  await step(() => {
+    if (bot.entity) delete bot.entity.moveYaw;
+  });
   await step(() => {
     if (bot.currentWindow) bot.closeWindow?.(bot.currentWindow as never);
   });

@@ -65,6 +65,8 @@ replaced). The General offers `raid`, `attack`, `line` and, since docs/45, `flan
   cible. » (a later click: said, the attack goes on); a friend: refused. Archers never walk unless `approach` > 0 (docs/45: they close in to that distance; the General's default 40); otherwise (a sidestep after "no
   clear line of fire" only). Because it ends, bots it took from a `line` go back to their slots (as `tir`'s did);
   `epee`'s fall-back to defending the commander is gone.
+  Horse archers (mounted, a bow) circle the group's centre at `orbit` (30; 0: they stand as foot archers) and shoot
+  on the move ([docs/47](47-squad-horse-archer-orbit.md)).
 
 Mounted bots (horses) in these commands: [docs/41](41-squad-horses.md).
 

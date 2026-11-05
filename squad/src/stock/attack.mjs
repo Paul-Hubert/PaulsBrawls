@@ -21,7 +21,8 @@
 // it at full speed with the spear's use held (lance), out `backoff` blocks beyond the group; there they re-form the
 // same shape facing back, and charge again, until the group is gone. Far from the group (more than backoff + 20),
 // they first form up `backoff` blocks short of it (lanceWaves plans the waves). On the ground with nothing near the point,
-// they hold the ring.
+// they hold the ring. Horse archers (canOrbit: mounted, a bow) circle the group's centre (the point) at `orbit` blocks
+// (docs/47; 0: they shoot as foot archers do), shooting on the move, a foe within 16 of them first (orbitRing).
 export const manifest = {
   summary: 'Attaque : tout le monde sur ce que je vise, sinon une volée et une charge sur le point visé',
   params: {
@@ -35,6 +36,7 @@ export const manifest = {
       group: { type: 'integer', minimum: 0, maximum: 32, default: 8, description: 'rayon du groupe attaqué autour de la cible visée' },
       backoff: { type: 'integer', minimum: 6, maximum: 32, default: 12, description: 'recul des cavaliers entre deux charges' },
       approach: { type: 'integer', minimum: 0, maximum: 64, default: 0, description: "0 : les archers tirent d'où ils sont ; sinon, un archer plus loin que cela de sa cible s'en approche" },
+      orbit: { type: 'integer', minimum: 0, maximum: 48, default: 30, description: 'rayon du cercle des archers à cheval autour du groupe (16–48) ; 0 : ils tirent comme à pied' },
     },
   },
   roles: {
@@ -73,6 +75,7 @@ export default async function (squad, args, ctx) {
   const group = Math.max(0, Number(args.group ?? 8));
   const backoff = Math.max(6, Number(args.backoff ?? 12));
   const approachTo = Math.max(0, Math.min(64, Number(args.approach ?? 0)));
+  const orbitR = Number(args.orbit ?? 30) > 0 ? Math.max(16, Math.min(48, Number(args.orbit ?? 30))) : 0;
 
   /** What a click points at: 'target' (an entity), 'ground' (a point), 'wait' (a release: its hit follows), 'refuse', 'none'. */
   const fromAt = (at, final = false) => {
@@ -85,8 +88,8 @@ export default async function (squad, args, ctx) {
     return p.position ? { kind: 'ground', point: anyBot(squad.bots, (b) => groundAt(b, p.position)) ?? p.position } : { kind: 'none' };
   };
 
-  /** Whether a bot stands within NEAR of the entity (then its disappearance is a death, not a loss of sight). */
-  const nearABot = (e) => squad.bots.some((b) => b.entity && b.entity.position.distanceTo(e.position) <= NEAR);
+  /** Whether a bot stands within NEAR (a ring: its radius + 12) of the entity (then its disappearance is a death, not a loss of sight). */
+  const nearABot = (e) => squad.bots.some((b) => b.entity && b.entity.position.distanceTo(e.position) <= Math.max(NEAR, orbitR + 12));
 
   /** The target as this bot sees it, by the id resolved at the decision (a player by name). */
   const track = (bot, t) => {
@@ -211,25 +214,27 @@ export default async function (squad, args, ctx) {
     closing.set(bot.username, { goal, p: p.clone() });
   };
 
-  /** One look of one archer: the target's group, else the volley, else a threat near the point; shot from where it stands. */
+  /**
+   * One look of one archer: the target's group, else the volley, else a threat near the point; shot from where it
+   * stands. A horse archer on the ring: a foe within 16 of it first, and only within reach of the ring (orbitRing).
+   */
   const archer = async (bot) => {
     const m = state.mode;
+    const rides = orbiter(bot);
+    if (rides && !ring.canShoot(bot)) return void (await squad.sleep(LOOK_MS));
     let at = null;
-    let foe = null;
-    if (m.kind === 'target') foe = groupPick(bot, 'archers', Infinity, m);
-    else if ((m.left.get(bot.username) ?? 0) > 0) {
+    let foe = rides ? (foesNear(bot, 16, { filter: (e) => !taken.archers.blocked(bot, e) })[0] ?? null) : null;
+    if (!foe && m.kind === 'target') foe = groupPick(bot, 'archers', Infinity, m);
+    else if (!foe && (m.left.get(bot.username) ?? 0) > 0) {
       m.left.set(bot.username, (m.left.get(bot.username) ?? 0) - 1);
       at = volleySpot(bot, m.point);
-    } else foe = pick(bot, 'archers', Infinity, m.point);
-    if (!foe && !at) {
-      await squad.sleep(LOOK_MS);
-      return;
-    }
+    } else if (!foe) foe = pick(bot, 'archers', Infinity, m.point);
+    if (!foe && !at) return void (await squad.sleep(LOOK_MS));
     // Too far (approach): close in first, toward the foe (or the volley's point), and shoot once within.
     const aim = foe ? foe.position : m.point;
-    if (approachTo > 0 && aim && bot.entity.position.distanceTo(aim) > approachTo) {
+    if (rides ? !ring.inRange(bot, aim) : approachTo > 0 && aim && bot.entity.position.distanceTo(aim) > approachTo) {
       if (at) m.left.set(bot.username, (m.left.get(bot.username) ?? 0) + 1); // that arrow is not spent
-      closeIn(bot, aim, approachTo * 0.8);
+      if (!rides) closeIn(bot, aim, approachTo * 0.8);
       await squad.sleep(LOOK_MS * 2);
       return;
     }
@@ -249,8 +254,9 @@ export default async function (squad, args, ctx) {
       if (/no arrows|no bow/.test(e.message)) m.left.set(bot.username, 0);
       const blocked = foe && /no clear line of fire/.test(e.message) && !/a friend is in the way/.test(e.message);
       if (blocked) taken.archers.block(bot, foe, BLOCKED_MS);
-      if (blocked && approachTo > 0) closeIn(bot, foe.position, Math.max(6, bot.entity.position.distanceTo(foe.position) * 0.6));
-      else if (foe && /no clear line of fire/.test(e.message)) sidestep(bot, foe); // out from behind what blocked the shot
+      // A rider rides on (the ring); one on foot closes in, or steps out from behind what blocked the shot.
+      if (!rides && blocked && approachTo > 0) closeIn(bot, foe.position, Math.max(6, bot.entity.position.distanceTo(foe.position) * 0.6));
+      else if (!rides && foe && /no clear line of fire/.test(e.message)) sidestep(bot, foe);
       await squad.sleep(foe && /no clear line of fire/.test(e.message) ? 500 : 250);
     } finally {
       release();
@@ -324,6 +330,12 @@ export default async function (squad, args, ctx) {
     await squad.sleep(LOOK_MS);
   };
 
+  // -- horse archers: the ring round the group (docs/47: orbitRing rides it) ---------------------------------------
+  const orbiter = (bot) => orbitR > 0 && canOrbit(bot);
+  const ring = orbitRing({ radius: orbitR || undefined, log: (line) => ctx.log(line) });
+  /** The ring's centre: the group's (its foes' mean), else where the target is or was, else the point. */
+  const ringCenter = (m, foes) => (foes.length ? foes.reduce((c, e) => c.add(e.position), new Vec3(0, 0, 0)).scaled(1 / foes.length) : zoneOf(m).center);
+
   /** Whether any bot sees a threat within `r` (default `radius`) of the point. */
   const threatNear = (p, r = radius) => !!anyBot(squad.bots, (b) => nearestFoe(b, r, { from: p }));
 
@@ -342,36 +354,44 @@ export default async function (squad, args, ctx) {
   // One loop per bot (squad.crew: started again for one that comes back), until the attack ends.
   squad.crew((bot, role) => (role === 'archers' ? archer(bot) : fight(bot)), { while: () => !state.end });
 
-  while (!state.end) {
-    await squad.sleep(LOOK_MS);
-    const m = state.mode;
-    const rs = riders();
-    if (rs.length) waves.step(rs, groupFoes(m).foes);
-    if (m.kind === 'target') {
-      const seen = anyBot(squad.bots, (b) => track(b, m.target));
-      if (seen) {
-        m.near = nearABot(seen);
-        m.last = seen.position.clone();
-        m.gone = false;
-      } else m.gone = true;
-      if (m.gone && !m.near) state.end = `Cible perdue de vue (${m.target.name})`;
-      else if (m.gone && !threatNear(m.last, group)) {
-        // Down, and nothing left of its group.
+  try {
+    while (!state.end) {
+      await squad.sleep(LOOK_MS);
+      const m = state.mode;
+      const rs = riders();
+      const os = (squad.roles.archers ?? []).filter((b) => b.entity && orbiter(b));
+      const foes = rs.length || os.length ? groupFoes(m).foes : [];
+      if (rs.length) waves.step(rs, foes);
+      ring.step(os, ringCenter(m, foes));
+      if (m.kind === 'target') {
+        const seen = anyBot(squad.bots, (b) => track(b, m.target));
+        if (seen) {
+          m.near = nearABot(seen);
+          m.last = seen.position.clone();
+          m.gone = false;
+        } else m.gone = true;
+        if (m.gone && !m.near) state.end = `Cible perdue de vue (${m.target.name})`;
+        else if (m.gone && !threatNear(m.last, group)) {
+          // Down, and nothing left of its group.
+          m.clearSince = m.clearSince || Date.now();
+          if (Date.now() - m.clearSince >= CLEAR_MS || group === 0) state.end = `Cible abattue (${m.target.name})`;
+        } else m.clearSince = 0;
+        if (!state.end && Date.now() > m.until) state.end = m.gone ? `Toujours à l'attaque après ${seconds} s` : `Cible toujours debout après ${seconds} s (${m.target.name})`;
+        continue;
+      }
+      const fired = [...m.left.values()].every((n) => n <= 0) && m.busy.size === 0;
+      const there = (squad.roles.melee ?? []).every((b) => !b.entity || byPoint(b, m));
+      if (fired && there && !threatNear(m.point)) {
         m.clearSince = m.clearSince || Date.now();
-        if (Date.now() - m.clearSince >= CLEAR_MS || group === 0) state.end = `Cible abattue (${m.target.name})`;
+        if (Date.now() - m.clearSince >= CLEAR_MS) state.end = (squad.roles.archers ?? []).length && volley > 0 ? 'Volée tirée, point tenu' : 'Point tenu';
       } else m.clearSince = 0;
-      if (!state.end && Date.now() > m.until) state.end = m.gone ? `Toujours à l'attaque après ${seconds} s` : `Cible toujours debout après ${seconds} s (${m.target.name})`;
-      continue;
+      if (!state.end && Date.now() > m.until) state.end = `Toujours à l'attaque après ${seconds} s`;
     }
-    const fired = [...m.left.values()].every((n) => n <= 0) && m.busy.size === 0;
-    const there = (squad.roles.melee ?? []).every((b) => !b.entity || byPoint(b, m));
-    if (fired && there && !threatNear(m.point)) {
-      m.clearSince = m.clearSince || Date.now();
-      if (Date.now() - m.clearSince >= CLEAR_MS) state.end = (squad.roles.archers ?? []).length && volley > 0 ? 'Volée tirée, point tenu' : 'Point tenu';
-    } else m.clearSince = 0;
-    if (!state.end && Date.now() > m.until) state.end = `Toujours à l'attaque après ${seconds} s`;
+  } finally {
+    ring.stop();
   }
   const tally = [];
+  if (ring.laps) tally.push(`${ring.laps} tour${ring.laps === 1 ? '' : 's'} à cheval`);
   if (state.shots) tally.push(`${state.shots} flèche${state.shots === 1 ? '' : 's'}`);
   if (waves.passes) tally.push(`${waves.passes} charge${waves.passes === 1 ? '' : 's'} (${waves.struck} touché${waves.struck === 1 ? '' : 's'})`);
   return tally.length ? `${state.end} : ${tally.join(', ')}.` : `${state.end}.`;

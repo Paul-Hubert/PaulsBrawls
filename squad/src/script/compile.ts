@@ -208,6 +208,8 @@ export const SCOPE_NAMES = [
   'melee', 'sidestep', 'walkFacing',
   // the lance (docs/44)
   'canLance', 'foesNear', 'lance', 'lanceWaves',
+  // the orbit (docs/47)
+  'canOrbit', 'orbitRing',
 ] as const;
 
 /** Compile a command's source once per version. `filename` shows in stack traces. */
