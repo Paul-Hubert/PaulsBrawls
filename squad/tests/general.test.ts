@@ -266,6 +266,53 @@ test('reinforce brings a dead bot back and spends a reinforcement; mission and a
   assert.match(generals.sitrep(g), /axis=NE/);
 });
 
+test('attribution: who hurt a squad, from where; under-fire, enemy-approach, a lost cluster keeps its heading, what each bot does', () => {
+  const { generals, g, fulfil, events } = rig();
+  generals.spawnSquad(g, 'A', 'guard', 2);
+  const [b1, b2] = fulfil();
+  const t0 = Date.now();
+  // An enemy archer 70 blocks north-east, and a melee cluster 40 blocks east coming west at 2 b/s.
+  const archer = { id: 50, type: 'player', username: 'Hubert', position: new Vec3(150, 64, -350), equipment: [{ name: 'bow' }] };
+  const runner = (x: number) => ({ id: 51, type: 'player', username: 'HubertSwd', position: new Vec3(x, 64, -300), equipment: [{ name: 'iron_sword' }] });
+  b1!.entities = { 50: archer, 51: runner(142) };
+  generals.sample(t0);
+  assert.equal(generals.events(g).since(0).filter((e) => e.kind === 'enemy-approach').length, 0, 'no speed yet');
+  b1!.entities = { 50: archer, 51: runner(140) };
+  generals.sample(t0 + 1000);
+  const near = generals.events(g).since(0).find((e) => e.kind === 'enemy-approach');
+  assert.ok(near, 'enemy-approach');
+  assert.match(near.text, /X2 \(1, sword1\) 39b from squad A, closing at 2\.0b\/s from E: contact in ~19s/);
+  b1!.entities = { 50: archer, 51: runner(136) };
+  generals.sample(t0 + 2000);
+  generals.sample(t0 + 2500);
+  assert.equal(generals.events(g).since(0).filter((e) => e.kind === 'enemy-approach').length, 1, 'once');
+
+  // Three arrows from Hubert within 5 s: under-fire, with the bearing and the cluster.
+  for (const [i, b] of [b1, b2, b1].entries()) generals.hurt(g, b!.username, { attacker: archer as never, kind: 'arrow', weapon: 'bow', from: archer.position }, t0 + 2600 + i * 100);
+  generals.sample(t0 + 3000);
+  const fire = generals.events(g).since(0).find((e) => e.kind === 'under-fire');
+  assert.ok(fire, 'under-fire');
+  assert.match(fire.text, /squad A: 3 hits in 5s: 3 arrows from NE ~\d+b \(X1\)/);
+
+  // Health falls: the band says what hit it; a death names its killer.
+  b1!.health = 6;
+  b2!.health = 6;
+  generals.sample(t0 + 3500);
+  assert.match(generals.events(g).since(0).find((e) => e.kind === 'hp-band')!.text, /below 50%\); 3 hits in 10s: 3 arrows from NE/);
+  const detail = generals.squadDetail(g, 'A');
+  assert.match(detail, /RougeGar01 guard hp6 .*no order: standing, holds .*; hit 2x in 10s, last by Hubert \(bow, arrow, from NE \d+b, X1\)/);
+  events.emit('gone', 'RougeGar02', 'died');
+  assert.match(generals.events(g).since(0).find((e) => e.kind === 'casualty')!.text, /RougeGar02 of squad A died, killed by Hubert \(bow, arrow, from NE \d+b, X1\)/);
+
+  // The runner leaves sight: lost, with its last heading.
+  b1!.entities = { 50: archer };
+  generals.sample(t0 + 3500 + LOST_MS);
+  const lost = generals.events(g).since(0).find((e) => e.kind === 'contact-lost');
+  assert.ok(lost);
+  assert.match(lost.text, /X2 1 LOST \d+s ago, last @E36 y64 →W \d\.\db\/s sword1 \[HubertSwd\]/);
+  assert.match(generals.sitrep(g), /X2 1 LOST/);
+});
+
 // -- over HTTP -------------------------------------------------------------------------------------------------------
 
 let dir: string;

@@ -22,6 +22,7 @@ import type { Order } from '../orders/order';
 import type { Player, Roster } from '../roster';
 import type { EntityRef, Snapshot, Vec3Like } from '../types';
 import { errorMessage } from '../api/errors';
+import type { HurtBy } from '../bots/hits';
 import { logger } from '../logger';
 import { DEFAULT_WAKE, EVENT_KINDS, EventRing, type EventKind, type GeneralEvent } from './events';
 import { along, dirName, dirOf, horizontal, onAxis, parseDirection, parsePosition, rel, roundYaw16, yawToward } from './geometry';
@@ -53,6 +54,16 @@ const ARCHER_BACK = 6;
 /** A spawn request the mod never fully answered is closed after this long. */
 const SPAWN_TIMEOUT_MS = 180_000;
 const HP_BANDS = [75, 50, 25];
+/** Hits are remembered this long (a casualty's killer is its last hit within it). */
+const HIT_MEMORY_MS = 10_000;
+/** under-fire: this many arrows on one squad within UNDER_FIRE_MS, said again after UNDER_FIRE_AGAIN_MS at most. */
+const UNDER_FIRE_ARROWS = 3;
+const UNDER_FIRE_MS = 5_000;
+const UNDER_FIRE_AGAIN_MS = 10_000;
+/** enemy-approach: a cluster within this of a squad, closing at least APPROACH_SPEED b/s; again once beyond APPROACH_RESET. */
+export const APPROACH_WITHIN = 48;
+const APPROACH_SPEED = 1;
+const APPROACH_RESET = 64;
 
 export interface SquadRecord {
   bots: string[];
@@ -129,6 +140,25 @@ interface Runtime {
   deaths: Map<string, number[]>;
   /** Bots whose entityDead listener is installed. */
   watched: WeakSet<object>;
+  /** Who hurt the army's bots in the last HIT_MEMORY_MS (attribution: casualty, hp-band, under-fire). */
+  hits: Hit[];
+  /** When each squad's last under-fire event was said. */
+  fireSaid: Map<string, number>;
+  /** `cluster|squad` → when its enemy-approach was said (again only after it went away). */
+  approachSaid: Map<string, number>;
+}
+
+/** One hit on one of the army's bots (hits.ts `hurtBy`). */
+interface Hit {
+  t: number;
+  bot: string;
+  squad: string;
+  /** The attacker's name and entity id, when the bot saw it. */
+  name: string | null;
+  id: number | null;
+  kind: 'melee' | 'arrow' | 'other';
+  weapon: string | null;
+  from: Vec3Like | null;
 }
 
 export interface AtInput {
@@ -404,7 +434,15 @@ export class Generals {
         continue;
       }
       const o = this.orderOf(n);
-      lines.push(` ${n} ${kit} hp${Math.round(bot.health ?? 0)} @${rel(g.spawn, bot.entity.position)} y${Math.round(bot.entity.position.y)} held ${bot.heldItem?.name ?? 'nothing'}${o ? ` order ${o.command.name}:${o.roleOf(n) ?? '?'}` : ' idle'}`);
+      const now = Date.now();
+      const hits = rt.hits.filter((h) => h.bot === n && now - h.t < HIT_MEMORY_MS);
+      const lastHit = hits.at(-1);
+      const said = o ? [...o.report.logs].reverse().find((l) => l.includes(n)) : undefined;
+      lines.push(
+        ` ${n} ${kit} hp${Math.round(bot.health ?? 0)} @${rel(g.spawn, bot.entity.position)} y${Math.round(bot.entity.position.y)} ${o ? `${o.command.name}:${o.roleOf(n) ?? '?'}` : 'no order'}: ${doing(g, bot)}` +
+          (hits.length ? `; hit ${hits.length}x in 10s, last by ${this.hitText(rt, lastHit!, bot.entity.position)}` : '') +
+          (said ? `; log: ${said.replace(`${n}: `, '').slice(0, 140)}` : ''),
+      );
     }
     const e = rt.orders.get(s);
     const o = e ? this.deps.runner.get(e.orderId) : undefined;
@@ -425,7 +463,8 @@ export class Generals {
     const overlay = new Map<string, string>();
     const key = (x: number, z: number): string => `${Math.floor((x - (c.x - r)) / step)},${Math.floor((z - (c.z - r)) / step)}`;
     overlay.set(key(g.spawn.x, g.spawn.z), 'S');
-    for (const cl of rt.tracker.visible(Date.now())) for (const m of cl.members.values()) overlay.set(key(m.pos.x, m.pos.z), 'x');
+    const visible = new Set(rt.tracker.visible(Date.now()));
+    for (const cl of rt.tracker.all()) for (const m of cl.members.values()) overlay.set(key(m.pos.x, m.pos.z), visible.has(cl) ? 'x' : 'o');
     for (const [s, sq] of Object.entries(g.squads)) {
       for (const n of sq.bots) {
         const p = this.deps.pool.bot(n)?.entity?.position;
@@ -451,7 +490,7 @@ export class Generals {
     return [
       `map centre ${rel(g.spawn, c)} radius ${r} cell ${step} (north up, east right; one char = ${step}x${step} blocks)`,
       ...rows,
-      'legend: . level with spawn (±1)  + 2-4 up  ^ 5+ up  - 2-4 down  _ 5+ down  ~ water  ! lava  ? not loaded  S spawn  x enemy  A-Z your squads (first letter)',
+      'legend: . level with spawn (±1)  + 2-4 up  ^ 5+ up  - 2-4 down  _ 5+ down  ~ water  ! lava  ? not loaded  S spawn  x enemy  o enemy last seen (lost)  A-Z your squads (first letter)',
     ].join('\n');
   }
 
@@ -776,11 +815,13 @@ export class Generals {
         }
       }
       if (mobs) rt.mobs.set(s, mobs);
-      this.band(rt, s, healths);
+      this.band(g, rt, s, healths, now);
     }
     const u = rt.tracker.update(now, [...sightings.values()]);
     for (const c of u.appeared) rt.events.push('contact', `${clusterLine(g, c, now)}${this.nearestSquadText(g, c)}`, now);
-    for (const c of u.lost) rt.events.push('contact-lost', `${c.id} not seen for 15s (last @${rel(g.spawn, c.center)})`, now);
+    for (const c of u.lost) rt.events.push('contact-lost', `${clusterLine(g, c, now)}${this.nearestSquadText(g, c)}`, now);
+    this.underFire(g, rt, now);
+    this.approaches(g, rt, now);
 
     // The advance: a squad whose leg ended goes on once it is not far ahead of the slowest advancing squad.
     for (const [s, adv] of rt.advancing) {
@@ -812,15 +853,47 @@ export class Generals {
     }
   }
 
+  /** A squad hit by UNDER_FIRE_ARROWS arrows within UNDER_FIRE_MS: where they come from (once per UNDER_FIRE_AGAIN_MS). */
+  private underFire(g: GeneralRecord, rt: Runtime, now: number): void {
+    rt.hits = rt.hits.filter((h) => now - h.t < HIT_MEMORY_MS);
+    const arrows = new Map<string, number>();
+    for (const h of rt.hits) if (h.kind === 'arrow' && now - h.t < UNDER_FIRE_MS) arrows.set(h.squad, (arrows.get(h.squad) ?? 0) + 1);
+    for (const [s, n] of arrows) {
+      if (n < UNDER_FIRE_ARROWS || !g.squads[s]) continue;
+      if (now - (rt.fireSaid.get(s) ?? -Infinity) < UNDER_FIRE_AGAIN_MS) continue;
+      rt.fireSaid.set(s, now);
+      rt.events.push('under-fire', `squad ${s}: ${this.hitsSummary(g, rt, s, now, UNDER_FIRE_MS)}`, now);
+    }
+  }
+
+  /** A visible cluster within APPROACH_WITHIN of a squad and closing on it: once, until it goes beyond APPROACH_RESET. */
+  private approaches(g: GeneralRecord, rt: Runtime, now: number): void {
+    for (const c of rt.tracker.visible(now)) {
+      for (const s of Object.keys(g.squads)) {
+        const at = this.squadCenter(g, s);
+        if (!at) continue;
+        const key = `${c.id}|${s}`;
+        const d = horizontal(at, c.center);
+        if (d > APPROACH_RESET) rt.approachSaid.delete(key);
+        if (d > APPROACH_WITHIN || rt.approachSaid.has(key) || !c.velocity || d < 1) continue;
+        const closing = (c.velocity.x * (at.x - c.center.x) + c.velocity.z * (at.z - c.center.z)) / d;
+        if (closing < APPROACH_SPEED) continue;
+        rt.approachSaid.set(key, now);
+        rt.events.push('enemy-approach', `${c.id} (${c.members.size}, ${kitOfCluster(c.members.values())}) ${Math.round(d)}b from squad ${s}, closing at ${closing.toFixed(1)}b/s from ${dirName(yawToward(at, c.center))}: contact in ~${Math.round(d / closing)}s`, now);
+      }
+    }
+  }
+
   /** A squad's mean health crossing 75 / 50 / 25 % downward is an event; it is armed again 10 points above. */
-  private band(rt: Runtime, s: string, healths: number[]): void {
+  private band(g: GeneralRecord, rt: Runtime, s: string, healths: number[], now: number): void {
     if (healths.length === 0) return;
     const pct = (healths.reduce((a, b) => a + b, 0) / healths.length / 20) * 100;
     const last = rt.bands.get(s) ?? 100;
     const lowest = HP_BANDS.filter((b) => pct < b).pop();
     if (lowest !== undefined && lowest < last) {
       rt.bands.set(s, lowest);
-      rt.events.push('hp-band', `squad ${s} health down to ${Math.round(pct)}% (below ${lowest}%)`);
+      const why = this.hitsSummary(g, rt, s, now);
+      rt.events.push('hp-band', `squad ${s} health down to ${Math.round(pct)}% (below ${lowest}%); ${why || 'no hit seen (fire, a fall, hunger?)'}`);
     } else if (pct >= last + 10) {
       rt.bands.set(s, [...HP_BANDS, 100].filter((b) => b > pct - 10).sort((a, b) => a - b)[0] ?? 100);
     }
@@ -836,7 +909,10 @@ export class Generals {
       list.push(Date.now());
       rt.deaths.set(s, list);
       const left = this.online(g, s).filter((n) => n !== name).length;
-      rt.events.push('casualty', `${name} of squad ${s} died (${left} left online; ${g.reinforce} reinforcement(s))`);
+      const now = Date.now();
+      const last = [...rt.hits].reverse().find((h) => h.bot.toLowerCase() === name.toLowerCase() && now - h.t < HIT_MEMORY_MS);
+      const by = last ? `, killed by ${this.hitText(rt, last, this.squadCenter(g, s))}` : '';
+      rt.events.push('casualty', `${name} of squad ${s} died${by} (${left} left online; ${g.reinforce} reinforcement(s))`);
     }
   }
 
@@ -854,6 +930,68 @@ export class Generals {
       const s = r.tracker.remove(e.id);
       if (s) r.events.push('kill', `${s.name} died (seen by ${name})`);
     });
+    // hits.ts emits it (not one of mineflayer's typed events).
+    (bot as unknown as EventEmitter).on('hurtBy', (h: HurtBy) => {
+      const gg = this.records.get(g.name.toLowerCase());
+      if (!gg) return;
+      this.hurt(gg, name, h);
+    });
+  }
+
+  /** One hit on an army bot, remembered for HIT_MEMORY_MS. Public for the tests (the fakes emit no damage_event). */
+  hurt(g: GeneralRecord, bot: string, h: HurtBy, now = Date.now()): void {
+    const rt = this.runtime(g);
+    rt.hits = rt.hits.filter((x) => now - x.t < HIT_MEMORY_MS);
+    const a = h.attacker as { id?: number; username?: string; name?: string } | null;
+    rt.hits.push({
+      t: now,
+      bot,
+      squad: this.squadOf(g, bot) ?? '(no squad)',
+      name: a ? (a.username ?? a.name ?? null) : null,
+      id: typeof a?.id === 'number' ? a.id : null,
+      kind: h.kind,
+      weapon: h.weapon,
+      from: h.from ? { x: h.from.x, y: h.from.y, z: h.from.z } : null,
+    });
+  }
+
+  /** "Paul (bow, arrow from NE 70b, X3)": one hit, seen from `at`. */
+  private hitText(rt: Runtime, h: Hit, at: Vec3Like | undefined): string {
+    const parts = [h.weapon ? shortItem(h.weapon) : null, h.kind === 'melee' ? 'melee' : h.kind === 'arrow' ? 'arrow' : null].filter(Boolean);
+    if (h.from && at) {
+      const d = horizontal(at, h.from);
+      parts.push(d >= 2 ? `from ${dirName(yawToward(at, h.from))} ${Math.round(d)}b` : 'point-blank');
+    }
+    const c = h.id !== null ? rt.tracker.all().find((cl) => cl.members.has(h.id!)) : undefined;
+    if (c) parts.push(c.id);
+    return `${h.name ?? (h.kind === 'arrow' ? 'an unseen archer' : 'unknown')} (${parts.join(', ')})`;
+  }
+
+  /** The hits on a squad in the last `ms`, in one phrase: "7 hits in 10s: 5 arrows from NE ~70b (X3), 2 melee (Paul)". */
+  private hitsSummary(g: GeneralRecord, rt: Runtime, s: string, now: number, ms = HIT_MEMORY_MS): string {
+    const mine = rt.hits.filter((h) => h.squad === s && now - h.t < ms);
+    if (mine.length === 0) return '';
+    const at = this.squadCenter(g, s);
+    const groups = new Map<string, { n: number; h: Hit; d: number[] }>();
+    for (const h of mine) {
+      const c = h.id !== null ? rt.tracker.all().find((cl) => cl.members.has(h.id!))?.id : undefined;
+      const dir = h.from && at && horizontal(at, h.from) >= 2 ? dirName(yawToward(at, h.from)) : '';
+      const k = `${h.kind}|${c ?? h.name ?? ''}|${dir}`;
+      const e = groups.get(k) ?? { n: 0, h, d: [] };
+      e.n++;
+      if (h.from && at) e.d.push(horizontal(at, h.from));
+      groups.set(k, e);
+    }
+    const parts = [...groups.values()]
+      .sort((a, b) => b.n - a.n)
+      .map(({ n, h, d }) => {
+        const what = h.kind === 'arrow' ? `arrow${n === 1 ? '' : 's'}` : h.kind === 'melee' ? 'melee' : 'other';
+        const dir = h.from && at && horizontal(at, h.from) >= 2 ? ` from ${dirName(yawToward(at, h.from))} ~${Math.round(d.reduce((a, b) => a + b, 0) / Math.max(1, d.length))}b` : '';
+        const c = h.id !== null ? rt.tracker.all().find((cl) => cl.members.has(h.id!))?.id : undefined;
+        const who = c ?? h.name;
+        return `${n} ${what}${dir}${who ? ` (${who})` : ''}`;
+      });
+    return `${mine.length} hit${mine.length === 1 ? '' : 's'} in ${Math.round(ms / 1000)}s: ${parts.join(', ')}`;
   }
 
   // -- helpers -------------------------------------------------------------------------------------------------------
@@ -875,6 +1013,9 @@ export class Generals {
         startedAt: Date.now(),
         deaths: new Map(),
         watched: new WeakSet(),
+        hits: [],
+        fireSaid: new Map(),
+        approachSaid: new Map(),
       };
       this.rt.set(k, rt);
     }
@@ -1067,13 +1208,16 @@ export class Generals {
 // -- formatting ---------------------------------------------------------------------------------------------------------
 
 function clusterLine(g: GeneralRecord, c: Cluster, now: number): string {
-  const v = c.velocity;
+  const v = c.lost ? c.lastVelocity : c.velocity;
   const speed = v ? Math.hypot(v.x, v.z) : 0;
   const heading = v && speed >= 0.5 ? ` →${dirName(yawToward({ x: 0, y: 0, z: 0 }, { x: v.x, y: 0, z: v.z }))} ${speed.toFixed(1)}b/s` : ' static';
   const names = [...c.members.values()].map((m) => m.name);
   const shown = names.slice(0, 3).join(',') + (names.length > 3 ? `,+${names.length - 3}` : '');
   const ago = Math.round((now - c.lastSeen) / 1000);
-  return `${c.id} ${c.members.size} @${rel(g.spawn, c.center)} y${Math.round(c.center.y)}${c.lost ? ' LOST' : heading} ${kitOfCluster(c.members.values())} [${shown}] seen ${ago}s ago`;
+  // A lost cluster keeps where it was last seen and how it was moving then (docs/45 §2).
+  return c.lost
+    ? `${c.id} ${c.members.size} LOST ${ago}s ago, last @${rel(g.spawn, c.center)} y${Math.round(c.center.y)}${heading} ${kitOfCluster(c.members.values())} [${shown}]`
+    : `${c.id} ${c.members.size} @${rel(g.spawn, c.center)} y${Math.round(c.center.y)}${heading} ${kitOfCluster(c.members.values())} [${shown}] seen ${ago}s ago`;
 }
 
 function eventLine(e: GeneralEvent, now: number): string {
@@ -1088,6 +1232,41 @@ function missionText(g: GeneralRecord): string {
 
 function allowanceText(g: GeneralRecord, fielded?: Record<string, number>): string {
   return Object.entries(g.allowance).map(([k, v]) => (fielded ? `${k} ${fielded[k] ?? 0}/${v}` : `${k}=${v}`)).join(' ') || 'none';
+}
+
+/**
+ * What a bot is doing now, read from its body (no script API: docs/45 §2): mounted or not, its fight (pvp's target),
+ * a drawn bow or a raised shield, the pathfinder's goal, else standing; with what it holds.
+ */
+function doing(g: GeneralRecord, bot: Bot): string {
+  const b = bot as unknown as {
+    vehicle?: unknown;
+    usingHeldItem?: boolean;
+    heldItem?: { name: string } | null;
+    pvp?: { target?: { username?: string; name?: string } | null };
+    pathfinder?: { goal?: { x?: number; z?: number } | null };
+    inventory?: { slots?: Array<{ name?: string } | null> };
+  };
+  const parts: string[] = [];
+  if (b.vehicle) parts.push('mounted');
+  const held = b.heldItem?.name ?? null;
+  const t = b.pvp?.target;
+  const goal = b.pathfinder?.goal;
+  const offHand = b.inventory?.slots?.[45]?.name;
+  if (t) parts.push(`fighting ${t.username ?? t.name ?? '?'}`);
+  else if (b.usingHeldItem && held && /bow/.test(held)) parts.push('drawing its bow');
+  else if (b.usingHeldItem && (held === 'shield' || offHand === 'shield')) parts.push('shield up');
+  else if (b.usingHeldItem && held && /_spear$/.test(held)) parts.push('charging (spear held)');
+  if (goal && typeof goal.x === 'number' && typeof goal.z === 'number') {
+    const d = horizontal(bot.entity.position, { x: goal.x, y: 0, z: goal.z });
+    parts.push(d > 1.5 ? `moving to ${rel(g.spawn, { x: goal.x, y: 0, z: goal.z })} (${Math.round(d)}b)` : 'at its place');
+  } else if (!t && !b.usingHeldItem) parts.push('standing');
+  return `${parts.join(', ')}, holds ${held ? shortItem(held) : 'nothing'}`;
+}
+
+/** An item's name without its namespace. */
+function shortItem(name: string): string {
+  return name.replace(/^minecraft:/, '');
 }
 
 function fmt(p: Vec3Like): string {

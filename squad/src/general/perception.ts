@@ -21,6 +21,8 @@ export interface Cluster {
   center: Vec3Like;
   /** Blocks per second, from the center's last few seconds; null until it has moved for a while. */
   velocity: { x: number; z: number } | null;
+  /** The last velocity known, kept once the cluster is lost (its last heading and speed). */
+  lastVelocity: { x: number; z: number } | null;
   firstSeen: number;
   lastSeen: number;
   /** contact-lost was announced (it has not been seen for LOST_MS). */
@@ -87,7 +89,7 @@ export class ClusterTracker {
         }
       }
       const reappeared = !!best && best.lost;
-      const c: Cluster = best ?? { id: `X${this.next++}`, members: new Map(), center, velocity: null, firstSeen: now, lastSeen: now, lost: false };
+      const c: Cluster = best ?? { id: `X${this.next++}`, members: new Map(), center, velocity: null, lastVelocity: null, firstSeen: now, lastSeen: now, lost: false };
       c.members = new Map(g.map((s) => [s.id, s]));
       c.center = center;
       c.lastSeen = now;
@@ -132,6 +134,7 @@ export class ClusterTracker {
     const first = h[0]!;
     const dt = (now - first.t) / 1000;
     c.velocity = dt >= 1 ? { x: (c.center.x - first.x) / dt, z: (c.center.z - first.z) / dt } : null;
+    if (c.velocity) c.lastVelocity = c.velocity;
   }
 }
 

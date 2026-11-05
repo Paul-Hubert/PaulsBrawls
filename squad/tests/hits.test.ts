@@ -65,3 +65,29 @@ test('meleeHit: a hit the shield stopped is the swing nearest the block, a mob b
   await tick(SWING_LATE_MS + 50);
   assert.equal(g.hits.length, 2);
 });
+
+test('hurtBy: who hurt the bot, how and from where: melee, an arrow with its shooter, an arrow from an unseen shooter', () => {
+  const g = guard();
+  const hurt: Array<{ attacker: unknown; kind: string; weapon: string | null; from: { x: number; z: number } | null }> = [];
+  g.b.on('hurtBy', (h: (typeof hurt)[number]) => hurt.push(h));
+  Object.assign(g.player, { equipment: [{ name: 'iron_sword' }] });
+  Object.assign(g.skeleton, { equipment: [{ name: 'bow' }] });
+  g.damage(21, 21);
+  assert.equal(hurt[0]!.attacker, g.player);
+  assert.equal(hurt[0]!.kind, 'melee');
+  assert.equal(hurt[0]!.weapon, 'iron_sword');
+  g.damage(22, 23); // the skeleton's arrow
+  assert.equal(hurt[1]!.attacker, g.skeleton);
+  assert.equal(hurt[1]!.kind, 'arrow');
+  assert.equal(hurt[1]!.weapon, 'bow');
+  assert.equal(hurt[1]!.from!.x, 15);
+  // A shooter the bot does not see: back along the arrow's flight (it flies west, so it came from the east).
+  Object.assign(g.arrow, { velocity: new Vec3(-2, -0.1, 0) });
+  g.damage(77, 23);
+  assert.equal(hurt[2]!.attacker, null);
+  assert.equal(hurt[2]!.kind, 'arrow');
+  assert.equal(hurt[2]!.weapon, 'arrow');
+  assert.ok(hurt[2]!.from!.x > 10, JSON.stringify(hurt[2]!.from));
+  g.b._client.emit('damage_event', { entityId: 10, sourceTypeId: 0, sourceCauseId: 0, sourceDirectId: 0 }); // a fall: no event
+  assert.equal(hurt.length, 3);
+});

@@ -8,6 +8,8 @@ export const EVENT_KINDS = [
   'casualty',
   'kill',
   'hp-band',
+  'under-fire',
+  'enemy-approach',
   'order-end',
   'arrived',
   'spawn-refused',

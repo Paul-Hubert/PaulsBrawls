@@ -532,9 +532,13 @@ A Claude Code instance commanding a bodiless army; the design and the as-built d
   SSE `general-spawn` / `general-despawn` to the mod.
 - **Mod** `SquadGeneral` (`/bots general create|allow|tell|stop|list`, the spawn handler) and `SquadGeneralPlan`
   (Minecraft-free, JUnit). The General's owner is a virtual player named after it; its bots are `<NAME>Arc01`, `Gar01`….
-- **Orders** are the stock `raid`, `epee`, `tir`, `ligne-archers`, `mur-de-boucliers`, started per squad with a written
+- **Orders** are the stock `raid`, `attack`, `line` (docs/40), started per squad with a written
   commander snapshot; `advance` chains `raid` legs along the axis (the admin's facing at `create`).
 - **Instance** `squad/agent/general/` (doctrine `CLAUDE.md`, `.mcp.json`, `.claude/settings.json`).
+- **The reform (docs/45, 2026-11-05)**, as built so far: who hurt the army (`hits.ts` `hurtBy`: melee, an arrow and
+  its shooter, the bearing) named in `casualty` and `hp-band`; `under-fire` (3 arrows on a squad in 5 s) and
+  `enemy-approach` (a cluster within 48 closing ≥ 1 b/s) events; a lost cluster keeps its last position and heading
+  (sitrep, `contact-lost`, `o` on the map); `squad_detail` says what each bot does, read from its body.
 
 ## A bot that dies (docs/35 F6–F7, Paul's D2–D3)
 

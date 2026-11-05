@@ -7,6 +7,9 @@
 //   • Blocked: the entity within MELEE_REACH whose arm swing (animation 0) came nearest the block. A mob swings in the
 //     tick of its hit, before it; a player's client sends its attack, then its swing, so that swing arrives just after
 //     the block: the block waits SWING_LATE_MS for it. Nobody swung (an arrow, an explosion): no event.
+// And who hurt it at all, as `bot.on('hurtBy', (hit: HurtBy) => …)` (the General's attribution, docs/45 §2): every
+// damage_event on this bot with a cause or a direct source. An arrow's damage_event names the arrow (direct) and its
+// shooter (cause): `from` is where the shooter stands when the bot sees it, else back along the arrow's flight.
 
 import type { EventEmitter } from 'node:events';
 
@@ -26,6 +29,18 @@ export const STATUS_SHIELD_BLOCK = 29;
 export interface MeleeHit {
   /** The raised shield stopped it (no damage). */
   blocked: boolean;
+}
+
+/** What `hurtBy` says: who (when the bot sees them), how, and from where. */
+export interface HurtBy {
+  /** The cause (the shooter, the swinger), when this bot has it in its entities and it is a creature. */
+  attacker: Entity | null;
+  /** melee: the cause hit it directly; arrow: a projectile (arrow, trident…); other: a fireball, fangs, unknown. */
+  kind: 'melee' | 'arrow' | 'other';
+  /** What the attacker holds, as the bot sees it (its main hand), else the projectile's name. */
+  weapon: string | null;
+  /** Where it came from: the attacker's position, else a point 16 blocks back along the projectile's flight. */
+  from: { x: number; y: number; z: number } | null;
 }
 
 /** Not a creature: arrows, tridents, fireballs, items, XP orbs, vehicles. */
@@ -55,6 +70,12 @@ export function installMeleeHits(bot: Bot): void {
     if (inReach(attacker)) bot.emit('meleeHit' as never, attacker as never, { blocked: false } as never);
   });
 
+  client.on('damage_event', (p: { entityId: number; sourceCauseId: number; sourceDirectId: number }) => {
+    if (!bot.entity || p.entityId !== bot.entity.id) return;
+    if (p.sourceCauseId <= 0 && p.sourceDirectId <= 0) return; // a fall, fire, drowning: nobody
+    bot.emit('hurtBy' as never, hurtOf(bot, p.sourceCauseId - 1, p.sourceDirectId - 1) as never);
+  });
+
   client.on('entity_status', (p: { entityId: number; entityStatus: number }) => {
     if (!bot.entity || p.entityId !== bot.entity.id || p.entityStatus !== STATUS_SHIELD_BLOCK) return;
     const at = Date.now();
@@ -71,4 +92,26 @@ export function installMeleeHits(bot: Bot): void {
       if (attacker) bot.emit('meleeHit' as never, attacker as never, { blocked: true } as never);
     }, SWING_LATE_MS);
   });
+}
+
+/** A damage_event's ids (already minus 1; -1: none) as a HurtBy. */
+export function hurtOf(bot: Bot, causeId: number, directId: number): HurtBy {
+  const ents = bot.entities as Record<number, Entity | undefined>;
+  const cause = causeId >= 0 ? (ents[causeId] ?? null) : null;
+  const direct = directId >= 0 ? (ents[directId] ?? null) : null;
+  const living = (e: Entity | null): e is Entity => !!e && !NOT_LIVING.has(String(e.type));
+  const projectile = directId >= 0 && directId !== causeId && (!direct || String(direct.type) === 'projectile' || /arrow|trident/.test(direct.name ?? ''));
+  const kind: HurtBy['kind'] = projectile ? 'arrow' : causeId >= 0 && causeId === directId && living(cause) ? 'melee' : 'other';
+  const held = (e: Entity | null): string | null => {
+    const eq = (e as unknown as { equipment?: Array<{ name?: string } | null> } | null)?.equipment;
+    return eq?.[0]?.name ?? null;
+  };
+  const weapon = held(cause) ?? (projectile ? (direct?.name ?? 'arrow') : null);
+  let from: HurtBy['from'] = cause?.position ? { x: cause.position.x, y: cause.position.y, z: cause.position.z } : null;
+  if (!from && direct?.position) {
+    const v = (direct as unknown as { velocity?: { x: number; y: number; z: number } }).velocity;
+    const n = v ? Math.hypot(v.x, v.z) : 0;
+    if (v && n > 1e-6) from = { x: direct.position.x - (v.x / n) * 16, y: direct.position.y, z: direct.position.z - (v.z / n) * 16 };
+  }
+  return { attacker: living(cause) ? cause : null, kind, weapon, from };
 }

@@ -1,6 +1,6 @@
 # 45 — Reforming the General: standing orders, sight of damage, kits used for their purpose
 
-Status: **proposed, awaiting the owner's OK on §1** (2026-11-05). Brief: [general-reform-prompt.md](general-reform-prompt.md).
+Status: **approved by the owner (2026-11-05), being built**; §7 records what is built. Brief: [general-reform-prompt.md](general-reform-prompt.md).
 Audit of today's code: [system/squad/general-reform-audit.md](system/squad/general-reform-audit.md). Scope: `squad/`
 and `docs/` only.
 
@@ -94,3 +94,16 @@ benchmark (started at step 1, extended at each). 10. `agent/general/CLAUDE.md` l
   60/min budget for runtime-fired orders.
 - The work builds on uncommitted files (docs/40–44, `line.mjs`, `lance.ts`, the merged `attack`). Commit them first
   as their own commit, or should mine include them?
+
+## 7. As built
+
+1. **Attribution and sight** (step 1). `squad/src/bots/hits.ts` emits `hurtBy` for every `damage_event` with a
+   source (`hurtOf`: melee when the cause is the direct source, `arrow` for a projectile, its shooter as `attacker`
+   when seen, `from` the shooter's place or 16 blocks back along the arrow's flight). The General keeps 10 s of hits
+   (`Generals.hurt`); `casualty` names the killer (its last hit), `hp-band` sums the hits by kind, bearing and
+   cluster (« 3 hits in 10s: 3 arrows from NE ~70b (X1) », else « no hit seen »); `under-fire` (≥ 3 arrows in 5 s,
+   10 s apart per squad) and `enemy-approach` (within 48, closing ≥ 1 b/s, again only after going beyond 64) are new
+   waking events. A lost cluster keeps `lastVelocity`: « X2 1 LOST 15s ago, last @E36 y64 →W 1.6b/s … »; the map
+   draws it `o`. `squad_detail` gives per bot its order and role, what it does (mounted, fighting X, drawing its bow,
+   shield up, moving to E30 (12b), standing), its hits in 10 s and the last log line naming it. Tests:
+   `tests/hits.test.ts` (hurtBy), `tests/general.test.ts` (attribution).
