@@ -151,7 +151,7 @@ test('spawn_squad goes through the mod and counts against the allowance; arrival
   const ev = generals.events(g).since(0);
   assert.equal(ev.filter((e) => e.kind === 'arrived').length, 1);
   assert.match(generals.sitrep(g), /allow archer 3\/4 guard 0\/4/);
-  assert.match(generals.sitrep(g), /^A 3\/3 archer3 hp100 idle @E2/m);
+  assert.match(generals.sitrep(g), /^A 3\/3 archer3 hp100 idle rules1 @E2/m);
 });
 
 test('order: a written snapshot at the point, facing the axis; retarget re-aims a listening order without restarting', async () => {
@@ -193,7 +193,7 @@ test('enemies: a sighting is a contact, a cluster in the sitrep, and a target fo
   const contact = generals.events(g).since(0).find((e) => e.kind === 'contact');
   assert.ok(contact, 'a contact event');
   assert.match(contact.text, /X1 1 @E30 .*sword1 diamond \[Paul\]/);
-  assert.match(generals.sitrep(g), /^A 2\/2 archer2 hp100 idle @E2 contact X1 29b mobs1$/m);
+  assert.match(generals.sitrep(g), /^A 2\/2 archer2 hp100 idle rules1 @E2 contact X1 29b mobs1$/m);
   const r = await generals.order(g, 'A', 'attack', '', { target: 'X1' });
   assert.match(r, /on Paul @E30 facing E/);
   const o = generals['deps'].runner.get(/#(\d+)/.exec(r)![1]!) as Order;
@@ -270,6 +270,7 @@ test('attribution: who hurt a squad, from where; under-fire, enemy-approach, a l
   const { generals, g, fulfil, events } = rig();
   generals.spawnSquad(g, 'A', 'guard', 2);
   const [b1, b2] = fulfil();
+  generals.setStanding(g, 'A', []); // standing orders have their own tests (standing.test.ts)
   const t0 = Date.now();
   // An enemy archer 70 blocks north-east, and a melee cluster 40 blocks east coming west at 2 b/s.
   const archer = { id: 50, type: 'player', username: 'Hubert', position: new Vec3(150, 64, -350), equipment: [{ name: 'bow' }] };
@@ -332,6 +333,8 @@ test('cadence: wait_events sends the sitrep whole once, then only what changed; 
   assert.match(await generals.waitEvents(g, { timeoutS: 1, full: true }), /^B 1\/1 /m);
 
   // An enemy in sight: the default timeout is the fight's (8 s), and a contact wakes it at once.
+  generals.setStanding(g, 'A', []);
+  generals.setStanding(g, 'B', []);
   a!.entities = { 60: { id: 60, type: 'player', username: 'Hubert', position: new Vec3(140, 64, -300) } };
   generals.sample();
   const t = Date.now();

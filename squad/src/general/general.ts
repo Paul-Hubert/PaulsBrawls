@@ -26,6 +26,7 @@ import type { HurtBy } from '../bots/hits';
 import { logger } from '../logger';
 import { DEFAULT_WAKE, EVENT_KINDS, EventRing, type EventKind, type GeneralEvent } from './events';
 import { along, dirName, dirOf, horizontal, onAxis, parseDirection, parsePosition, rel, roundYaw16, yawToward } from './geometry';
+import { checkRule, defaultRules, due, freshState, ruleText, TRIGGERS, type Rule, type RuleAt, type RuleState } from './standing';
 import { centroid, ClusterTracker, kit as kitOfCluster, type Cluster, type Sighting } from './perception';
 
 /** The kits the mod knows (SquadKits), and the bot-name part each one gives: `<General><Arc>01`. */
@@ -46,6 +47,9 @@ export const DEFAULT_LEG = 48;
 export const MAX_ORDERS_PER_MINUTE = 20;
 /** Orders the runtime gives by itself (advance legs, standing orders) per General per minute: their own budget. */
 export const MAX_RUNTIME_ORDERS_PER_MINUTE = 60;
+/** The sampler's period while an enemy is within HOT_RANGE of a squad (standing orders react this fast). */
+export const HOT_SAMPLE_MS = 250;
+const HOT_RANGE = 64;
 /** wait_events' default timeout while an enemy is in sight, and otherwise (seconds). */
 export const FIGHT_WAIT_S = 8;
 export const QUIET_WAIT_S = 45;
@@ -72,6 +76,20 @@ const APPROACH_RESET = 64;
 
 export interface SquadRecord {
   bots: string[];
+  /** Its standing orders (docs/45 §1): fired by the runtime, in list order. */
+  standing?: Rule[];
+}
+
+/** One squad's standing-order state between samples. */
+interface StandingState {
+  states: RuleState[];
+  /** The rules these states are for (replaced rules get fresh states). */
+  rules?: Rule[];
+  endedAt?: number;
+  modelAt?: number;
+  idleSince?: number;
+  /** A rule's action is starting: no other fires meanwhile. */
+  firing: boolean;
 }
 
 export interface GeneralRecord {
@@ -158,6 +176,11 @@ interface Runtime {
   fireSaid: Map<string, number>;
   /** `cluster|squad` → when its enemy-approach was said (again only after it went away). */
   approachSaid: Map<string, number>;
+  /** Standing orders' state per squad. */
+  standing: Map<string, StandingState>;
+  /** Whether an enemy is within HOT_RANGE of a squad (the sampler then runs every HOT_SAMPLE_MS). */
+  hot: boolean;
+  lastSample: number;
 }
 
 /** One hit on one of the army's bots (hits.ts `hurtBy`). */
@@ -227,13 +250,14 @@ export class Generals {
     deps.runner.on('state', () => this.forgetDespawned());
     const ms = deps.sampleMs ?? 1_000;
     if (ms > 0) {
+      // Every HOT_SAMPLE_MS a General with an enemy near its squads is sampled; the others every `ms`.
       this.timer = setInterval(() => {
         try {
-          this.sample();
+          this.sample(Date.now(), ms);
         } catch (e) {
           logger.warn('general', `sample failed: ${errorMessage(e)}`);
         }
-      }, ms);
+      }, Math.min(ms, HOT_SAMPLE_MS));
       this.timer.unref();
     }
   }
@@ -488,6 +512,8 @@ export class Generals {
           (said ? `; log: ${said.replace(`${n}: `, '').slice(0, 140)}` : ''),
       );
     }
+    const rules = g.squads[s]!.standing ?? [];
+    lines.push(rules.length ? `standing orders: ${rules.map((r, i) => `${i + 1}. ${ruleText(r)}`).join('; ')}` : 'standing orders: none');
     const e = rt.orders.get(s);
     const o = e ? this.deps.runner.get(e.orderId) : undefined;
     if (o) {
@@ -606,7 +632,7 @@ export class Generals {
       revive: [],
     });
     if (!sent) fail('the server mod is not connected to the runtime: nothing can spawn right now');
-    g.squads[name] ??= { bots: [] };
+    if (!g.squads[name]) g.squads[name] = { bots: [], standing: defaultRules(k) };
     this.save();
     this.pending.set(p.id, p);
     return `requested ${n} ${k} for squad ${name}: they appear at the spawn point one by one (about 4 s each); an "arrived" event follows`;
@@ -658,7 +684,7 @@ export class Generals {
    * A plan in one call (docs/45 §2): several squads' orders, all checked first (squads, commands, bots online, the
    * minute's budget), then started one after the other. Nothing starts when one is wrong.
    */
-  async orderMany(g: GeneralRecord, items: Array<{ squad: string; command: string; args?: string; at?: AtInput }>): Promise<string> {
+  async orderMany(g: GeneralRecord, items: Array<{ squad: string; command: string; args?: string; at?: AtInput; standing?: Array<Parameters<typeof checkRule>[0]> }>): Promise<string> {
     if (items.length === 0) fail('no orders given');
     const seen = new Set<string>();
     const plan = items.map((it) => {
@@ -668,11 +694,19 @@ export class Generals {
       const c = it.command.trim().toLowerCase();
       if (!(OFFERED as readonly string[]).includes(c)) fail(`squad ${s}: unknown order "${it.command}" (${OFFERED.join(', ')})`);
       if (this.online(g, s).length === 0) fail(`squad ${s} has no bot online`);
-      return { s, c, args: it.args ?? '', at: it.at ?? {} };
+      it.standing?.forEach((r, i) => {
+        try {
+          checkRule(r);
+        } catch (e) {
+          fail(`squad ${s} rule ${i + 1}: ${errorMessage(e)}`);
+        }
+      });
+      return { s, c, args: it.args ?? '', at: it.at ?? {}, standing: it.standing };
     });
     this.budget(this.runtime(g), 'model', plan.length);
     const out: string[] = [];
     for (const p of plan) {
+      if (p.standing) out.push(this.setStanding(g, p.s, p.standing));
       this.runtime(g).advancing.delete(p.s);
       try {
         out.push(await this.start(g, p.s, p.c, p.args, p.at, { by: 'model' }));
@@ -727,6 +761,7 @@ export class Generals {
     const s = this.squadName(g, squad);
     const rt = this.runtime(g);
     rt.advancing.delete(s);
+    this.standingOf(rt, s).modelAt = Date.now();
     const e = rt.orders.get(s);
     const o = e ? this.deps.runner.get(e.orderId) : undefined;
     if (!e || !o || o.ended) return `squad ${s} had no running order`;
@@ -777,6 +812,7 @@ export class Generals {
       await prevOrder.stop('stopped', `replaced by General ${g.name}`);
     }
     (opts.by === 'model' ? rt.orderTimes : rt.runtimeOrderTimes).push(now);
+    if (opts.by === 'model') this.standingOf(rt, s).modelAt = now;
     const r = await this.deps.runner.start({ commander: g.owner, command, tokens, filters: members, snap });
     if (!r.ok) fail(`${command} for squad ${s} did not start: ${r.text.replace(/^\[Bots\]\s*/, '')}`);
     const ok = r as { orderId: string; bots: Array<{ name: string; role: string }> };
@@ -803,6 +839,7 @@ export class Generals {
     if (adv) rt.advancing.delete(s);
     const r = o.report;
     const why = r.result ? `: ${r.result}` : r.error ? `: ${r.error.message.split('\n')[0]}` : '';
+    this.standingOf(rt, s).endedAt = Date.now();
     rt.events.push('order-end', `squad ${s}: ${entry.command} ${r.status}${why}`);
   }
 
@@ -879,8 +916,12 @@ export class Generals {
   // -- the sampler ---------------------------------------------------------------------------------------------------
 
   /** Once a second: what the army sees, the events it gives, the advance's next legs. Public for the tests. */
-  sample(now = Date.now()): void {
-    for (const g of this.records.values()) this.sampleOne(g, now);
+  sample(now = Date.now(), coolMs = 0): void {
+    for (const g of this.records.values()) {
+      const rt = this.runtime(g);
+      if (coolMs > 0 && !rt.hot && now - rt.lastSample < coolMs - 5) continue;
+      this.sampleOne(g, now);
+    }
     for (const p of [...this.pending.values()]) if (now - p.at > SPAWN_TIMEOUT_MS) this.closeIfDone(p, true, true);
   }
 
@@ -920,6 +961,12 @@ export class Generals {
     for (const c of u.lost) rt.events.push('contact-lost', `${clusterLine(g, c, now)}${this.nearestSquadText(g, c)}`, now);
     this.underFire(g, rt, now);
     this.approaches(g, rt, now);
+    this.standingTick(g, rt, now);
+    rt.lastSample = now;
+    rt.hot = rt.tracker.visible(now).some((c) => Object.keys(g.squads).some((sq) => {
+      const at = this.squadCenter(g, sq);
+      return !!at && horizontal(at, c.center) <= HOT_RANGE;
+    }));
 
     // The advance: a squad whose leg ended goes on once it is not far ahead of the slowest advancing squad.
     for (const [s, adv] of rt.advancing) {
@@ -980,6 +1027,167 @@ export class Generals {
         rt.events.push('enemy-approach', `${c.id} (${c.members.size}, ${kitOfCluster(c.members.values())}) ${Math.round(d)}b from squad ${s}, closing at ${closing.toFixed(1)}b/s from ${dirName(yawToward(at, c.center))}: contact in ~${Math.round(d / closing)}s`, now);
       }
     }
+  }
+
+  // -- standing orders (docs/45 §1) ------------------------------------------------------------------------------
+
+  private standingOf(rt: Runtime, s: string): StandingState {
+    let st = rt.standing.get(s);
+    if (!st) rt.standing.set(s, (st = { states: [], firing: false }));
+    return st;
+  }
+
+  /** Replace a squad's standing orders (`'defaults'`: its kit's; `[]`: none). The tool's answer lists them. */
+  setStanding(g: GeneralRecord, squad: string, rules: Array<Parameters<typeof checkRule>[0]> | 'defaults'): string {
+    const s = this.squadName(g, squad);
+    let list: Rule[];
+    if (rules === 'defaults') {
+      const kits = new Map<string, number>();
+      for (const n of g.squads[s]!.bots) {
+        const k = this.kitOf(g, n) ?? '';
+        kits.set(k, (kits.get(k) ?? 0) + 1);
+      }
+      const main = [...kits].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+      list = defaultRules(main);
+    } else {
+      if (rules.length > 8) fail('8 standing orders a squad at most');
+      list = rules.map((r, i) => {
+        try {
+          return checkRule(r);
+        } catch (e) {
+          return fail(`rule ${i + 1}: ${errorMessage(e)}`);
+        }
+      });
+    }
+    g.squads[s]!.standing = list;
+    this.save();
+    const rt = this.runtime(g);
+    const st = this.standingOf(rt, s);
+    st.rules = undefined; // fresh states at the next sample
+    return list.length ? `squad ${s} standing orders:\n${list.map((r, i) => ` ${i + 1}. ${ruleText(r)}`).join('\n')}` : `squad ${s}: no standing orders`;
+  }
+
+  /** Each squad's standing orders against this sample: the first one due fires (through start(), the runtime's budget). */
+  private standingTick(g: GeneralRecord, rt: Runtime, now: number): void {
+    const visible = rt.tracker.visible(now);
+    for (const [s, sq] of Object.entries(g.squads)) {
+      const st = this.standingOf(rt, s);
+      const rules = sq.standing ?? [];
+      const deaths = rt.deaths.get(s)?.length ?? 0;
+      if (st.rules !== rules) {
+        st.rules = rules;
+        st.states = rules.map(() => freshState(deaths, now));
+      }
+      const e = rt.orders.get(s);
+      const o = e ? this.deps.runner.get(e.orderId) : undefined;
+      const running = !!o?.running;
+      const advancing = rt.advancing.has(s);
+      if (running || advancing) st.idleSince = undefined;
+      else st.idleSince ??= now;
+      if (rules.length === 0 || st.firing) continue;
+      const at = this.squadCenter(g, s);
+      if (!at) continue;
+      const clusters = visible.map((c) => {
+        const d = horizontal(at, c.center);
+        const closing = c.velocity && d > 0 ? (c.velocity.x * (at.x - c.center.x) + c.velocity.z * (at.z - c.center.z)) / d : 0;
+        return { id: c.id, d, closing };
+      });
+      const on = this.online(g, s);
+      const hp = on.length ? (on.reduce((a, n) => a + (this.deps.pool.bot(n)?.health ?? 0), 0) / on.length / 20) * 100 : null;
+      const free = !running || advancing || e?.command === 'line';
+      const hit = due(rules, st.states, { now, clusters, hp, deaths, idleSince: st.idleSince, free, endedAt: st.endedAt, modelAt: st.modelAt });
+      if (!hit) continue;
+      const rule = rules[hit.i]!;
+      const state = st.states[hit.i]!;
+      st.firing = true;
+      void this.fire(g, s, rule, hit.cluster, at)
+        .then((text) => {
+          state.firedAt = Date.now();
+          if (text) rt.events.push('standing', `squad ${s}: ${triggerText(rule, hit.cluster)} → ${text}`);
+        })
+        .catch((err) => {
+          state.firedAt = Date.now(); // a failed rule waits its cooldown too, so it cannot spin
+          rt.events.push('standing', `squad ${s}: ${triggerText(rule, hit.cluster)} → ${rule.do} failed: ${errorMessage(err)}`);
+        })
+        .finally(() => {
+          st.firing = false;
+        });
+    }
+  }
+
+  /** Carry out one rule; '' when it had nothing to act on (a "nearest" target with no enemy in sight). */
+  private async fire(g: GeneralRecord, s: string, rule: Rule, cluster: string | undefined, center: Vec3Like): Promise<string> {
+    const rt = this.runtime(g);
+    if (rule.do === 'reinforce') return this.reinforce(g, s, rule.n ?? 1);
+    if (rule.do === 'advance') {
+      if (rt.advancing.has(s)) return '';
+      return this.advance(g, [s], undefined);
+    }
+    const at = this.ruleAt(g, rt, rule.at ?? {}, cluster, center);
+    if (!at) return '';
+    if (rule.do === 'line' && at.target) {
+      // A line takes no target: it forms at its point (else where the squad stands), facing that enemy.
+      const enemy = rt.tracker.get(at.target);
+      const p = at.pos ? parsePosition(at.pos, this.posCtx(g)) : center;
+      if (!at.pos) at.pos = `${Math.round(center.x)} ${Math.round(center.y)} ${Math.round(center.z)}`;
+      if (enemy && !at.facing && horizontal(p, enemy.center) > 2) at.facing = `yaw=${Math.round(yawToward(p, enemy.center))}`;
+      delete at.target;
+    }
+    rt.advancing.delete(s);
+    return this.start(g, s, rule.do, rule.args ?? '', at, { by: 'runtime' });
+  }
+
+  /**
+   * A rule's `at` for now: target "trigger" / "nearest" → a cluster id; pos "here" (the squad's centre), "rally", "back
+   * N" (N blocks from the enemy, away from it); facing, when not given, toward the enemy. Null: it names an enemy and
+   * none is in sight.
+   */
+  private ruleAt(g: GeneralRecord, rt: Runtime, at: RuleAt, cluster: string | undefined, center: Vec3Like): AtInput | null {
+    const now = Date.now();
+    const nearest = (): string | undefined =>
+      rt.tracker
+        .visible(now)
+        .map((c) => ({ c, d: horizontal(center, c.center) }))
+        .sort((a, b) => a.d - b.d)[0]?.c.id;
+    const enemyId = cluster ?? nearest();
+    const enemy = enemyId ? rt.tracker.get(enemyId) : undefined;
+    const out: AtInput = {};
+    if (at.target === 'trigger' || at.target === 'nearest') {
+      const id = at.target === 'trigger' ? enemyId : nearest();
+      if (!id) return null;
+      out.target = id;
+    } else if (at.target) out.target = at.target;
+    const abs = (p: Vec3Like): string => `${Math.round(p.x)} ${Math.round(p.y)} ${Math.round(p.z)}`;
+    const back = at.pos ? /^back\s+(\d+)$/i.exec(at.pos.trim()) : null;
+    if (at.pos === 'here') out.pos = abs(center);
+    else if (at.pos === 'rally') out.pos = abs(this.rallyPoint(g));
+    else if (back) {
+      const n = Number(back[1]);
+      const away = enemy ? horizontal(center, enemy.center) > 0.5 ? { x: center.x - enemy.center.x, z: center.z - enemy.center.z } : null : null;
+      const d = away ? Math.hypot(away.x, away.z) : 0;
+      const u = away && d > 0 ? { x: away.x / d, z: away.z / d } : (() => {
+        const f = dirOf(g.axis);
+        return { x: -f.x, z: -f.z };
+      })();
+      const from = enemy ? enemy.center : center;
+      const dist = enemy ? horizontal(center, enemy.center) + n : n;
+      out.pos = abs({ x: from.x + u.x * dist, y: center.y, z: from.z + u.z * dist });
+    } else if (at.pos) out.pos = at.pos;
+    if (at.facing) out.facing = at.facing;
+    else if (enemy && !out.target) {
+      const p = out.pos ? parsePosition(out.pos, this.posCtx(g)) : center;
+      if (horizontal(p, enemy.center) > 2) out.facing = `yaw=${Math.round(yawToward(p, enemy.center))}`;
+    }
+    return out;
+  }
+
+  /** Where arrivals and fallbacks gather: 12 blocks behind the army's centre on the axis, never behind the spawn. */
+  rallyPoint(g: GeneralRecord): Vec3Like {
+    const c = this.armyCenter(g);
+    if (!c) return { x: g.spawn.x, y: g.spawn.y, z: g.spawn.z };
+    const f = dirOf(g.axis);
+    const p = { x: c.x - f.x * 12, y: c.y, z: c.z - f.z * 12 };
+    return along(g.spawn, g.axis, p) <= 0 ? { x: g.spawn.x, y: g.spawn.y, z: g.spawn.z } : p;
   }
 
   /** A squad's mean health crossing 75 / 50 / 25 % downward is an event; it is armed again 10 points above. */
@@ -1115,6 +1323,9 @@ export class Generals {
         hits: [],
         fireSaid: new Map(),
         approachSaid: new Map(),
+        standing: new Map(),
+        hot: false,
+        lastSample: 0,
       };
       this.rt.set(k, rt);
     }
@@ -1280,7 +1491,8 @@ export class Generals {
     }
     const dead = bots.filter((n) => this.deps.roster.get(n)?.dead).length;
     const mobs = rt.mobs.get(s);
-    return `${s} ${on.length}/${bots.length} ${[...kits].map(([k, v]) => `${k}${v}`).join(' ')} hp${hp} ${doing}${center ? ` @${rel(g.spawn, center)}` : ''}${contact}${dead ? ` dead${dead}` : ''}${mobs ? ` mobs${mobs}` : ''}`;
+    const rules = g.squads[s]!.standing?.length ?? 0;
+    return `${s} ${on.length}/${bots.length} ${[...kits].map(([k, v]) => `${k}${v}`).join(' ')} hp${hp} ${doing}${rules ? ` rules${rules}` : ''}${center ? ` @${rel(g.spawn, center)}` : ''}${contact}${dead ? ` dead${dead}` : ''}${mobs ? ` mobs${mobs}` : ''}`;
   }
 
   private nearestSquadText(g: GeneralRecord, c: Cluster): string {
@@ -1361,6 +1573,11 @@ function doing(g: GeneralRecord, bot: Bot): string {
     parts.push(d > 1.5 ? `moving to ${rel(g.spawn, { x: goal.x, y: 0, z: goal.z })} (${Math.round(d)}b)` : 'at its place');
   } else if (!t && !b.usingHeldItem) parts.push('standing');
   return `${parts.join(', ')}, holds ${held ? shortItem(held) : 'nothing'}`;
+}
+
+/** What fired a rule: "contact within 48 (X2)". */
+function triggerText(rule: Rule, cluster: string | undefined): string {
+  return `${TRIGGERS[rule.when].text(rule.value)}${cluster ? ` (${cluster})` : ''}`;
 }
 
 /** An item's name without its namespace. */

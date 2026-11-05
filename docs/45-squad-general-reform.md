@@ -115,3 +115,17 @@ benchmark (started at step 1, extended at each). 10. `agent/general/CLAUDE.md` l
    (`Generals.orderMany`) starts one order per squad for up to 12 squads, all checked before any starts. Budgets: the
    model's orders 20 a minute, the runtime's own (advance legs, later the standing orders) 60 a minute, apart.
    Tests: `tests/general.test.ts` (cadence, orders).
+3. **Standing orders** (step 3), as §1 with these details. `squad/src/general/standing.ts` (pure: `TRIGGERS`,
+   `checkRule`, `defaultRules`, `due`) and `Generals.setStanding`/`standingTick`/`fire`/`ruleAt`. Rules live
+   on the squad (`SquadRecord.standing`, persisted in generals.json). A new squad gets its kit's rules at its first
+   `spawn_squad` (horseman: `hp<40 → line @back 24`, `contact 48 → attack trigger`, `approach 64 → attack
+   trigger`, `ended → attack nearest`; horse archer: `hp<50 → line range=120 @back 32`, `contact 64 → raid trigger
+   radius=40 quiet=10`, `ended → raid nearest`; archer, guard, spearman: `idle 8s → line @here facing the
+   nearest`; miner, farmer: none). `contact`, `approach` and `idle` fire only while the squad is free (no order,
+   an advance leg, or a `line`); `hp` re-arms 10 points above; `ended` counts only ends after the rule was set. A
+   `line` given a target forms where the squad stands (or at its `pos`) facing that enemy. A rule naming an enemy
+   with none in sight does nothing. `back N` is N blocks beyond the squad, on the line from the enemy through it
+   (with no enemy: back along the axis). `rally` is 12 blocks behind the army's centre on the axis, never behind the
+   spawn. The sampler runs every 250 ms for a General with an enemy within 64 of a squad, else every second. Tools:
+   `standing(squad, rules | defaults)`, and `standing` per item of `orders`. The sitrep shows `rulesN`;
+   `squad_detail` lists them. Tests: `tests/standing.test.ts`.

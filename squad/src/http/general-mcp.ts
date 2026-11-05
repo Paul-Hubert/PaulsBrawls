@@ -11,6 +11,7 @@ import { z } from 'zod';
 
 import { errorMessage } from '../api/errors';
 import { EVENT_KINDS } from '../general/events';
+import { RULE_ACTIONS, TRIGGER_KINDS } from '../general/standing';
 import { FIGHT_WAIT_S, KITS, OFFERED, QUIET_WAIT_S, type GeneralRecord, type Generals } from '../general/general';
 import { logger } from '../logger';
 
@@ -28,6 +29,22 @@ const at = z
   })
   .optional()
   .describe('The point, target and facing of the order (the commander snapshot)');
+
+const rule = z.object({
+  when: z.enum(TRIGGER_KINDS as [string, ...string[]]).describe('contact (a cluster within value), approach (one within value closing on the squad), hp (mean health below value %), losses (value deaths since it last fired), idle (no order for value s), ended (its order ended by itself)'),
+  value: z.number().optional().describe('The trigger number (defaults: contact 48, approach 64, hp 40, losses 1, idle 8)'),
+  do: z.enum(RULE_ACTIONS).describe('An order (raid, attack, line), advance, or reinforce'),
+  args: z.string().optional().describe('The order key=value args'),
+  at: z
+    .object({
+      pos: z.string().optional().describe('"here", "rally", "back N" (N blocks from the enemy, away from it), or any position'),
+      target: z.string().optional().describe('"trigger" (the cluster that fired it), "nearest", or a cluster/enemy'),
+      facing: z.string().optional(),
+    })
+    .optional(),
+  n: z.number().int().min(1).max(50).optional().describe('reinforce: how many'),
+  cooldown_s: z.number().int().min(2).max(600).optional().describe('Seconds before it may fire again (default 10)'),
+});
 
 export function buildGeneralServer(generals: Generals, ticket: string | undefined, signal?: AbortSignal): McpServer {
   const server = new McpServer(
@@ -144,12 +161,22 @@ export function buildGeneralServer(generals: Generals, ticket: string | undefine
       description: 'A whole plan in one call: one order per squad (each replaces that squad\'s current one). All are checked first; nothing starts if one is wrong.',
       inputSchema: {
         orders: z
-          .array(z.object({ squad: z.string(), command: z.enum(OFFERED), args: z.string().optional().describe('key=value pairs'), at }))
+          .array(z.object({ squad: z.string(), command: z.enum(OFFERED), args: z.string().optional().describe('key=value pairs'), at, standing: z.array(rule).max(8).optional().describe("Replaces the squad's standing orders") }))
           .min(1)
           .max(12),
       },
     },
     async ({ orders }) => run((g) => generals.orderMany(g, orders)),
+  );
+  server.registerTool(
+    'standing',
+    {
+      title: "Set a squad's standing orders",
+      description:
+        "Rules the runtime fires by itself, within a quarter second, without waiting for you: when TRIGGER → do ACTION. They replace the squad's rules (an empty list clears them; defaults=true restores its kit's). The first rule due fires (list order); each waits its cooldown; contact, approach and idle rules fire only while the squad holds a line, advances or has no order; none fires within 5 s of your own order to the squad. Every firing is a 'standing' event.",
+      inputSchema: { squad: z.string(), rules: z.array(rule).max(8).optional(), defaults: z.boolean().optional() },
+    },
+    async ({ squad, rules, defaults }) => run((g) => generals.setStanding(g, squad, defaults ? 'defaults' : (rules ?? []))),
   );
   server.registerTool(
     'retarget',

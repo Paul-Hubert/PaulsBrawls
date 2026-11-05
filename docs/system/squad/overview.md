@@ -540,6 +540,8 @@ A Claude Code instance commanding a bodiless army; the design and the as-built d
   `enemy-approach` (a cluster within 48 closing ≥ 1 b/s) events; a lost cluster keeps its last position and heading
   (sitrep, `contact-lost`, `o` on the map); `squad_detail` says what each bot does, read from its body. `wait_events` sends a diff sitrep, waits 8 s by default
   in a fight; `orders` gives a whole plan in one call; runtime-given orders have their own 60/min budget.
+  **Standing orders** (`general/standing.ts`): per-squad `when trigger → action` rules the sampler fires (250 ms in a
+  fight) through the same `start()` as the model's orders; each kit gets defaults at its first spawn.
 
 ## A bot that dies (docs/35 F6–F7, Paul's D2–D3)
 
