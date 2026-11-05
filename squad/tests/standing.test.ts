@@ -1,7 +1,7 @@
 // Standing orders (docs/45 §1): the pure rules (src/general/standing.ts: checks, edges, cooldowns, the model's
 // precedence) and their firing by the General's sampler on fakes (tests/general.test.ts has the rest of the General).
 
-import { test } from 'node:test';
+import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
@@ -63,9 +63,22 @@ test('due: edges, cooldowns, a free squad for contact, the model first', () => {
   assert.equal(due(more.slice(2), st.slice(2), v({ endedAt: 99_000 })), null, 'that end already fired it');
 });
 
+const rigs: Array<{ runner: { stopAll(): Promise<unknown> }; generals: Generals }> = [];
+afterEach(async () => {
+  // An arrival's or a rule's order starts a moment later: let every queued start finish, then stop them all.
+  for (const r of rigs.splice(0)) {
+    await new Promise((res) => setTimeout(res, 20));
+    await r.generals.settled();
+    await r.runner.stopAll();
+    await r.generals.settled();
+    await r.runner.stopAll();
+  }
+});
+
 function rig() {
   const h = harness({ stock, limits: { maxBots: 100 } });
   const generals = new Generals({ roster: h.roster, pool: h.pool as never, poolEvents: new EventEmitter(), runner: h.runner, limits: h.runner['deps'].limits, revive: (n) => h.roster.setDead(n, false), file: null, sampleMs: 0, coalesceMs: 0 });
+  rigs.push({ runner: h.runner, generals });
   const sent: Array<Record<string, unknown>> = [];
   generals.sink = (_e, data) => {
     sent.push(data as Record<string, unknown>);
@@ -96,8 +109,11 @@ function rig() {
 test('standing: cavalry gets its kit rules and charges a contact by itself; the model wins for 5 s; a fallback goes away from the enemy', async () => {
   const { generals, g, spawn, events, orderOf } = rig();
   const [c1] = spawn('C', 'horseman', 2);
+  await until(() => events('arrived').length > 0, 2000, 'arrived');
+  const rt = generals['runtime'](g);
+  const runtimeBefore = rt.runtimeOrderTimes.length;
   assert.equal(g.squads.C!.standing!.length, 4);
-  assert.match(generals.sitrep(g), /^C 2\/2 horseman2 hp100 idle rules4 /m);
+  assert.match(generals.sitrep(g), /^C 2\/2 horseman2 hp100 line rules4 /m);
   assert.match(generals.squadDetail(g, 'C'), /standing orders: 1\. health below 40% → line @back 24; 2\. contact within 48 → attack on trigger/);
 
   // An enemy 40 blocks east: the contact rule fires an attack on it, with no model turn.
@@ -108,9 +124,8 @@ test('standing: cavalry gets its kit rules and charges a contact by itself; the 
   assert.match(events('standing')[0]!.text, /^squad C: contact within 48 \(X1\) → squad C: attack #\d+ \(2 melee\) on Hubert @E41/);
   const o = orderOf('C')!;
   assert.equal(o.command.name, 'attack');
-  const rt = generals['runtime'](g);
   assert.equal(rt.orders.get('C')!.by, 'runtime');
-  assert.equal(rt.runtimeOrderTimes.length, 1, 'counted on the runtime budget');
+  assert.equal(rt.runtimeOrderTimes.length, runtimeBefore + 1, 'counted on the runtime budget');
   assert.equal(rt.orderTimes.length, 0);
 
   // The model orders a line: a new enemy within 48 does not override it for RESPECT_MS.

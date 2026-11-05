@@ -323,3 +323,19 @@ test('only the owners may order a bot; @filters must name your bots', async () =
   const f = await h.order(ALICE, 'xx', [], { filters: ['Bob'] });
   assert.match(f.text, /Bob n'est pas un de tes bots/);
 });
+
+test('an order stopped while it is still starting never begins: no script left running, its bots free (found by the General reform, docs/45)', async () => {
+  const h = harness();
+  h.bot('Bob', [PAUL]);
+  h.command(PAUL, 'loop', 'export const manifest = { summary: "s", roles: { all: {} }, duration: "until-stopped" };\nexport default async function (squad) { for (;;) await squad.sleep(50); }');
+  const starting = h.order(PAUL, 'loop');
+  await h.runner.stopAll(); // the order exists, still starting
+  const r = await starting;
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.match((r as { text: string }).text, /arrêté avant son départ/);
+  assert.equal(h.runner.running().length, 0);
+  assert.equal(h.leases.top('Bob'), undefined, 'Bob is free');
+  const again = await h.order(PAUL, 'loop');
+  assert.ok(again.ok, (again as { text: string }).text);
+  await h.runner.stopAll();
+});

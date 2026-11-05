@@ -2,7 +2,7 @@
 // mod's reports, orders with a written commander snapshot, the advance's legs, the events), then the MCP server over
 // HTTP with its ticket header.
 
-import { after, before, test } from 'node:test';
+import { after, afterEach, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -88,6 +88,18 @@ test('events: wait wakes on a waking kind, not on others, and times out', async 
 
 // -- the service on fakes ------------------------------------------------------------------------------------------
 
+const rigs: Array<{ runner: { stopAll(): Promise<unknown> }; generals: Generals }> = [];
+afterEach(async () => {
+  // An arrival's or a rule's order starts a moment later: let every queued start finish, then stop them all.
+  for (const r of rigs.splice(0)) {
+    await new Promise((res) => setTimeout(res, 20));
+    await r.generals.settled();
+    await r.runner.stopAll();
+    await r.generals.settled();
+    await r.runner.stopAll();
+  }
+});
+
 function rig() {
   const h = harness({ stock, limits: { maxBots: 100 } });
   const events = new EventEmitter();
@@ -103,6 +115,7 @@ function rig() {
     sampleMs: 0,
     coalesceMs: 0,
   });
+  rigs.push({ runner: h.runner, generals });
   generals.sink = (event, data) => {
     sent.push({ event, data: data as Record<string, unknown> });
     return true;
@@ -139,7 +152,7 @@ test('create: admin only, a valid name and allowance; the axis is the facing rou
   assert.equal(generals.isGeneralOwner(ROUGE.uuid), true);
 });
 
-test('spawn_squad goes through the mod and counts against the allowance; arrival is one event', () => {
+test('spawn_squad goes through the mod and counts against the allowance; arrival is one event', async () => {
   const { generals, g, sent, fulfil } = rig();
   assert.match(generals.spawnSquad(g, 'A', 'archer', 3), /requested 3 archer for squad A/);
   assert.equal(sent[0]!.event, 'general-spawn');
@@ -148,10 +161,13 @@ test('spawn_squad goes through the mod and counts against the allowance; arrival
   assert.throws(() => generals.spawnSquad(g, 'B', 'miner', 1), /not in your allowance/);
   fulfil();
   assert.deepEqual(g.squads.A!.bots, ['RougeArc01', 'RougeArc02', 'RougeArc03']);
+  await until(() => generals.events(g).since(0).some((e) => e.kind === 'arrived'), 2000, 'arrived');
   const ev = generals.events(g).since(0);
   assert.equal(ev.filter((e) => e.kind === 'arrived').length, 1);
+  // With no order to join, the arrivals form a line at the rally point (spread out, not a pile at the spawn).
+  assert.match(ev.find((e) => e.kind === 'arrived')!.text, /3 archer arrived at the spawn point .*; squad A: line #\d+ \(3 archers\)/);
   assert.match(generals.sitrep(g), /allow archer 3\/4 guard 0\/4/);
-  assert.match(generals.sitrep(g), /^A 3\/3 archer3 hp100 idle rules1 @E2/m);
+  assert.match(generals.sitrep(g), /^A 3\/3 archer3 hp100 line rules1 @E2/m);
 });
 
 test('order: a written snapshot at the point, facing the axis; retarget re-aims a listening order without restarting', async () => {
@@ -349,8 +365,10 @@ test('orders: a plan in one call, checked whole first; the model and the runtime
   fulfil();
   generals.spawnSquad(g, 'B', 'archer', 2);
   fulfil();
+  await tick(20);
+  const before = generals['deps'].runner.running().map((o) => o.id);
   await assert.rejects(generals.orderMany(g, [{ squad: 'A', command: 'line', at: { pos: 'E20' } }, { squad: 'Z', command: 'attack' }]), /unknown squad "Z"/);
-  assert.equal(generals['deps'].runner.running().length, 0, 'nothing started');
+  assert.deepEqual(generals['deps'].runner.running().map((o) => o.id), before, 'nothing started');
   const r = await generals.orderMany(g, [
     { squad: 'A', command: 'line', at: { pos: 'E20' } },
     { squad: 'B', command: 'line', args: 'back=6', at: { pos: 'E20' } },
@@ -364,6 +382,38 @@ test('orders: a plan in one call, checked whole first; the model and the runtime
   await assert.rejects(generals.order(g, 'A', 'line', '', { pos: 'E30' }), /20 orders a minute at most/);
   assert.match(await generals.advance(g, ['A'], 40), /squad A: raid #\d+/);
   await generals['deps'].runner.stopAll();
+});
+
+test('safe reinforcement: refused with an enemy near the spawn (unless forced); the arrivals get their order', async () => {
+  const { h, generals, g, fulfil, sent } = rig();
+  generals.spawnSquad(g, 'A', 'guard', 2);
+  const [a1] = fulfil();
+  generals.setStanding(g, 'A', []);
+  await until(() => generals.events(g).since(0).some((e) => e.kind === 'arrived'), 2000, 'arrived');
+  h.roster.setDead('RougeGar02', true);
+  // An enemy 20 blocks from the spawn point: arrivals would die there.
+  a1!.entities = { 80: { id: 80, type: 'player', username: 'Hubert', position: new Vec3(120, 64, -300) } };
+  generals.sample();
+  assert.throws(() => generals.reinforce(g, 'A', 1), /enemy X1 \(1\) is 20 blocks from the spawn point: arrivals would die there/);
+  assert.throws(() => generals.spawnSquad(g, 'B', 'archer', 1), /20 blocks from the spawn point/);
+  assert.match(generals.reinforce(g, 'A', 1, { force: true, then: { command: 'attack', at: { target: 'X1' } } }), /bringing back RougeGar02 .*on arrival: attack/);
+  const req = String(sent.at(-1)!.data.request);
+  generals.arrived(req, 'RougeGar02');
+  await until(() => generals.events(g).since(0).filter((e) => e.kind === 'arrived').length === 2, 2000, 'the reinforcement arrived');
+  assert.match(generals.events(g).since(0).filter((e) => e.kind === 'arrived')[1]!.text, /1 guard back at the spawn point \(RougeGar02\); squad A: attack #\d+ \(\d melee\) on Hubert/);
+});
+
+test('attack: archers close in by default (approach=40); with approach=0 a far target is refused', async () => {
+  const { generals, g, fulfil } = rig();
+  generals.spawnSquad(g, 'A', 'archer', 2);
+  const [a1] = fulfil();
+  generals.setStanding(g, 'A', []);
+  a1!.entities = { 90: { id: 90, type: 'player', username: 'Far', position: new Vec3(210, 64, -300) } };
+  generals.sample();
+  await assert.rejects(generals.order(g, 'A', 'attack', 'approach=0', { target: 'X1' }), /target 109 blocks from squad A, out of bow range .*use raid, or attack with approach=N/);
+  const r = await generals.order(g, 'A', 'attack', '', { target: 'X1' });
+  const o = generals['deps'].runner.get(/#(\d+)/.exec(r)![1]!) as Order;
+  assert.equal(o.args.approach, 40);
 });
 
 // -- over HTTP -------------------------------------------------------------------------------------------------------

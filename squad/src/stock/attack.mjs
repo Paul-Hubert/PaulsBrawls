@@ -11,8 +11,10 @@
 //   • the sky: « Aucune cible. »; one of our own with nobody to fight near them: refused, never a volley onto a friend.
 // Then the order ends: bots it took from a `line` go back to it, and to their slots there. A new click while it runs
 // retargets it (it listens: ctx.commander.on('trigger')); a bow's arrow-release with no creature in the crosshair waits
-// for its arrow's hit (the first one up to 4 s, then the look). Archers never walk, except a step aside after "no clear
-// line of fire", so a line of archers keeps its shape.
+// for its arrow's hit (the first one up to 4 s, then the look). Archers do not walk (a line of archers keeps its shape),
+// except a step aside after "no clear line of fire", and with `approach` > 0 (docs/45: the General's default 40): an
+// archer farther than that from its foe walks or rides toward it until within, and a foe a block stops its shots at is
+// passed over for 5 s while it closes in.
 // Horsemen with spears (canLance: mounted, a spear) do not swing: a spear misses nearer than 2 blocks, and its real
 // blow is the charge (docs/44). They charge in waves, in the formation they stood in when the order took them (their
 // places across and along the axis of the charge): together, each at the foe of the group nearest its lane, through
@@ -32,6 +34,7 @@ export const manifest = {
       spread: { type: 'number', minimum: 0, maximum: 16, default: 3, description: 'rayon de la volée autour du point visé' },
       group: { type: 'integer', minimum: 0, maximum: 32, default: 8, description: 'rayon du groupe attaqué autour de la cible visée' },
       backoff: { type: 'integer', minimum: 6, maximum: 32, default: 12, description: 'recul des cavaliers entre deux charges' },
+      approach: { type: 'integer', minimum: 0, maximum: 64, default: 0, description: "0 : les archers tirent d'où ils sont ; sinon, un archer plus loin que cela de sa cible s'en approche" },
     },
   },
   roles: {
@@ -52,6 +55,8 @@ const NEAR = 24;
 const HIT_WAIT_MS = 4_000;
 /** The point is held: the volley fired, every melee bot by the point, and no threat near it for this long. */
 const CLEAR_MS = 1_500;
+/** A foe a block stopped this archer's shot at is passed over this long (as in `line`). */
+const BLOCKED_MS = 5_000;
 
 export default async function (squad, args, ctx) {
   // First: every later click retargets (from the first target on) instead of restarting the order.
@@ -67,6 +72,7 @@ export default async function (squad, args, ctx) {
   const spread = Math.max(0, Number(args.spread ?? 3));
   const group = Math.max(0, Number(args.group ?? 8));
   const backoff = Math.max(6, Number(args.backoff ?? 12));
+  const approachTo = Math.max(0, Math.min(64, Number(args.approach ?? 0)));
 
   /** What a click points at: 'target' (an entity), 'ground' (a point), 'wait' (a release: its hit follows), 'refuse', 'none'. */
   const fromAt = (at, final = false) => {
@@ -195,6 +201,16 @@ export default async function (squad, args, ctx) {
     return Math.hypot(p.x - s.x, p.z - s.z) <= 2;
   };
 
+  /** An archer's goal toward a point, within `r` of it (set once per point, not awaited; a shot clears it). */
+  const closing = new Map();
+  const closeIn = (bot, p, r) => {
+    const c = closing.get(bot.username);
+    if (c && c.goal === bot.pathfinder.goal && c.p.distanceTo(p) < 4) return;
+    const goal = new goals.GoalNear(p.x, p.y, p.z, Math.max(2, Math.round(r)));
+    bot.pathfinder.setGoal(goal);
+    closing.set(bot.username, { goal, p: p.clone() });
+  };
+
   /** One look of one archer: the target's group, else the volley, else a threat near the point; shot from where it stands. */
   const archer = async (bot) => {
     const m = state.mode;
@@ -209,6 +225,19 @@ export default async function (squad, args, ctx) {
       await squad.sleep(LOOK_MS);
       return;
     }
+    // Too far (approach): close in first, toward the foe (or the volley's point), and shoot once within.
+    const aim = foe ? foe.position : m.point;
+    if (approachTo > 0 && aim && bot.entity.position.distanceTo(aim) > approachTo) {
+      if (at) m.left.set(bot.username, (m.left.get(bot.username) ?? 0) + 1); // that arrow is not spent
+      closeIn(bot, aim, approachTo * 0.8);
+      await squad.sleep(LOOK_MS * 2);
+      return;
+    }
+    const c = closing.get(bot.username);
+    if (c) {
+      if (bot.pathfinder.goal === c.goal) bot.pathfinder.setGoal(null); // within reach: stop and shoot
+      closing.delete(bot.username);
+    }
     m.busy.add(bot.username);
     const release = foe ? taken.archers.take(foe, bot) : () => undefined;
     try {
@@ -218,7 +247,10 @@ export default async function (squad, args, ctx) {
       if (e instanceof BotLeftError || e instanceof OrderStoppedError) throw e;
       ctx.log(`${bot.username}: ${e.message}`);
       if (/no arrows|no bow/.test(e.message)) m.left.set(bot.username, 0);
-      if (foe && /no clear line of fire/.test(e.message)) sidestep(bot, foe); // out from behind what blocked the shot
+      const blocked = foe && /no clear line of fire/.test(e.message) && !/a friend is in the way/.test(e.message);
+      if (blocked) taken.archers.block(bot, foe, BLOCKED_MS);
+      if (blocked && approachTo > 0) closeIn(bot, foe.position, Math.max(6, bot.entity.position.distanceTo(foe.position) * 0.6));
+      else if (foe && /no clear line of fire/.test(e.message)) sidestep(bot, foe); // out from behind what blocked the shot
       await squad.sleep(foe && /no clear line of fire/.test(e.message) ? 500 : 250);
     } finally {
       release();

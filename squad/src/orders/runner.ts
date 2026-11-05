@@ -196,6 +196,13 @@ export class OrderRunner extends EventEmitter {
       }
       this.deps.leases.register(order);
       await this.deps.leases.apply(order.id, plan.grants);
+      // Stopped while it was starting (a stopAll, a General replacing it): it never begins, or its script would run on
+      // as an order nobody can stop any more (status set back to running after its end).
+      if (order.ended) {
+        this.unlease(order);
+        await this.abandon(order);
+        return { ok: false, text: `[Bots] « ${ref.name} » arrêté avant son départ.` };
+      }
       order.begin(plan.grants, manifest);
       this.refreshFriends(order);
       this.deps.journal.save(order.report);
@@ -352,6 +359,10 @@ export class OrderRunner extends EventEmitter {
       }
       this.deps.leases.register(order);
       await this.deps.leases.apply(order.id, plan.grants);
+      if (order.ended) {
+        await this.abandon(order);
+        return { error: 'the trial was stopped before it began' };
+      }
       order.begin(plan.grants, manifest);
       this.refreshFriends(order);
       this.emit('state');
@@ -535,6 +546,11 @@ export class OrderRunner extends EventEmitter {
     const manifest = validateManifest(exports.manifest);
     if (typeof exports.default !== 'function') throw new ManifestError('the command has no `export default async function (squad, args, ctx)`');
     return { fn: exports.default as (...a: unknown[]) => unknown, manifest };
+  }
+
+  /** An order stopped while it was starting: hand back the bots its leases took meanwhile (its end ran before). */
+  private unlease(order: Order): void {
+    for (const name of this.deps.leases.endOrder(order.id)) this.deps.leases.release(order.id, name);
   }
 
   /** An order that never started: forget it (it is not journaled). */

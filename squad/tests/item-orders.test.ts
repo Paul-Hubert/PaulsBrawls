@@ -1064,3 +1064,27 @@ test('attack takes the archers off a line without moving them; when it ends they
   assert.equal(line.status, 'running');
   await f.h.runner.stopAll();
 });
+
+test('attack (archers), approach: a foe beyond `approach` is closed in on before it is shot; 0 shoots from where they stand; a foe a block stops is passed over (docs/45)', async () => {
+  const f = field();
+  const a = f.add('Archer0', 0, 0, BOW);
+  const far = f.spawn(zombie(0.5, 60.5));
+  const o = await f.start('attack', f.snap({ yaw: 0, lookEntity: { id: far.id, name: 'zombie', type: 'hostile', position: far.position } }), ['approach=20', 'seconds=30']);
+  try {
+    await until(() => f.shots.get(a)!.includes(far), 5_000, 'shot once within 20');
+    assert.ok(far.position.distanceTo(a.entity.position) <= 20.5, `it closed in: ${a.entity.position}`);
+    assert.ok(a.entity.position.z > 30, 'it walked toward the foe');
+    // The nearer foe of the group a block hides: tried once, then passed over for a while.
+    const hidden = f.spawn(zombie(3.5, 58.5));
+    refuse = (t) => (t === hidden ? 'shoot(Archer0): no clear line of fire: grass_block is in the way at (2, 63, 50)' : null);
+    await tick(1_500);
+    const atHidden = f.shots.get(a)!.filter((t) => t === hidden).length;
+    assert.ok(atHidden <= 1, `the hidden one not tried again: ${atHidden}`);
+    far.isValid = false;
+    hidden.isValid = false;
+    await until(() => !o.running, 5_000, 'the attack ends');
+  } finally {
+    refuse = null;
+    await f.h.runner.stopAll();
+  }
+});

@@ -129,3 +129,23 @@ benchmark (started at step 1, extended at each). 10. `agent/general/CLAUDE.md` l
    spawn. The sampler runs every 250 ms for a General with an enemy within 64 of a squad, else every second. Tools:
    `standing(squad, rules | defaults)`, and `standing` per item of `orders`. The sitrep shows `rulesN`;
    `squad_detail` lists them. Tests: `tests/standing.test.ts`.
+4. **Ranged reach and safe arrivals** (step 4). `attack` has `approach` (0–64, default 0 for players): an archer
+   farther than that from its foe (or the volley's point) walks or rides toward it (`GoalNear` within 0.8 × approach),
+   stops and shoots once within; a foe a block stops its shot at is marked for 5 s (`targets().block`, as `line`
+   does), and with `approach` it closes to 0.6 of the distance instead of only stepping aside. The General adds
+   `approach=40` to every `attack` it gives; with `approach=0`, a squad with archers is refused a target past 80
+   blocks (« use raid, or attack with approach=N »). `spawn_squad` and `reinforce` take `then` (an order once all
+   arrived), `rally` and `force`: they are refused while a visible cluster is within 32 blocks of the spawn point;
+   on arrival the squad gets `then`, else its running order is started again so the arrivals are in it, else a
+   `line` at the rally point facing the nearest enemy (else the axis), which also spreads fresh spawns instead of
+   leaving them in one pile. The `arrived` event says which. Order starts per squad are serialized
+   (`Generals.start`), since a rule, an arrival and the model may start one at once.
+   **A runner bug found on the way:** an order stopped while it was still starting (`runner.stopAll` or a
+   replacement during `load`/lease apply) was set back to `running` by `order.begin`, so its script ran on unseen
+   and unstoppable. `OrderRunner.start`/`trial` now check `order.ended` after the leases, hand the bots back and
+   answer « arrêté avant son départ » (`tests/orders.test.ts`). Tests: `tests/item-orders.test.ts` (approach),
+   `tests/general.test.ts` (safe reinforcement, approach default and refusal).
+   Not built from §3, and why: a per-rider `retreat` inside the lance waves (the cavalry's `hp below 40 → line @back
+   24` standing order pulls the squad out instead), a `line fallback=` arg (the same: `hp`/`losses` rules with
+   `line @back N` give the fighting retreat, step by step; the foot squads' defaults get one, below), and spreading
+   at the mod's spawn point (the mod is out of this work's scope; the arrival line spreads them).

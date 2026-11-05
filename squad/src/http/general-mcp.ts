@@ -30,6 +30,16 @@ const at = z
   .optional()
   .describe('The point, target and facing of the order (the commander snapshot)');
 
+/** What a spawn's or reinforcement's bots do once there (docs/45 §2). */
+const arrival = {
+  then: z
+    .object({ command: z.enum(OFFERED), args: z.string().optional(), at })
+    .optional()
+    .describe('The order the squad gets once they all arrived'),
+  rally: z.string().optional().describe('Where they gather when they have no order to join (default: the rally point)'),
+  force: z.boolean().optional().describe('Spawn even with an enemy near the spawn point'),
+};
+
 const rule = z.object({
   when: z.enum(TRIGGER_KINDS as [string, ...string[]]).describe('contact (a cluster within value), approach (one within value closing on the squad), hp (mean health below value %), losses (value deaths since it last fired), idle (no order for value s), ended (its order ended by itself)'),
   value: z.number().optional().describe('The trigger number (defaults: contact 48, approach 64, hp 40, losses 1, idle 8)'),
@@ -125,15 +135,21 @@ export function buildGeneralServer(generals: Generals, ticket: string | undefine
     'spawn_squad',
     {
       title: 'Spawn a squad',
-      description: 'Spawn bots of one kit at the spawn point into a squad (new or existing), within your allowance. An "arrived" event follows.',
-      inputSchema: { squad: z.string().describe('Squad name, e.g. A or archers'), kit: z.enum(KITS), count: z.number().int().min(1).max(50) },
+      description:
+        'Spawn bots of one kit at the spawn point into a squad (new or existing), within your allowance. A new squad gets its kit\'s standing orders. Once all are there ("arrived" event) they get then, else join the squad\'s running order, else form a line at rally (default: the rally point, 12 blocks behind your army). Refused while an enemy is within 32 blocks of the spawn point unless force=true.',
+      inputSchema: { squad: z.string().describe('Squad name, e.g. A or archers'), kit: z.enum(KITS), count: z.number().int().min(1).max(50), ...arrival },
     },
-    async ({ squad, kit, count }) => run((g) => generals.spawnSquad(g, squad, kit, count)),
+    async ({ squad, kit, count, then, rally, force }) => run((g) => generals.spawnSquad(g, squad, kit, count, { then, rally, force })),
   );
   server.registerTool(
     'reinforce',
-    { title: 'Bring back the dead', description: "Bring a squad's dead bots back at the spawn point with their kit; each one spends a reinforcement.", inputSchema: { squad: z.string(), count: z.number().int().min(1).max(50) } },
-    async ({ squad, count }) => run((g) => generals.reinforce(g, squad, count)),
+    {
+      title: 'Bring back the dead',
+      description:
+        "Bring a squad's dead bots back at the spawn point with their kit; each one spends a reinforcement. On arrival they get then, else join the squad's running order, else form a line at rally. Refused while an enemy is within 32 blocks of the spawn point unless force=true.",
+      inputSchema: { squad: z.string(), count: z.number().int().min(1).max(50), ...arrival },
+    },
+    async ({ squad, count, then, rally, force }) => run((g) => generals.reinforce(g, squad, count, { then, rally, force })),
   );
   server.registerTool(
     'assign',

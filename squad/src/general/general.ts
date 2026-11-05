@@ -148,7 +148,23 @@ interface PendingSpawn {
   arrived: string[];
   failed: string[];
   at: number;
+  /** What the arrivals do (docs/45 §2): an order, else gather at `rally`. */
+  then?: Arrival;
 }
+
+/** What a spawn's or a reinforcement's bots do once they are all there. */
+export interface Arrival {
+  /** An order for the whole squad once they arrived (default: the squad's running order again, with them). */
+  then?: { command: string; args?: string; at?: AtInput };
+  /** Where they gather when there is no order to join: a position (default: the rally point). */
+  rally?: string;
+}
+
+/** attack: archers close in to this (approach) unless told otherwise; with approach=0, farther than FAR_SHOT is refused. */
+export const GENERAL_APPROACH = 40;
+const FAR_SHOT = 80;
+/** A reinforcement is refused while an enemy is this close to the spawn point (unless forced). */
+export const SPAWN_DANGER = 32;
 
 interface Runtime {
   events: EventRing;
@@ -176,6 +192,8 @@ interface Runtime {
   fireSaid: Map<string, number>;
   /** `cluster|squad` → when its enemy-approach was said (again only after it went away). */
   approachSaid: Map<string, number>;
+  /** Each squad's order start in flight (start() runs them one after the other). */
+  starting: Map<string, Promise<unknown>>;
   /** Standing orders' state per squad. */
   standing: Map<string, StandingState>;
   /** Whether an enemy is within HOT_RANGE of a squad (the sampler then runs every HOT_SAMPLE_MS). */
@@ -422,7 +440,7 @@ export class Generals {
       '',
       'Orders (order tool; `at` = { pos?, target?, facing? }; target = a cluster id like X1, an enemy name, or #entityId):',
       ' raid — march in formation on at.pos (or the target, whom it hunts) and fight every enemy met; ends after `quiet` seconds without enemies at the point. args: radius=8..48 (24) quiet=1..600 (60). Roles: archers (bow), melee.',
-      ' attack — at.target: its group is attacked, it and every enemy within `group` of it, spread over the bots (archers shoot from where they stand, 2 melee on one foe at most) until the group is down or `seconds`; no target: each archer fires a volley at at.pos, the melee take a ring of 3 around it and fight threats within radius. Horsemen with spears charge in waves: through the group at speed, out `backoff` beyond it, re-form, charge back. Ends by itself (the group down, or the volley fired and the point clear); bots it took from a line go back to it. Retarget re-aims it. args: radius=4..48 (16) seconds=5..600 (60) near=0..16 (4) volley=0..16 (3) spread (3) group=0..32 (8) backoff=6..32 (12). Roles: archers (bow), melee.',
+      ' attack — at.target: its group is attacked, it and every enemy within `group` of it, spread over the bots (archers shoot from where they stand, 2 melee on one foe at most) until the group is down or `seconds`; no target: each archer fires a volley at at.pos, the melee take a ring of 3 around it and fight threats within radius. Horsemen with spears charge in waves: through the group at speed, out `backoff` beyond it, re-form, charge back. Ends by itself (the group down, or the volley fired and the point clear); bots it took from a line go back to it. Retarget re-aims it. args: radius=4..48 (16) seconds=5..600 (60) near=0..16 (4) volley=0..16 (3) spread (3) group=0..32 (8) backoff=6..32 (12) approach=0..64 (40 for you: an archer farther than that from its foe walks or rides closer before it shoots; 0: they shoot from where they stand, and a target past 80 blocks is refused). Roles: archers (bow), melee.',
       ' line — guards (shield) form a straight shield wall at at.pos facing at.facing and hit back what hits them; archers form a line `back` blocks behind it and shoot everything in range, in front first. Until stopped; retarget re-forms it. args: spacing=1..3 (1, guards) archerSpacing=1..4 (2) back (4) range=4..120 (120) ranks=1..3 (1) reach (4) march=0..60 (20: seconds an archer on foot walks to a new slot before it shoots on the way; horse archers always shoot on the move). Roles: guards (shield), archers (bow), melee (neither, e.g. horsemen: on the wall flanks, 2 apart).',
       'advance — the default move when no enemy is visible: squads march along the axis in legs of 48 blocks (raid legs), side by side, until contact or the range.',
       '',
@@ -609,7 +627,8 @@ export class Generals {
     return `axis is now ${dirName(g.axis)}; front ${Math.round(this.front(g))}/${g.range} along it`;
   }
 
-  spawnSquad(g: GeneralRecord, squad: string, kit: string, count: number): string {
+  spawnSquad(g: GeneralRecord, squad: string, kit: string, count: number, arrival: Arrival & { force?: boolean } = {}): string {
+    this.checkArrival(g, arrival);
     if (!SQUAD_NAME.test(squad)) fail(`invalid squad name "${squad}" (1-16 of a-z, 0-9, _ and -)`);
     const k = kit.toLowerCase();
     if (!(k in g.allowance)) fail(`kit "${kit}" is not in your allowance (${allowanceText(g)})`);
@@ -620,7 +639,7 @@ export class Generals {
     const free = this.deps.limits.maxBots - this.deps.roster.all().length - this.pendingTotal();
     if (free < n) fail(`the server's bot limit leaves room for ${Math.max(0, free)} more bot(s) (limits.maxBots ${this.deps.limits.maxBots})`);
     const name = this.squadName(g, squad, true);
-    const p: PendingSpawn = { id: `sp-${randomBytes(6).toString('hex')}`, general: g.name, squad: name, kit: k, want: n, revive: false, names: [], arrived: [], failed: [], at: Date.now() };
+    const p: PendingSpawn = { id: `sp-${randomBytes(6).toString('hex')}`, general: g.name, squad: name, kit: k, want: n, revive: false, names: [], arrived: [], failed: [], at: Date.now(), then: arrival };
     const sent = this.sink('general-spawn', {
       request: p.id,
       general: g.name,
@@ -638,15 +657,16 @@ export class Generals {
     return `requested ${n} ${k} for squad ${name}: they appear at the spawn point one by one (about 4 s each); an "arrived" event follows`;
   }
 
-  reinforce(g: GeneralRecord, squad: string, count: number): string {
+  reinforce(g: GeneralRecord, squad: string, count: number, arrival: Arrival & { force?: boolean } = {}): string {
     const s = this.squadName(g, squad);
     if (g.reinforce <= 0) fail('no reinforcements left');
+    this.checkArrival(g, arrival);
     const dead = g.squads[s]!.bots.filter((n) => this.deps.roster.get(n)?.dead);
     if (dead.length === 0) fail(`squad ${s} has no dead bot to bring back`);
     const back = dead.slice(0, Math.min(clampInt(count, 1, 50), g.reinforce));
     const kits: Record<string, string> = {};
     for (const n of back) kits[n] = g.kits[n] ?? '';
-    const p: PendingSpawn = { id: `sp-${randomBytes(6).toString('hex')}`, general: g.name, squad: s, kit: [...new Set(Object.values(kits))].join('/'), want: back.length, revive: true, names: [...back], arrived: [], failed: [], at: Date.now() };
+    const p: PendingSpawn = { id: `sp-${randomBytes(6).toString('hex')}`, general: g.name, squad: s, kit: [...new Set(Object.values(kits))].join('/'), want: back.length, revive: true, names: [...back], arrived: [], failed: [], at: Date.now(), then: arrival };
     const sent = this.sink('general-spawn', { request: p.id, general: g.name, owner: g.owner, kit: '', n: 0, prefix: '', spawn: { ...g.spawn, yaw: g.axis }, revive: back, kits });
     if (!sent) fail('the server mod is not connected to the runtime: nothing can spawn right now');
     for (const n of back) this.deps.revive(n);
@@ -654,7 +674,7 @@ export class Generals {
     this.save();
     this.pending.set(p.id, p);
     this.deps.runner.emit('state');
-    return `bringing back ${back.join(', ')} at the spawn point (${g.reinforce} reinforcement(s) left)`;
+    return `bringing back ${back.join(', ')} at the spawn point (${g.reinforce} reinforcement(s) left); on arrival: ${this.arrivalText(g, s, arrival)}`;
   }
 
   assign(g: GeneralRecord, bots: string[], squad: string): string {
@@ -792,7 +812,23 @@ export class Generals {
     if (by === 'runtime' && rt.runtimeOrderTimes.length + n > MAX_RUNTIME_ORDERS_PER_MINUTE) fail(`the runtime's ${MAX_RUNTIME_ORDERS_PER_MINUTE} orders a minute are spent`);
   }
 
-  private async start(g: GeneralRecord, s: string, command: string, args: string, at: AtInput, opts: { advance?: boolean; by: 'model' | 'runtime' }): Promise<string> {
+  /**
+   * Start a squad's order (the one writer of it). Starts for one squad run one after the other: a rule, an arrival and
+   * the model may ask at once, and two orders racing would leave one running unknown to the General.
+   */
+  private start(g: GeneralRecord, s: string, command: string, args: string, at: AtInput, opts: { advance?: boolean; by: 'model' | 'runtime' }): Promise<string> {
+    const rt = this.runtime(g);
+    const prev = rt.starting.get(s) ?? Promise.resolve();
+    const next = prev.catch(() => undefined).then(() => this.startNow(g, s, command, args, at, opts));
+    const tail = next.catch(() => undefined);
+    rt.starting.set(s, tail);
+    void tail.then(() => {
+      if (rt.starting.get(s) === tail) rt.starting.delete(s);
+    });
+    return next;
+  }
+
+  private async startNow(g: GeneralRecord, s: string, command: string, args: string, at: AtInput, opts: { advance?: boolean; by: 'model' | 'runtime' }): Promise<string> {
     const rt = this.runtime(g);
     const now = Date.now();
     this.budget(rt, opts.by, 1, now);
@@ -800,6 +836,16 @@ export class Generals {
     if (members.length === 0) fail(`squad ${s} has no bot online`);
     const { snap, desc, point, sighting } = this.snapFor(g, s, at);
     const tokens = args.trim() ? args.trim().split(/\s+/) : [];
+    if (command === 'attack') {
+      // Ranged bots close in to `approach` (docs/45): the General's default 40; with 0, a far target is refused.
+      const given = tokens.find((t) => t.startsWith('approach='));
+      if (!given) tokens.push(`approach=${GENERAL_APPROACH}`);
+      const archers = members.filter((n) => ['archer', 'horsearcher'].includes(this.kitOf(g, n) ?? '')).length;
+      const here = this.squadCenter(g, s);
+      if (given === 'approach=0' && archers && here && horizontal(here, point) > FAR_SHOT) {
+        fail(`target ${Math.round(horizontal(here, point))} blocks from squad ${s}, out of bow range for archers that stand still (approach=0): use raid, or attack with approach=N`);
+      }
+    }
     if (command === 'raid' && !tokens.some((t) => /^[xyz]=/.test(t))) {
       tokens.push(`x=${Math.round(point.x)}`, `y=${Math.round(point.y)}`, `z=${Math.round(point.z)}`);
       if (sighting && !tokens.some((t) => t.startsWith('target='))) tokens.push(`target=${sighting.name}`);
@@ -1324,12 +1370,23 @@ export class Generals {
         fireSaid: new Map(),
         approachSaid: new Map(),
         standing: new Map(),
+        starting: new Map(),
         hot: false,
         lastSample: 0,
       };
       this.rt.set(k, rt);
     }
     return rt;
+  }
+
+  /** Once no order start is queued or in flight (an arrival's, a rule's, an advance leg's): for the tests and a stop. */
+  async settled(): Promise<void> {
+    for (let i = 0; i < 50; i++) {
+      const all = [...this.rt.values()].flatMap((r) => [...r.starting.values()]);
+      if (all.length === 0) return;
+      await Promise.allSettled(all);
+      await new Promise((r) => setTimeout(r, 10));
+    }
   }
 
   /** For the tests: the General's event ring. */
@@ -1422,10 +1479,53 @@ export class Generals {
     const g = this.byRequest(p);
     if (!g || p.arrived.length === 0) return;
     const late = p.want - p.arrived.length - p.failed.length;
-    this.runtime(g).events.push(
-      'arrived',
-      `squad ${p.squad}: ${p.arrived.length} ${p.kit} ${p.revive ? 'back' : 'arrived'} at the spawn point (${p.arrived.join(', ')})${late > 0 ? `; ${late} never came` : ''}`,
-    );
+    const rt = this.runtime(g);
+    const head = `squad ${p.squad}: ${p.arrived.length} ${p.kit} ${p.revive ? 'back' : 'arrived'} at the spawn point (${p.arrived.join(', ')})${late > 0 ? `; ${late} never came` : ''}`;
+    void this.onArrival(g, p.squad, p.then ?? {})
+      .then((what) => rt.events.push('arrived', `${head}; ${what}`))
+      .catch((e) => rt.events.push('arrived', `${head}; their order did not start (${errorMessage(e)}): give them one`));
+  }
+
+  /** Refuse a spawn or reinforcement while an enemy is near the spawn point (they would die as they arrive). */
+  private checkArrival(g: GeneralRecord, a: Arrival & { force?: boolean }): void {
+    if (a.then && !(OFFERED as readonly string[]).includes(a.then.command)) fail(`then: unknown order "${a.then.command}" (${OFFERED.join(', ')})`);
+    if (a.rally) parsePosition(a.rally, this.posCtx(g));
+    if (a.force) return;
+    const near = this.runtime(g)
+      .tracker.visible(Date.now())
+      .map((c) => ({ c, d: horizontal(g.spawn, c.center) }))
+      .filter((x) => x.d <= SPAWN_DANGER)
+      .sort((x, y) => x.d - y.d)[0];
+    if (near) fail(`enemy ${near.c.id} (${near.c.members.size}) is ${Math.round(near.d)} blocks from the spawn point: arrivals would die there. Clear it first, or force=true`);
+  }
+
+  private arrivalText(g: GeneralRecord, s: string, a: Arrival): string {
+    if (a.then) return `${a.then.command}${a.then.args ? ` ${a.then.args}` : ''}`;
+    const e = this.runtime(g).orders.get(s);
+    if (e && this.deps.runner.get(e.orderId)?.running) return `they join the ${e.command} of squad ${s}`;
+    return `a line at ${a.rally ?? `the rally point (${rel(g.spawn, this.rallyPoint(g))})`}`;
+  }
+
+  /**
+   * The arrivals' order (docs/45 §2): `then`; else the squad's running order again, restarted so they are in it; else
+   * a line at the rally point (spread out, not a pile at the spawn), facing the nearest enemy or the axis. Given by the
+   * runtime (its budget).
+   */
+  private async onArrival(g: GeneralRecord, s: string, a: Arrival): Promise<string> {
+    const rt = this.runtime(g);
+    if (!g.squads[s] || this.online(g, s).length === 0) return 'nobody online to order';
+    const e = rt.orders.get(s);
+    const running = e ? this.deps.runner.get(e.orderId) : undefined;
+    if (a.then) return this.start(g, s, a.then.command, a.then.args ?? '', a.then.at ?? {}, { by: 'runtime' });
+    if (running?.running && e) {
+      if (e.advance) return 'the advance takes them on its next leg';
+      return this.start(g, s, e.command, e.args, e.at, { by: 'runtime' });
+    }
+    const center = this.squadCenter(g, s) ?? g.spawn;
+    const rally = a.rally ? parsePosition(a.rally, this.posCtx(g)) : this.rallyPoint(g);
+    const near = rt.tracker.visible(Date.now()).sort((x, y) => horizontal(center, x.center) - horizontal(center, y.center))[0];
+    const facing = near && horizontal(rally, near.center) > 2 ? `yaw=${Math.round(yawToward(rally, near.center))}` : dirName(g.axis);
+    return this.start(g, s, 'line', '', { pos: `${Math.round(rally.x)} ${Math.round(rally.y)} ${Math.round(rally.z)}`, facing }, { by: 'runtime' });
   }
 
   private squadCenter(g: GeneralRecord, s: string): Vec3Like | undefined {

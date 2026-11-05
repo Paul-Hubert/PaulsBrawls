@@ -60,7 +60,7 @@ replaced). The General offers `raid`, `attack`, `line` (`general.ts` `OFFERED`).
   (60); the ground: each archer fires `volley` (3) arrows over a disc of `spread` (3), then shoots threats within
   `radius` of the point, the melee bots take a ring of 3 around the point and fight there; it ends once the volley is
   fired, the melee bots are by the point and nothing has been near it for 1.5 s, or after `seconds`. The sky: « Aucune
-  cible. » (a later click: said, the attack goes on); a friend: refused. Archers never walk (a sidestep after "no
+  cible. » (a later click: said, the attack goes on); a friend: refused. Archers never walk unless `approach` > 0 (docs/45: they close in to that distance; the General's default 40); otherwise (a sidestep after "no
   clear line of fire" only). Because it ends, bots it took from a `line` go back to their slots (as `tir`'s did);
   `epee`'s fall-back to defending the commander is gone.
 
